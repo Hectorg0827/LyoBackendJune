@@ -1,0 +1,3 @@
+"""
+Community module test initialization.
+"""
