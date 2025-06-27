@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # LyoApp Backend API
+  api:
+    build: .
+    container_name: lyoapp-api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://lyoapp:${DB_PASSWORD}@db:5432/lyoapp_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY}
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - lyoapp-network
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: lyoapp-db
+    environment:
+      - POSTGRES_DB=lyoapp_db
+      - POSTGRES_USER=lyoapp
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - lyoapp-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: lyoapp-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - lyoapp-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: lyoapp-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+      - ./uploads:/var/www/uploads
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - lyoapp-network
+
+  # Celery Worker for Background Tasks
+  worker:
+    build: .
+    container_name: lyoapp-worker
+    command: celery -A lyo_app.core.celery worker --loglevel=info
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://lyoapp:${DB_PASSWORD}@db:5432/lyoapp_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - lyoapp-network
+
+  # Celery Beat Scheduler
+  scheduler:
+    build: .
+    container_name: lyoapp-scheduler
+    command: celery -A lyo_app.core.celery beat --loglevel=info
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://lyoapp:${DB_PASSWORD}@db:5432/lyoapp_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - lyoapp-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  lyoapp-network:
+    driver: bridge
