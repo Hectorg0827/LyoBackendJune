@@ -10,11 +10,14 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from lyo_app.core.config import settings
+import sentry_sdk
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
 from lyo_app.core.database import close_db, init_db
 from lyo_app.core.logging import setup_logging
 from lyo_app.core.exceptions import setup_error_handlers
+from lyo_app.core.rate_limiter import rate_limit_middleware
 from lyo_app.auth.security_middleware import (
-    rate_limit_middleware,
     security_headers_middleware,
     request_size_middleware
 )
@@ -29,19 +32,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     setup_logging()
     await init_db()
-    
+
+    # Initialize Sentry if configured
+    if settings.sentry_dsn:
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.environment,
+            release=settings.app_version
+        )
+
     # Initialize Redis if available
     try:
         from lyo_app.core.redis_client import init_redis
         await init_redis()
     except Exception as e:
         print(f"Redis initialization failed: {e}")
-    
+
     yield
-    
+
     # Shutdown
     await close_db()
-    
     # Close Redis
     try:
         from lyo_app.core.redis_client import close_redis
@@ -70,11 +80,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
-    # Add security middleware
+    # Add security middleware using production-ready rate limiter
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
         return await security_headers_middleware(request, call_next)
     
+    # Add production rate limiting middleware  
     @app.middleware("http")
     async def add_rate_limiting(request: Request, call_next):
         return await rate_limit_middleware(request, call_next)
@@ -93,7 +104,8 @@ def create_app() -> FastAPI:
     from lyo_app.admin.routes import router as admin_router
     from lyo_app.core.file_routes import router as file_router
     from lyo_app.core.health import router as health_router
-    
+    from lyo_app.ai_agents import ai_router  # AI agents router
+
     app.include_router(auth_router, prefix=f"{settings.api_v1_prefix}/auth", tags=["auth"])
     app.include_router(email_router, tags=["email"])
     app.include_router(learning_router, prefix=f"{settings.api_v1_prefix}/learning", tags=["learning"])
@@ -103,7 +115,9 @@ def create_app() -> FastAPI:
     app.include_router(admin_router, prefix=f"{settings.api_v1_prefix}/admin", tags=["admin"])
     app.include_router(file_router, tags=["files"])
     app.include_router(health_router, tags=["health"])
-    
+    # Include AI agents API
+    app.include_router(ai_router, prefix=f"{settings.api_v1_prefix}/ai", tags=["ai"]) 
+
     # Setup error handlers
     setup_error_handlers(app)
     
@@ -132,3 +146,10 @@ def create_app() -> FastAPI:
 
 # Create the app instance
 app = create_app()
+
+# Expose Prometheus metrics
+@app.get("/metrics")
+def metrics() -> Response:
+    """Prometheus metrics endpoint"""
+    data = generate_latest()
+    return Response(data, media_type=CONTENT_TYPE_LATEST)
