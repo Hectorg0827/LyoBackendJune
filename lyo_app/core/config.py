@@ -15,8 +15,16 @@ class Settings(BaseSettings):
     
     # Application settings
     app_name: str = Field(default="LyoApp Backend", description="Application name")
+    app_version: str = Field(default="1.0.0", description="Application version")
     debug: bool = Field(default=False, description="Debug mode")
     environment: str = Field(default="development", description="Environment")
+    
+    # API settings
+    api_prefix: str = Field(default="/api/v1", description="API prefix for versioning")
+    cors_origins: list[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8080"],
+        description="CORS allowed origins"
+    )
     
     # Database settings
     database_url: str = Field(
@@ -50,6 +58,14 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/2",
         description="Celery result backend URL"
     )
+    
+    # Email settings
+    smtp_server: str = Field(default="smtp.gmail.com", description="SMTP server")
+    smtp_port: int = Field(default=587, description="SMTP port")
+    smtp_username: Optional[str] = Field(default=None, description="SMTP username")
+    smtp_password: Optional[str] = Field(default=None, description="SMTP password")
+    smtp_from_email: str = Field(default="noreply@lyoapp.com", description="From email address")
+    smtp_use_tls: bool = Field(default=True, description="Use TLS for SMTP")
     
     # API settings
     api_v1_prefix: str = Field(default="/api/v1", description="API v1 prefix")
