@@ -28,6 +28,7 @@ from lyo_app.learning.models import Course, Lesson, Progress, Quiz, QuizAttempt 
 from lyo_app.feeds.models import Post, Comment, Like  # noqa: F401
 from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
 from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
+from lyo_app.ai_agents.models import *  # noqa: F401
 
 target_metadata = Base.metadata
 
