@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, validator
 from enum import Enum
+from lyo_app.learning.models import DifficultyLevel, ContentType
 
 
 class UserEngagementStateEnum(str, Enum):
@@ -224,3 +225,99 @@ class BatchAnalysisResponse(BaseModel):
     processing_time_seconds: float = Field(..., description="Total processing time")
     started_at: datetime = Field(..., description="Batch processing start time")
     completed_at: datetime = Field(..., description="Batch processing completion time")
+
+
+# ============================================================================
+# CURRICULUM AGENT SCHEMAS
+# ============================================================================
+
+class CourseOutlineRequest(BaseModel):
+    """Request to generate a course outline."""
+    title: str = Field(..., min_length=3, max_length=200, description="Course title")
+    description: str = Field(..., min_length=20, max_length=2000, description="Course description")
+    target_audience: str = Field(..., min_length=5, max_length=500, description="Target audience description")
+    learning_objectives: List[str] = Field(..., min_items=1, max_items=10, description="Learning objectives")
+    difficulty_level: str = Field(..., description="Course difficulty level")
+    estimated_duration_hours: int = Field(..., ge=1, le=500, description="Estimated course duration in hours")
+
+
+class CourseOutlineResponse(BaseModel):
+    """Response with course outline generation task status."""
+    task_id: str = Field(..., description="Celery task ID")
+    status: str = Field(..., description="Task status")
+    user_id: int = Field(..., description="User ID")
+    timestamp: datetime = Field(..., description="Timestamp")
+
+
+class LessonContentRequest(BaseModel):
+    """Request to generate lesson content."""
+    course_id: int = Field(..., description="Parent course ID")
+    lesson_title: str = Field(..., min_length=3, max_length=200, description="Lesson title")
+    lesson_description: str = Field(..., min_length=20, max_length=1000, description="Lesson description")
+    learning_objectives: List[str] = Field(..., min_items=1, max_items=5, description="Learning objectives")
+    content_type: str = Field(..., description="Type of lesson content")
+    difficulty_level: str = Field(..., description="Lesson difficulty level")
+
+
+class LessonContentResponse(BaseModel):
+    """Response with lesson content generation task status."""
+    task_id: str = Field(..., description="Celery task ID")
+    status: str = Field(..., description="Task status")
+    course_id: int = Field(..., description="Course ID")
+    lesson_title: str = Field(..., description="Lesson title")
+    user_id: int = Field(..., description="User ID")
+    timestamp: datetime = Field(..., description="Timestamp")
+
+
+# ============================================================================
+# CURATION AGENT SCHEMAS
+# ============================================================================
+
+class ContentEvaluationRequest(BaseModel):
+    """Request to evaluate content quality."""
+    content_text: str = Field(..., min_length=50, description="Content to evaluate")
+    content_type: str = Field(..., description="Type of content")
+    topic: str = Field(..., min_length=3, max_length=100, description="Content topic")
+    target_audience: Optional[str] = Field(None, description="Target audience description")
+    difficulty_level: Optional[str] = Field(None, description="Content difficulty level")
+
+
+class ContentEvaluationResponse(BaseModel):
+    """Response with content evaluation task status."""
+    task_id: str = Field(..., description="Celery task ID")
+    status: str = Field(..., description="Task status")
+    topic: str = Field(..., description="Content topic")
+    content_type: str = Field(..., description="Content type")
+    user_id: int = Field(..., description="User ID")
+    timestamp: datetime = Field(..., description="Timestamp")
+
+
+class ContentTaggingRequest(BaseModel):
+    """Request to tag and categorize content."""
+    content_text: str = Field(..., min_length=50, description="Content to tag")
+    content_type: str = Field(..., description="Type of content")
+    content_title: Optional[str] = Field(None, description="Content title")
+
+
+class ContentTaggingResponse(BaseModel):
+    """Response with content tagging task status."""
+    task_id: str = Field(..., description="Celery task ID")
+    status: str = Field(..., description="Task status")
+    content_title: Optional[str] = Field(None, description="Content title")
+    content_type: str = Field(..., description="Content type")
+    user_id: int = Field(..., description="User ID")
+    timestamp: datetime = Field(..., description="Timestamp")
+
+
+class ContentGapsRequest(BaseModel):
+    """Request to identify content gaps in a course."""
+    course_id: int = Field(..., description="Course ID")
+
+
+class ContentGapsResponse(BaseModel):
+    """Response with content gaps analysis task status."""
+    task_id: str = Field(..., description="Celery task ID")
+    status: str = Field(..., description="Task status")
+    course_id: int = Field(..., description="Course ID")
+    user_id: int = Field(..., description="User ID")
+    timestamp: datetime = Field(..., description="Timestamp")
