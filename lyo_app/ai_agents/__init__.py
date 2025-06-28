@@ -19,6 +19,9 @@ The system is designed for enterprise-scale production use with:
 from .orchestrator import AIOrchestrator, ai_orchestrator
 from .mentor_agent import AIMentor, ai_mentor
 from .sentiment_agent import SentimentAndEngagementAgent, sentiment_engagement_agent
+from .curriculum_agent import CurriculumDesignAgent, curriculum_design_agent
+from .curation_agent import ContentCurationAgent, content_curation_agent
+from .feed_agent import FeedRankingAgent
 from .websocket_manager import ConnectionManager, connection_manager
 from .routes import router as ai_router
 
@@ -29,10 +32,15 @@ __all__ = [
     "AIOrchestrator",
     "AIMentor", 
     "SentimentAndEngagementAgent",
+    "CurriculumDesignAgent",
+    "ContentCurationAgent",
+    "FeedRankingAgent",
     "ConnectionManager",
     "ai_orchestrator",
     "ai_mentor",
     "sentiment_engagement_agent",
+    "curriculum_design_agent",
+    "content_curation_agent",
     "connection_manager",
     "ai_router"
 ]
