@@ -73,6 +73,10 @@ class User(Base):
     # RBAC relationships
     roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="select")
     
+    # AI Agents relationships
+    engagement_state = relationship("UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="select")
+    mentor_interactions = relationship("MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
     
