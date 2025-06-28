@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lyoapp-backend:latest
+    env_file: .env.staging
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    command: uvicorn lyo_app.main:app --host 0.0.0.0 --port 8000
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lyoapp-backend:latest
+    env_file: .env.staging
+    depends_on:
+      - web
+      - redis
+    command: celery -A lyo_app.core.celery_app worker -Q default -l info
+
+  db:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lyo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lyo_password}
+      POSTGRES_DB: ${POSTGRES_DB:-lyo_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:6-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  db-data: {}
