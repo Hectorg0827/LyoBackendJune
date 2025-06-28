@@ -27,12 +27,21 @@ from .schemas import (
     InteractionRatingRequest, UserActionRequest, UserActionAnalysisResponse,
     EngagementSummaryResponse, AIHealthCheckResponse, AIPerformanceStatsResponse,
     WebSocketResponse, AIErrorResponse, ContentGenerationRequest, GeneratedContentResponse,
-    LearningInsightsRequest, LearningInsightsResponse, BatchAnalysisRequest, BatchAnalysisResponse
+    LearningInsightsRequest, LearningInsightsResponse, BatchAnalysisRequest, BatchAnalysisResponse,
+    CourseOutlineRequest, CourseOutlineResponse, LessonContentRequest, LessonContentResponse,
+    ContentEvaluationRequest, ContentEvaluationResponse, ContentTaggingRequest, ContentTaggingResponse,
+    ContentGapsRequest, ContentGapsResponse
 )
 from .mentor_agent import ai_mentor
 from .sentiment_agent import sentiment_engagement_agent
 from .orchestrator import ai_orchestrator
 from .websocket_manager import connection_manager, websocket_connection
+from .curriculum_agent import curriculum_design_agent
+from .curation_agent import content_curation_agent
+from lyo_app.core.celery_tasks.ai_tasks import (
+    generate_course_outline_task, generate_lesson_content_task,
+    evaluate_content_quality_task, tag_content_task, identify_content_gaps_task
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +52,198 @@ router = APIRouter(prefix="/ai", tags=["AI Agents"])
 # ============================================================================
 # MENTOR CONVERSATION ENDPOINTS
 # ============================================================================
+
+# ============================================================================
+# CURRICULUM DESIGN ENDPOINTS
+# ============================================================================
+
+@router.post("/curriculum/course-outline", response_model=CourseOutlineResponse)
+async def generate_course_outline(
+    request: CourseOutlineRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a detailed course outline based on provided parameters.
+    
+    This endpoint uses AI to create a structured course outline with modules,
+    learning objectives, and content recommendations. Processing happens
+    asynchronously with results delivered via websocket.
+    """
+    try:
+        logger.info(f"Course outline generation request from user {current_user.id}")
+        
+        # Start the Celery task
+        task = generate_course_outline_task.delay(
+            title=request.title,
+            description=request.description,
+            target_audience=request.target_audience,
+            learning_objectives=request.learning_objectives,
+            difficulty_level=request.difficulty_level,
+            estimated_duration_hours=request.estimated_duration_hours,
+            user_id=current_user.id
+        )
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "user_id": current_user.id,
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error generating course outline for user {current_user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate course outline")
+
+
+@router.post("/curriculum/lesson-content", response_model=LessonContentResponse)
+async def generate_lesson_content(
+    request: LessonContentRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate detailed content for a lesson.
+    
+    This endpoint uses AI to create comprehensive lesson content based on
+    learning objectives, content type, and difficulty level. Processing
+    happens asynchronously with results delivered via websocket.
+    """
+    try:
+        logger.info(f"Lesson content generation request from user {current_user.id}")
+        
+        # Start the Celery task
+        task = generate_lesson_content_task.delay(
+            course_id=request.course_id,
+            lesson_title=request.lesson_title,
+            lesson_description=request.lesson_description,
+            learning_objectives=request.learning_objectives,
+            content_type=request.content_type,
+            difficulty_level=request.difficulty_level,
+            user_id=current_user.id
+        )
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "course_id": request.course_id,
+            "lesson_title": request.lesson_title,
+            "user_id": current_user.id,
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error generating lesson content for user {current_user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate lesson content")
+
+
+# ============================================================================
+# CONTENT CURATION ENDPOINTS
+# ============================================================================
+
+@router.post("/curation/evaluate-content", response_model=ContentEvaluationResponse)
+async def evaluate_content(
+    request: ContentEvaluationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Evaluate the quality of educational content.
+    
+    This endpoint uses AI to assess content quality across multiple dimensions
+    including accuracy, clarity, engagement, and relevance.
+    """
+    try:
+        logger.info(f"Content evaluation request from user {current_user.id}")
+        
+        # Start the Celery task
+        task = evaluate_content_quality_task.delay(
+            content_text=request.content_text,
+            content_type=request.content_type,
+            topic=request.topic,
+            target_audience=request.target_audience,
+            difficulty_level=request.difficulty_level
+        )
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "topic": request.topic,
+            "content_type": request.content_type,
+            "user_id": current_user.id,
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error evaluating content for user {current_user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to evaluate content")
+
+
+@router.post("/curation/tag-content", response_model=ContentTaggingResponse)
+async def tag_content(
+    request: ContentTaggingRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Automatically tag and categorize educational content.
+    
+    This endpoint uses AI to generate relevant tags, categories,
+    and metadata for educational content.
+    """
+    try:
+        logger.info(f"Content tagging request from user {current_user.id}")
+        
+        # Start the Celery task
+        task = tag_content_task.delay(
+            content_text=request.content_text,
+            content_type=request.content_type,
+            content_title=request.content_title
+        )
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "content_title": request.content_title,
+            "content_type": request.content_type,
+            "user_id": current_user.id,
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error tagging content for user {current_user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to tag content")
+
+
+@router.post("/curation/identify-gaps", response_model=ContentGapsResponse)
+async def identify_content_gaps(
+    request: ContentGapsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Identify content gaps in a course.
+    
+    This endpoint uses AI to analyze a course's structure and content,
+    identifying areas where additional content or clarification is needed.
+    """
+    try:
+        logger.info(f"Content gaps analysis request from user {current_user.id}")
+        
+        # Start the Celery task
+        task = identify_content_gaps_task.delay(
+            course_id=request.course_id
+        )
+        
+        return {
+            "task_id": task.id,
+            "status": "processing",
+            "course_id": request.course_id,
+            "user_id": current_user.id,
+            "timestamp": datetime.utcnow()
+        }
+    except Exception as e:
+        logger.error(f"Error identifying content gaps for user {current_user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to identify content gaps")
+
 
 @router.post("/mentor/conversation", response_model=MentorMessageResponse)
 async def send_message_to_mentor(
