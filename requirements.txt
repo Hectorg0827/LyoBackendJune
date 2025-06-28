@@ -21,6 +21,8 @@ redis==5.0.1
 # Security
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
+bleach==6.1.0
+python-decouple==3.8
 
 # Email
 email-validator==2.1.0
