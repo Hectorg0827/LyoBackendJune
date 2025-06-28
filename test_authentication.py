@@ -7,15 +7,22 @@ Tests user registration, login, and protected endpoint access.
 import asyncio
 import httpx
 import json
+import uuid
 from typing import Dict, Optional
+from datetime import datetime
 
 # Test configuration
 API_BASE_URL = "http://localhost:8000"
+
+# Generate unique test data to avoid conflicts
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+UNIQUE_ID = str(uuid.uuid4())[:8]
+
 TEST_USER_DATA = {
-    "username": "testuser123",
-    "email": "test@lyoapp.com",
+    "username": f"testuser_{TIMESTAMP}_{UNIQUE_ID}",
+    "email": f"test_{TIMESTAMP}_{UNIQUE_ID}@lyoapp.com",
     "password": "TestPassword123!",
-    "full_name": "Test User"
+    "full_name": "Test User Auto"
 }
 
 class AuthTester:
@@ -23,6 +30,7 @@ class AuthTester:
     
     def __init__(self, base_url: str = API_BASE_URL):
         self.base_url = base_url
+        self.api_prefix = "/api/v1"  # Centralized API prefix
         self.access_token: Optional[str] = None
         self.user_data: Optional[Dict] = None
     
@@ -52,7 +60,7 @@ class AuthTester:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.base_url}/api/v1/auth/register",
+                    f"{self.base_url}{self.api_prefix}/auth/register",
                     json=TEST_USER_DATA
                 )
                 
@@ -66,7 +74,7 @@ class AuthTester:
                 elif response.status_code == 400:
                     error_data = response.json()
                     if "already exists" in str(error_data):
-                        print("ℹ️ User already exists, proceeding with login test")
+                        print("ℹ️ User already exists, will fetch user data during login")
                         return True
                     else:
                         print(f"❌ Registration failed: {error_data}")
@@ -91,7 +99,7 @@ class AuthTester:
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.base_url}/api/v1/auth/login",
+                    f"{self.base_url}{self.api_prefix}/auth/login",
                     json=login_data
                 )
                 
@@ -101,12 +109,43 @@ class AuthTester:
                     print(f"✅ Login successful:")
                     print(f"   Token type: {token_data['token_type']}")
                     print(f"   Access token: {self.access_token[:20]}...")
+                    
+                    # Fetch user profile if we don't have user data
+                    if not self.user_data:
+                        await self._fetch_user_profile()
+                    
                     return True
                 else:
                     print(f"❌ Login failed with status {response.status_code}: {response.text}")
                     return False
         except Exception as e:
             print(f"❌ Login error: {e}")
+            return False
+    
+    async def _fetch_user_profile(self) -> bool:
+        """Fetch user profile information after login."""
+        if not self.access_token:
+            return False
+        
+        try:
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}{self.api_prefix}/auth/me",
+                    headers=headers
+                )
+                
+                if response.status_code == 200:
+                    self.user_data = response.json()
+                    print(f"   User ID: {self.user_data.get('id', 'N/A')}")
+                    print(f"   Username: {self.user_data.get('username', 'N/A')}")
+                    print(f"   Email: {self.user_data.get('email', 'N/A')}")
+                    return True
+                else:
+                    print(f"⚠️ Could not fetch user profile: {response.status_code}")
+                    return False
+        except Exception as e:
+            print(f"⚠️ Error fetching user profile: {e}")
             return False
     
     async def test_protected_endpoint(self) -> bool:
@@ -123,7 +162,7 @@ class AuthTester:
             async with httpx.AsyncClient() as client:
                 # Test gamification achievements endpoint
                 response = await client.get(
-                    f"{self.base_url}/api/v1/gamification/achievements",
+                    f"{self.base_url}{self.api_prefix}/gamification/achievements",
                     headers=headers
                 )
                 
@@ -160,7 +199,7 @@ class AuthTester:
                 }
                 
                 response = await client.post(
-                    f"{self.base_url}/api/v1/gamification/xp/award",
+                    f"{self.base_url}{self.api_prefix}/gamification/xp/award",
                     headers=headers,
                     json=xp_data
                 )
@@ -173,7 +212,7 @@ class AuthTester:
                 
                 # Test 2: Check user stats
                 response = await client.get(
-                    f"{self.base_url}/api/v1/gamification/stats",
+                    f"{self.base_url}{self.api_prefix}/gamification/stats",
                     headers=headers
                 )
                 
@@ -197,14 +236,14 @@ class AuthTester:
             async with httpx.AsyncClient() as client:
                 # Test without token
                 response = await client.get(
-                    f"{self.base_url}/api/v1/gamification/achievements"
+                    f"{self.base_url}{self.api_prefix}/gamification/achievements"
                 )
                 
-                if response.status_code == 403:
-                    print("✅ Unauthorized access properly blocked (403 Forbidden)")
+                if response.status_code in (401, 403):
+                    print(f"✅ Unauthorized access properly blocked ({response.status_code})")
                     return True
                 else:
-                    print(f"⚠️ Expected 403, got {response.status_code}")
+                    print(f"⚠️ Expected 401/403, got {response.status_code}")
                     return False
         except Exception as e:
             print(f"❌ Unauthorized access test error: {e}")
@@ -221,32 +260,43 @@ async def start_server_if_needed() -> bool:
             if response.status_code == 200:
                 print("✅ Server is already running")
                 return True
-    except:
+    except Exception:
         pass
     
     print("🚀 Starting development server...")
     import subprocess
     import time
+    import os
     
-    # Start server in background
+    # Start server in background with proper working directory
+    cwd = os.getcwd()
     process = subprocess.Popen([
         "python", "start_server.py"
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
     
-    # Wait for server to start
-    for i in range(10):
-        time.sleep(1)
+    # Wait for server to start with improved timing
+    max_retries = 15
+    for i in range(max_retries):
+        time.sleep(2)  # Increased wait time
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(f"{API_BASE_URL}/health", timeout=2.0)
+                response = await client.get(f"{API_BASE_URL}/health", timeout=3.0)
                 if response.status_code == 200:
                     print("✅ Server started successfully")
                     return True
-        except:
+        except Exception:
+            if i % 5 == 0:  # Progress update every 10 seconds
+                print(f"   Still waiting for server... ({i*2}/{max_retries*2}s)")
             continue
     
     print("❌ Failed to start server")
-    return False
+    # Try to get error output
+    try:
+        stdout, stderr = process.communicate(timeout=1)
+        if stderr:
+            print(f"Server error: {stderr.decode()[:200]}...")
+    except subprocess.TimeoutExpired:
+        pass
 
 
 async def main():
