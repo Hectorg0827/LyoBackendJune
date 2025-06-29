@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.routes import get_current_user
 from lyo_app.auth.models import User
 from .schemas import (
     MentorMessageRequest, MentorMessageResponse, ConversationHistoryResponse,
@@ -516,182 +516,230 @@ async def get_websocket_stats(
 @router.get("/health", response_model=AIHealthCheckResponse)
 async def ai_health_check():
     """
-    Comprehensive health check of the AI system.
+    Comprehensive AI system health check.
     
-    Tests all AI models and components, returns detailed status.
+    Returns detailed health status of all AI components including:
+    - Gemma 4 on-device and cloud status
+    - Cloud LLM providers (OpenAI, Anthropic)
+    - Circuit breaker states
+    - Performance metrics
+    - Cost tracking
     """
     try:
         health_status = await ai_orchestrator.health_check()
-        return AIHealthCheckResponse(**health_status)
         
-    except Exception as e:
-        logger.error(f"Error in AI health check: {e}")
-        raise HTTPException(status_code=500, detail="Health check failed")
-
-
-@router.get("/performance", response_model=AIPerformanceStatsResponse)
-async def get_performance_stats(
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get AI system performance statistics.
-    
-    Requires admin role for access to performance metrics.
-    """
-    if not current_user.has_role("admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        stats = ai_orchestrator.get_performance_stats()
-        return AIPerformanceStatsResponse(**stats)
-        
-    except Exception as e:
-        logger.error(f"Error getting performance stats: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get performance statistics")
-
-
-# ============================================================================
-# CONTENT GENERATION ENDPOINTS (Future Expansion)
-# ============================================================================
-
-@router.post("/content/generate", response_model=GeneratedContentResponse)
-async def generate_educational_content(
-    request: ContentGenerationRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Generate educational content using AI.
-    
-    Creates personalized lessons, quizzes, and explanations
-    based on the specified topic and difficulty level.
-    """
-    try:
-        # This would be implemented when content generation is ready
-        # For now, return a placeholder response
-        
-        return GeneratedContentResponse(
-            content=f"AI-generated content for '{request.topic}' at {request.difficulty_level} level would appear here.",
-            content_type=request.content_type,
-            difficulty_level=request.difficulty_level,
-            estimated_duration_minutes=30,
-            learning_objectives=request.learning_objectives,
-            additional_resources=[],
-            generation_metadata={
-                "model_used": "placeholder",
-                "generation_time_ms": 0,
-                "user_id": current_user.id
+        return AIHealthCheckResponse(
+            status=health_status["status"],
+            timestamp=health_status["timestamp"],
+            models=health_status["models"],
+            cost_status=health_status["cost_status"],
+            overall_performance={
+                "response_time_p95": health_status.get("p95_response_time", 0),
+                "success_rate": health_status.get("success_rate", 0),
+                "active_connections": len(connection_manager.active_connections)
             }
         )
         
     except Exception as e:
-        logger.error(f"Error generating content: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate content")
+        logger.error(f"AI health check failed: {e}")
+        return AIHealthCheckResponse(
+            status="critical",
+            timestamp=datetime.utcnow().isoformat(),
+            models={},
+            cost_status={"error": str(e)},
+            overall_performance={}
+        )
 
 
-# ============================================================================
-# ANALYTICS AND INSIGHTS ENDPOINTS
-# ============================================================================
-
-@router.post("/insights/learning", response_model=LearningInsightsResponse)
-async def get_learning_insights(
-    request: LearningInsightsRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+@router.get("/performance/stats", response_model=AIPerformanceStatsResponse)
+async def get_ai_performance_stats(
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Get comprehensive learning analytics insights.
+    Get comprehensive AI system performance statistics.
     
-    Provides detailed analysis of learning patterns, progress,
-    and personalized recommendations.
+    Returns detailed metrics including:
+    - Model usage statistics
+    - Response time percentiles
+    - Error rates and circuit breaker status
+    - Cost analysis
+    - Cache performance
     """
     try:
-        # Verify authorization
-        if request.user_id != current_user.id and not current_user.has_role("admin"):
-            raise HTTPException(status_code=403, detail="Not authorized to view this user's insights")
+        stats = ai_orchestrator.get_performance_stats()
         
-        # This would be implemented when analytics system is ready
-        # For now, return a placeholder response
-        
-        return LearningInsightsResponse(
-            user_id=request.user_id,
-            time_period_days=request.time_period_days,
-            engagement_summary={"average_engagement": "high", "trend": "improving"},
-            learning_progress={"completion_rate": 85, "average_score": 0.78},
-            behavioral_patterns=["consistent_daily_learning", "strong_morning_performance"],
-            strengths=["problem_solving", "conceptual_understanding"],
-            areas_for_improvement=["time_management", "quiz_preparation"],
-            personalized_recommendations=[
-                "Focus on spaced repetition for better retention",
-                "Consider shorter study sessions to maintain engagement"
-            ],
-            predictions={"likely_completion_date": "2024-08-15"} if request.include_predictions else None
+        return AIPerformanceStatsResponse(
+            daily_cost=stats["daily_cost"],
+            gemma_stats=stats["gemma_stats"],
+            models=stats["models"],
+            system_performance={
+                "active_connections": len(connection_manager.active_connections),
+                "total_users_today": await _get_daily_active_users(),
+                "avg_response_time": await _get_avg_response_time(),
+                "system_uptime_hours": await _get_system_uptime()
+            }
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error getting learning insights: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate learning insights")
+        logger.error(f"Error retrieving AI performance stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve performance statistics")
 
 
-# ============================================================================
-# BATCH PROCESSING ENDPOINTS
-# ============================================================================
-
-@router.post("/batch/analyze", response_model=BatchAnalysisResponse)
-async def batch_analyze_users(
-    request: BatchAnalysisRequest,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+@router.post("/analyze/model-recommendation")
+async def get_model_recommendation(
+    request: Dict[str, Any],
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Perform batch analysis on multiple users.
+    Get AI model recommendations for a given prompt.
     
-    Requires admin role. Useful for system-wide analytics
-    and bulk engagement analysis.
+    Analyzes the prompt and user context to recommend optimal model,
+    estimate costs, and provide routing insights without executing.
+    """
+    try:
+        prompt = request.get("prompt", "")
+        user_context = request.get("user_context", {})
+        
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Prompt is required")
+        
+        recommendations = await ai_orchestrator.get_model_recommendations(
+            prompt=prompt,
+            user_context=user_context
+        )
+        
+        return {
+            "recommendations": recommendations,
+            "user_id": current_user.id,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting model recommendations: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get model recommendations")
+
+
+@router.get("/metrics/real-time")
+async def get_real_time_metrics(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get real-time AI system metrics.
+    
+    Returns current system state including active connections,
+    ongoing requests, circuit breaker status, and resource usage.
     """
     if not current_user.has_role("admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        start_time = datetime.utcnow()
+        # Get real-time connection stats
+        connection_stats = connection_manager.get_connection_stats()
         
-        # For now, return a placeholder response
-        # In production, this would queue background tasks
+        # Get current system metrics
+        performance_stats = ai_orchestrator.get_performance_stats()
         
-        background_tasks.add_task(
-            _process_batch_analysis,
-            request.user_ids,
-            request.analysis_type,
-            request.parameters
-        )
-        
-        return BatchAnalysisResponse(
-            total_users=len(request.user_ids),
-            successful_analyses=0,
-            failed_analyses=0,
-            results=[],
-            errors=[],
-            processing_time_seconds=0,
-            started_at=start_time,
-            completed_at=start_time  # Would be updated when complete
-        )
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "active_connections": connection_stats,
+            "current_load": {
+                "requests_per_minute": await _get_current_rpm(),
+                "avg_response_time_last_minute": await _get_recent_response_time(),
+                "error_rate_last_hour": await _get_recent_error_rate()
+            },
+            "resource_usage": {
+                "memory_usage_mb": await _get_memory_usage(),
+                "cpu_usage_percent": await _get_cpu_usage(),
+                "daily_cost_used": performance_stats["daily_cost"]["current"],
+                "cache_hit_rate": performance_stats["gemma_stats"]["cache_hit_rate"]
+            },
+            "circuit_breakers": {
+                model.value: performance_stats["models"][model.value]["circuit_breaker_open"] 
+                for model in ModelType if model.value in performance_stats["models"]
+            }
+        }
         
     except Exception as e:
-        logger.error(f"Error starting batch analysis: {e}")
-        raise HTTPException(status_code=500, detail="Failed to start batch analysis")
+        logger.error(f"Error getting real-time metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get real-time metrics")
 
 
-async def _process_batch_analysis(user_ids: List[int], analysis_type: str, parameters: Optional[Dict]):
-    """Background task for processing batch analysis."""
-    logger.info(f"Starting batch analysis for {len(user_ids)} users: {analysis_type}")
+@router.post("/admin/circuit-breaker/reset")
+async def reset_circuit_breaker(
+    request: Dict[str, str],
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Reset circuit breaker for a specific model.
     
-    # Implementation would go here
-    # This is where the actual batch processing would happen
+    Requires admin role. Manually resets circuit breaker state
+    for debugging and recovery purposes.
+    """
+    if not current_user.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
-    logger.info(f"Completed batch analysis for {len(user_ids)} users")
+    try:
+        model_type = request.get("model_type")
+        if not model_type:
+            raise HTTPException(status_code=400, detail="model_type is required")
+        
+        # Reset circuit breaker for the specified model
+        if model_type in ai_orchestrator.model_metrics:
+            metrics = ai_orchestrator.model_metrics[ModelType(model_type)]
+            metrics.circuit_breaker_open = False
+            metrics.failure_streak = 0
+            metrics.last_failure = None
+            
+            logger.info(f"Circuit breaker reset for {model_type} by admin {current_user.id}")
+            
+            return {
+                "message": f"Circuit breaker reset successfully for {model_type}",
+                "model_type": model_type,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid model type: {model_type}")
+            
+    except Exception as e:
+        logger.error(f"Error resetting circuit breaker: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset circuit breaker")
+
+
+# Helper functions for metrics
+async def _get_daily_active_users() -> int:
+    """Get count of daily active users."""
+    # This would query the database for unique users today
+    return 0  # Placeholder
+
+async def _get_avg_response_time() -> float:
+    """Get average response time across all models."""
+    # Calculate from orchestrator metrics
+    return 0.0  # Placeholder
+
+async def _get_system_uptime() -> float:
+    """Get system uptime in hours."""
+    # Calculate from application start time
+    return 0.0  # Placeholder
+
+async def _get_current_rpm() -> int:
+    """Get current requests per minute."""
+    return 0  # Placeholder
+
+async def _get_recent_response_time() -> float:
+    """Get average response time for last minute."""
+    return 0.0  # Placeholder
+
+async def _get_recent_error_rate() -> float:
+    """Get error rate for last hour."""
+    return 0.0  # Placeholder
+
+async def _get_memory_usage() -> float:
+    """Get current memory usage in MB."""
+    return 0.0  # Placeholder
+
+async def _get_cpu_usage() -> float:
+    """Get current CPU usage percentage."""
+    return 0.0  # Placeholder
 
 
 # ============================================================================
@@ -729,10 +777,14 @@ async def cleanup_system(
 
 
 # ============================================================================
-# ERROR HANDLERS
+# ERROR HANDLERS - These should be added to the main app, not the router
 # ============================================================================
 
-@router.exception_handler(Exception)
+# Note: Exception handlers are defined here but should be registered with the main app
+# Example usage in main.py:
+# from lyo_app.ai_agents.routes import ai_exception_handler
+# app.add_exception_handler(Exception, ai_exception_handler)
+
 async def ai_exception_handler(request, exc):
     """Global exception handler for AI endpoints."""
     logger.error(f"Unhandled AI system error: {exc}")
@@ -745,3 +797,13 @@ async def ai_exception_handler(request, exc):
             details={"exception_type": type(exc).__name__}
         ).dict()
     )
+
+
+# Import and include optimization routes
+try:
+    from .optimization.routes import setup_optimization_routes
+    # Setup optimization routes
+    setup_optimization_routes(router)
+    logger.info("AI optimization routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"AI optimization routes not available: {e}")
