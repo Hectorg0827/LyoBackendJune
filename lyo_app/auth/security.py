@@ -83,3 +83,16 @@ def verify_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+def verify_access_token(token: str) -> Optional[dict]:
+    """
+    Verify and decode an access token (alias for verify_token).
+    
+    Args:
+        token: JWT access token to verify
+        
+    Returns:
+        Decoded token payload if valid, None otherwise
+    """
+    return verify_token(token)
