@@ -24,9 +24,9 @@ import re
 from .models import AIConversationLog, AIModelTypeEnum, UserEngagementState
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
 from lyo_app.learning.models import Course, Lesson, DifficultyLevel, ContentType
-from lyo_app.learning.models import UserLearningProgress, LearningModule
+from lyo_app.learning.models import CourseEnrollment, LessonCompletion
 from lyo_app.auth.models import User
-from lyo_app.feeds.models import ContentItem, ContentTag, ContentSource
+from lyo_app.feeds.models import Post, Comment, FeedItem
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ class ContentCurationAgent:
             ai_response = await ai_orchestrator.generate_response(
                 prompt=prompt,
                 task_complexity=TaskComplexity.COMPLEX,
-                model_preference=ModelType.CLOUD_LLM,
+                model_preference=ModelType.GEMMA_4_CLOUD,
                 max_tokens=2000
             )
             
@@ -638,17 +638,21 @@ class ContentCurationAgent:
             engagement_state = result.scalar_one_or_none()
             
             # Get learning progress
-            progress_query = select(UserLearningProgress).where(UserLearningProgress.user_id == user_id)
-            result = await db.execute(progress_query)
-            progress_records = result.scalars().all()
+            enrollment_query = select(CourseEnrollment).where(CourseEnrollment.user_id == user_id)
+            result = await db.execute(enrollment_query)
+            enrollments = result.scalars().all()
+            
+            completion_query = select(LessonCompletion).where(LessonCompletion.user_id == user_id)
+            result = await db.execute(completion_query)
+            completions = result.scalars().all()
             
             # Compile user data
             user_data = {
                 "user_id": user_id,
                 "name": user.username,
                 "engagement_state": engagement_state.state.value if engagement_state else "unknown",
-                "completed_courses": [p.course_id for p in progress_records if p.completion_percentage >= 100],
-                "in_progress_courses": [p.course_id for p in progress_records if 0 < p.completion_percentage < 100]
+                "completed_courses": [e.course_id for e in enrollments if e.progress_percentage >= 100],
+                "in_progress_courses": [e.course_id for e in enrollments if 0 < e.progress_percentage < 100]
             }
             
             return user_data
@@ -670,20 +674,19 @@ class ContentCurationAgent:
             if not keywords:
                 return []
                 
-            # Build query with keyword search in title and description
+            # Build query with keyword search in content
             conditions = []
             for keyword in keywords:
-                conditions.append(ContentItem.title.ilike(f"%{keyword}%"))
-                conditions.append(ContentItem.description.ilike(f"%{keyword}%"))
+                conditions.append(Post.content.ilike(f"%{keyword}%"))
                 
             # Exclude existing content
-            exclude_condition = not_(ContentItem.id.in_(existing_content_ids)) if existing_content_ids else True
+            exclude_condition = not_(Post.id.in_(existing_content_ids)) if existing_content_ids else True
             
-            query = select(ContentItem).where(
+            query = select(Post).where(
                 or_(*conditions),
                 exclude_condition,
-                ContentItem.is_published == True
-            ).order_by(desc(ContentItem.quality_score)).limit(content_count)
+                Post.is_published == True
+            ).order_by(desc(Post.created_at)).limit(content_count)
             
             result = await db.execute(query)
             content_items = result.scalars().all()
@@ -693,12 +696,11 @@ class ContentCurationAgent:
             for item in content_items:
                 formatted_items.append({
                     "id": item.id,
-                    "title": item.title,
-                    "description": item.description,
-                    "content_type": item.content_type,
-                    "quality_score": item.quality_score,
-                    "source_url": item.source_url,
-                    "source_name": item.source_name
+                    "content": item.content[:200] + "..." if len(item.content or "") > 200 else item.content,
+                    "post_type": item.post_type.value,
+                    "author_id": item.author_id,
+                    "created_at": item.created_at.isoformat(),
+                    "is_published": item.is_published
                 })
                 
             return formatted_items
