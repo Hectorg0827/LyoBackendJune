@@ -215,7 +215,12 @@ class AIMentor:
 
         # Send prompt to orchestrator
         prompt = convo.get_context_summary() + "\nUser: " + message
-        model_resp = await ai_orchestrator.route_and_execute(task_type="conversation", prompt=prompt)
+        model_resp = await ai_orchestrator.generate_response(
+            prompt=prompt,
+            task_complexity=TaskComplexity.MEDIUM,
+            model_preference=ModelType.GEMMA_4_ON_DEVICE,
+            max_tokens=512
+        )
 
         # Build response
         response = {
@@ -438,9 +443,17 @@ Provide a helpful, educational response that matches your personality and the sp
         task_type = complexity_mapping.get(strategy, "simple")
         
         # Generate response using orchestrator
-        response = await ai_orchestrator.route_and_execute(
-            task_type=f"mentor_{strategy}",
+        complexity = TaskComplexity.SIMPLE
+        if task_type == "medium":
+            complexity = TaskComplexity.MEDIUM
+        elif task_type == "complex":
+            complexity = TaskComplexity.COMPLEX
+            
+        response = await ai_orchestrator.generate_response(
             prompt=full_prompt,
+            task_complexity=complexity,
+            model_preference=ModelType.GEMMA_4_ON_DEVICE,
+            max_tokens=512,
             user_context={
                 "user_id": user_id,
                 "engagement_state": user_state,
@@ -525,9 +538,11 @@ The student hasn't asked for help - you're reaching out because you care about t
 """
         
         # Generate response
-        response = await ai_orchestrator.route_and_execute(
-            task_type=f"proactive_{reason}",
+        response = await ai_orchestrator.generate_response(
             prompt=full_prompt,
+            task_complexity=TaskComplexity.MEDIUM,
+            model_preference=ModelType.GEMMA_4_ON_DEVICE,
+            max_tokens=256,
             user_context={
                 "user_id": user_id,
                 "reason": reason,
