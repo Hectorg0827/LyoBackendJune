@@ -22,9 +22,9 @@ import json
 import re
 
 from .models import AIConversationLog, AIModelTypeEnum, UserEngagementState
-from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
+from .orchestrator import ai_orchestrator, ModelType, TaskComplexity, LanguageCode
 from lyo_app.learning.models import Course, Lesson, DifficultyLevel, ContentType
-from lyo_app.learning.models import UserLearningProgress, LearningModule
+from lyo_app.learning.models import CourseEnrollment, LessonCompletion
 from lyo_app.auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -49,10 +49,12 @@ class CurriculumDesignAgent:
         difficulty_level: DifficultyLevel,
         estimated_duration_hours: int,
         db: AsyncSession,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        language: Optional[LanguageCode] = None
     ) -> Dict[str, Any]:
         """
         Generate a comprehensive course outline based on the provided parameters.
+        Uses advanced optimization and personalization for enhanced results.
         
         Args:
             title: Course title
@@ -63,15 +65,16 @@ class CurriculumDesignAgent:
             estimated_duration_hours: Estimated course duration in hours
             db: Database session
             user_id: Optional user ID for personalization
+            language: Target language for the course content
             
         Returns:
-            Dictionary containing the generated course outline
+            Dictionary containing the generated course outline with optimization metadata
         """
         start_time = time.time()
-        logger.info(f"Generating course outline for '{title}' with {len(learning_objectives)} learning objectives")
+        logger.info(f"Generating optimized course outline for '{title}' with {len(learning_objectives)} learning objectives")
         
         try:
-            # 1. Prepare prompt for the AI model
+            # 1. Prepare prompt for the AI model with personalization context
             context = await self._prepare_course_context(
                 title=title,
                 description=description,
@@ -80,23 +83,33 @@ class CurriculumDesignAgent:
                 difficulty_level=difficulty_level,
                 estimated_duration_hours=estimated_duration_hours,
                 user_id=user_id,
+                language=language,
                 db=db
             )
             
-            # 2. Generate course structure using AI orchestrator
+            # 2. Generate course structure using AI orchestrator with optimization
             prompt = self._build_course_generation_prompt(context)
             
             ai_response = await ai_orchestrator.generate_response(
                 prompt=prompt,
                 task_complexity=TaskComplexity.COMPLEX,
-                model_preference=ModelType.CLOUD_LLM,
-                max_tokens=2000
+                model_preference=ModelType.GEMMA_4_CLOUD,
+                max_tokens=2000,
+                language=language or LanguageCode.ENGLISH,
+                user_id=user_id,  # Enable personalization
+                agent_type="curriculum"  # Enable agent-specific optimizations
             )
             
             # 3. Parse AI response into structured outline
             course_outline = self._parse_course_outline(ai_response.content)
             
-            # 4. Log the AI conversation
+            # 4. Apply post-processing optimizations
+            if user_id:
+                course_outline = await self._apply_personalization_optimizations(
+                    course_outline, user_id, context
+                )
+            
+            # 5. Log the AI conversation with optimization metadata
             await self._log_ai_conversation(
                 user_id=user_id,
                 context=context,
@@ -105,9 +118,9 @@ class CurriculumDesignAgent:
                 db=db
             )
             
-            # 5. Return the structured course outline
+            # 6. Return the structured course outline with optimization info
             processing_time = time.time() - start_time
-            logger.info(f"Course outline generated in {processing_time:.2f}s with {len(course_outline.get('lessons', []))} lessons")
+            logger.info(f"Optimized course outline generated in {processing_time:.2f}s with {len(course_outline.get('lessons', []))} lessons")
             
             return {
                 "title": title,
@@ -293,7 +306,7 @@ class CurriculumDesignAgent:
             ai_response = await ai_orchestrator.generate_response(
                 prompt=prompt,
                 task_complexity=TaskComplexity.COMPLEX,
-                model_preference=ModelType.CLOUD_LLM,
+                model_preference=ModelType.GEMMA_4_CLOUD,
                 max_tokens=2500
             )
             
@@ -337,7 +350,7 @@ class CurriculumDesignAgent:
     # Helper methods
     async def _prepare_course_context(self, title, description, target_audience, 
                                      learning_objectives, difficulty_level, 
-                                     estimated_duration_hours, user_id, db):
+                                     estimated_duration_hours, user_id, language, db):
         """Prepare context for course generation."""
         context = {
             "title": title,
@@ -347,6 +360,7 @@ class CurriculumDesignAgent:
             "difficulty_level": difficulty_level.value,
             "estimated_duration_hours": estimated_duration_hours,
             "content_types": [t.value for t in ContentType],
+            "language": language.value if language else "en",
             "timestamp": datetime.utcnow().isoformat()
         }
         
@@ -798,9 +812,13 @@ class CurriculumDesignAgent:
                 return None
                 
             # Get learning progress
-            progress_query = select(UserLearningProgress).where(UserLearningProgress.user_id == user_id)
-            result = await db.execute(progress_query)
-            progress_records = result.scalars().all()
+            enrollment_query = select(CourseEnrollment).where(CourseEnrollment.user_id == user_id)
+            result = await db.execute(enrollment_query)
+            enrollments = result.scalars().all()
+            
+            completion_query = select(LessonCompletion).where(LessonCompletion.user_id == user_id)
+            result = await db.execute(completion_query)
+            completions = result.scalars().all()
             
             # Get engagement state
             state_query = select(UserEngagementState).where(UserEngagementState.user_id == user_id)
@@ -811,9 +829,9 @@ class CurriculumDesignAgent:
             user_data = {
                 "user_id": user_id,
                 "name": user.username,
-                "learning_records": len(progress_records),
+                "learning_records": len(enrollments),
                 "engagement_state": engagement_state.state.value if engagement_state else "unknown",
-                "completed_courses": [p.course_id for p in progress_records if p.completion_percentage >= 100]
+                "completed_courses": [e.course_id for e in enrollments if e.progress_percentage >= 100]
             }
             
             return user_data
@@ -997,8 +1015,76 @@ class CurriculumDesignAgent:
             "steps": steps,
             "milestones": milestones
         }
+    
+    async def _apply_personalization_optimizations(
+        self, 
+        course_outline: Dict[str, Any], 
+        user_id: int, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Apply personalization optimizations to the course outline."""
+        try:
+            # Import optimization modules if available
+            try:
+                from .optimization.personalization_engine import personalization_engine
+                
+                # Get user profile for personalization
+                user_profile = await personalization_engine.get_user_profile(user_id)
+                
+                # Adjust lesson structure based on learning style
+                if user_profile.learning_style.value == "visual":
+                    # Emphasize visual content and diagrams
+                    for lesson in course_outline.get("lessons", []):
+                        lesson["content_format"] = "video_heavy"
+                        lesson["visual_aids"] = "emphasized"
+                
+                elif user_profile.learning_style.value == "kinesthetic":
+                    # Add more hands-on activities
+                    for lesson in course_outline.get("lessons", []):
+                        lesson["interactive_elements"] = "hands_on_projects"
+                        lesson["practical_exercises"] = "required"
+                
+                elif user_profile.learning_style.value == "reading_writing":
+                    # Emphasize text-based learning
+                    for lesson in course_outline.get("lessons", []):
+                        lesson["content_format"] = "text_rich"
+                        lesson["written_assignments"] = "emphasized"
+                
+                # Adjust difficulty based on user preference
+                if user_profile.difficulty_preference > 0.7:
+                    course_outline["enhanced_challenges"] = True
+                    course_outline["advanced_topics"] = "included"
+                elif user_profile.difficulty_preference < 0.3:
+                    course_outline["simplified_explanations"] = True
+                    course_outline["extra_support"] = "provided"
+                
+                # Adjust session length based on user preference
+                optimal_session = user_profile.optimal_session_length
+                for lesson in course_outline.get("lessons", []):
+                    original_duration = lesson.get("estimated_duration", 30)
+                    lesson["recommended_duration"] = min(optimal_session, original_duration)
+                    if original_duration > optimal_session:
+                        lesson["suggested_breaks"] = "frequent"
+                
+                # Add personalization metadata
+                course_outline["personalization_applied"] = {
+                    "learning_style": user_profile.learning_style.value,
+                    "difficulty_adjusted": user_profile.difficulty_preference,
+                    "session_optimized": True,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                logger.info(f"Applied personalization for user {user_id}: {user_profile.learning_style.value} style")
+                
+            except ImportError:
+                logger.warning("Personalization engine not available")
+                
+        except Exception as e:
+            logger.error(f"Personalization optimization failed: {e}")
+            # Continue without personalization if it fails
+        
+        return course_outline
 
 
 # Initialize the agent
 curriculum_design_agent = CurriculumDesignAgent()
-"""
