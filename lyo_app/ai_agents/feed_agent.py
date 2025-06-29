@@ -10,6 +10,7 @@ This agent provides intelligent feed ranking and personalization:
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta
@@ -22,8 +23,8 @@ from collections import defaultdict
 
 from .models import UserEngagementState, UserEngagementStateEnum, AIModelTypeEnum, AIConversationLog
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
-from lyo_app.feeds.models import ContentItem, UserContentInteraction, UserPreferences
-from lyo_app.learning.models import UserLearningProgress, LearningModule
+from lyo_app.feeds.models import Post, PostReaction, FeedItem
+from lyo_app.learning.models import CourseEnrollment, LessonCompletion
 from lyo_app.auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -189,42 +190,47 @@ class FeedRankingAgent:
     async def _get_learning_progress(self, user_id: int, db: AsyncSession) -> Dict[str, Any]:
         """Fetch user learning progress data."""
         try:
-            # Query user learning progress
-            progress_records = (await db.execute(
-                select(UserLearningProgress)
-                .where(UserLearningProgress.user_id == user_id)
-                .order_by(desc(UserLearningProgress.last_updated))
-                .limit(100)  # Limit to recent modules
+            # Query user course enrollments
+            enrollments = (await db.execute(
+                select(CourseEnrollment)
+                .where(CourseEnrollment.user_id == user_id)
+                .order_by(desc(CourseEnrollment.enrolled_at))
+                .limit(100)  # Limit to recent enrollments
             )).scalars().all()
             
-            # Organize by module
-            modules = {}
-            for record in progress_records:
-                modules[record.module_id] = {
-                    "module_id": record.module_id,
-                    "progress_percentage": record.progress_percentage,
-                    "status": record.status,
-                    "last_updated": record.last_updated,
-                    "score": record.score if hasattr(record, "score") else None,
-                    "attempts": record.attempts if hasattr(record, "attempts") else 1,
-                    "time_spent": record.time_spent if hasattr(record, "time_spent") else 0,
+            # Query lesson completions
+            completions = (await db.execute(
+                select(LessonCompletion)
+                .where(LessonCompletion.user_id == user_id)
+                .order_by(desc(LessonCompletion.completed_at))
+                .limit(200)  # Recent completions
+            )).scalars().all()
+            
+            # Organize by course
+            courses = {}
+            for enrollment in enrollments:
+                courses[enrollment.course_id] = {
+                    "course_id": enrollment.course_id,
+                    "progress_percentage": enrollment.progress_percentage,
+                    "enrolled_at": enrollment.enrolled_at,
+                    "completed_at": enrollment.completed_at,
+                    "is_active": enrollment.is_active,
                 }
             
-            # Get current/active modules
-            active_modules = [m for m in modules.values() 
-                             if m["status"] == "in_progress" and m["progress_percentage"] < 100]
+            # Get current/active courses
+            active_courses = [c for c in courses.values() 
+                             if c["is_active"] and c["progress_percentage"] < 100]
             
-            # Get recently completed modules
-            completed_modules = [m for m in modules.values() 
-                                if m["status"] == "completed" and 
-                                m["last_updated"] > (datetime.utcnow() - timedelta(days=7))]
+            # Get recently completed courses
+            completed_courses = [c for c in courses.values() 
+                                if c["progress_percentage"] >= 100]
             
             return {
-                "modules": modules,
-                "active_modules": active_modules,
-                "completed_modules": completed_modules,
-                "total_modules": len(modules),
-                "avg_completion": sum(m["progress_percentage"] for m in modules.values()) / max(len(modules), 1)
+                "courses": courses,
+                "active_courses": active_courses,
+                "completed_courses": completed_courses,
+                "total_courses": len(courses),
+                "avg_completion": sum(c["progress_percentage"] for c in courses.values()) / max(len(courses), 1)
             }
         except Exception as e:
             logger.error(f"Error fetching learning progress for {user_id}: {str(e)}")
@@ -665,4 +671,3 @@ class FeedRankingAgent:
 
 # Create singleton instance
 feed_ranking_agent = FeedRankingAgent()
-"""
