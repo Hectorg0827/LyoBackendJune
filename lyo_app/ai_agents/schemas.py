@@ -129,12 +129,16 @@ class AIHealthCheckResponse(BaseModel):
     status: str = Field(..., description="Overall health status")
     timestamp: datetime = Field(..., description="Health check timestamp")
     models: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Individual model health status")
+    cost_status: Dict[str, Any] = Field(default_factory=dict, description="Cost tracking status")
+    overall_performance: Dict[str, Any] = Field(default_factory=dict, description="Overall performance metrics")
 
 
 class AIPerformanceStatsResponse(BaseModel):
     """Response containing AI performance statistics."""
     daily_cost: Dict[str, float] = Field(default_factory=dict, description="Daily cost information")
+    gemma_stats: Dict[str, Any] = Field(default_factory=dict, description="Gemma client statistics")
     models: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Per-model performance stats")
+    system_performance: Dict[str, Any] = Field(default_factory=dict, description="Overall system performance")
 
 
 # WebSocket Message Schemas
