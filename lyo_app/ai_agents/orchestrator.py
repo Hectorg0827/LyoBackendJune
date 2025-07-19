@@ -217,14 +217,14 @@ class ProductionGemma4Client:
     def __init__(self, 
                  on_device_model_path: str = "./models/gemma-4-9b",
                  cloud_endpoint: Optional[str] = None,
-                 api_key: Optional[str] = None):
+                 cloud_model: Optional[str] = None):
         self.on_device_model_path = on_device_model_path
-        self.cloud_endpoint = cloud_endpoint or os.getenv("GEMMA_4_CLOUD_ENDPOINT")
-        self.api_key = api_key or os.getenv("GEMMA_4_API_KEY")
+        self.cloud_endpoint = cloud_endpoint or os.getenv("LLM_ENDPOINT")
+        self.cloud_model = cloud_model or os.getenv("LLM_MODEL")
         
         # Model state
         self.on_device_loaded = False
-        self.cloud_available = bool(self.cloud_endpoint and self.api_key)
+        self.cloud_available = bool(self.cloud_endpoint)
         self.last_health_check = None
         self.preferred_mode = "on_device"  # "on_device", "cloud", "hybrid"
         
@@ -296,15 +296,11 @@ class ProductionGemma4Client:
     
     async def _check_cloud_health(self) -> bool:
         """Check if cloud Gemma 4 endpoint is healthy."""
-        if not self.cloud_endpoint or not self.api_key:
+        if not self.cloud_endpoint:
             return False
-            
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{self.cloud_endpoint}/health",
-                    headers={"Authorization": f"Bearer {self.api_key}"}
-                )
+                response = await client.get(self.cloud_endpoint)
                 return response.status_code == 200
         except Exception:
             return False
@@ -425,55 +421,38 @@ class ProductionGemma4Client:
         )
     
     async def _generate_cloud(self, prompt: str, max_tokens: int, temperature: float) -> ModelResponse:
-        """Generate response using cloud Gemma 4."""
+        """Generate response using cloud Gemma 4 (Ollama Gemma 4n)."""
         start_time = time.time()
-        
         try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
             payload = {
-                "model": "gemma-4-9b",
+                "model": self.cloud_model,
                 "prompt": prompt,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
-                "top_p": 0.9,
-                "stop": ["Human:", "Assistant:"]
+                "stream": False
             }
-            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.cloud_endpoint}/generate",
-                    headers=headers,
+                    self.cloud_endpoint,
                     json=payload
                 )
-                
                 response_time = (time.time() - start_time) * 1000
-                
                 if response.status_code == 200:
                     data = response.json()
-                    content = data["text"]
-                    tokens_used = data.get("tokens_used", len(content.split()) * 2)
-                    
-                    # Cloud pricing estimate (example rates)
-                    cost_per_token = 0.000015  # $0.015 per 1K tokens
-                    cost_estimate = tokens_used * cost_per_token
-                    
+                    content = data.get("response", data.get("text", ""))
+                    tokens_used = data.get("tokens", len(content.split()) * 2)
                     return ModelResponse(
                         content=content,
                         model_used=ModelType.GEMMA_4_CLOUD,
                         response_time_ms=response_time,
                         tokens_used=tokens_used,
-                        cost_estimate=cost_estimate,
+                        cost_estimate=0.0,
                         confidence_score=0.92,
-                        model_version="gemma-4-9b-cloud",
+                        model_version=self.cloud_model,
                         language_detected=LanguageCode.ENGLISH
                     )
                 else:
                     raise Exception(f"Cloud API error: {response.status_code}")
-                    
         except Exception as e:
             # Fallback to on-device if available
             if self.on_device_loaded:
