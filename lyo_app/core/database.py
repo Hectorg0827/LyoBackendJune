@@ -64,6 +64,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+# Alias for backward compatibility
+get_async_session = get_db
+
+
 async def get_db_session() -> AsyncSession:
     """
     Get a database session for direct use (not as dependency).
