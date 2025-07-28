@@ -4,27 +4,62 @@ Provides database engine, session factory, and base model class.
 """
 
 import logging
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
-# Create async engine
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.database_echo,
-    future=True,
-    pool_pre_ping=True,  # Verify connections before use
-    pool_recycle=300,    # Recycle connections every 5 minutes
-)
+# Database connection configuration
+def get_engine_config():
+    """Get database engine configuration based on database type."""
+    config = {
+        "echo": settings.database_echo,
+        "future": True,
+        "pool_pre_ping": True,  # Verify connections before use
+        "pool_recycle": 300,    # Recycle connections every 5 minutes
+    }
+    
+    # SQLite-specific configuration
+    if "sqlite" in settings.database_url:
+        config.update({
+            "poolclass": NullPool,  # SQLite doesn't support connection pooling
+            "connect_args": {"check_same_thread": False}
+        })
+    else:
+        # PostgreSQL/MySQL configuration
+        config.update({
+            "pool_size": settings.connection_pool_size,
+            "max_overflow": settings.max_overflow,
+            "pool_timeout": 30,
+        })
+    
+    return config
 
-# Create async session factory
+# Create async engine with dynamic configuration
+engine = create_async_engine(settings.database_url, **get_engine_config())
+
+# Add connection event listeners for better debugging
+@event.listens_for(engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    """Set SQLite pragmas for better performance and consistency."""
+    if "sqlite" in settings.database_url:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=10000")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.close()
+
+# Create async session factory with better configuration
 AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -56,12 +91,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
+            # Only commit if there were no exceptions
         except Exception:
             await session.rollback()
             raise
-        finally:
-            await session.close()
 
 
 # Alias for backward compatibility
