@@ -11,7 +11,7 @@ from lyo_app.auth.models import User
 from lyo_app.auth.rbac import Role, Permission, RoleType, PermissionType
 from lyo_app.auth.rbac_service import RBACService
 from lyo_app.auth.service import AuthService
-from lyo_app.auth.security import get_current_user
+from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.security_middleware import PermissionChecker
 from lyo_app.core.database import get_db
 from pydantic import BaseModel
