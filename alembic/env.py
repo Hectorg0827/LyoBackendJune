@@ -23,11 +23,12 @@ if config.config_file_name is not None:
 from lyo_app.core.database import Base
 
 # Import all models to ensure they're registered with Base
-from lyo_app.auth.models import User, UserSession  # noqa: F401
-from lyo_app.learning.models import Course, Lesson, Progress, Quiz, QuizAttempt  # noqa: F401
-from lyo_app.feeds.models import Post, Comment, Like  # noqa: F401
+from lyo_app.auth.models import User  # noqa: F401
+from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
+from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
 from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
 from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
+from lyo_app.resources.models import EducationalResource, ResourceTag, CourseResource, ResourceCollection  # noqa: F401
 from lyo_app.ai_agents.models import *  # noqa: F401
 
 target_metadata = Base.metadata
