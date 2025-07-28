@@ -105,32 +105,24 @@ def create_app() -> FastAPI:
     from lyo_app.core.file_routes import router as file_router
     from lyo_app.core.health import router as health_router
     from lyo_app.ai_agents import ai_router  # AI agents router
+    from lyo_app.resources.routes import router as resources_router  # Educational resources router
 
-    app.include_router(auth_router, prefix=f"{settings.api_v1_prefix}/auth", tags=["auth"])
+    app.include_router(auth_router, prefix=f"{settings.api_prefix}/auth", tags=["auth"])
     app.include_router(email_router, tags=["email"])
-    app.include_router(learning_router, prefix=f"{settings.api_v1_prefix}/learning", tags=["learning"])
-    app.include_router(feeds_router, prefix=f"{settings.api_v1_prefix}/feeds", tags=["feeds"])
-    app.include_router(community_router, prefix=f"{settings.api_v1_prefix}/community", tags=["community"])
-    app.include_router(gamification_router, prefix=f"{settings.api_v1_prefix}/gamification", tags=["gamification"])
-    app.include_router(admin_router, prefix=f"{settings.api_v1_prefix}/admin", tags=["admin"])
+    app.include_router(learning_router, prefix=f"{settings.api_prefix}/learning", tags=["learning"])
+    app.include_router(feeds_router, prefix=f"{settings.api_prefix}/feeds", tags=["feeds"])
+    app.include_router(community_router, prefix=f"{settings.api_prefix}/community", tags=["community"])
+    app.include_router(gamification_router, prefix=f"{settings.api_prefix}/gamification", tags=["gamification"])
+    app.include_router(admin_router, prefix=f"{settings.api_prefix}/admin", tags=["admin"])
     app.include_router(file_router, tags=["files"])
     app.include_router(health_router, tags=["health"])
     # Include AI agents API
-    app.include_router(ai_router, prefix=f"{settings.api_v1_prefix}/ai", tags=["ai"]) 
+    app.include_router(ai_router, prefix=f"{settings.api_prefix}/ai", tags=["ai"])
+    # Include Educational Resources API
+    app.include_router(resources_router, prefix=f"{settings.api_prefix}/resources", tags=["educational-resources"])
 
     # Setup error handlers
     setup_error_handlers(app)
-    
-    @app.get("/")
-    async def root():
-        """Root endpoint for health check."""
-        return {
-            "message": "LyoApp Backend API",
-            "version": "1.0.0",
-            "environment": settings.environment,
-            "docs": "/docs",
-            "health": "/health"
-        }
     
     @app.get("/health")
     async def health_check():
@@ -146,6 +138,12 @@ def create_app() -> FastAPI:
 
 # Create the app instance
 app = create_app()
+
+# Simple global root endpoint to confirm backend is running
+@app.get("/", include_in_schema=False)
+async def root_global():
+    """Global root endpoint confirming service is up"""
+    return {"message": "LyoApp backend is running. Visit /docs for API documentation."}
 
 # Expose Prometheus metrics
 @app.get("/metrics")
