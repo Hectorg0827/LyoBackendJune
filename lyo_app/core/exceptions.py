@@ -1,14 +1,21 @@
 """
-Global error handling and custom exceptions for LyoApp.
-Provides consistent error responses and proper exception handling.
+Enhanced error handling system for LyoApp backend.
+Provides comprehensive exception handling, logging, and user-friendly error responses.
 """
 
-from typing import Any, Dict, Optional, Union
-from fastapi import HTTPException, Request, status
+import logging
+import traceback
+from typing import Union, Dict, Any, Optional
+from datetime import datetime
+
+from fastapi import Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
-import logging
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
