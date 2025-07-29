@@ -8,7 +8,7 @@ import re
 from functools import lru_cache
 from typing import Optional, List
 
-from pydantic import Field, validator, root_validator
+from pydantic import Field, validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -120,6 +120,80 @@ class Settings(BaseSettings):
     max_overflow: int = Field(default=10, description="Maximum overflow connections")
     request_timeout: int = Field(default=30, description="Request timeout in seconds")
     
+    # Production Enhancement Settings
+    # Storage Configuration
+    storage_provider: str = Field(default="local", description="Storage provider: local, aws_s3, cloudflare_r2")
+    storage_bucket: Optional[str] = Field(default=None, description="Storage bucket name")
+    cdn_domain: Optional[str] = Field(default=None, description="CDN domain for faster file delivery")
+    
+    # AWS Configuration
+    aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key")
+    aws_secret_access_key: Optional[str] = Field(default=None, description="AWS Secret Key")
+    aws_region: str = Field(default="us-east-1", description="AWS region")
+    
+    # Cloudflare R2 Configuration (S3-compatible, cheaper)
+    r2_endpoint: Optional[str] = Field(default=None, description="Cloudflare R2 endpoint")
+    r2_access_key: Optional[str] = Field(default=None, description="R2 Access Key")
+    r2_secret_key: Optional[str] = Field(default=None, description="R2 Secret Key")
+    
+    # Database Optimization
+    database_pool_size: int = Field(default=20, description="Database connection pool size")
+    database_max_overflow: int = Field(default=30, description="Database max overflow connections")
+    database_pool_timeout: int = Field(default=30, description="Database pool timeout")
+    database_pool_recycle: int = Field(default=3600, description="Database pool recycle time")
+    
+    # Performance & Scaling
+    enable_query_cache: bool = Field(default=True, description="Enable database query caching")
+    cache_default_ttl: int = Field(default=300, description="Default cache TTL in seconds")
+    max_concurrent_requests: int = Field(default=1000, description="Max concurrent requests")
+    
+    # Real-time Features
+    websocket_max_connections: int = Field(default=10000, description="Max WebSocket connections")
+    websocket_heartbeat_interval: int = Field(default=30, description="WebSocket heartbeat interval")
+    
+    # Search Enhancement
+    enable_elasticsearch: bool = Field(default=False, description="Enable Elasticsearch for advanced search")
+    elasticsearch_url: Optional[str] = Field(default=None, description="Elasticsearch cluster URL")
+    
+    # Content Delivery
+    enable_content_compression: bool = Field(default=True, description="Enable content compression")
+    image_optimization_quality: int = Field(default=85, description="Image optimization quality (1-100)")
+    max_image_size: int = Field(default=5 * 1024 * 1024, description="Max image size in bytes")
+    
+    # API Enhancement
+    api_rate_limit_per_minute: int = Field(default=100, description="API rate limit per minute")
+    api_burst_limit: int = Field(default=20, description="API burst limit")
+    
+    # Monitoring & Analytics
+    enable_performance_monitoring: bool = Field(default=True, description="Enable performance monitoring")
+    enable_user_analytics: bool = Field(default=True, description="Enable user analytics")
+    analytics_batch_size: int = Field(default=100, description="Analytics batch processing size")
+    
+    # Security Enhancement
+    enable_advanced_security: bool = Field(default=True, description="Enable advanced security features")
+    password_min_length: int = Field(default=12, description="Minimum password length")
+    session_timeout_minutes: int = Field(default=60, description="Session timeout in minutes")
+    max_login_attempts: int = Field(default=5, description="Max login attempts before lockout")
+    
+    # Content Moderation
+    enable_content_moderation: bool = Field(default=True, description="Enable AI content moderation")
+    moderation_confidence_threshold: float = Field(default=0.8, description="Content moderation confidence threshold")
+    
+    # Backup & Recovery
+    enable_automated_backups: bool = Field(default=True, description="Enable automated database backups")
+    backup_retention_days: int = Field(default=30, description="Backup retention period in days")
+    
+    # Mobile App Integration
+    ios_app_store_url: Optional[str] = Field(default=None, description="iOS App Store URL")
+    android_play_store_url: Optional[str] = Field(default=None, description="Android Play Store URL")
+    deep_link_scheme: str = Field(default="lyoapp", description="Deep link URL scheme")
+    
+    # Push Notifications
+    apns_key_id: Optional[str] = Field(default=None, description="Apple Push Notification service Key ID")
+    apns_team_id: Optional[str] = Field(default=None, description="Apple Developer Team ID")
+    apns_bundle_id: Optional[str] = Field(default=None, description="iOS App Bundle ID")
+    fcm_server_key: Optional[str] = Field(default=None, description="Firebase Cloud Messaging Server Key")
+    
     @validator('youtube_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key', 'podchaser_api_key')
     def validate_api_keys(cls, v, field):
         """Validate API key format and length."""
@@ -167,30 +241,27 @@ class Settings(BaseSettings):
             raise ValueError("Invalid email format")
         return v
     
-    @root_validator
-    def validate_environment_specific(cls, values):
+        @model_validator(mode='after')
+    def validate_environment_specific(self):
         """Validate environment-specific configurations."""
-        environment = values.get('environment', 'development')
+        # For model_validator in 'after' mode, self is the model instance
+        environment = self.environment
         
         # Production-specific validations
         if environment == 'production':
             # Require secure secret key in production
-            secret_key = values.get('secret_key', '')
+            secret_key = self.secret_key
             if len(secret_key) < 64:
-                raise ValueError("Production environment requires a secret key of at least 64 characters")
+                raise ValueError("Production secret key must be at least 64 characters")
             
             # Require database URL in production
-            database_url = values.get('database_url', '')
+            database_url = self.database_url
             if 'sqlite' in database_url.lower():
                 raise ValueError("SQLite is not recommended for production - use PostgreSQL")
             
             # Require HTTPS CORS origins in production
-            cors_origins = values.get('cors_origins', [])
-            for origin in cors_origins:
-                if origin.startswith('http://') and 'localhost' not in origin:
-                    raise ValueError("Production CORS origins should use HTTPS")
         
-        return values
+        return self
     
     class Config:
         env_file = ".env"
