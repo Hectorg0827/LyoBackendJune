@@ -119,6 +119,7 @@ async def init_db() -> None:
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
         from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
+        from lyo_app.ai_study.models import StudySession, StudyMessage, GeneratedQuiz, QuizAttempt  # noqa: F401
         
         await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully")
