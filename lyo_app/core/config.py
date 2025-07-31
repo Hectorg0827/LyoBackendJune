@@ -8,7 +8,7 @@ import re
 from functools import lru_cache
 from typing import Optional, List
 
-from pydantic import Field, validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -194,15 +194,16 @@ class Settings(BaseSettings):
     apns_bundle_id: Optional[str] = Field(default=None, description="iOS App Bundle ID")
     fcm_server_key: Optional[str] = Field(default=None, description="Firebase Cloud Messaging Server Key")
     
-    @validator('youtube_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key', 'podchaser_api_key')
-    def validate_api_keys(cls, v, field):
+    @field_validator('youtube_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key', 'podchaser_api_key')
+    @classmethod
+    def validate_api_keys(cls, v, info):
         """Validate API key format and length."""
         if v is None:
             return v
         
         # Minimum length check
         if len(v) < 10:
-            raise ValueError(f"{field.name} seems too short (minimum 10 characters)")
+            raise ValueError(f"{info.field_name} seems too short (minimum 10 characters)")
         
         # Check for obvious placeholder values
         placeholder_patterns = [
@@ -210,11 +211,12 @@ class Settings(BaseSettings):
             'change-me', 'placeholder', 'test-key'
         ]
         if any(pattern in v.lower() for pattern in placeholder_patterns):
-            raise ValueError(f"{field.name} appears to be a placeholder value")
+            raise ValueError(f"{info.field_name} appears to be a placeholder value")
         
         return v
     
-    @validator('secret_key')
+    @field_validator('secret_key')
+    @classmethod
     def validate_secret_key(cls, v):
         """Validate secret key strength."""
         if len(v) < 32:
@@ -226,7 +228,8 @@ class Settings(BaseSettings):
         
         return v
     
-    @validator('cors_origins')
+    @field_validator('cors_origins')
+    @classmethod
     def validate_cors_origins(cls, v):
         """Validate CORS origins format."""
         for origin in v:
@@ -234,14 +237,15 @@ class Settings(BaseSettings):
                 raise ValueError(f"CORS origin '{origin}' must start with http:// or https://")
         return v
     
-    @validator('smtp_from_email')
+    @field_validator('smtp_from_email')
+    @classmethod
     def validate_email_format(cls, v):
         """Validate email format."""
         if v and '@' not in v:
             raise ValueError("Invalid email format")
         return v
     
-        @model_validator(mode='after')
+    @model_validator(mode='after')
     def validate_environment_specific(self):
         """Validate environment-specific configurations."""
         # For model_validator in 'after' mode, self is the model instance
