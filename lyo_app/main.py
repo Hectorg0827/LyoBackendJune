@@ -10,8 +10,17 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from lyo_app.core.config import settings
-import sentry_sdk
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+try:
+    import sentry_sdk
+    SENTRY_AVAILABLE = True
+except ImportError:
+    SENTRY_AVAILABLE = False
+
+try:
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
 
 from lyo_app.core.database import close_db, init_db
 from lyo_app.core.logging import setup_logging
@@ -33,8 +42,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     await init_db()
 
-    # Initialize Sentry if configured
-    if settings.sentry_dsn:
+    # Initialize Sentry if configured and available
+    if settings.sentry_dsn and SENTRY_AVAILABLE:
         sentry_sdk.init(
             dsn=settings.sentry_dsn,
             environment=settings.environment,
@@ -107,6 +116,7 @@ def create_app() -> FastAPI:
     from lyo_app.ai_agents import ai_router  # AI agents router
     from lyo_app.resources.routes import router as resources_router  # Educational resources router
     from lyo_app.api.social import router as social_router  # Stories & Messenger router
+    from lyo_app.ai_study import ai_study_router  # AI Study Mode router
 
     app.include_router(auth_router, prefix=f"{settings.api_prefix}/auth", tags=["auth"])
     app.include_router(email_router, tags=["email"])
@@ -123,6 +133,8 @@ def create_app() -> FastAPI:
     app.include_router(resources_router, prefix=f"{settings.api_prefix}/resources", tags=["educational-resources"])
     # Include Stories & Messenger API
     app.include_router(social_router, prefix=f"{settings.api_prefix}", tags=["stories-messenger"])
+    # Include AI Study Mode API
+    app.include_router(ai_study_router, prefix=f"{settings.api_prefix}", tags=["ai-study-mode"])
 
     # Setup error handlers
     setup_error_handlers(app)
@@ -148,9 +160,12 @@ async def root_global():
     """Global root endpoint confirming service is up"""
     return {"message": "LyoApp backend is running. Visit /docs for API documentation."}
 
-# Expose Prometheus metrics
-@app.get("/metrics")
-def metrics() -> Response:
-    """Prometheus metrics endpoint"""
-    data = generate_latest()
-    return Response(data, media_type=CONTENT_TYPE_LATEST)
+# Expose Prometheus metrics (temporarily disabled)
+# @app.get("/metrics")
+# def metrics() -> Response:
+#     """Prometheus metrics endpoint"""
+#     if not PROMETHEUS_AVAILABLE:
+#         return Response("Prometheus client not available", status_code=503)
+#     
+#     data = generate_latest()
+#     return Response(data, media_type=CONTENT_TYPE_LATEST)
