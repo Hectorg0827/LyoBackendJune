@@ -116,7 +116,7 @@ def create_app() -> FastAPI:
     from lyo_app.ai_agents import ai_router  # AI agents router
     from lyo_app.resources.routes import router as resources_router  # Educational resources router
     from lyo_app.api.social import router as social_router  # Stories & Messenger router
-    from lyo_app.ai_study import ai_study_router  # AI Study Mode router
+    from lyo_app.ai_study.clean_routes import router as ai_study_router  # AI Study Mode router
 
     app.include_router(auth_router, prefix=f"{settings.api_prefix}/auth", tags=["auth"])
     app.include_router(email_router, tags=["email"])
@@ -134,7 +134,7 @@ def create_app() -> FastAPI:
     # Include Stories & Messenger API
     app.include_router(social_router, prefix=f"{settings.api_prefix}", tags=["stories-messenger"])
     # Include AI Study Mode API
-    app.include_router(ai_study_router, prefix=f"{settings.api_prefix}", tags=["ai-study-mode"])
+    app.include_router(ai_study_router, tags=["ai-study-mode"])
 
     # Setup error handlers
     setup_error_handlers(app)
