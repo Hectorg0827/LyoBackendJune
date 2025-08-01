@@ -250,7 +250,7 @@ class iOSConnectionSimulator:
         
         ai_request = {
             "message": "Hello AI! Can you help me learn Python programming?",
-            "model": "gpt-3.5-turbo"
+            "model": "gemini-pro"
         }
         
         try:
