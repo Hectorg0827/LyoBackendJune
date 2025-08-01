@@ -77,6 +77,12 @@ class User(Base):
     engagement_state = relationship("UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="select")
     mentor_interactions = relationship("MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="select")
     
+    # AI Study Mode relationships
+    study_sessions = relationship("StudySession", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    generated_quizzes = relationship("GeneratedQuiz", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    quiz_attempts = relationship("QuizAttempt", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    study_analytics = relationship("StudySessionAnalytics", back_populates="user", cascade="all, delete-orphan", lazy="select")
+    
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
     
