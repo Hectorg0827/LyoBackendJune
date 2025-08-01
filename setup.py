@@ -131,8 +131,6 @@ CELERY_RESULT_BACKEND=redis://localhost:6379/2
 
 # API Keys (Add your actual keys here)
 YOUTUBE_API_KEY=your-youtube-api-key-here
-OPENAI_API_KEY=your-openai-api-key-here
-ANTHROPIC_API_KEY=your-anthropic-api-key-here
 GEMINI_API_KEY=your-gemini-api-key-here
 
 # Email Configuration
