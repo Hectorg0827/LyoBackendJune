@@ -176,10 +176,9 @@ class BaseAPIClient:
             if "youtube" in self.base_url.lower():
                 # YouTube uses query parameter, not header
                 pass
-            elif "openai" in self.base_url.lower():
-                headers["Authorization"] = f"Bearer {self.api_key}"
-            elif "anthropic" in self.base_url.lower():
-                headers["x-api-key"] = self.api_key
+            elif "googleapis.com" in self.base_url.lower() or "gemini" in self.base_url.lower():
+                # Google APIs use query parameter for API key
+                pass
             else:
                 # Default to Authorization header
                 headers["Authorization"] = f"Bearer {self.api_key}"
