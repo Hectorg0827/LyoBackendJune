@@ -117,37 +117,37 @@ class AIResilienceManager:
     async def initialize(self):
         """Initialize AI models and circuit breakers"""
         
-        # Configure available AI models
+        # Configure available AI models - Google Gemini only
         self.models = {
-            "openai-gpt4": AIModelConfig(
-                name="OpenAI GPT-4",
-                endpoint="https://api.openai.com/v1/chat/completions",
-                api_key=settings.openai_api_key or "",
+            "gemini-pro": AIModelConfig(
+                name="Google Gemini Pro",
+                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
+                api_key=settings.gemini_api_key or "",
                 max_tokens=2000,
                 timeout=30,
                 priority=1,
-                cost_per_token=0.03,
-                capabilities=["chat", "code", "analysis", "creative"]
+                cost_per_token=0.002,
+                capabilities=["chat", "code", "analysis", "creative", "multimodal"]
             ),
-            "anthropic-claude": AIModelConfig(
-                name="Anthropic Claude",
-                endpoint="https://api.anthropic.com/v1/messages",
-                api_key=settings.anthropic_api_key or "",
+            "gemini-pro-vision": AIModelConfig(
+                name="Google Gemini Pro Vision",
+                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-pro-vision:generateContent",
+                api_key=settings.gemini_api_key or "",
                 max_tokens=1500,
                 timeout=25,
                 priority=2,
-                cost_per_token=0.025,
-                capabilities=["chat", "analysis", "reasoning"]
+                cost_per_token=0.003,
+                capabilities=["chat", "vision", "multimodal", "analysis"]
             ),
-            "google-gemini": AIModelConfig(
-                name="Google Gemini",
-                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
+            "gemini-1.5-flash": AIModelConfig(
+                name="Google Gemini 1.5 Flash",
+                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
                 api_key=settings.gemini_api_key or "",
                 max_tokens=1000,
-                timeout=20,
+                timeout=15,
                 priority=3,
-                cost_per_token=0.002,
-                capabilities=["chat", "multimodal"]
+                cost_per_token=0.001,
+                capabilities=["chat", "fast", "lightweight"]
             )
         }
         
@@ -180,25 +180,40 @@ class AIResilienceManager:
     
     async def chat_completion(
         self,
-        message: str,
-        model_preference: Optional[str] = None,
-        max_retries: int = 3,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+        provider_order: Optional[List[str]] = None,
         use_cache: bool = True
     ) -> Dict[str, Any]:
         """
-        Get AI chat completion with resilience features
+        Get AI chat completion with conversation context
         """
+        
+        # Convert messages to a single string for caching
+        message_str = json.dumps(messages)
         
         # Check cache first
         if use_cache:
-            cache_key = f"chat:{hash(message)}"
+            cache_key = f"chat:{hash(message_str)}"
             cached_result = self._get_from_cache(cache_key)
             if cached_result:
                 logger.debug("Returning cached AI response")
                 return cached_result
         
         # Get available models in priority order
-        available_models = self._get_available_models(model_preference)
+        if provider_order:
+            # Map provider names to model names - Google Gemini only
+            provider_map = {
+                "google": "gemini-pro",
+                "gemini": "gemini-pro",
+                "gemini-pro": "gemini-pro",
+                "gemini-vision": "gemini-pro-vision", 
+                "gemini-flash": "gemini-1.5-flash"
+            }
+            available_models = [provider_map.get(p) for p in provider_order if provider_map.get(p) in self.models]
+        else:
+            available_models = self._get_available_models()
         
         if not available_models:
             raise Exception("No AI models available")
@@ -220,35 +235,110 @@ class AIResilienceManager:
                 logger.warning(f"Skipping {model_name} - daily cost limit reached")
                 continue
             
-            # Attempt call with retries and exponential backoff
-            for attempt in range(max_retries):
-                try:
-                    result = await self._call_model_with_circuit_breaker(
-                        model_name, model, message
-                    )
-                    
-                    # Cache successful result
-                    if use_cache:
-                        self._add_to_cache(cache_key, result)
-                    
-                    # Track usage costs
-                    self._track_usage(model_name, result.get("tokens_used", 0), model)
-                    
-                    logger.info(f"Successful AI response from {model_name}")
-                    return result
-                    
-                except Exception as e:
-                    last_exception = e
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff with jitter
-                    logger.warning(f"Attempt {attempt + 1} failed for {model_name}: {e}")
-                    
-                    if attempt < max_retries - 1:
-                        logger.info(f"Retrying in {wait_time:.2f} seconds...")
-                        await asyncio.sleep(wait_time)
-                    break  # Move to next model
+            try:
+                result = await self._call_model_with_messages(
+                    model_name, model, messages, temperature, max_tokens
+                )
+                
+                # Cache successful result
+                if use_cache:
+                    self._add_to_cache(cache_key, result)
+                
+                # Track usage costs
+                self._track_usage(model_name, result.get("tokens_used", 0), model)
+                
+                logger.info(f"Successful AI response from {model_name}")
+                return result
+                
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"Model {model_name} failed: {e}")
+                continue  # Move to next model
         
         # All models failed - return fallback response
-        return self._get_fallback_response(message, str(last_exception))
+        return self._get_fallback_response(message_str, str(last_exception))
+
+    async def _call_model_with_messages(
+        self, model_name: str, model: AIModelConfig, messages: List[Dict[str, str]], 
+        temperature: float, max_tokens: int
+    ) -> Dict[str, Any]:
+        """Call AI model with conversation messages"""
+        
+        circuit_breaker = self.circuit_breakers[model_name]
+        
+        async def make_api_call():
+            return await self._make_api_call_with_messages(model, messages, temperature, max_tokens)
+        
+        return await circuit_breaker.call(make_api_call)
+
+    async def _make_api_call_with_messages(
+        self, model: AIModelConfig, messages: List[Dict[str, str]], 
+        temperature: float, max_tokens: int
+    ) -> Dict[str, Any]:
+        """Make actual API call to Google Gemini with messages"""
+        
+        if not model.api_key:
+            raise Exception(f"No API key configured for {model.name}")
+        
+        start_time = time.time()
+        
+        # Convert messages to Gemini format
+        contents = []
+        
+        for msg in messages:
+            role = "user" if msg["role"] in ["user", "system"] else "model"
+            content_part = {"text": msg["content"]}
+            
+            # Find existing conversation turn or create new one
+            if contents and contents[-1]["role"] == role:
+                # Append to existing turn
+                contents[-1]["parts"].append(content_part)
+            else:
+                # Create new conversation turn
+                contents.append({
+                    "role": role,
+                    "parts": [content_part]
+                })
+        
+        payload = {
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+                "topP": 0.8,
+                "topK": 40
+            }
+        }
+        
+        headers = {"Content-Type": "application/json"}
+        endpoint = f"{model.endpoint}?key={model.api_key}"
+        
+        # Make API call to Google Gemini
+        async with self.session.post(
+            endpoint,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=model.timeout)
+        ) as response:
+            
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"Gemini API call failed: {response.status} - {error_text}")
+            
+            result_data = await response.json()
+            response_time = time.time() - start_time
+            
+            # Parse Gemini response
+            content = result_data["candidates"][0]["content"]["parts"][0]["text"]
+            tokens_used = result_data.get("usageMetadata", {}).get("totalTokenCount", 0)
+            
+            return {
+                "content": content,
+                "model": model.name,
+                "tokens_used": tokens_used,
+                "response_time": response_time,
+                "timestamp": time.time()
+            }
     
     async def _call_model_with_circuit_breaker(
         self, model_name: str, model: AIModelConfig, message: str
