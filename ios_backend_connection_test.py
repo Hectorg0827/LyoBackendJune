@@ -268,7 +268,7 @@ class BackendConnectionTester:
         try:
             ai_data = {
                 "message": "Hello! This is a test from iOS connection verification.",
-                "model": "gpt-3.5-turbo"
+                "model": "gemini-pro"
             }
             response = requests.post(f"{API_BASE}/ai/chat", json=ai_data, headers=headers)
             if response.status_code == 200:
