@@ -6,7 +6,7 @@ All secrets and environment-specific values are loaded from environment variable
 import secrets
 import re
 from functools import lru_cache
-from typing import Optional, List
+from typing import Optional, List, Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     
     # API settings
     api_prefix: str = Field(default="/api/v1", description="API prefix for versioning")
-    cors_origins: list[str] = Field(
+    cors_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080"],
         description="CORS allowed origins"
     )
@@ -85,9 +85,8 @@ class Settings(BaseSettings):
     
     # External API Keys
     youtube_api_key: Optional[str] = Field(default=None, description="YouTube Data API v3 key")
-    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
-    anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key")
     gemini_api_key: Optional[str] = Field(default=None, description="Google Gemini API key")
+    # Removed: openai_api_key and anthropic_api_key - Using Google Gemini only
     
     # Spotify API (for podcast content)
     spotify_client_id: Optional[str] = Field(default=None, description="Spotify Client ID")
