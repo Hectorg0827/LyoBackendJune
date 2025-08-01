@@ -276,7 +276,7 @@ class LyoAppAPIClient: ObservableObject {
     }
     
     // MARK: - AI Chat
-    func sendAIMessage(message: String, model: String = "gpt-4") -> AnyPublisher<AIResponse, APIError> {
+    func sendAIMessage(message: String, model: String = "gemini-pro") -> AnyPublisher<AIResponse, APIError> {
         var request = createRequest(for: "/ai/chat", method: .POST)
         
         let chatData = AIMessageRequest(message: message, model: model)
