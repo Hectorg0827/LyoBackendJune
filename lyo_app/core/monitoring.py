@@ -610,3 +610,84 @@ def setup_performance_monitoring(app):
     performance_monitor._start_time = time.time()
     
     logger.info("Performance monitoring initialized")
+
+def monitor_request(endpoint_name: str):
+    """Decorator to monitor request performance"""
+    
+    def decorator(func: Callable) -> Callable:
+        import functools
+        
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            start_time = time.time()
+            error = None
+            status_code = 200
+            
+            try:
+                result = await func(*args, **kwargs)
+                return result
+                
+            except Exception as e:
+                error = str(e)
+                status_code = 500
+                raise
+                
+            finally:
+                duration_ms = (time.time() - start_time) * 1000
+                
+                # Try to extract user_id from kwargs if available
+                user_id = None
+                if 'current_user' in kwargs:
+                    user = kwargs['current_user']
+                    user_id = getattr(user, 'id', None)
+                
+                # Record metrics
+                logger.info(f"Request {endpoint_name} completed", extra={
+                    "endpoint": endpoint_name,
+                    "duration_ms": duration_ms,
+                    "status_code": status_code,
+                    "user_id": user_id,
+                    "error": error
+                })
+        
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            start_time = time.time()
+            error = None
+            status_code = 200
+            
+            try:
+                result = func(*args, **kwargs)
+                return result
+                
+            except Exception as e:
+                error = str(e)
+                status_code = 500
+                raise
+                
+            finally:
+                duration_ms = (time.time() - start_time) * 1000
+                
+                # Try to extract user_id from kwargs if available
+                user_id = None
+                if 'current_user' in kwargs:
+                    user = kwargs['current_user']
+                    user_id = getattr(user, 'id', None)
+                
+                # Record metrics  
+                logger.info(f"Request {endpoint_name} completed", extra={
+                    "endpoint": endpoint_name,
+                    "duration_ms": duration_ms,
+                    "status_code": status_code,
+                    "user_id": user_id,
+                    "error": error
+                })
+        
+        # Return appropriate wrapper based on function type
+        import asyncio
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
+    
+    return decorator
