@@ -224,7 +224,19 @@ async def get_study_session_history(
             status_code=500,
             detail=f"Failed to get AI session history: {str(e)}"
         )
-    """
+
+# ============================================================================
+# AI Study Mode API Routes
+# ============================================================================
+
+@router.post("/sessions", response_model=StudySessionCreateResponse)
+async def create_study_session(
+    request: StudySessionCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_access_token)
+):
+    """Create a new AI study session for a learning resource."""
     try:
         # Process the conversation through our AI service
         response = await study_mode_service.process_conversation(
@@ -957,6 +969,11 @@ async def _update_quiz_analytics(user_id: int, quiz_id: str, db: AsyncSession):
 async def _update_attempt_analytics(user_id: int, attempt_id: str, db: AsyncSession):
     """Update attempt analytics in the background"""
     try:
+        # Placeholder for attempt analytics update
+        pass
+    except Exception as e:
+        logger.error(f"Failed to update attempt analytics: {e}")
+
 # ============================================================================
 # ENHANCED UTILITY AND HEALTH ENDPOINTS
 # ============================================================================
