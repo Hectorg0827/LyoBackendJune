@@ -246,3 +246,36 @@ class FeedItem(Base):
     
     def __repr__(self) -> str:
         return f"<FeedItem(user_id={self.user_id}, post_id={self.post_id}, score={self.score})>"
+
+
+class UserInteraction(Base):
+    """Model for tracking user interactions with posts for the addictive algorithm."""
+    
+    __tablename__ = "user_interactions"
+    
+    # Primary key
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    
+    # User who performed the interaction
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    
+    # Post that was interacted with
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id"), nullable=False, index=True
+    )
+    
+    # Type of interaction (view, like, comment, share, etc.)
+    interaction_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    
+    # How long the user engaged with the content (in seconds)
+    engagement_duration: Mapped[Optional[float]] = mapped_column(default=0.0)
+    
+    # Timestamp
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+    
+    def __repr__(self) -> str:
+        return f"<UserInteraction(user_id={self.user_id}, post_id={self.post_id}, type={self.interaction_type})>"
