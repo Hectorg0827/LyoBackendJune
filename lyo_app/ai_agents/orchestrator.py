@@ -80,9 +80,9 @@ class ModelType(str, Enum):
     """Available AI model types with production capabilities."""
     GEMMA_4_ON_DEVICE = "gemma_4_on_device"
     GEMMA_4_CLOUD = "gemma_4_cloud"
-    CLAUDE_3_5_SONNET = "claude_3_5_sonnet"
-    GPT_4_TURBO = "gpt_4_turbo"
-    GPT_4_MINI = "gpt_4_mini"
+    GEMINI_PRO = "gemini_pro"
+    GEMINI_PRO_VISION = "gemini_pro_vision"
+    GEMINI_15_FLASH = "gemini_15_flash"
     HYBRID = "hybrid"
 
 
@@ -608,26 +608,24 @@ Is there a particular aspect you'd like to dive deeper into?"""
 
 class ModernCloudLLMClient:
     """
-    Enhanced cloud LLM client supporting multiple providers and models.
+    Enhanced cloud LLM client supporting Google Gemini models only.
     
     Supports:
-    - OpenAI GPT-4 Turbo, GPT-4 Mini
-    - Anthropic Claude 3.5 Sonnet
+    - Google Gemini Pro
+    - Google Gemini Pro Vision
+    - Google Gemini 1.5 Flash
     - Auto-retry with exponential backoff
     - Rate limiting and cost optimization
     """
     
     def __init__(self, 
-                 openai_api_key: Optional[str] = None,
-                 anthropic_api_key: Optional[str] = None,
-                 default_model: str = "gpt-4-mini"):
-        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        self.anthropic_api_key = anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
+                 gemini_api_key: Optional[str] = None,
+                 default_model: str = "gemini-pro"):
+        self.gemini_api_key = gemini_api_key or os.getenv("GOOGLE_API_KEY")
         self.default_model = default_model
         
         # API endpoints
-        self.openai_endpoint = "https://api.openai.com/v1/chat/completions"
-        self.anthropic_endpoint = "https://api.anthropic.com/v1/messages"
+        self.gemini_base_url = "https://generativelanguage.googleapis.com/v1/models"
         
         # Rate limiting
         self.last_request_time = 0
@@ -638,7 +636,7 @@ class ModernCloudLLMClient:
                       max_tokens: int = 512, 
                       temperature: float = 0.7,
                       model_preference: Optional[ModelType] = None) -> ModelResponse:
-        """Generate response using cloud LLM with intelligent model selection."""
+        """Generate response using Google Gemini with intelligent model selection."""
         start_time = time.time()
         
         try:
@@ -648,14 +646,8 @@ class ModernCloudLLMClient:
             # Rate limiting
             await self._apply_rate_limiting()
             
-            # Generate response based on provider
-            if model_type in [ModelType.GPT_4_TURBO, ModelType.GPT_4_MINI]:
-                response = await self._generate_openai(prompt, model_name, max_tokens, temperature)
-            elif model_type == ModelType.CLAUDE_3_5_SONNET:
-                response = await self._generate_anthropic(prompt, max_tokens, temperature)
-            else:
-                raise Exception(f"Unsupported model type: {model_type}")
-            
+            # Generate response using Gemini
+            response = await self._generate_gemini(prompt, model_name, max_tokens, temperature)
             response.model_used = model_type
             return response
             
@@ -665,7 +657,7 @@ class ModernCloudLLMClient:
             
             return ModelResponse(
                 content="",
-                model_used=ModelType.GPT_4_MINI,
+                model_used=ModelType.GEMINI_PRO,
                 response_time_ms=response_time,
                 language_detected=LanguageCode.ENGLISH,
                 error=str(e)
@@ -673,127 +665,112 @@ class ModernCloudLLMClient:
     
     def _select_model(self, preference: Optional[ModelType]) -> Tuple[ModelType, str]:
         """Select appropriate model based on preference and availability."""
-        if preference == ModelType.GPT_4_TURBO and self.openai_api_key:
-            return ModelType.GPT_4_TURBO, "gpt-4-turbo"
-        elif preference == ModelType.GPT_4_MINI and self.openai_api_key:
-            return ModelType.GPT_4_MINI, "gpt-4o-mini"
-        elif preference == ModelType.CLAUDE_3_5_SONNET and self.anthropic_api_key:
-            return ModelType.CLAUDE_3_5_SONNET, "claude-3-5-sonnet-20241022"
-        elif self.openai_api_key:
-            return ModelType.GPT_4_MINI, "gpt-4o-mini"  # Default to cost-effective option
-        elif self.anthropic_api_key:
-            return ModelType.CLAUDE_3_5_SONNET, "claude-3-5-sonnet-20241022"
+        if preference == ModelType.GEMINI_PRO and self.gemini_api_key:
+            return ModelType.GEMINI_PRO, "gemini-pro"
+        elif preference == ModelType.GEMINI_PRO_VISION and self.gemini_api_key:
+            return ModelType.GEMINI_PRO_VISION, "gemini-pro-vision"
+        elif preference == ModelType.GEMINI_15_FLASH and self.gemini_api_key:
+            return ModelType.GEMINI_15_FLASH, "gemini-1.5-flash"
+        elif self.gemini_api_key:
+            return ModelType.GEMINI_PRO, "gemini-pro"  # Default to Gemini Pro
         else:
-            raise Exception("No cloud LLM API keys configured")
+            raise Exception("No Google Gemini API key configured")
     
-    async def _generate_openai(self, prompt: str, model: str, max_tokens: int, temperature: float) -> ModelResponse:
-        """Generate response using OpenAI API."""
-        if not self.openai_api_key:
-            raise Exception("OpenAI API key not configured")
+    async def _generate_gemini(self, prompt: str, model: str, max_tokens: int, temperature: float) -> ModelResponse:
+        """Generate response using Google Gemini API."""
+        if not self.gemini_api_key:
+            raise Exception("Google Gemini API key not configured")
+        
+        # Construct the endpoint URL
+        endpoint = f"{self.gemini_base_url}/{model}:generateContent?key={self.gemini_api_key}"
         
         headers = {
-            "Authorization": f"Bearer {self.openai_api_key}",
             "Content-Type": "application/json"
         }
         
         payload = {
-            "model": model,
-            "messages": [
+            "contents": [
                 {
-                    "role": "system", 
-                    "content": "You are an expert AI tutor helping students learn. Provide clear, educational, and encouraging responses. Always break down complex topics into understandable parts."
-                },
-                {"role": "user", "content": prompt}
+                    "parts": [
+                        {
+                            "text": f"You are an expert AI tutor helping students learn. Provide clear, educational, and encouraging responses. Always break down complex topics into understandable parts.\n\n{prompt}"
+                        }
+                    ]
+                }
             ],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "top_p": 0.9
-        }
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                self.openai_endpoint,
-                headers=headers,
-                json=payload
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"OpenAI API error: {response.status_code} - {response.text}")
-            
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            usage = data.get("usage", {})
-            tokens_used = usage.get("total_tokens", 0)
-            
-            # Cost calculation (approximate rates as of 2024)
-            if model == "gpt-4-turbo":
-                cost_per_token = 0.00003  # $0.03 per 1K tokens
-            else:  # gpt-4o-mini
-                cost_per_token = 0.00000015  # $0.15 per 1M tokens
-                
-            cost_estimate = tokens_used * cost_per_token
-            
-            return ModelResponse(
-                content=content,
-                model_used=ModelType.GPT_4_TURBO,  # Will be updated by caller
-                response_time_ms=0,  # Will be calculated by caller
-                tokens_used=tokens_used,
-                cost_estimate=cost_estimate,
-                confidence_score=0.95,
-                model_version=model,
-                language_detected=LanguageCode.ENGLISH
-            )
-    
-    async def _generate_anthropic(self, prompt: str, max_tokens: int, temperature: float) -> ModelResponse:
-        """Generate response using Anthropic Claude API."""
-        if not self.anthropic_api_key:
-            raise Exception("Anthropic API key not configured")
-        
-        headers = {
-            "Authorization": f"Bearer {self.anthropic_api_key}",
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01"
-        }
-        
-        payload = {
-            "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": [
+            "generationConfig": {
+                "temperature": temperature,
+                "topK": 40,
+                "topP": 0.95,
+                "maxOutputTokens": max_tokens,
+                "stopSequences": []
+            },
+            "safetySettings": [
                 {
-                    "role": "user", 
-                    "content": f"You are an expert AI tutor. {prompt}"
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
                 }
             ]
         }
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                self.anthropic_endpoint,
+                endpoint,
                 headers=headers,
                 json=payload
             )
             
             if response.status_code != 200:
-                raise Exception(f"Anthropic API error: {response.status_code} - {response.text}")
+                raise Exception(f"Google Gemini API error: {response.status_code} - {response.text}")
             
             data = response.json()
-            content = data["content"][0]["text"]
-            usage = data.get("usage", {})
-            tokens_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
             
-            # Cost calculation for Claude 3.5 Sonnet
-            cost_per_token = 0.000003  # $3 per 1M tokens
-            cost_estimate = tokens_used * cost_per_token
+            # Extract content from Gemini response
+            if "candidates" in data and len(data["candidates"]) > 0:
+                candidate = data["candidates"][0]
+                if "content" in candidate and "parts" in candidate["content"]:
+                    content = candidate["content"]["parts"][0]["text"]
+                else:
+                    raise Exception("No content found in Gemini response")
+            else:
+                raise Exception("No candidates found in Gemini response")
+            
+            # Extract usage metadata if available
+            usage = data.get("usageMetadata", {})
+            prompt_tokens = usage.get("promptTokenCount", 0)
+            completion_tokens = usage.get("candidatesTokenCount", 0)
+            total_tokens = usage.get("totalTokenCount", prompt_tokens + completion_tokens)
+            
+            # Cost calculation for Google Gemini (approximate rates)
+            if model == "gemini-pro":
+                cost_per_token = 0.0000005  # $0.50 per 1M tokens
+            elif model == "gemini-pro-vision":
+                cost_per_token = 0.0000025  # $2.50 per 1M tokens
+            else:  # gemini-1.5-flash
+                cost_per_token = 0.0000001  # $0.10 per 1M tokens
+                
+            cost_estimate = total_tokens * cost_per_token
             
             return ModelResponse(
                 content=content,
-                model_used=ModelType.CLAUDE_3_5_SONNET,
+                model_used=ModelType.GEMINI_PRO,  # Will be updated by caller
                 response_time_ms=0,  # Will be calculated by caller
-                tokens_used=tokens_used,
+                tokens_used=total_tokens,
                 cost_estimate=cost_estimate,
-                confidence_score=0.96,
-                model_version="claude-3-5-sonnet-20241022",
+                confidence_score=0.95,
+                model_version=model,
                 language_detected=LanguageCode.ENGLISH
             )
     
@@ -829,13 +806,19 @@ class AIOrchestrator:
         # Initialize Redis cache (mock for development)
         self.redis_cache = MockRedis()
         
+        # AI optimization flags (disabled for now)
+        self.OPTIMIZATION_AVAILABLE = False
+        self.ai_performance_optimizer = None
+        self.experiment_manager = None
+        self.personalization_engine = None
+        
         # Model metrics tracking
         self.model_metrics: Dict[ModelType, ModelMetrics] = {
             ModelType.GEMMA_4_ON_DEVICE: ModelMetrics(),
             ModelType.GEMMA_4_CLOUD: ModelMetrics(),
-            ModelType.GPT_4_TURBO: ModelMetrics(),
-            ModelType.GPT_4_MINI: ModelMetrics(),
-            ModelType.CLAUDE_3_5_SONNET: ModelMetrics()
+            ModelType.GEMINI_PRO: ModelMetrics(),
+            ModelType.GEMINI_PRO_VISION: ModelMetrics(),
+            ModelType.GEMINI_15_FLASH: ModelMetrics()
         }
         
         # Circuit breaker configuration
@@ -924,7 +907,7 @@ class AIOrchestrator:
         
         try:
             # OPTIMIZATION LAYER 1: Request Optimization
-            if OPTIMIZATION_AVAILABLE and user_id:
+            if self.OPTIMIZATION_AVAILABLE and user_id:
                 # Prepare request data for optimization
                 request_data = {
                     "prompt": prompt,
@@ -936,7 +919,7 @@ class AIOrchestrator:
                 }
                 
                 # Apply performance optimizations
-                optimization_result = await ai_performance_optimizer.optimize_request(agent_type, request_data)
+                optimization_result = await self.ai_performance_optimizer.optimize_request(agent_type, request_data)
                 optimized_request = optimization_result["optimized_request"]
                 processing_config = optimization_result["processing_config"]
                 
@@ -945,7 +928,7 @@ class AIOrchestrator:
                 temperature = optimized_request.get("temperature", temperature)
                 
                 # Check for A/B test variants
-                ab_variant = await experiment_manager.get_experiment_variant(f"{agent_type}_optimization", user_id)
+                ab_variant = await self.experiment_manager.get_experiment_variant(f"{agent_type}_optimization", user_id)
                 if ab_variant:
                     # Apply A/B test configuration
                     if "model_preference" in ab_variant["config"]:
@@ -956,9 +939,9 @@ class AIOrchestrator:
                     logger.info(f"A/B test active for user {user_id}: {ab_variant['variant_name']}")
             
             # OPTIMIZATION LAYER 2: Personalization
-            if OPTIMIZATION_AVAILABLE and user_id:
+            if self.OPTIMIZATION_AVAILABLE and user_id:
                 # Get user profile for personalized routing
-                user_profile = await personalization_engine.get_user_profile(user_id)
+                user_profile = await self.personalization_engine.get_user_profile(user_id)
                 
                 # Adjust prompt based on user learning style and preferences
                 if user_profile.learning_style and not user_context:
@@ -1011,7 +994,7 @@ class AIOrchestrator:
             )
             
             # OPTIMIZATION LAYER 3: Response Optimization
-            if OPTIMIZATION_AVAILABLE and response.content:
+            if self.OPTIMIZATION_AVAILABLE and response.content:
                 # Optimize response content
                 optimization_context = {
                     "user_id": user_id,
@@ -1021,7 +1004,7 @@ class AIOrchestrator:
                     "user_level": user_context.get("user_level", "intermediate") if user_context else "intermediate"
                 }
                 
-                optimized_content = await ai_performance_optimizer.optimize_response(
+                optimized_content = await self.ai_performance_optimizer.optimize_response(
                     agent_type, response.content, optimization_context
                 )
                 response.content = optimized_content
@@ -1033,7 +1016,7 @@ class AIOrchestrator:
                         "satisfaction_score": 0.8,  # Would be measured from user feedback
                         "error": response.error is not None
                     }
-                    await experiment_manager.record_conversion(
+                    await self.experiment_manager.record_conversion(
                         f"{agent_type}_optimization", 
                         user_id, 
                         ab_variant["variant_name"],
@@ -1105,11 +1088,11 @@ class AIOrchestrator:
         if complexity == TaskComplexity.SIMPLE:
             return ModelType.GEMMA_4_ON_DEVICE
         elif complexity == TaskComplexity.CREATIVE:
-            return ModelType.CLAUDE_3_5_SONNET if self.cloud_client.anthropic_api_key else ModelType.GEMMA_4_ON_DEVICE
+            return ModelType.GEMINI_PRO if self.cloud_client.gemini_api_key else ModelType.GEMMA_4_ON_DEVICE
         elif complexity in [TaskComplexity.COMPLEX, TaskComplexity.CRITICAL]:
             # Prefer cloud models for complex tasks
-            if self.cloud_client.openai_api_key:
-                return ModelType.GPT_4_TURBO if max_tokens > 1000 else ModelType.GPT_4_MINI
+            if self.cloud_client.gemini_api_key:
+                return ModelType.GEMINI_PRO if max_tokens > 1000 else ModelType.GEMINI_15_FLASH
             elif self.gemma_client.cloud_available:
                 return ModelType.GEMMA_4_CLOUD
             else:
@@ -1127,10 +1110,8 @@ class AIOrchestrator:
             return self.gemma_client.on_device_loaded
         elif model_type == ModelType.GEMMA_4_CLOUD:
             return self.gemma_client.cloud_available
-        elif model_type in [ModelType.GPT_4_TURBO, ModelType.GPT_4_MINI]:
-            return bool(self.cloud_client.openai_api_key)
-        elif model_type == ModelType.CLAUDE_3_5_SONNET:
-            return bool(self.cloud_client.anthropic_api_key)
+        elif model_type in [ModelType.GEMINI_PRO, ModelType.GEMINI_PRO_VISION, ModelType.GEMINI_15_FLASH]:
+            return bool(self.cloud_client.gemini_api_key)
         
         return False
     
