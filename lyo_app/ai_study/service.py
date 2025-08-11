@@ -112,7 +112,7 @@ class StudyModeService:
         try:
             ai_response = await self.ai_manager.chat_completion(
                 message=json.dumps(messages),
-                model_preference="openai-gpt4",
+                model_preference="gemini-pro",
                 use_cache=True
             )
             
@@ -189,7 +189,7 @@ class StudyModeService:
         try:
             ai_response = await self.ai_manager.chat_completion(
                 message=generation_prompt,
-                model_preference="openai-gpt4",
+                model_preference="gemini-pro",
                 use_cache=False  # Don't cache quiz generation
             )
             
