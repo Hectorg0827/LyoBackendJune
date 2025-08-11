@@ -193,7 +193,12 @@ class Settings(BaseSettings):
     apns_bundle_id: Optional[str] = Field(default=None, description="iOS App Bundle ID")
     fcm_server_key: Optional[str] = Field(default=None, description="Firebase Cloud Messaging Server Key")
     
-    @field_validator('youtube_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key', 'podchaser_api_key')
+    # Additional settings for enhanced features
+    APP_NAME: str = Field(default="LyoApp Backend", description="Application name (legacy)")
+    APP_VERSION: str = Field(default="1.0.0", description="Application version (legacy)")
+    CLOUDFLARE_ZONE_ID: Optional[str] = Field(default=None, description="Cloudflare zone ID for CDN management")
+    
+    @field_validator('youtube_api_key', 'gemini_api_key', 'podchaser_api_key')
     @classmethod
     def validate_api_keys(cls, v, info):
         """Validate API key format and length."""
