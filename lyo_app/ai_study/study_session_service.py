@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc
 
 from lyo_app.core.database import get_db
-from lyo_app.ai_agents.orchestrator import orchestrator
+from lyo_app.ai_agents.orchestrator import ai_orchestrator
 from lyo_app.learning.models import Course, Lesson
 from lyo_app.ai_study.models import StudySession, StudyMessage, StudySessionType
 from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -465,7 +465,7 @@ ADDITIONAL CONTEXT:
             # Use AI resilience manager for response generation
             ai_response = await ai_resilience_manager.chat_completion(
                 message=user_input + enhanced_context,
-                model_preference="openai-gpt4",  # Use best model for tutoring
+                model_preference="gemini-pro",  # Use best model for tutoring
                 max_retries=2,
                 use_cache=True
             )
