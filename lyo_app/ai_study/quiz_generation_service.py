@@ -12,7 +12,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 
 from lyo_app.core.database import get_db
-from lyo_app.ai_agents.orchestrator import orchestrator
+from lyo_app.ai_agents.orchestrator import ai_orchestrator
 from lyo_app.learning.models import Course, Lesson
 from lyo_app.ai_study.models import QuizSession, QuizQuestion, QuizAttempt, QuestionType
 from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -339,7 +339,7 @@ class QuizGenerationService:
             # Use AI resilience manager for question generation
             ai_response = await ai_resilience_manager.chat_completion(
                 message=prompt,
-                model_preference="openai-gpt4",  # Use best model for question generation
+                model_preference="gemini-pro",  # Use best model for question generation
                 max_retries=3,
                 use_cache=False  # Don't cache quiz generation for uniqueness
             )
