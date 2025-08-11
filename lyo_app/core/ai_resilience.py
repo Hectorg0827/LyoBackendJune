@@ -353,51 +353,47 @@ class AIResilienceManager:
         return await circuit_breaker.call(make_api_call)
     
     async def _make_api_call(self, model: AIModelConfig, message: str) -> Dict[str, Any]:
-        """Make actual API call to AI model"""
+        """Make actual API call to Google Gemini model"""
         
         if not model.api_key:
             raise Exception(f"No API key configured for {model.name}")
         
-        # Prepare request based on model type
-        if "openai" in model.name.lower():
-            payload = {
-                "model": "gpt-4",
-                "messages": [{"role": "user", "content": message}],
-                "max_tokens": model.max_tokens,
-                "temperature": 0.7
-            }
-            headers = {
-                "Authorization": f"Bearer {model.api_key}",
-                "Content-Type": "application/json"
-            }
+        # Prepare request for Google Gemini
+        payload = {
+            "contents": [{"parts": [{"text": message}]}],
+            "generationConfig": {
+                "maxOutputTokens": model.max_tokens,
+                "temperature": 0.7,
+                "topK": 40,
+                "topP": 0.95
+            },
+            "safetySettings": [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                }
+            ]
+        }
+        headers = {"Content-Type": "application/json"}
         
-        elif "anthropic" in model.name.lower():
-            payload = {
-                "model": "claude-3-sonnet-20240229",
-                "max_tokens": model.max_tokens,
-                "messages": [{"role": "user", "content": message}]
-            }
-            headers = {
-                "x-api-key": model.api_key,
-                "Content-Type": "application/json",
-                "anthropic-version": "2023-06-01"
-            }
-        
-        elif "gemini" in model.name.lower():
-            payload = {
-                "contents": [{"parts": [{"text": message}]}],
-                "generationConfig": {"maxOutputTokens": model.max_tokens}
-            }
-            headers = {"Content-Type": "application/json"}
-            # Add API key to URL for Gemini
-            model.endpoint += f"?key={model.api_key}"
-        
-        else:
-            raise Exception(f"Unknown model type: {model.name}")
+        # Add API key to URL for Gemini
+        endpoint_with_key = f"{model.endpoint}?key={model.api_key}"
         
         # Make API call
         async with self.session.post(
-            model.endpoint,
+            endpoint_with_key,
             json=payload,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=model.timeout)
@@ -409,18 +405,17 @@ class AIResilienceManager:
             
             result_data = await response.json()
             
-            # Parse response based on model type
-            if "openai" in model.name.lower():
-                content = result_data["choices"][0]["message"]["content"]
-                tokens_used = result_data.get("usage", {}).get("total_tokens", 0)
+            # Parse Google Gemini response
+            if "candidates" in result_data and len(result_data["candidates"]) > 0:
+                candidate = result_data["candidates"][0]
+                if "content" in candidate and "parts" in candidate["content"]:
+                    content = candidate["content"]["parts"][0]["text"]
+                else:
+                    raise Exception("No content found in Gemini response")
+            else:
+                raise Exception("No candidates found in Gemini response")
             
-            elif "anthropic" in model.name.lower():
-                content = result_data["content"][0]["text"]
-                tokens_used = result_data.get("usage", {}).get("output_tokens", 0)
-            
-            elif "gemini" in model.name.lower():
-                content = result_data["candidates"][0]["content"]["parts"][0]["text"]
-                tokens_used = result_data.get("usageMetadata", {}).get("totalTokenCount", 0)
+            tokens_used = result_data.get("usageMetadata", {}).get("totalTokenCount", 0)
             
             return {
                 "response": content,
