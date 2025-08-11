@@ -65,3 +65,7 @@ def log_error(logger: logging.Logger, error: Exception, **kwargs: Any) -> None:
         StructuredMessage(f"Error: {type(error).__name__}: {str(error)}", **kwargs),
         exc_info=True
     )
+
+
+# Default logger instance for convenience
+logger = get_logger("lyo_app")
