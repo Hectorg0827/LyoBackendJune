@@ -1,0 +1,63 @@
+{
+  "timestamp": "2025-08-01T02:29:53.670346",
+  "overall_score": 0,
+  "test_results": {
+    "syntax_validation": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.033919"
+    },
+    "configuration_system": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.081537"
+    },
+    "ai_study_mode": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.783546"
+    },
+    "addictive_feed_algorithm": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.784855"
+    },
+    "enhanced_storage": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.785751"
+    },
+    "error_monitoring": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.786653"
+    },
+    "performance_optimization": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.839987"
+    },
+    "production_readiness": {
+      "score": 0,
+      "status": "FAIL",
+      "timestamp": "2025-08-01T02:29:55.880426"
+    }
+  },
+  "errors": [
+    "Import error in lyo_app.core.enhanced_monitoring: No module named 'psutil'",
+    "Import error in lyo_app.feeds.addictive_algorithm: No module named 'sklearn'",
+    "Import error in lyo_app.storage.enhanced_storage: No module named 'cv2'",
+    "Configuration system error: Configuration validation failed: GOOGLE_API_KEY is required",
+    "AI Study Mode error: No module named 'psutil'",
+    "Addictive feed algorithm error: No module named 'sklearn'",
+    "Enhanced storage error: No module named 'cv2'",
+    "Error monitoring error: No module named 'psutil'",
+    "Performance optimization error: Configuration validation failed: GOOGLE_API_KEY is required",
+    "Production readiness error: Configuration validation failed: GOOGLE_API_KEY is required"
+  ],
+  "warnings": [
+    "Warning in lyo_app.core.enhanced_config: Configuration validation failed: GOOGLE_API_KEY is required",
+    "Warning in lyo_app.enhanced_main: Configuration validation failed: GOOGLE_API_KEY is required"
+  ],
+  "production_ready": false
+}
