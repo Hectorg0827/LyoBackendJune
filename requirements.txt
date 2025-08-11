@@ -48,6 +48,41 @@ slowapi==0.1.9
 
 # AI/ML APIs - Google Gemini Only
 google-generativeai==0.7.2
+
+# WebSocket Support for Real-time Features  
+websockets==12.0
+
+# Enhanced Media Processing
+opencv-python==4.8.1.78
+imageio==2.34.0
+moviepy==1.0.3
+
+# Advanced Caching
+aiocache==0.12.2
+
+# Feed Algorithm Dependencies
+scikit-learn==1.3.2
+numpy==1.26.2
+pandas==2.1.4
+
+# Enhanced Performance
+orjson==3.9.10
+lz4==4.3.2
+
+# Search & Indexing
+elasticsearch==8.11.1
+
+# Real-time Analytics
+kafka-python==2.0.2
+
+# Enhanced Error Handling
+rollbar==0.16.3
+
+# Development & Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+httpx==0.25.2
 google-ai-generativelanguage==0.6.4
 
 # Content Processing
@@ -75,14 +110,12 @@ gunicorn==21.2.0
 psycopg2-binary==2.9.9
 sentry-sdk[fastapi]==1.38.0
 
-# AI and LLM Dependencies
+# AI and LLM Dependencies - Google Gemini Only
 transformers==4.36.0
 torch==2.1.1
 tokenizers==0.15.0
 langdetect==1.0.9
 tiktoken==0.5.2
-openai==1.3.8
-anthropic==0.7.8
 
 # Additional production features
 numpy==1.25.2
