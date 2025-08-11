@@ -18,8 +18,8 @@ from enum import Enum
 from contextlib import asynccontextmanager
 from uuid import uuid4
 import smtplib
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import aiofiles
 import os
 
