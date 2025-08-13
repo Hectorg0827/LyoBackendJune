@@ -1,5 +1,5 @@
-# LyoApp Backend Dependencies
-# Enhanced with missing critical dependencies
+# LyoApp Backend Dependencies - World-Class Architecture
+# Enhanced with enterprise-grade infrastructure components
 
 # Core Framework
 fastapi==0.104.1
@@ -7,22 +7,36 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# Database
+# Database - Polyglot Persistence
 sqlalchemy[asyncio]==2.0.23
 alembic==1.13.0
 asyncpg==0.29.0
 aiosqlite==0.19.0
 psycopg2-binary==2.9.9
 
-# Authentication & Security
+# MongoDB for Document Storage
+motor==3.3.2
+pymongo==4.6.0
+
+# InfluxDB for Time Series
+influxdb-client==1.40.0
+
+# Authentication & Zero-Trust Security
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
 bleach==6.1.0
 python-decouple==3.8
+argon2-cffi==23.1.0
+cryptography==41.0.8
+pyotp==2.9.0
+qrcode==7.4.2
 
-# Background Jobs & Caching
+# Enhanced Caching & Session Management
+redis[hiredis]==5.0.1
+aiocache==0.12.2
+
+# Background Jobs
 celery==5.3.4
-redis==5.0.1
 flower==2.0.1
 
 # HTTP Client & API Integration
@@ -38,27 +52,46 @@ aiosmtplib==3.0.1
 python-multipart==0.0.6
 pillow==10.1.0
 
-# Monitoring & Logging
+# Enterprise Observability Stack
 prometheus-client==0.19.0
 structlog==23.2.0
 sentry-sdk[fastapi]==1.38.0
 
+# Distributed Tracing - OpenTelemetry
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-jaeger==1.21.0
+opentelemetry-exporter-prometheus==1.12.0rc1
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-sqlalchemy==0.42b0
+opentelemetry-instrumentation-redis==0.42b0
+opentelemetry-instrumentation-requests==0.42b0
+
+# Geographic & User Agent Analysis
+geoip2==4.7.0
+user-agents==2.2.0
+
 # Rate Limiting
 slowapi==0.1.9
 
-# AI/ML APIs - Google Gemini Only
+# AI/ML APIs - Google Gemini
 google-generativeai==0.7.2
+google-ai-generativelanguage==0.6.4
 
-# WebSocket Support for Real-time Features  
+# Google Cloud & Firebase Integrations
+google-cloud-secret-manager==2.20.2
+google-cloud-firestore==2.16.0
+google-cloud-storage==2.17.0
+google-cloud-vertexai==1.54.0
+firebase-admin==6.5.0
+
+# WebSocket Support
 websockets==12.0
 
 # Enhanced Media Processing
 opencv-python==4.8.1.78
 imageio==2.34.0
 moviepy==1.0.3
-
-# Advanced Caching
-aiocache==0.12.2
 
 # Feed Algorithm Dependencies
 scikit-learn==1.3.2
@@ -78,22 +111,16 @@ kafka-python==2.0.2
 # Enhanced Error Handling
 rollbar==0.16.3
 
-# Development & Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-mock==3.12.0
-httpx==0.25.2
-google-ai-generativelanguage==0.6.4
-
 # Content Processing
 beautifulsoup4==4.12.2
 lxml==4.9.3
 python-dateutil==2.8.2
 
-# Testing
+# Testing Framework
 pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
+pytest-mock==3.12.0
 factory-boy==3.3.0
 faker==20.1.0
 
@@ -105,39 +132,27 @@ pre-commit==3.5.0
 ipython==8.18.1
 flake8==6.1.0
 
-# Additional Production Dependencies
+# Production Server
 gunicorn==21.2.0
-psycopg2-binary==2.9.9
-sentry-sdk[fastapi]==1.38.0
 
-# AI and LLM Dependencies - Google Gemini Only
+# AI/ML Core Dependencies
 transformers==4.36.0
 torch==2.1.1
 tokenizers==0.15.0
 langdetect==1.0.9
 tiktoken==0.5.2
 
-# Additional production features
-numpy==1.25.2
-scikit-learn==1.3.2
-
-# AI Optimization Dependencies
-pandas==2.1.4
+# Data Science & Analytics
 scipy==1.11.4
 matplotlib==3.8.2
 seaborn==0.13.0
 plotly==5.17.0
-
-# Performance Monitoring
-psutil==5.9.6
-py-cpuinfo==9.0.0
-
-# Machine Learning for Personalization
 joblib==1.3.2
 umap-learn==0.5.4
 
-# Additional Redis features
-redis[hiredis]==5.0.1
+# System Monitoring
+psutil==5.9.6
+py-cpuinfo==9.0.0
 
-# GPU Monitoring (optional)
+# Optional GPU Monitoring
 nvidia-ml-py==12.535.133
