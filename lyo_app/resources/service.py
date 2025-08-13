@@ -11,6 +11,13 @@ import logging
 
 from .models import EducationalResource, ResourceType, ResourceProvider, ResourceTag, CourseResource
 from .providers.youtube_provider import YouTubeProvider
+try:
+    from lyo_app.integrations.gcp_secrets import get_secret
+except Exception:  # pragma: no cover
+    def get_secret(name: str, default=None):
+        import os
+        return os.getenv(name, default)
+from lyo_app.core.config import settings, get_credential
 from .providers.internet_archive_provider import InternetArchiveProvider
 from .providers.khan_academy_provider import KhanAcademyProvider
 from .providers.base import ResourceData
@@ -29,7 +36,8 @@ class ResourceAggregationService:
         providers = {}
         
         # Initialize providers - using mock API keys for testing
-        providers[ResourceProvider.YOUTUBE] = YouTubeProvider("MOCK_YOUTUBE_API_KEY")
+    yt_key = get_credential("YOUTUBE_API_KEY", settings.youtube_api_key) or "MOCK_YOUTUBE_API_KEY"
+    providers[ResourceProvider.YOUTUBE] = YouTubeProvider(yt_key)
         providers[ResourceProvider.INTERNET_ARCHIVE] = InternetArchiveProvider()
         providers[ResourceProvider.KHAN_ACADEMY] = KhanAcademyProvider()
         
