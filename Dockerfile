@@ -49,12 +49,13 @@ RUN mkdir -p uploads/avatars uploads/documents uploads/temp && chown -R app:app 
 # Switch to non-root user
 USER app
 
-# Health check
+# Health check (respect dynamic PORT; default to 8080)
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
 
-# Expose port
-EXPOSE 8000
+# Expose Cloud Run default port (8080) but allow override via PORT env
+ENV PORT=8080
+EXPOSE 8080
 
-# Start application
-CMD ["gunicorn", "lyo_app.main:app", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--workers", "4"]
+# Start application (dynamic port)
+CMD ["bash", "-c", "gunicorn lyo_app.enhanced_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${WORKERS:-4}"]
