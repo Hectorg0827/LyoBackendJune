@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""
-Start the LyoApp API server.
-"""
+"""Unified server start script pointing to enhanced_main (cloud-ready)."""
 
+import os
 import uvicorn
 
-if __name__ == "__main__":
-    print("🚀 Starting LyoApp API Server...")
-    print("📊 Environment: Development")
-    print("🗄️ Database: SQLite (./lyo_app_dev.db)")
-    print("🌐 URL: http://localhost:8000")
-    print("📖 Docs: http://localhost:8000/docs")
+
+def main():
+    port = int(os.getenv("PORT", 8000))
+    env = os.getenv("ENVIRONMENT", "development")
+    print("🚀 Starting LyoApp API Server (enhanced_main)...")
+    print(f"📊 Environment: {env}")
+    print(f"🌐 URL: http://localhost:{port}")
+    if env != "production":
+        print(f"📖 Docs: http://localhost:{port}/docs")
     print("=" * 50)
-    
     uvicorn.run(
-        "lyo_app.main:app",
+        "lyo_app.enhanced_main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+        port=port,
+        reload=env != "production",
+        log_level="info",
     )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
