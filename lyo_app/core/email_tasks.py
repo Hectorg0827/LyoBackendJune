@@ -10,6 +10,12 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from celery import Celery
 from lyo_app.core.config import settings
+try:
+    from lyo_app.integrations.gcp_secrets import get_secret
+except Exception:  # pragma: no cover
+    def get_secret(name: str, default=None):  # fallback
+        import os
+        return os.getenv(name, default)
 from lyo_app.core.security_utils import get_safe_token_for_logging
 
 logger = logging.getLogger(__name__)
@@ -73,9 +79,11 @@ def send_email_via_smtp(msg: MIMEMultipart) -> bool:
         with smtplib.SMTP(settings.smtp_server, settings.smtp_port) as server:
             if settings.smtp_use_tls:
                 server.starttls()
-            
-            if settings.smtp_username and settings.smtp_password:
-                server.login(settings.smtp_username, settings.smtp_password)
+            # Pull credentials (prefer settings, fallback to secret manager / env)
+            smtp_user = settings.smtp_username or get_secret("SMTP_USERNAME")
+            smtp_pass = settings.smtp_password or get_secret("SMTP_PASSWORD")
+            if smtp_user and smtp_pass:
+                server.login(smtp_user, smtp_pass)
             
             server.send_message(msg)
             return True
