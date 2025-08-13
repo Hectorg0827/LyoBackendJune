@@ -328,3 +328,24 @@ class StudySessionAnalytics(Base):
             "quizzes_attempted": self.quizzes_attempted,
             "average_quiz_score": self.average_quiz_score
         }
+
+
+class AIStudyManager:
+    """Simple AI Study Manager for initial startup"""
+    
+    def __init__(self):
+        pass
+    
+    async def generate_study_content(self, topic: str, difficulty: str = "intermediate", user_id: int = None):
+        """Generate study content"""
+        return {
+            "topic": topic,
+            "difficulty": difficulty,
+            "content": f"Study content for {topic} at {difficulty} level",
+            "tokens_used": 100
+        }
+
+
+def get_ai_study_manager():
+    """Get AI study manager instance"""
+    return AIStudyManager()
