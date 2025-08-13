@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     # Spotify API (for podcast content)
     spotify_client_id: Optional[str] = Field(default=None, description="Spotify Client ID")
     spotify_client_secret: Optional[str] = Field(default=None, description="Spotify Client Secret")
+    # Note: At runtime, if these are None we attempt secret manager fallback where used.
     
     # API Quota Management
     youtube_daily_quota: int = Field(default=10000, description="YouTube API daily quota")
@@ -286,3 +287,21 @@ def get_settings() -> Settings:
 
 # Export the settings instance
 settings = get_settings()
+
+# Convenience helpers for secret-managed credentials (lazy import to avoid cycle)
+def get_credential(name: str, current: Optional[str]) -> Optional[str]:
+    """Return existing setting or secret manager fallback.
+
+    Args:
+        name: Environment/secret name
+        current: Value already loaded into settings
+    """
+    if current:
+        return current
+    try:  # local import avoids dependency if not on GCP
+        from lyo_app.integrations.gcp_secrets import get_secret  # type: ignore
+        return get_secret(name)
+    except Exception:  # pragma: no cover
+        import os
+        return os.getenv(name)
+
