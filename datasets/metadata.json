@@ -1,0 +1,12 @@
+{
+  "created_at": "2025-08-18T12:32:13.129253",
+  "total_examples": 24,
+  "datasets": {
+    "tutoring_conversations": 14,
+    "content_classification": 5,
+    "learning_paths": 2,
+    "search_enhancement": 3
+  },
+  "combined_training_examples": 19,
+  "ready_for_fine_tuning": true
+}
