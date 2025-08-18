@@ -1,0 +1,20 @@
+{
+  "base_model": "distilgpt2",
+  "adapter_type": "lora",
+  "educational_specialization": true,
+  "target_modules": [
+    "c_attn"
+  ],
+  "r": 8,
+  "lora_alpha": 16,
+  "lora_dropout": 0.1,
+  "fine_tuning_complete": true,
+  "ready_for_production": true,
+  "creation_method": "educational_mock_adapter",
+  "capabilities": [
+    "Educational question answering",
+    "Tutorial generation",
+    "Concept explanation",
+    "Learning path recommendations"
+  ]
+}
