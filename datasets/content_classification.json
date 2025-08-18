@@ -1,0 +1,113 @@
+[
+  {
+    "content": {
+      "type": "video",
+      "title": "How Photosynthesis Works - 3 Minute Explanation",
+      "description": "Simple breakdown of photosynthesis process for high school students",
+      "duration": 180,
+      "tags": [
+        "biology",
+        "science",
+        "photosynthesis",
+        "education"
+      ],
+      "creator_verified": true
+    },
+    "classification": "educational",
+    "educational_value": 0.95,
+    "engagement_prediction": 0.78,
+    "target_audience": "high_school",
+    "learning_objectives": [
+      "understand photosynthesis",
+      "learn cellular processes"
+    ]
+  },
+  {
+    "content": {
+      "type": "video",
+      "title": "Crazy TikTok Dance Challenge #viral",
+      "description": "New dance trend everyone's doing",
+      "duration": 30,
+      "tags": [
+        "dance",
+        "viral",
+        "trending",
+        "fun"
+      ],
+      "creator_verified": false
+    },
+    "classification": "entertainment",
+    "educational_value": 0.05,
+    "engagement_prediction": 0.92,
+    "target_audience": "general",
+    "learning_objectives": []
+  },
+  {
+    "content": {
+      "type": "video",
+      "title": "Python Functions Explained with Real Examples",
+      "description": "Learn Python functions through practical coding examples",
+      "duration": 420,
+      "tags": [
+        "programming",
+        "python",
+        "tutorial",
+        "coding"
+      ],
+      "creator_verified": true
+    },
+    "classification": "educational",
+    "educational_value": 0.88,
+    "engagement_prediction": 0.65,
+    "target_audience": "programming_beginners",
+    "learning_objectives": [
+      "understand functions",
+      "write reusable code"
+    ]
+  },
+  {
+    "content": {
+      "type": "image",
+      "title": "Mathematical Beauty: Fibonacci in Nature",
+      "description": "Visual examples of Fibonacci sequence in flowers, shells, and galaxies",
+      "tags": [
+        "mathematics",
+        "nature",
+        "fibonacci",
+        "patterns"
+      ],
+      "creator_verified": true
+    },
+    "classification": "educational",
+    "educational_value": 0.82,
+    "engagement_prediction": 0.73,
+    "target_audience": "math_enthusiasts",
+    "learning_objectives": [
+      "recognize mathematical patterns",
+      "appreciate math in nature"
+    ]
+  },
+  {
+    "content": {
+      "type": "video",
+      "title": "Study With Me - 2 Hour Focus Session",
+      "description": "Quiet study session with ambient sounds",
+      "duration": 7200,
+      "tags": [
+        "study",
+        "focus",
+        "productivity",
+        "ambient"
+      ],
+      "creator_verified": true
+    },
+    "classification": "study_support",
+    "educational_value": 0.7,
+    "engagement_prediction": 0.85,
+    "target_audience": "students",
+    "learning_objectives": [
+      "maintain focus",
+      "study effectively"
+    ]
+  }
+]
