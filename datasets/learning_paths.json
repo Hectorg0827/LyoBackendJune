@@ -1,0 +1,88 @@
+[
+  {
+    "goal": "Master machine learning from scratch",
+    "current_level": "beginner",
+    "time_available": 90,
+    "learning_style": "hands-on",
+    "path": [
+      {
+        "week": 1,
+        "topic": "Python Fundamentals",
+        "description": "Variables, loops, functions, data structures",
+        "resources": [
+          "Python tutorial videos",
+          "Coding exercises"
+        ],
+        "milestone": "Build a calculator program"
+      },
+      {
+        "week": 2,
+        "topic": "Mathematics for ML",
+        "description": "Linear algebra, statistics, probability",
+        "resources": [
+          "Khan Academy math",
+          "NumPy tutorials"
+        ],
+        "milestone": "Solve matrix operations"
+      },
+      {
+        "week": 3,
+        "topic": "Data Manipulation",
+        "description": "Pandas, data cleaning, visualization",
+        "resources": [
+          "Pandas documentation",
+          "Matplotlib tutorials"
+        ],
+        "milestone": "Analyze a real dataset"
+      },
+      {
+        "week": 4,
+        "topic": "Supervised Learning",
+        "description": "Linear regression, classification",
+        "resources": [
+          "Scikit-learn tutorials",
+          "Kaggle courses"
+        ],
+        "milestone": "Build a prediction model"
+      }
+    ]
+  },
+  {
+    "goal": "Prepare for SAT Math",
+    "current_level": "junior_high",
+    "time_available": 120,
+    "learning_style": "practice-focused",
+    "path": [
+      {
+        "week": 1,
+        "topic": "Algebra Review",
+        "description": "Equations, inequalities, functions",
+        "resources": [
+          "Algebra practice tests",
+          "Khan Academy"
+        ],
+        "milestone": "Score 80%+ on algebra diagnostic"
+      },
+      {
+        "week": 2,
+        "topic": "Geometry Fundamentals",
+        "description": "Area, perimeter, angles, triangles",
+        "resources": [
+          "Geometry workbook",
+          "Visual proofs"
+        ],
+        "milestone": "Master basic geometric formulas"
+      },
+      {
+        "week": 3,
+        "topic": "Advanced Algebra",
+        "description": "Quadratics, exponentials, radicals",
+        "resources": [
+          "Practice problems",
+          "Video explanations"
+        ],
+        "milestone": "Solve complex equations confidently"
+      }
+    ]
+  }
+]
