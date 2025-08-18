@@ -1,0 +1,53 @@
+[
+  {
+    "query": "how to solve quadratic equations",
+    "intent": "learning_tutorial",
+    "subject": "mathematics",
+    "difficulty": "intermediate",
+    "enhanced_results": [
+      "Step-by-step quadratic formula tutorial",
+      "Interactive quadratic equation solver",
+      "Visual representation of parabolas",
+      "Practice problems with solutions"
+    ],
+    "learning_path_suggestions": [
+      "Review algebra basics first",
+      "Practice factoring polynomials",
+      "Learn graphing techniques"
+    ]
+  },
+  {
+    "query": "photosynthesis for kids",
+    "intent": "simplified_explanation",
+    "subject": "biology",
+    "difficulty": "elementary",
+    "enhanced_results": [
+      "Animated photosynthesis video for children",
+      "Simple diagram of plant processes",
+      "Interactive plant growth game",
+      "Fun facts about plants for kids"
+    ],
+    "learning_path_suggestions": [
+      "Start with plant parts identification",
+      "Learn about sunlight and water",
+      "Explore plant lifecycle"
+    ]
+  },
+  {
+    "query": "python debugging tips",
+    "intent": "problem_solving",
+    "subject": "programming",
+    "difficulty": "intermediate",
+    "enhanced_results": [
+      "Common Python debugging techniques",
+      "IDE debugging tools tutorial",
+      "Error message interpretation guide",
+      "Best practices for code testing"
+    ],
+    "learning_path_suggestions": [
+      "Master basic Python syntax",
+      "Learn about error types",
+      "Practice code review techniques"
+    ]
+  }
+]
