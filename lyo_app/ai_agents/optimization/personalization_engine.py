@@ -20,7 +20,7 @@ from sklearn.cluster import KMeans
 import pandas as pd
 
 from lyo_app.learning.models import CourseEnrollment, LessonCompletion
-from lyo_app.feeds.models import Post, UserPostInteraction
+from lyo_app.feeds.models import Post, UserInteraction
 from lyo_app.community.models import StudyGroup, GroupMembership
 
 logger = structlog.get_logger(__name__)
