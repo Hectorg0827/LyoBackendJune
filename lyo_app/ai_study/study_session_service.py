@@ -15,7 +15,7 @@ from sqlalchemy import and_, or_, desc
 from lyo_app.core.database import get_db
 from lyo_app.ai_agents.orchestrator import ai_orchestrator
 from lyo_app.learning.models import Course, Lesson
-from lyo_app.ai_study.models import StudySession, StudyMessage, StudySessionType
+from lyo_app.ai_study.models import StudySession, StudyMessage
 from lyo_app.core.ai_resilience import ai_resilience_manager
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,6 @@ class StudySessionService:
                 user_id=user_id,
                 resource_id=resource_id,
                 resource_type=resource_type,
-                session_type=StudySessionType.SOCRATIC_TUTORING,
                 metadata={
                     "tutoring_style": tutoring_style,
                     "resource_title": context.resource_title,
