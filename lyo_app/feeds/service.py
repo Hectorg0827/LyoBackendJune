@@ -18,6 +18,7 @@ from lyo_app.feeds.schemas import (
     PostCreate, PostUpdate, CommentCreate, CommentUpdate,
     PostReactionCreate, CommentReactionCreate, UserFollowCreate
 )
+from lyo_app.monetization.engine import interleave_ads
 
 
 class FeedsService:
@@ -199,12 +200,15 @@ class FeedsService:
             }
             posts_data.append(post_data)
         
+        interleaved = interleave_ads([{"type": "post", "post": p} for p in posts_data], placement="feed", every=5)
+        sponsored = [x for x in interleaved if x.get("type") == "ad"]
         return {
             "posts": posts_data,
             "total": total or 0,
             "page": page,
             "per_page": per_page,
             "has_next": total > page * per_page,
+            "sponsored": sponsored or None,
         }
 
     async def create_comment(
@@ -588,12 +592,15 @@ class FeedsService:
             }
             posts_data.append(post_data)
         
+        interleaved = interleave_ads([{"type": "post", "post": p} for p in posts_data], placement="feed", every=5)
+        sponsored = [x for x in interleaved if x.get("type") == "ad"]
         return {
             "posts": posts_data,
             "total": total or 0,
             "page": page,
             "per_page": per_page,
             "has_next": total > page * per_page,
+            "sponsored": sponsored or None,
         }
 
     async def _fan_out_post_to_followers(self, db: AsyncSession, post: Post) -> None:
@@ -1082,12 +1089,15 @@ class FeedsService:
             }
             posts_data.append(post_data)
         
+        interleaved = interleave_ads([{"type": "post", "post": p} for p in posts_data], placement="feed", every=5)
+        sponsored = [x for x in interleaved if x.get("type") == "ad"]
         return {
             "posts": posts_data,
             "total": total or 0,
             "page": page,
             "per_page": per_page,
             "has_next": total > page * per_page,
+            "sponsored": sponsored or None,
         }
 
     async def get_user_stats(self, db: AsyncSession, user_id: int) -> dict:
