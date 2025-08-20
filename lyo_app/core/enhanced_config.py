@@ -206,6 +206,16 @@ class EnhancedSettings(BaseSettings):
     # Analytics Services
     GOOGLE_ANALYTICS_ID: Optional[str] = Field(None, description="Google Analytics tracking ID")
     MIXPANEL_TOKEN: Optional[str] = Field(None, description="Mixpanel project token")
+
+    # Google Ads / Ad Manager
+    GOOGLE_ADS_ENABLED: bool = Field(True, description="Enable Google Ads/Ad Manager integration")
+    GOOGLE_ADS_NETWORK_CODE: Optional[str] = Field(None, description="Google Ad Manager network code")
+    GOOGLE_ADS_APP_ID_IOS: Optional[str] = Field(None, description="AdMob app ID for iOS (ca-app-pub-...)")
+    GOOGLE_ADS_APP_ID_ANDROID: Optional[str] = Field(None, description="AdMob app ID for Android (ca-app-pub-...)")
+    GOOGLE_ADS_FEED_UNIT_ID: Optional[str] = Field(None, description="Ad unit ID for feed native ads")
+    GOOGLE_ADS_STORY_UNIT_ID: Optional[str] = Field(None, description="Ad unit ID for story interstitial/video")
+    GOOGLE_ADS_POST_UNIT_ID: Optional[str] = Field(None, description="Ad unit ID for in-post native")
+    GOOGLE_ADS_TIMER_UNIT_ID: Optional[str] = Field(None, description="Ad unit ID for timer/loading video")
     
     # ============================================================================
     # RATE LIMITING
