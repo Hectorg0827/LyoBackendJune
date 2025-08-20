@@ -251,6 +251,10 @@ class CourseOutlineResponse(BaseModel):
     status: str = Field(..., description="Task status")
     user_id: int = Field(..., description="User ID")
     timestamp: datetime = Field(..., description="Timestamp")
+    # UX enhancements for loading phase
+    estimated_seconds: Optional[int] = Field(None, description="Estimated time until result is ready")
+    ad: Optional[dict] = Field(None, description="Optional ad card to show during waiting")
+    skip_available_after: Optional[int] = Field(None, description="Seconds after which user can skip the ad")
 
 
 class LessonContentRequest(BaseModel):
@@ -271,6 +275,10 @@ class LessonContentResponse(BaseModel):
     lesson_title: str = Field(..., description="Lesson title")
     user_id: int = Field(..., description="User ID")
     timestamp: datetime = Field(..., description="Timestamp")
+    # UX enhancements for loading phase
+    estimated_seconds: Optional[int] = Field(None, description="Estimated time until result is ready")
+    ad: Optional[dict] = Field(None, description="Optional ad card to show during waiting")
+    skip_available_after: Optional[int] = Field(None, description="Seconds after which user can skip the ad")
 
 
 # ============================================================================
