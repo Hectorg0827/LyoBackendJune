@@ -136,13 +136,15 @@ class UserFollowRead(BaseModel):
 
 
 class FeedResponse(BaseModel):
-    """Schema for feed responses."""
+    """Schema for feed responses with optional sponsored items."""
     
     posts: List[PostRead] = Field(..., description="List of posts in the feed")
     total: int = Field(..., description="Total number of posts")
     page: int = Field(..., description="Current page number")
     per_page: int = Field(..., description="Items per page")
     has_next: bool = Field(..., description="Whether there are more pages")
+    # Optional sponsored items interleaved by the backend; clients can render if present
+    sponsored: Optional[List[dict]] = Field(None, description="Interleaved sponsored items with type and ad payload")
 
 
 class PostWithDetailsRead(PostRead):
