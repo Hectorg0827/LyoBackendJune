@@ -34,7 +34,7 @@ from .schemas import (
 )
 from .mentor_agent import ai_mentor
 from .sentiment_agent import sentiment_engagement_agent
-from .orchestrator import ai_orchestrator
+from .orchestrator import ai_orchestrator, ModelType
 from .websocket_manager import connection_manager, websocket_connection
 from .curriculum_agent import curriculum_design_agent
 from .curation_agent import content_curation_agent
@@ -42,6 +42,7 @@ from lyo_app.core.celery_tasks.ai_tasks import (
     generate_course_outline_task, generate_lesson_content_task,
     evaluate_content_quality_task, tag_content_task, identify_content_gaps_task
 )
+from lyo_app.monetization.engine import get_ad_for_placement
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +85,22 @@ async def generate_course_outline(
             estimated_duration_hours=request.estimated_duration_hours,
             user_id=current_user.id
         )
-        
+        # Provide timer + optional ad metadata for UX while task runs
+        # Estimate a conservative load time in seconds (simple heuristic)
+        estimated_seconds = max(5, min(60, len(request.title) + len(request.description) // 20 + 10))
+        ad = get_ad_for_placement("timer")
+        skip_available_after = None
+        if ad and ad.duration_seconds:
+            # If ad is longer than estimated load, allow skip earlier than ad end
+            skip_available_after = min(ad.skippable_after_seconds or 0, estimated_seconds)
         return {
             "task_id": task.id,
             "status": "processing",
             "user_id": current_user.id,
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.utcnow(),
+            "estimated_seconds": estimated_seconds,
+            "ad": ad.model_dump() if ad else None,
+            "skip_available_after": skip_available_after,
         }
     except Exception as e:
         logger.error(f"Error generating course outline for user {current_user.id}: {e}")
@@ -124,13 +135,21 @@ async def generate_lesson_content(
             user_id=current_user.id
         )
         
+        estimated_seconds = max(5, min(60, len(request.lesson_title) + len(request.lesson_description) // 20 + 10))
+        ad = get_ad_for_placement("timer")
+        skip_available_after = None
+        if ad and ad.duration_seconds:
+            skip_available_after = min(ad.skippable_after_seconds or 0, estimated_seconds)
         return {
             "task_id": task.id,
             "status": "processing",
             "course_id": request.course_id,
             "lesson_title": request.lesson_title,
             "user_id": current_user.id,
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.utcnow(),
+            "estimated_seconds": estimated_seconds,
+            "ad": ad.model_dump() if ad else None,
+            "skip_available_after": skip_available_after,
         }
     except Exception as e:
         logger.error(f"Error generating lesson content for user {current_user.id}: {e}")
