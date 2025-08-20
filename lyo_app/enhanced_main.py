@@ -162,6 +162,7 @@ def create_app() -> FastAPI:
     from lyo_app.ai_study.clean_routes import router as ai_study_router
     from lyo_app.feeds.enhanced_routes import router as feeds_router
     from lyo_app.storage.enhanced_routes import router as storage_router
+    from lyo_app.monetization.routes import router as ads_router
     try:
         from lyo_app.api.v1 import api_router
 
@@ -173,6 +174,31 @@ def create_app() -> FastAPI:
     app.include_router(ai_study_router)
     app.include_router(feeds_router)
     app.include_router(storage_router)
+    app.include_router(ads_router)
+    
+    # Phase 1: Generative AI Tutor Foundation
+    try:
+        from lyo_app.personalization.routes import router as personalization_router
+        app.include_router(personalization_router)
+        logger.info("✅ Personalization routes integrated - Deep Knowledge Tracing active!")
+    except ImportError as e:
+        logger.warning(f"Personalization routes not available: {e}")
+    
+    # Phase 2: Advanced AI Tutoring Features
+    try:
+        from lyo_app.gen_curriculum.routes import router as gen_curriculum_router
+        app.include_router(gen_curriculum_router)
+        logger.info("✅ Generative Curriculum routes integrated - AI-powered content generation active!")
+    except ImportError as e:
+        logger.warning(f"Generative Curriculum routes not available: {e}")
+    
+    try:
+        from lyo_app.collaboration.routes import router as collaboration_router
+        app.include_router(collaboration_router)
+        logger.info("✅ Collaborative Learning routes integrated - Peer learning and study groups active!")
+    except ImportError as e:
+        logger.warning(f"Collaborative Learning routes not available: {e}")
+    
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router
@@ -349,6 +375,9 @@ async def root():  # noqa: D401
             "ai_study": "/api/v1/ai-study",
             "feeds": "/api/v1/feeds",
             "storage": "/api/v1/storage",
+            "personalization": "/api/v1/personalization",
+            "gen_curriculum": "/api/v1/gen-curriculum",
+            "collaboration": "/api/v1/collaboration",
         },
         "features": {
             "ai_study_mode": getattr(settings, "ENABLE_AI_STUDY_MODE", True),
@@ -359,6 +388,11 @@ async def root():  # noqa: D401
             "performance_monitoring": getattr(
                 settings, "ENABLE_PERFORMANCE_MONITORING", True
             ),
+            "deep_knowledge_tracing": True,
+            "generative_curriculum": True,
+            "collaborative_learning": True,
+            "peer_assessment": True,
+            "ai_tutoring": True,
         },
         "timestamp": time.time(),
     }
