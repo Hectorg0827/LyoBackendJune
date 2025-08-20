@@ -17,6 +17,7 @@ from lyo_app.auth.models import User
 from lyo_app.feeds.addictive_algorithm import addictive_feed_algorithm
 from lyo_app.core.enhanced_monitoring import monitor_performance, handle_errors, ErrorCategory
 from lyo_app.core.logging import logger
+from lyo_app.monetization.engine import interleave_ads
 
 router = APIRouter(prefix="/api/v1/feeds", tags=["Enhanced Feeds"])
 
@@ -55,6 +56,8 @@ class FeedResponse(BaseModel):
     feed_type: str
     personalization_data: Dict[str, Any]
     performance_metrics: Dict[str, Any]
+    # Optional sponsored content (non-breaking)
+    sponsored: Optional[List[Dict[str, Any]]] = None
 
 class InteractionRequest(BaseModel):
     """Request model for user interaction"""
@@ -70,6 +73,26 @@ class FeedAnalyticsResponse(BaseModel):
     content_performance: Dict[str, Any]
     algorithm_metrics: Dict[str, Any]
     recommendations: List[str]
+
+class SuggestionItemResponse(BaseModel):
+    """Response model for a user/content suggestion item"""
+    id: str
+    suggestion_type: str = Field(..., description="new_creator | trending_topic | similar_interests")
+    title: str
+    target_id: str
+    relevance_score: float
+    novelty_score: float
+    social_proof: int
+    category: str
+    timestamp: datetime
+
+class SuggestionsResponse(BaseModel):
+    """Response model for suggestions list"""
+    items: List[SuggestionItemResponse]
+    next_cursor: Optional[str]
+    total_count: int
+    filters: Dict[str, Any]
+    sponsored: Optional[List[Dict[str, Any]]] = None
 
 # ============================================================================
 # MAIN FEED ENDPOINTS
@@ -97,7 +120,7 @@ async def get_personalized_feed(
     
     try:
         start_time = datetime.utcnow()
-        
+
         # Get addictive feed from algorithm
         feed_items = await addictive_feed_algorithm.get_addictive_feed(
             user_id=current_user.id,
@@ -105,7 +128,7 @@ async def get_personalized_feed(
             limit=request.limit,
             db=db
         )
-        
+
         # Transform to response format
         response_items = []
         for item in feed_items:
@@ -146,19 +169,20 @@ async def get_personalized_feed(
                 timestamp=item.get('created_at', datetime.utcnow())
             )
             response_items.append(response_item)
-        
+
         # Calculate performance metrics
         processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
-        
+
         # Generate next cursor for pagination
         next_cursor = None
         if len(response_items) == request.limit:
             last_item = response_items[-1]
             next_cursor = f"{last_item.timestamp.isoformat()}_{last_item.id}"
-        
+
         # Get personalization insights
         user_profile = await addictive_feed_algorithm._get_user_profile(current_user.id, db)
-        
+
+        # Build response
         response = FeedResponse(
             items=response_items,
             next_cursor=next_cursor,
@@ -178,7 +202,7 @@ async def get_personalized_feed(
                 'diversity_ratio': 0.25
             }
         )
-        
+
         # Track feed performance in background
         background_tasks.add_task(
             _track_feed_performance,
@@ -187,7 +211,7 @@ async def get_personalized_feed(
             len(response_items),
             processing_time
         )
-        
+
         logger.info(
             f"Personalized feed generated for user {current_user.id}",
             extra={
@@ -197,9 +221,18 @@ async def get_personalized_feed(
                 'processing_time_ms': processing_time
             }
         )
-        
-        return response
-        
+
+        # Optional sponsored items for UI (non-breaking addition)
+        try:
+            interleaved = interleave_ads([{"type": "item", "item": i.model_dump()} for i in response_items], placement="feed", every=6)
+            sponsored = [x for x in interleaved if x.get("type") == "ad"]
+            # Attach to response model's optional field
+            response.sponsored = sponsored or None
+            return response
+        except Exception:
+            # Fallback to original response if monetization fails
+            return response
+
     except Exception as e:
         logger.error(f"Failed to generate personalized feed: {e}", exc_info=True)
         raise HTTPException(
@@ -366,13 +399,86 @@ async def get_discovery_content(
         db=db
     )
     
-    return {
+    # Discovery content plus optional sponsored
+    base = {
         'items': discovery_items,
         'exploration_level': exploration_level,
         'novelty_boost': novelty_boost,
         'serendipity_score': 0.75,
         'filter_bubble_break_count': 5
     }
+    try:
+        interleaved = interleave_ads([{"type": "item", "item": i} for i in discovery_items], placement="feed", every=5)
+        base['sponsored'] = [x for x in interleaved if x.get('type') == 'ad'] or None
+    except Exception:
+        pass
+    return base
+
+@router.get("/suggestions", response_model=SuggestionsResponse)
+@monitor_performance("user_suggestions")
+async def get_user_suggestions(
+    only_new_users: bool = Query(True, description="Only suggest new creators to follow"),
+    limit: int = Query(15, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_access_token)
+):
+    """Get personalized user/content suggestions with optional sponsored items"""
+
+    # Fetch discovery items and filter for suggestions
+    raw_items = await addictive_feed_algorithm.get_addictive_feed(
+        user_id=current_user.id,
+        feed_type='discovery',
+        limit=limit * 2,  # overfetch to allow filtering
+        db=db
+    )
+
+    filtered = [
+        i for i in raw_items
+        if i.get('type') == 'discovery'
+        and (not only_new_users or i.get('suggestion_type') == 'new_creator')
+    ][:limit]
+
+    # Map to response items
+    items: List[SuggestionItemResponse] = []
+    for i in filtered:
+        items.append(
+            SuggestionItemResponse(
+                id=i.get('id'),
+                suggestion_type=i.get('suggestion_type', 'new_creator'),
+                title=i.get('title', ''),
+                target_id=i.get('target_id', ''),
+                relevance_score=i.get('relevance_score', 0.0),
+                novelty_score=i.get('novelty_score', 0.0),
+                social_proof=i.get('social_proof', 0),
+                category=i.get('category', 'creator'),
+                timestamp=i.get('created_at', datetime.utcnow()),
+            )
+        )
+
+    # Cursor
+    next_cursor = None
+    if len(items) == limit:
+        last = items[-1]
+        next_cursor = f"{last.timestamp.isoformat()}_{last.id}"
+
+    # Build response
+    resp = SuggestionsResponse(
+        items=items,
+        next_cursor=next_cursor,
+        total_count=len(items),
+        filters={
+            'only_new_users': only_new_users
+        },
+    )
+
+    # Sponsored items (non-breaking)
+    try:
+        interleaved = interleave_ads([{"type": "item", "item": i.model_dump()} for i in items], placement="feed", every=5)
+        resp.sponsored = [x for x in interleaved if x.get('type') == 'ad'] or None
+    except Exception:
+        pass
+
+    return resp
 
 @router.get("/binge-mode")
 @monitor_performance("binge_mode_feed")
