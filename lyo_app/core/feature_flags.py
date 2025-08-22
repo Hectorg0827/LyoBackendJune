@@ -13,7 +13,6 @@ import redis.asyncio as redis
 from fastapi import HTTPException
 
 from .environments import env_manager, is_feature_enabled
-from .problems import create_problem_detail, ProblemType
 
 logger = logging.getLogger(__name__)
 
@@ -206,11 +205,12 @@ def requires_feature(feature: str, fallback_response: Optional[Any] = None):
                 
                 raise HTTPException(
                     status_code=503,
-                    detail=create_problem_detail(
-                        ProblemType.SERVICE_UNAVAILABLE,
-                        detail=detail,
-                        instance=f"/features/{feature}"
-                    )
+                    detail={
+                        "type": "service-unavailable", 
+                        "title": "Service Unavailable",
+                        "detail": detail,
+                        "instance": f"/features/{feature}"
+                    }
                 )
             
             try:
@@ -232,10 +232,11 @@ async def feature_operation(feature: str):
         if not await feature_manager.is_feature_available(feature):
             raise HTTPException(
                 status_code=503,
-                detail=create_problem_detail(
-                    ProblemType.SERVICE_UNAVAILABLE,
-                    detail=f"Feature '{feature}' is currently unavailable"
-                )
+                detail={
+                    "type": "service-unavailable", 
+                    "title": "Service Unavailable",
+                    "detail": f"Feature '{feature}' is currently unavailable"
+                }
             )
         
         yield

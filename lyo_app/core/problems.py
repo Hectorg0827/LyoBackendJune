@@ -254,3 +254,45 @@ async def problem_details_handler(request: Request, exc: Exception) -> JSONRespo
         )
     
     return create_problem_response(problem, request)
+
+
+class NotFoundProblem(ProblemDetail):
+    """RFC 9457 Problem for not found errors."""
+    
+    def __init__(self, detail: str, instance: Optional[str] = None, **extensions):
+        super().__init__(
+            type_="https://api.lyo.app/problems/not-found",
+            title="Not Found",
+            status=404,
+            detail=detail,
+            instance=instance,
+            **extensions
+        )
+
+
+class ConflictProblem(ProblemDetail):
+    """RFC 9457 Problem for conflict errors."""
+    
+    def __init__(self, detail: str, instance: Optional[str] = None, **extensions):
+        super().__init__(
+            type_="https://api.lyo.app/problems/conflict",
+            title="Conflict",
+            status=409,
+            detail=detail,
+            instance=instance,
+            **extensions
+        )
+
+
+class InternalServerProblem(ProblemDetail):
+    """RFC 9457 Problem for internal server errors."""
+    
+    def __init__(self, detail: str = "An internal server error occurred", instance: Optional[str] = None, **extensions):
+        super().__init__(
+            type_="https://api.lyo.app/problems/internal-server-error",
+            title="Internal Server Error", 
+            status=500,
+            detail=detail,
+            instance=instance,
+            **extensions
+        )

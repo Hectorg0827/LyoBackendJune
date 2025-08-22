@@ -88,6 +88,17 @@ class UserProfile(BaseModel):
     is_active: bool
     is_verified: bool
     created_at: datetime
+
+class UserResponse(BaseModel):
+    """User response model."""
+    id: str
+    email: EmailStr
+    username: Optional[str]
+    full_name: str
+    is_active: bool
+    is_verified: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True
@@ -99,7 +110,7 @@ class CourseGenerationRequest(BaseModel):
     """Request to generate a new course."""
     topic: str = Field(..., min_length=3, max_length=200)
     interests: List[str] = Field(default_factory=list, max_items=10)
-    difficulty_level: Optional[str] = Field("beginner", regex="^(beginner|intermediate|advanced)$")
+    difficulty_level: Optional[str] = Field("beginner", pattern="^(beginner|intermediate|advanced)$")
     target_duration_hours: Optional[float] = Field(None, gt=0, le=100)
     locale: Optional[str] = Field("en", min_length=2, max_length=10)
 
@@ -366,7 +377,7 @@ class SearchRequest(BaseModel):
     """Content search request."""
     query: str = Field(..., min_length=1, max_length=200)
     content_types: List[ContentType] = Field(default_factory=list)
-    difficulty_level: Optional[str] = Field(None, regex="^(beginner|intermediate|advanced)$")
+    difficulty_level: Optional[str] = Field(None, pattern="^(beginner|intermediate|advanced)$")
     language: Optional[str] = Field("en", min_length=2, max_length=10)
     limit: int = Field(20, ge=1, le=50)
     offset: int = Field(0, ge=0)

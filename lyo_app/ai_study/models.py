@@ -375,7 +375,7 @@ class StudySessionAnalytics(Base):
 class AIStudyManager:
     """Simple AI Study Manager for initial startup"""
 
-    async def generate_study_content(self, topic: str, difficulty: str = "intermediate", user_id: int | None = None):
+    async def generate_study_content(self, topic: str, difficulty: str = "intermediate", user_id: Optional[int] = None):
         """Generate study content (placeholder)"""
         return {
             "topic": topic,
@@ -408,76 +408,6 @@ def get_ai_study_manager():
             "user_sentiment": self.user_sentiment,
             "helpfulness_rating": self.helpfulness_rating,
             "clarity_score": self.clarity_score
-        }
-
-
-class GeneratedQuiz(Base):
-    """
-    Represents an AI-generated quiz for a study session or resource
-    """
-    __tablename__ = "generated_quizzes"
-
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id = Column(String, ForeignKey("study_sessions.id"), nullable=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    resource_id = Column(String, nullable=False)
-    
-    # Quiz metadata
-    quiz_type = Column(SQLEnum(QuizType), nullable=False)
-    title = Column(String(200), nullable=True)
-    description = Column(Text, nullable=True)
-    difficulty_level = Column(String(50), nullable=True)
-    estimated_duration_minutes = Column(Integer, nullable=True)
-    
-    # Quiz content
-    questions = Column(JSON, nullable=False)  # Array of question objects
-    question_count = Column(Integer, nullable=False)
-    
-    # Generation metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
-    ai_model_used = Column(String(100), nullable=True)
-    generation_prompt = Column(Text, nullable=True)  # The prompt used to generate
-    generation_time_ms = Column(Integer, nullable=True)
-    generation_token_count = Column(Integer, nullable=True)
-    
-    # Usage and performance
-    times_taken = Column(Integer, default=0)
-    average_score = Column(Float, nullable=True)  # 0-100 scale
-    completion_rate = Column(Float, nullable=True)  # 0-1 scale
-    
-    # Quality metrics
-    quality_rating = Column(Float, nullable=True)  # AI-assessed quality (0-1)
-    user_feedback_rating = Column(Float, nullable=True)  # User feedback (1-5)
-    is_validated = Column(Boolean, default=False)  # Whether questions have been reviewed
-    
-    # Relationships
-    session = relationship("StudySession", back_populates="quizzes")
-    user = relationship("User", back_populates="generated_quizzes")
-    quiz_attempts = relationship("QuizAttempt", back_populates="quiz", cascade="all, delete-orphan")
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "session_id": self.session_id,
-            "user_id": self.user_id,
-            "resource_id": self.resource_id,
-            "quiz_type": self.quiz_type.value,
-            "title": self.title,
-            "description": self.description,
-            "difficulty_level": self.difficulty_level,
-            "estimated_duration_minutes": self.estimated_duration_minutes,
-            "questions": self.questions,
-            "question_count": self.question_count,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "ai_model_used": self.ai_model_used,
-            "generation_time_ms": self.generation_time_ms,
-            "generation_token_count": self.generation_token_count,
-            "times_taken": self.times_taken,
-            "average_score": self.average_score,
-            "completion_rate": self.completion_rate,
-            "quality_rating": self.quality_rating,
-            "user_feedback_rating": self.user_feedback_rating,
-            "is_validated": self.is_validated
         }
 
 
