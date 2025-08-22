@@ -10,12 +10,15 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 try:
     from pydantic_settings import BaseSettings
 except ImportError:
-    # Fallback for older pydantic versions
-    from pydantic import BaseSettings
+    # Fallback for when pydantic_settings is not available
+    class BaseSettings(BaseModel):
+        class Config:
+            env_file = ".env"
+            env_file_encoding = "utf-8"
 
 class EnhancedSettings(BaseSettings):
     """
@@ -47,7 +50,7 @@ class EnhancedSettings(BaseSettings):
     WORKERS: int = Field(1, description="Number of worker processes")
     
     # Security
-    SECRET_KEY: str = Field(..., description="Secret key for signing tokens")
+    SECRET_KEY: str = Field(default="dev-secret-key-replace-in-production", description="Secret key for signing tokens")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60 * 24 * 7, description="Access token expiration (minutes)")  # 7 days
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, description="Refresh token expiration (days)")
     PASSWORD_MIN_LENGTH: int = Field(8, description="Minimum password length")
@@ -63,7 +66,7 @@ class EnhancedSettings(BaseSettings):
     # ============================================================================
     
     # PostgreSQL
-    DATABASE_URL: str = Field(..., description="Database connection URL")
+    DATABASE_URL: str = Field(default="sqlite+aiosqlite:///./lyo_app_dev.db", description="Database connection URL")
     DATABASE_ECHO: bool = Field(False, description="Echo SQL queries")
     DATABASE_POOL_SIZE: int = Field(20, description="Database connection pool size")
     DATABASE_MAX_OVERFLOW: int = Field(30, description="Database max overflow connections")
@@ -236,62 +239,81 @@ class EnhancedSettings(BaseSettings):
     CACHE_STATIC_CONTENT_TTL: int = Field(86400, description="Static content cache TTL (seconds)")
     
     # ============================================================================
-    # VALIDATORS
+    # VALIDATORS  
     # ============================================================================
     
-    @validator('ENVIRONMENT')
+    @field_validator('ENVIRONMENT')
+    @classmethod
     def validate_environment(cls, v):
         allowed_envs = ['development', 'staging', 'production']
         if v not in allowed_envs:
             raise ValueError(f'Environment must be one of: {allowed_envs}')
         return v
     
-    @validator('LOG_LEVEL')
+    @field_validator('LOG_LEVEL')
+    @classmethod
     def validate_log_level(cls, v):
         allowed_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if v.upper() not in allowed_levels:
             raise ValueError(f'Log level must be one of: {allowed_levels}')
         return v.upper()
     
-    @validator('LOG_FORMAT')
+    @field_validator('LOG_FORMAT')
+    @classmethod
     def validate_log_format(cls, v):
         allowed_formats = ['json', 'text']
         if v not in allowed_formats:
             raise ValueError(f'Log format must be one of: {allowed_formats}')
         return v
     
-    @validator('PORT')
+    @field_validator('PORT')
+    @classmethod
     def validate_port(cls, v):
         if not 1 <= v <= 65535:
             raise ValueError('Port must be between 1 and 65535')
         return v
     
-    @validator('PASSWORD_MIN_LENGTH')
+    @field_validator('PASSWORD_MIN_LENGTH')
+    @classmethod
     def validate_password_min_length(cls, v):
         if v < 6:
             raise ValueError('Password minimum length must be at least 6')
         return v
     
-    @validator('GEMINI_TEMPERATURE')
+    @field_validator('GEMINI_TEMPERATURE')
+    @classmethod
     def validate_temperature(cls, v):
         if not 0.0 <= v <= 2.0:
             raise ValueError('Temperature must be between 0.0 and 2.0')
         return v
     
-    @validator('GEMINI_TOP_P')
+    @field_validator('GEMINI_TOP_P')
+    @classmethod
     def validate_top_p(cls, v):
         if not 0.0 <= v <= 1.0:
             raise ValueError('Top_p must be between 0.0 and 1.0')
         return v
     
-    @validator('MAX_UPLOAD_SIZE')
+    @field_validator('MAX_UPLOAD_SIZE')
+    @classmethod
     def validate_max_upload_size(cls, v):
         if v < 1024:  # 1KB minimum
             raise ValueError('Max upload size must be at least 1KB')
         if v > 1024 * 1024 * 1024:  # 1GB maximum
             raise ValueError('Max upload size cannot exceed 1GB')
         return v
+
+    # ============================================================================
+    # PYDANTIC CONFIG
+    # ============================================================================
     
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True,
+        "extra": "allow"
+    }
+
     # ============================================================================
     # ENVIRONMENT-SPECIFIC CONFIGURATIONS
     # ============================================================================
@@ -441,13 +463,6 @@ class EnhancedSettings(BaseSettings):
     def is_staging(self) -> bool:
         """Check if running in staging"""
         return self.ENVIRONMENT == 'staging'
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        validate_assignment = True
-        extra = "ignore"  # Ignore extra fields from legacy config
 
 # Global settings instance
 settings = EnhancedSettings()

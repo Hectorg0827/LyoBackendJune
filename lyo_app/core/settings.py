@@ -2,7 +2,16 @@
 
 import os
 from typing import List, Optional, Literal
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, field_validator
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    # Fallback for when pydantic_settings is not available
+    from pydantic import BaseModel
+    class BaseSettings(BaseModel):
+        class Config:
+            env_file = ".env"
+            env_file_encoding = "utf-8"
 
 
 class Settings(BaseSettings):
@@ -109,27 +118,32 @@ class Settings(BaseSettings):
     AI_DAILY_COST_LIMIT: float = 50.0
     CONTENT_GENERATION_TIMEOUT: int = 300  # 5 minutes
     
-    @validator("CORS_ORIGINS", pre=True)
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
     
-    @validator("MODEL_DIR")
+    @field_validator("MODEL_DIR")
+    @classmethod
     def validate_model_dir(cls, v):
         """Ensure model directory is absolute path."""
         return os.path.abspath(v)
     
-    @validator("DATABASE_URL")
+    @field_validator("DATABASE_URL")
+    @classmethod
     def validate_database_url(cls, v):
         """Validate database URL format."""
         if not v.startswith(("postgresql://", "postgresql+asyncpg://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         return v
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "allow",  # Allow extra fields in Pydantic v2
+    }
 
 
 # Global settings instance

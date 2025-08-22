@@ -40,7 +40,10 @@ except ImportError:
     BOTO3_AVAILABLE = False
 
 import aiofiles
-import aiohttp
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
 from fastapi import HTTPException, UploadFile
 
 try:
@@ -49,7 +52,11 @@ try:
 except ImportError:
     REDIS_AVAILABLE = False
 
-from lyo_app.core.config import settings
+try:
+    from lyo_app.core.enhanced_config import EnhancedSettings
+    settings = EnhancedSettings()
+except ImportError:
+    from lyo_app.core.config import settings
 from lyo_app.core.logging import logger
 
 class MediaType:
@@ -306,8 +313,14 @@ class EnhancedStorageSystem:
         self.image_processor = ImageProcessor()
         self.video_processor = VideoProcessor()
         
-        # Initialize storage clients
-        asyncio.create_task(self._initialize_clients())
+        # Will initialize storage clients lazily
+        self._initialized = False
+    
+    async def _ensure_initialized(self):
+        """Ensure clients are initialized"""
+        if not self._initialized:
+            await self._initialize_clients()
+            self._initialized = True
     
     async def _initialize_clients(self):
         """Initialize storage and cache clients"""

@@ -17,7 +17,83 @@ from dataclasses import dataclass, asdict
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-import structlog
+try:
+    import structlog
+except ImportError:
+    # Fallback when structlog is not available
+    import logging
+    
+    class MockLogger:
+        def __init__(self, name):
+            self._logger = logging.getLogger(name)
+            
+        def info(self, *args, **kwargs):
+            self._logger.info(str(args) + str(kwargs))
+            
+        def error(self, *args, **kwargs):
+            self._logger.error(str(args) + str(kwargs))
+            
+        def warning(self, *args, **kwargs):
+            self._logger.warning(str(args) + str(kwargs))
+            
+        def debug(self, *args, **kwargs):
+            self._logger.debug(str(args) + str(kwargs))
+    
+    class MockProcessors:
+        @staticmethod
+        def TimeStamper(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def StackInfoRenderer(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def format_exc_info(record):
+            return record
+            
+        @staticmethod
+        def UnicodeDecoder(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def JSONRenderer(*args, **kwargs):
+            return lambda record: record
+            
+    class MockStdlib:
+        @staticmethod
+        def filter_by_level(record):
+            return record
+            
+        @staticmethod
+        def add_logger_name(record):
+            return record
+            
+        @staticmethod  
+        def add_log_level(record):
+            return record
+            
+        @staticmethod
+        def PositionalArgumentsFormatter(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def LoggerFactory(*args, **kwargs):
+            return lambda name: MockLogger(name)
+            
+    class MockStructlog:
+        processors = MockProcessors()
+        stdlib = MockStdlib()
+        
+        @staticmethod
+        def get_logger(name=""):
+            return MockLogger(name)
+            
+        @staticmethod
+        def configure(**kwargs):
+            pass
+    
+    structlog = MockStructlog()
 
 try:
     import psutil

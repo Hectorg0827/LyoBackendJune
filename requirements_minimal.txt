@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+aiosqlite
+passlib
+python-jose
+python-multipart
+psutil
+aiofiles
+prometheus_client
+slowapi

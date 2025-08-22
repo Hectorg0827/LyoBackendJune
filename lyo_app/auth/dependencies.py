@@ -42,3 +42,6 @@ async def get_current_user(
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+# Alias for backward compatibility
+verify_access_token = get_current_user

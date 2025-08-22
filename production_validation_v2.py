@@ -23,7 +23,7 @@ os.environ.setdefault("ENVIRONMENT", "production")
 
 try:
     # Core imports
-    from lyo_app.core.settings import get_settings
+    from lyo_app.core.settings import settings
     from lyo_app.core.database import get_database_url
     from lyo_app.core.environments import env_manager, get_environment_config
     from lyo_app.core.feature_flags import feature_manager, get_feature_status_summary
@@ -122,7 +122,7 @@ class ProductionValidator:
         """Validate environment configuration"""
         try:
             config = get_environment_config()
-            settings = get_settings()
+            # settings already imported at module level
             
             checks = {
                 "environment_set": bool(os.getenv("ENVIRONMENT")),
@@ -214,8 +214,8 @@ class ProductionValidator:
     async def validate_redis(self) -> Dict[str, Any]:
         """Validate Redis connectivity"""
         try:
-            settings = get_settings()
-            redis_client = redis.from_url(settings.redis_url)
+            # settings already imported at module level
+            redis_client = redis.from_url(settings.REDIS_URL)
             
             # Test basic connectivity
             await redis_client.ping()
@@ -532,7 +532,7 @@ class ProductionValidator:
     async def validate_security(self) -> Dict[str, Any]:
         """Validate security configuration"""
         try:
-            settings = get_settings()
+            # settings already imported at module level
             config = get_environment_config()
             
             security_checks = {

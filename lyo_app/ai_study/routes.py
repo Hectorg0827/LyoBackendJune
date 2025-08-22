@@ -677,8 +677,8 @@ async def generate_quiz(
 @router.post("/generate-adaptive-quiz", response_model=QuizGenerationResponse)
 @monitor_request("ai_adaptive_quiz_generation")
 async def generate_adaptive_quiz(
-    resource_id: str = Field(..., description="Learning resource ID"),
-    include_performance_history: bool = Field(default=True, description="Use performance history"),
+    resource_id: str = Query(..., description="Learning resource ID"),
+    include_performance_history: bool = Query(default=True, description="Use performance history"),
     current_user: User = Depends(verify_access_token),
     db: AsyncSession = Depends(get_db)
 ):

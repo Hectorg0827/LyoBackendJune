@@ -369,7 +369,7 @@ class FeedItem(Base):
     course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
     
     # Metadata
-    metadata = Column(JSONB, nullable=True)
+    feed_metadata = Column(JSONB, nullable=True)
     
     # Engagement
     likes_count = Column(Integer, default=0, nullable=False)

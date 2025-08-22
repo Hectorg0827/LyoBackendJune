@@ -24,7 +24,34 @@ from enum import Enum
 import os
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
-import structlog
+try:
+    import structlog
+except ImportError:
+    # Fallback when structlog is not available
+    import logging
+    
+    class MockLogger:
+        def __init__(self, name):
+            self._logger = logging.getLogger(name)
+            
+        def info(self, *args, **kwargs):
+            self._logger.info(str(args) + str(kwargs))
+            
+        def error(self, *args, **kwargs):
+            self._logger.error(str(args) + str(kwargs))
+            
+        def warning(self, *args, **kwargs):
+            self._logger.warning(str(args) + str(kwargs))
+            
+        def debug(self, *args, **kwargs):
+            self._logger.debug(str(args) + str(kwargs))
+    
+    class MockStructlog:
+        @staticmethod
+        def get_logger(name=""):
+            return MockLogger(name)
+    
+    structlog = MockStructlog()
 from pydantic import BaseModel, Field
 
 # Production-grade structured logging
