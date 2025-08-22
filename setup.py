@@ -30,8 +30,11 @@ class LyoBackendSetup:
             # Step 1: Check Python version
             self.check_python_version()
             
-            # Step 2: Install dependencies
-            self.install_dependencies()
+            # Step 2: Install dependencies (if not skipped)
+            if not self.requirements_installed:
+                self.install_dependencies()
+            else:
+                print("📦 Skipping dependency installation...")
             
             # Step 3: Setup environment file
             self.setup_environment()

@@ -41,7 +41,7 @@ class CollaborativeLearningEngine:
         subject_area: str,
         collaboration_type: CollaborationType,
         target_skills: List[str],
-        max_members: int = 8,
+        max_members: int,
         db: AsyncSession
     ) -> StudyGroup:
         """Create a new collaborative study group"""
