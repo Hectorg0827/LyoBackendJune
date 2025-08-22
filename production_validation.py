@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Production Validation Script for LyoApp Backend
-Comprehensive end-to-end testing of all production features.
+Comprehensive production validation script for LyoBackend
+Validates all systems, configurations, and production readiness
 """
 
 import asyncio
-import json
-import subprocess
 import sys
-import time
-from typing import Dict, Any, Optional
-import httpx
-import sqlite3
+import os
+import json
+import logging
+from datetime import datetime
+from typing import Dict, List, Any, Optional
 from pathlib import Path
+import psutil
+
+# Add the project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+# Set environment for testing
+os.environ.setdefault("ENVIRONMENT", "production")
 
 class Colors:
     GREEN = '\033[92m'
