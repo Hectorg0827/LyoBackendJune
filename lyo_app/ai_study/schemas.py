@@ -268,3 +268,14 @@ class StudyModeHealthResponse(BaseModel):
     total_sessions_today: int = Field(..., description="Total sessions created today")
     avg_response_time_ms: float = Field(..., description="Average AI response time")
     service_uptime_seconds: int = Field(..., description="Service uptime in seconds")
+
+# Alias for backward compatibility
+StudySessionCreateRequest = StudySessionRequest
+StudySessionCreateResponse = StudySessionResponse
+
+# Quick compatibility classes
+class AnswerAnalysisRequest(BaseModel):
+    """Request for answer analysis"""
+    user_answer: str = Field(..., description="User's answer")
+    question: str = Field(..., description="Original question")
+    correct_answer: Optional[str] = Field(None, description="Correct answer for comparison")

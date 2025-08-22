@@ -41,17 +41,49 @@ except ImportError:
     
     class MockProcessors:
         @staticmethod
-        def JSONRenderer():
-            return None
+        def TimeStamper(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def StackInfoRenderer(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def format_exc_info(record):
+            return record
+            
+        @staticmethod
+        def UnicodeDecoder(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def JSONRenderer(*args, **kwargs):
+            return lambda record: record
+            
+    class MockStdlib:
+        @staticmethod
+        def filter_by_level(record):
+            return record
+            
+        @staticmethod
+        def add_logger_name(record):
+            return record
+            
+        @staticmethod  
+        def add_log_level(record):
+            return record
+            
+        @staticmethod
+        def PositionalArgumentsFormatter(*args, **kwargs):
+            return lambda record: record
+            
+        @staticmethod
+        def LoggerFactory(*args, **kwargs):
+            return lambda name: MockLogger(name)
             
     class MockStructlog:
         processors = MockProcessors()
-        stdlib = type('MockStdlib', (), {
-            'filter_by_level': lambda: None,
-            'add_logger_name': lambda: None,
-            'add_log_level': lambda: None,
-            'PositionalArgumentsFormatter': lambda: None
-        })()
+        stdlib = MockStdlib()
         
         @staticmethod
         def get_logger(name=""):

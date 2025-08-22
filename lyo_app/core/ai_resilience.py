@@ -393,3 +393,6 @@ class AIResilienceManager:
             await self.session.close()
         logger.info("AI Resilience Manager closed")
 
+# Create global instance
+ai_resilience_manager = AIResilienceManager()
+
