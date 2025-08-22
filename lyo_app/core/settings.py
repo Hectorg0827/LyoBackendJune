@@ -3,7 +3,15 @@
 import os
 from typing import List, Optional, Literal
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    # Fallback for when pydantic_settings is not available
+    from pydantic import BaseModel
+    class BaseSettings(BaseModel):
+        class Config:
+            env_file = ".env"
+            env_file_encoding = "utf-8"
 
 
 class Settings(BaseSettings):

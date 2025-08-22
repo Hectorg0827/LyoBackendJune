@@ -17,7 +17,51 @@ from dataclasses import dataclass, asdict
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-import structlog
+try:
+    import structlog
+except ImportError:
+    # Fallback when structlog is not available
+    import logging
+    
+    class MockLogger:
+        def __init__(self, name):
+            self._logger = logging.getLogger(name)
+            
+        def info(self, *args, **kwargs):
+            self._logger.info(str(args) + str(kwargs))
+            
+        def error(self, *args, **kwargs):
+            self._logger.error(str(args) + str(kwargs))
+            
+        def warning(self, *args, **kwargs):
+            self._logger.warning(str(args) + str(kwargs))
+            
+        def debug(self, *args, **kwargs):
+            self._logger.debug(str(args) + str(kwargs))
+    
+    class MockProcessors:
+        @staticmethod
+        def JSONRenderer():
+            return None
+            
+    class MockStructlog:
+        processors = MockProcessors()
+        stdlib = type('MockStdlib', (), {
+            'filter_by_level': lambda: None,
+            'add_logger_name': lambda: None,
+            'add_log_level': lambda: None,
+            'PositionalArgumentsFormatter': lambda: None
+        })()
+        
+        @staticmethod
+        def get_logger(name=""):
+            return MockLogger(name)
+            
+        @staticmethod
+        def configure(**kwargs):
+            pass
+    
+    structlog = MockStructlog()
 
 try:
     import psutil

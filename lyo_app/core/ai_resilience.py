@@ -4,7 +4,10 @@ Implements fallback mechanisms, retries, and load balancing for AI models
 """
 
 import asyncio
-import aiohttp
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
 import time
 import logging
 import random
@@ -20,14 +23,16 @@ except Exception:  # pragma: no cover
     def get_secret(name: str, default=None):
         import os
         return os.getenv(name, default)
-"""AI Resilience Manager with Circuit Breaker Pattern (restored)."""
 
-import aiohttp
-import time
-import logging
-import random
-import json
-from typing import Dict, List, Optional, Any, Callable
+# Remove duplicate imports
+#"""AI Resilience Manager with Circuit Breaker Pattern (restored)."""
+#
+#import aiohttp
+#import time
+#import logging
+#import random
+#import json
+#from typing import Dict, List, Optional, Any, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 from lyo_app.core.config import settings

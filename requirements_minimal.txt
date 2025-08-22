@@ -8,3 +8,5 @@ python-jose
 python-multipart
 psutil
 aiofiles
+prometheus_client
+slowapi
