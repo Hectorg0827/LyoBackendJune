@@ -337,8 +337,7 @@ class BackendHealthChecker:
         else:
             print("❌ POOR! Major issues need immediate fixing.")
         
-        print("
-🚀 BACKEND STATUS SUMMARY:")
+        print("\n🚀 BACKEND STATUS SUMMARY:")
         print(f"   - All identified issues: {'FIXED' if rating >= 9.0 else 'PARTIALLY FIXED'}")
         print(f"   - AI Study Mode: {'FULLY IMPLEMENTED' if self.results.get('Database Models', False) else 'NEEDS WORK'}")
         print(f"   - Enhanced Features: {'OPERATIONAL' if self.results.get('Enhanced Features', False) else 'NEEDS WORK'}")
@@ -351,12 +350,10 @@ if __name__ == "__main__":
     final_rating = checker.run_validation()
     
     if final_rating >= 9.0:
-        print("
-🏆 MISSION ACCOMPLISHED!")
+        print("\n🏆 MISSION ACCOMPLISHED!")
         print("✨ Backend is error-free and operates as intended!")
     else:
-        print(f"
-📈 Current status: {final_rating:.1f}/10")
+        print(f"\n📈 Current status: {final_rating:.1f}/10")
         print("🔧 Additional fixes may be needed.")
 
 import subprocess

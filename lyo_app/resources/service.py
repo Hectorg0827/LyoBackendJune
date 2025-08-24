@@ -36,8 +36,8 @@ class ResourceAggregationService:
         providers = {}
         
         # Initialize providers - using mock API keys for testing
-    yt_key = get_credential("YOUTUBE_API_KEY", settings.youtube_api_key) or "MOCK_YOUTUBE_API_KEY"
-    providers[ResourceProvider.YOUTUBE] = YouTubeProvider(yt_key)
+        yt_key = get_credential("YOUTUBE_API_KEY", settings.youtube_api_key) or "MOCK_YOUTUBE_API_KEY"
+        providers[ResourceProvider.YOUTUBE] = YouTubeProvider(yt_key)
         providers[ResourceProvider.INTERNET_ARCHIVE] = InternetArchiveProvider()
         providers[ResourceProvider.KHAN_ACADEMY] = KhanAcademyProvider()
         

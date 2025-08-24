@@ -57,7 +57,7 @@ class AuthorizationError(APIError):
         super().__init__(message, status_code=403, error_code="ACCESS_DENIED", **kwargs)
 
 
-class ValidationError as AppValidationError(APIError):
+class AppValidationError(APIError):
     """Validation-related errors."""
     
     def __init__(self, message: str = "Validation failed", **kwargs):
