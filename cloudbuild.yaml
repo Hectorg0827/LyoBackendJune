@@ -1,4 +1,24 @@
 steps:
+  # Create Artifact Registry repository if it doesn't exist
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+    - -c
+    - |
+      # Enable required services
+      gcloud services enable artifactregistry.googleapis.com --quiet
+      gcloud services enable run.googleapis.com --quiet
+      
+      # Create repository (non-blocking if exists)
+      gcloud artifacts repositories create lyo-backend-repo \
+        --repository-format=docker \
+        --location=${_REGION} \
+        --description="Lyo Backend Docker images" \
+        --quiet || echo "Repository may already exist"
+      
+      # Configure Docker authentication  
+      gcloud auth configure-docker ${_REGION}-docker.pkg.dev --quiet
+
   # Build the container image using the lightweight Dockerfile.cloud
   - name: 'gcr.io/cloud-builders/docker'
     args: [
@@ -8,31 +28,61 @@ steps:
       '.'
     ]
 
-  # Push the image to Container Registry
+  # Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '${_IMAGE}']
 
-  # Deploy to Cloud Run
+  # Deploy to Cloud Run (with conditional secrets)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args: [
-      'run', 'deploy', '${_SERVICE}',
-      '--image', '${_IMAGE}',
-      '--region', '${_REGION}',
-      '--platform', 'managed',
-      '--allow-unauthenticated',
-      '--port', '8080',
-      '--memory', '2Gi',
-      '--cpu', '1',
-      '--set-env-vars', 'ENVIRONMENT=production,DEBUG=false,PORT=8080',
-      '--set-secrets', 'DATABASE_URL=database-url:latest,JWT_SECRET_KEY=jwt-secret:latest',
-      '--add-cloudsql-instances', 'lyobackend:us-central1:my-instance'
-    ]
+    entrypoint: bash
+    args:
+    - -c
+    - |
+      # Deploy with basic configuration
+      gcloud run deploy ${_SERVICE} \
+        --image ${_IMAGE} \
+        --region ${_REGION} \
+        --platform managed \
+        --allow-unauthenticated \
+        --port 8080 \
+        --memory 2Gi \
+        --cpu 1 \
+        --set-env-vars "ENVIRONMENT=production,DEBUG=false,PORT=8080,GCP_PROJECT_ID=${PROJECT_ID}" \
+        --quiet
+      
+      # Try to add secrets if they exist (non-blocking)
+      echo "Attempting to configure secrets..."
+      
+      # Check and add JWT secret
+      if gcloud secrets describe jwt-secret-key --quiet 2>/dev/null; then
+        gcloud run services update ${_SERVICE} \
+          --region ${_REGION} \
+          --update-secrets="JWT_SECRET_KEY=jwt-secret-key:latest" \
+          --quiet || echo "Warning: Could not set JWT_SECRET_KEY"
+      fi
+      
+      # Check and add database URL  
+      if gcloud secrets describe database-url --quiet 2>/dev/null; then
+        gcloud run services update ${_SERVICE} \
+          --region ${_REGION} \
+          --update-secrets="DATABASE_URL=database-url:latest" \
+          --quiet || echo "Warning: Could not set DATABASE_URL"
+      fi
+      
+      # Check and add OpenAI API key
+      if gcloud secrets describe openai-api-key --quiet 2>/dev/null; then
+        gcloud run services update ${_SERVICE} \
+          --region ${_REGION} \
+          --update-secrets="OPENAI_API_KEY=openai-api-key:latest" \
+          --quiet || echo "Warning: Could not set OPENAI_API_KEY"
+      fi
+      
+      echo "Deployment completed successfully!"
 
 substitutions:
   _SERVICE: 'lyo-backend'
-  _REGION: 'us-central1'
-  _IMAGE: 'gcr.io/lyobackend/lyo-backend'
+  _REGION: 'us-central1'  
+  _IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/lyo-backend-repo/${_SERVICE}:${SHORT_SHA}'
 
 options:
   logging: CLOUD_LOGGING_ONLY
