@@ -2,7 +2,18 @@
 
 # One-Click Google Cloud Deployment for LyoBackend
 # This script provides a complete, automated deployment solution
-# Usage: ./one-click-gcp-deploy.sh [PROJECT_ID] [REGION] [SERVICE_NAME]
+# 
+# Usage: ./one-click-gcp-deploy.sh [OPTIONS] [PROJECT_ID] [REGION] [SERVICE_NAME]
+#
+# Options:
+#   -h, --help     Show help message and exit
+#   -v, --version  Show version information and exit
+#
+# Examples:
+#   ./one-click-gcp-deploy.sh                                # Interactive mode
+#   ./one-click-gcp-deploy.sh my-project                     # With project ID
+#   ./one-click-gcp-deploy.sh my-project us-west1            # With project and region
+#   ./one-click-gcp-deploy.sh my-project us-west1 my-backend # All parameters
 
 set -euo pipefail
 
@@ -39,25 +50,111 @@ cat << "EOF"
 EOF
 echo -e "${NC}"
 
+# Function to show help
+show_help() {
+    echo -e "${BLUE}Usage: $0 [OPTIONS] [PROJECT_ID] [REGION] [SERVICE_NAME]${NC}"
+    echo ""
+    echo "One-Click Google Cloud Deployment for LyoBackend"
+    echo ""
+    echo "OPTIONS:"
+    echo "  -h, --help     Show this help message and exit"
+    echo "  -v, --version  Show version information and exit"
+    echo ""
+    echo "ARGUMENTS:"
+    echo "  PROJECT_ID     Google Cloud Project ID (required if not provided interactively)"
+    echo "  REGION         Google Cloud region (default: ${DEFAULT_REGION})"
+    echo "  SERVICE_NAME   Cloud Run service name (default: ${DEFAULT_SERVICE_NAME})"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  $0                                    # Interactive mode"
+    echo "  $0 my-project                        # Specify project ID"
+    echo "  $0 my-project us-west1               # Specify project and region"
+    echo "  $0 my-project us-west1 my-backend    # Specify all parameters"
+    echo ""
+    echo "ENVIRONMENT VARIABLES:"
+    echo "  SKIP_CONFIRM=true    Skip confirmation prompts"
+    echo ""
+}
+
+# Function to show version
+show_version() {
+    echo -e "${GREEN}LyoBackend One-Click GCP Deploy v1.0.0${NC}"
+    echo "Google Cloud Run deployment automation script"
+}
+
 # Parse command line arguments
-PROJECT_ID=${1:-}
-REGION=${2:-$DEFAULT_REGION}
-SERVICE_NAME=${3:-$DEFAULT_SERVICE_NAME}
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -v|--version)
+            show_version
+            exit 0
+            ;;
+        -*)
+            log_error "Unknown option $1"
+            echo "Use $0 --help for usage information"
+            exit 1
+            ;;
+        *)
+            # Positional arguments
+            if [[ -z "$PROJECT_ID" ]]; then
+                PROJECT_ID="$1"
+            elif [[ -z "$REGION_ARG" ]]; then
+                REGION_ARG="$1"
+            elif [[ -z "$SERVICE_NAME_ARG" ]]; then
+                SERVICE_NAME_ARG="$1"
+            else
+                log_error "Too many arguments"
+                echo "Use $0 --help for usage information"
+                exit 1
+            fi
+            ;;
+    esac
+    shift
+done
+
+# Set defaults for region and service name
+REGION=${REGION_ARG:-$DEFAULT_REGION}
+SERVICE_NAME=${SERVICE_NAME_ARG:-$DEFAULT_SERVICE_NAME}
 
 # Interactive configuration if not provided
 if [[ -z "$PROJECT_ID" ]]; then
     echo -e "${BLUE}📋 Configuration Setup${NC}"
+    echo "Please provide the required deployment configuration:"
+    echo ""
     read -p "Enter your GCP Project ID: " PROJECT_ID
-    read -p "Enter your preferred region (default: ${DEFAULT_REGION}): " USER_REGION
-    REGION=${USER_REGION:-$DEFAULT_REGION}
-    read -p "Enter service name (default: ${DEFAULT_SERVICE_NAME}): " USER_SERVICE_NAME
-    SERVICE_NAME=${USER_SERVICE_NAME:-$DEFAULT_SERVICE_NAME}
+    if [[ -z "$REGION_ARG" ]]; then
+        read -p "Enter your preferred region (default: ${DEFAULT_REGION}): " USER_REGION
+        REGION=${USER_REGION:-$DEFAULT_REGION}
+    fi
+    if [[ -z "$SERVICE_NAME_ARG" ]]; then
+        read -p "Enter service name (default: ${DEFAULT_SERVICE_NAME}): " USER_SERVICE_NAME
+        SERVICE_NAME=${USER_SERVICE_NAME:-$DEFAULT_SERVICE_NAME}
+    fi
 fi
 
 # Validate inputs
 if [[ -z "$PROJECT_ID" ]]; then
     log_error "Project ID is required"
+    echo "Use $0 --help for usage information"
     exit 1
+fi
+
+# Validate PROJECT_ID format (Google Cloud project IDs must be lowercase, 6-30 chars, letters/numbers/hyphens)
+if [[ ! "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,29}$ ]]; then
+    log_warning "Project ID format may be invalid"
+    log_info "Google Cloud Project IDs should be 6-30 characters, lowercase letters, numbers, and hyphens only"
+    log_info "Must start with a letter"
+    if [[ "${SKIP_CONFIRM:-}" != "true" ]]; then
+        read -p "Continue anyway? (y/n): " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
 fi
 
 log_step "Configuration Summary"
