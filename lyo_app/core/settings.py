@@ -2,7 +2,8 @@
 
 import os
 from typing import List, Optional, Literal
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -46,11 +47,11 @@ class Settings(BaseSettings):
     CORS_ALLOW_METHODS: List[str] = ["*"]
     CORS_ALLOW_HEADERS: List[str] = ["*"]
     
-    # AI Model Configuration (Gemma 3)
+    # AI Model Configuration (Public Model for Testing)
     MODEL_PROVIDER: Literal["hf", "s3", "gcs"] = "hf"
-    MODEL_ID: str = "google/gemma-2-2b-it"  # Default to available model
+    MODEL_ID: str = "gpt2"  # Using GPT-2 public model for testing
     MODEL_URI: Optional[str] = None  # For S3/GCS
-    MODEL_DIR: str = "/tmp/models/gemma3"
+    MODEL_DIR: str = "/tmp/models/ai_model"
     MODEL_SHA256: Optional[str] = None
     HF_HOME: str = "/tmp/models/cache"
     
@@ -109,27 +110,31 @@ class Settings(BaseSettings):
     AI_DAILY_COST_LIMIT: float = 50.0
     CONTENT_GENERATION_TIMEOUT: int = 300  # 5 minutes
     
-    @validator("CORS_ORIGINS", pre=True)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra='ignore'
+    )
+
+    @field_validator("CORS_ORIGINS", mode='before')
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
     
-    @validator("MODEL_DIR")
+    @field_validator("MODEL_DIR")
     def validate_model_dir(cls, v):
         """Ensure model directory is absolute path."""
         return os.path.abspath(v)
     
-    @validator("DATABASE_URL")
+    @field_validator("DATABASE_URL")
     def validate_database_url(cls, v):
         """Validate database URL format."""
         if not v.startswith(("postgresql://", "postgresql+asyncpg://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         return v
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+
+
 
 
 # Global settings instance

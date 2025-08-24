@@ -1,10 +1,20 @@
-"""
-Alembic migration for social and messenger models: stories, story_views, conversations, conversation_participants, messages, message_read_receipts.
+"""Add social and messenger models
+
+Revision ID: 20250728_add_social
+Revises: 003_educational_resources
+Create Date: 2025-07-28 19:35:00.000000
+
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from datetime import datetime
+
+# revision identifiers, used by Alembic.
+revision = '20250728_add_social'
+down_revision = '003_educational_resources'
+branch_labels = None
+depends_on = None
 
 def upgrade():
     op.create_table(
