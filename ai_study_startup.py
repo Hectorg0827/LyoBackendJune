@@ -52,7 +52,9 @@ def check_dependencies():
     
         if missing_optional:
             print(f"\n⚠️  Missing optional packages: {', '.join(missing_optional)}")
-            print("For full AI features, install with: pip install " + " ".join(missing_optional))    print("\n✅ Core dependencies satisfied!")
+            print("For full AI features, install with: pip install " + " ".join(missing_optional))
+        
+    print("\n✅ Core dependencies satisfied!")
     return True
 
 def check_ai_study_implementation():
