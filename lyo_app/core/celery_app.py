@@ -1,65 +1,66 @@
 """
-Celery configuration and background tasks for LyoApp.
-Handles async email sending, analytics processing, and other background jobs.
+Production Celery worker configuration for async task processing.
+Handles course generation and other background tasks with Redis pub/sub.
 """
 
 import os
+import logging
+from typing import Callable, Optional, Dict, Any
 from celery import Celery
-from kombu import Exchange, Queue
+from celery.signals import worker_ready, worker_shutting_down
+from kombu import Queue
 
 from lyo_app.core.config import settings
-from lyo_app.core.logging import get_logger
 
-logger = get_logger(__name__)
-
-# Celery configuration
-celery_app = Celery(
-    "lyoapp",
-    broker=getattr(settings, 'CELERY_BROKER_URL', 'redis://localhost:6379/1'),
-    backend=getattr(settings, 'CELERY_RESULT_BACKEND', 'redis://localhost:6379/2'),
-    include=[
-        'lyo_app.core.celery_tasks.email_tasks',
-        'lyo_app.core.celery_tasks.analytics_tasks',
-        'lyo_app.core.celery_tasks.cleanup_tasks'
-    ]
-)
+logger = logging.getLogger(__name__)
 
 # Celery configuration
+CELERY_BROKER_URL = getattr(settings, "CELERY_BROKER_URL", "redis://localhost:6379/1")
+CELERY_RESULT_BACKEND = getattr(settings, "CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+
+# Create Celery app
+celery_app = Celery("lyo_backend")
+
+# Configure Celery
 celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
+    broker_url=CELERY_BROKER_URL,
+    result_backend=CELERY_RESULT_BACKEND,
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
     enable_utc=True,
-    
-    # Task routing
-    task_routes={
-        'lyo_app.core.celery_tasks.email_tasks.*': {'queue': 'email'},
-        'lyo_app.core.celery_tasks.analytics_tasks.*': {'queue': 'analytics'},
-        'lyo_app.core.celery_tasks.cleanup_tasks.*': {'queue': 'cleanup'},
-    },
-    
-    # Default queue configuration
-    task_default_queue='default',
-    task_queues=(
-        Queue('default', Exchange('default'), routing_key='default'),
-        Queue('email', Exchange('email'), routing_key='email'),
-        Queue('analytics', Exchange('analytics'), routing_key='analytics'),
-        Queue('cleanup', Exchange('cleanup'), routing_key='cleanup'),
-    ),
-    
-    # Task execution settings
-    task_acks_late=True,
+    task_track_started=True,
+    task_time_limit=30 * 60,  # 30 minutes
+    task_soft_time_limit=25 * 60,  # 25 minutes
     worker_prefetch_multiplier=1,
-    
-    # Result backend settings
-    result_expires=3600,  # 1 hour
-    
-    # Worker settings
-    worker_max_tasks_per_child=1000,
+    task_acks_late=True,
     worker_disable_rate_limits=False,
-    
-    # Monitoring
-    worker_send_task_events=True,
-    task_send_sent_event=True,
+    task_default_queue="lyo_tasks",
+    task_routes={
+        "lyo_app.tasks.course_generation.*": {"queue": "course_generation"},
+        "lyo_app.tasks.notifications.*": {"queue": "notifications"},
+        "lyo_app.tasks.feeds.*": {"queue": "feeds"},
+    },
+    task_queues=(
+        Queue("lyo_tasks", routing_key="lyo_tasks"),
+        Queue("course_generation", routing_key="course_generation"),
+        Queue("notifications", routing_key="notifications"),
+        Queue("feeds", routing_key="feeds"),
+    ),
+    # Retry configuration
+    task_retry_jitter=True,
+    task_retry_max_delay=60 * 5,  # 5 minutes
 )
+
+# Worker event handlers
+@worker_ready.connect
+def worker_ready_handler(sender=None, **kwargs):
+    """Handle worker ready event."""
+    logger.info(f"Celery worker ready: {sender}")
+
+
+@worker_shutting_down.connect
+def worker_shutting_down_handler(sender=None, **kwargs):
+    """Handle worker shutdown event."""
+    logger.info(f"Celery worker shutting down: {sender}")

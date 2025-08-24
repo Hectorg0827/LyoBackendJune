@@ -375,7 +375,7 @@ class StudySessionAnalytics(Base):
 class AIStudyManager:
     """Simple AI Study Manager for initial startup"""
 
-    async def generate_study_content(self, topic: str, difficulty: str = "intermediate", user_id: int | None = None):
+    async def generate_study_content(self, topic: str, difficulty: str = "intermediate", user_id: Optional[int] = None):
         """Generate study content (placeholder)"""
         return {
             "topic": topic,

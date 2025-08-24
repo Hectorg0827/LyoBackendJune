@@ -43,9 +43,141 @@ class ContentCurator:
     preferences, and progress to provide intelligent content recommendations.
     """
     
-    def __init__(self, model_manager: ModelManager):
+    def __init__(self, model_manager: ModelManager, youtube_api_key: str, openai_api_key: str):
         self.model_manager = model_manager
+        self.youtube_api_key = youtube_api_key
+        self.openai_api_key = openai_api_key
         self.logger = logging.getLogger(__name__)
+    
+    def _generate_with_gemma(self, prompt: str) -> str:
+        """Generate text using the local Gemma model."""
+        try:
+            model_instance = self.model_manager.get_model_instance()
+            if not model_instance or not model_instance.get("model"):
+                raise Exception("Gemma model not loaded")
+
+            model = model_instance["model"]
+            tokenizer = model_instance["tokenizer"]
+
+            inputs = tokenizer(prompt, return_tensors="pt", return_attention_mask=True)
+            outputs = model.generate(
+                **inputs, 
+                max_new_tokens=1024,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9
+            )
+            
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            # Clean up the prompt from the beginning of the generated text
+            if generated_text.startswith(prompt):
+                return generated_text[len(prompt):].strip()
+            return generated_text.strip()
+
+        except Exception as e:
+            self.logger.error(f"Error during Gemma generation: {e}")
+            # Fallback to a simple response if Gemma fails
+            return f"Error generating content. Could not process prompt: {prompt[:50]}..."
+
+    async def curate_course(
+        self,
+        topic: str,
+        interests: List[str],
+        difficulty_level: str,
+        target_duration_hours: float,
+        locale: str,
+        progress_callback: callable
+    ) -> Dict[str, Any]:
+        """
+        Curate a complete course using local Gemma model.
+        """
+        try:
+            progress_callback(10, "Generating course outline with Gemma...")
+
+            # 1. Generate course outline using Gemma
+            outline_prompt = self._build_course_outline_prompt(
+                topic, interests, difficulty_level, target_duration_hours
+            )
+            
+            course_outline_str = self._generate_with_gemma(outline_prompt)
+            
+            progress_callback(40, "Parsing generated course structure...")
+            
+            # 2. Parse the generated outline
+            # This part needs a robust parser. For now, we'll use a simple one.
+            parsed_outline = self._parse_gemma_outline(course_outline_str)
+
+            progress_callback(70, "Finalizing course details...")
+
+            # 3. Structure the final course object
+            course_data = {
+                "title": parsed_outline.get("title", f"Course on {topic}"),
+                "summary": parsed_outline.get("summary", f"A comprehensive course on {topic}."),
+                "description": parsed_outline.get("description", ""),
+                "tags": parsed_outline.get("tags", [topic] + interests),
+                "lessons": parsed_outline.get("lessons", []),
+                "estimated_duration_hours": target_duration_hours,
+                "sources_summary": {"ai_model": "Gemma Local"},
+                "content_items": [] # Content items can be added later
+            }
+
+            progress_callback(100, "Course curation complete.")
+            return course_data
+
+        except Exception as e:
+            self.logger.error(f"Error in curate_course: {e}")
+            raise
+
+    def _build_course_outline_prompt(
+        self, topic: str, interests: List[str], difficulty: str, duration: float
+    ) -> str:
+        """Builds a detailed prompt for Gemma to generate a course outline."""
+        return f"""
+        Generate a comprehensive course outline for the following topic:
+
+        Topic: {topic}
+        Interests: {', '.join(interests)}
+        Difficulty Level: {difficulty}
+        Target Duration: {duration} hours
+
+        The output should be a structured JSON object with the following format:
+        {{
+          "title": "Course Title",
+          "summary": "A brief summary of the course.",
+          "description": "A more detailed description of what the course covers.",
+          "tags": ["tag1", "tag2"],
+          "lessons": [
+            {{
+              "title": "Lesson 1 Title",
+              "summary": "Summary of lesson 1.",
+              "objectives": ["Objective 1", "Objective 2"],
+              "duration_minutes": 60
+            }},
+            {{
+              "title": "Lesson 2 Title",
+              "summary": "Summary of lesson 2.",
+              "objectives": ["Objective 1", "Objective 2"],
+              "duration_minutes": 90
+            }}
+          ]
+        }}
+        """
+
+    def _parse_gemma_outline(self, outline_str: str) -> Dict[str, Any]:
+        """Parses the JSON output from Gemma."""
+        try:
+            import json
+            # Clean up the string to extract only the JSON part
+            json_part = outline_str[outline_str.find('{'):outline_str.rfind('}')+1]
+            return json.loads(json_part)
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse JSON from Gemma output: {e}")
+            # Fallback to a simple structure if parsing fails
+            return {
+                "title": "Generated Course",
+                "summary": "Could not parse AI-generated outline.",
+                "lessons": [{"title": "Introduction", "summary": "Please regenerate."}]
+            }
     
     async def get_personalized_recommendations(
         self,

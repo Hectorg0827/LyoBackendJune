@@ -1,347 +1,268 @@
-"""Gemma 3 model loading and management system."""
+
+"""Unified Tutor Model Loader & Generation Utilities
+
+Provides:
+ - Lazy loading of base Gemma (or other) model with optional LoRA adapter
+ - 4-bit (QLoRA) quantization support (fallback to full precision if unavailable)
+ - Structured tutor prompt construction for: explanations, hints, reflection
+ - Safe fallback mock model when heavy deps missing
+
+Environment Variables (override defaults):
+ - MODEL_ID (default: google/gemma-2b-it)
+ - MODEL_DIR (default: ./models)
+ - LORA_ADAPTER_PATH (optional path to PEFT adapter)
+ - MAX_NEW_TOKENS (optional int)
+"""
+
+from __future__ import annotations
 
 import os
-import hashlib
-import shutil
-import tempfile
+import json
+import time
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
-from datetime import datetime
-
-from lyo_app.core.settings import settings
-from lyo_app.core.problems import ModelNotAvailableProblem
+from typing import Any, Dict, Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    return os.getenv(name, default)
+
+
 @dataclass
-class ModelInfo:
-    """Information about a loaded model."""
-    name: str
-    version: Optional[str]
-    path: str
-    checksum: Optional[str]
-    loaded_at: datetime
-    size_bytes: int
+class TutorGenerationResult:
+    """Represents a parsed structured tutor output."""
+    raw: str
+    response: str
+    reasoning: Optional[str] = None
+    next_hint: Optional[str] = None
+    meta: Dict[str, Any] = None
 
 
-class ModelManager:
-    """Manages Gemma 3 model download, verification, and loading."""
-    
+class _MockPipe:
+    def __call__(self, prompt: str, **kwargs):  # type: ignore
+        # Produce minimal structured JSON content for dev.
+        content = {
+            "reason": "Mock reasoning path demonstrating scaffold.",
+            "response": "Let's break this down. First, identify the loop bounds...",
+            "next_hint": "What variable changes each iteration?"
+        }
+        return [{"generated_text": prompt + json.dumps(content)}]
+
+
+class TutorModel:
+    """Encapsulates model + tokenizer + generation pipeline for tutoring tasks."""
+
     def __init__(self):
-        self.model_info: Optional[ModelInfo] = None
-        self._model_instance = None
-        
-    def ensure_model(self) -> ModelInfo:
-        """
-        Ensure model is available and verified.
-        Downloads if necessary, verifies checksum.
-        
-        Returns:
-            ModelInfo with model details
-            
-        Raises:
-            ModelNotAvailableProblem: If model cannot be loaded
-        """
-        model_path = Path(settings.MODEL_DIR)
-        
-        # Check if model exists and is valid
-        if self._is_model_valid(model_path):
-            logger.info(f"Model already available at {model_path}")
-            return self._load_model_info(model_path)
-        
-        # Download model
-        logger.info(f"Downloading model to {model_path}")
-        self._download_model(model_path)
-        
-        # Verify checksum if provided
-        if settings.MODEL_SHA256:
-            if not self._verify_checksum(model_path, settings.MODEL_SHA256):
-                shutil.rmtree(model_path, ignore_errors=True)
-                raise ModelNotAvailableProblem(f"Model checksum verification failed for {settings.MODEL_ID}")
-        
-        return self._load_model_info(model_path)
-    
-    def _is_model_valid(self, model_path: Path) -> bool:
-        """Check if model directory exists and contains expected files."""
-        if not model_path.exists():
-            return False
-            
-        # Check for essential model files
-        expected_files = [
-            "config.json",
-            "tokenizer.json",
-        ]
-        
-        # Look for model weight files (various formats)
-        weight_patterns = [
-            "model*.safetensors",
-            "pytorch_model*.bin", 
-            "model*.bin"
-        ]
-        
-        # Check essential files exist
-        for file_name in expected_files:
-            if not (model_path / file_name).exists():
-                logger.warning(f"Missing essential file: {file_name}")
-                return False
-        
-        # Check at least one weight file exists
-        has_weights = False
-        for pattern in weight_patterns:
-            if list(model_path.glob(pattern)):
-                has_weights = True
-                break
-        
-        if not has_weights:
-            logger.warning("No model weight files found")
-            return False
-        
-        # Verify checksum if configured
-        if settings.MODEL_SHA256:
-            return self._verify_checksum(model_path, settings.MODEL_SHA256)
-        
-        return True
-    
-    def _download_model(self, model_path: Path):
-        """Download model from configured provider."""
-        model_path.mkdir(parents=True, exist_ok=True)
-        
+        self.base_id: str = _env("MODEL_ID", "google/gemma-2b-it")
+        self.cache_dir = Path(_env("MODEL_DIR", "./models"))
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.adapter_path = _env("LORA_ADAPTER_PATH")
+        self.tokenizer = None
+        self.model = None
+        self.pipe = None
+        self.loaded = False
+        self.adapter_loaded = False
+        self.max_new_tokens_default = int(_env("MAX_NEW_TOKENS", "512"))
+
+    def load(self):
+        if self.loaded:
+            return
+        t0 = time.time()
         try:
-            if settings.MODEL_PROVIDER == "hf":
-                self._download_from_huggingface(model_path)
-            elif settings.MODEL_PROVIDER == "s3":
-                self._download_from_s3(model_path)
-            elif settings.MODEL_PROVIDER == "gcs":
-                self._download_from_gcs(model_path)
-            else:
-                raise ModelNotAvailableProblem(f"Unsupported model provider: {settings.MODEL_PROVIDER}")
-                
-        except Exception as e:
-            # Clean up on failure
-            shutil.rmtree(model_path, ignore_errors=True)
-            raise ModelNotAvailableProblem(f"Model download failed: {str(e)}")
-    
-    def _download_from_huggingface(self, model_path: Path):
-        """Download model from Hugging Face Hub."""
-        try:
-            from huggingface_hub import snapshot_download
-        except ImportError:
-            raise ModelNotAvailableProblem("huggingface_hub not installed")
-        
-        # Set cache directory if configured
-        if settings.HF_HOME:
-            os.environ["HF_HOME"] = settings.HF_HOME
-        
-        logger.info(f"Downloading {settings.MODEL_ID} from Hugging Face Hub")
-        
-        snapshot_download(
-            repo_id=settings.MODEL_ID,
-            local_dir=str(model_path),
-            local_dir_use_symlinks=False,
-            ignore_patterns=["*.md", "*.txt", ".git*"]
-        )
-        
-        logger.info(f"Successfully downloaded {settings.MODEL_ID}")
-    
-    def _download_from_s3(self, model_path: Path):
-        """Download model from S3."""
-        if not settings.MODEL_URI:
-            raise ModelNotAvailableProblem("MODEL_URI not configured for S3 provider")
-        
-        try:
-            import boto3
-        except ImportError:
-            raise ModelNotAvailableProblem("boto3 not installed for S3 download")
-        
-        # Parse S3 URI: s3://bucket/path/to/model.tar.gz
-        uri = settings.MODEL_URI
-        if not uri.startswith("s3://"):
-            raise ModelNotAvailableProblem(f"Invalid S3 URI: {uri}")
-        
-        bucket_and_key = uri[5:]  # Remove s3://
-        bucket, key = bucket_and_key.split("/", 1)
-        
-        s3 = boto3.client("s3")
-        
-        with tempfile.NamedTemporaryFile(suffix=".tar.gz") as tmp_file:
-            logger.info(f"Downloading from S3: {bucket}/{key}")
-            s3.download_file(bucket, key, tmp_file.name)
-            
-            # Extract tarball
-            import tarfile
-            with tarfile.open(tmp_file.name, "r:gz") as tar:
-                tar.extractall(model_path)
-        
-        logger.info(f"Successfully downloaded model from S3")
-    
-    def _download_from_gcs(self, model_path: Path):
-        """Download model from Google Cloud Storage."""
-        if not settings.MODEL_URI:
-            raise ModelNotAvailableProblem("MODEL_URI not configured for GCS provider")
-        
-        try:
-            from google.cloud import storage
-        except ImportError:
-            raise ModelNotAvailableProblem("google-cloud-storage not installed for GCS download")
-        
-        # Parse GCS URI: gs://bucket/path/to/model.tar.gz
-        uri = settings.MODEL_URI
-        if not uri.startswith("gs://"):
-            raise ModelNotAvailableProblem(f"Invalid GCS URI: {uri}")
-        
-        bucket_and_path = uri[5:]  # Remove gs://
-        bucket_name, blob_path = bucket_and_path.split("/", 1)
-        
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-        
-        with tempfile.NamedTemporaryFile(suffix=".tar.gz") as tmp_file:
-            logger.info(f"Downloading from GCS: {bucket_name}/{blob_path}")
-            blob.download_to_filename(tmp_file.name)
-            
-            # Extract tarball
-            import tarfile
-            with tarfile.open(tmp_file.name, "r:gz") as tar:
-                tar.extractall(model_path)
-        
-        logger.info(f"Successfully downloaded model from GCS")
-    
-    def _verify_checksum(self, model_path: Path, expected_checksum: str) -> bool:
-        """Verify model directory checksum."""
-        logger.info("Verifying model checksum...")
-        
-        # Calculate checksum of all files in sorted order
-        hasher = hashlib.sha256()
-        
-        for file_path in sorted(model_path.rglob("*")):
-            if file_path.is_file():
-                with open(file_path, "rb") as f:
-                    while chunk := f.read(8192):
-                        hasher.update(chunk)
-        
-        calculated_checksum = hasher.hexdigest()
-        
-        if calculated_checksum == expected_checksum:
-            logger.info("Model checksum verification passed")
-            return True
-        else:
-            logger.error(f"Checksum mismatch. Expected: {expected_checksum}, Got: {calculated_checksum}")
-            return False
-    
-    def _load_model_info(self, model_path: Path) -> ModelInfo:
-        """Load model information from path."""
-        # Calculate directory size
-        total_size = sum(f.stat().st_size for f in model_path.rglob('*') if f.is_file())
-        
-        # Try to read model version from config
-        version = None
-        config_path = model_path / "config.json"
-        if config_path.exists():
-            try:
-                import json
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
-                    version = config.get('model_version') or config.get('version')
-            except Exception:
-                logger.warning("Could not read model version from config.json")
-        
-        model_info = ModelInfo(
-            name=settings.MODEL_ID,
-            version=version,
-            path=str(model_path),
-            checksum=settings.MODEL_SHA256,
-            loaded_at=datetime.utcnow(),
-            size_bytes=total_size
-        )
-        
-        self.model_info = model_info
-        logger.info(f"Model info loaded: {model_info.name} ({model_info.size_bytes / 1024 / 1024:.1f} MB)")
-        
-        return model_info
-    
-    def get_model_instance(self):
-        """
-        Get the actual model instance for inference.
-        
-        This is a placeholder - implement based on your inference needs:
-        - Transformers pipeline
-        - vLLM engine
-        - Custom inference wrapper
-        """
-        if not self.model_info:
-            self.ensure_model()
-        
-        if self._model_instance is None:
-            self._model_instance = self._load_model_for_inference()
-        
-        return self._model_instance
-    
-    def _load_model_for_inference(self):
-        """
-        Load model for inference.
-        
-        Implement this based on your inference framework:
-        - For Transformers: pipeline("text-generation", model=path)
-        - For vLLM: LLM(model=path)
-        - For custom: your inference wrapper
-        """
-        model_path = self.model_info.path
-        
-        try:
-            # Example: Transformers pipeline
-            from transformers import pipeline
-            
-            logger.info(f"Loading model for inference from {model_path}")
-            
-            model_instance = pipeline(
-                "text-generation",
-                model=model_path,
-                device_map="auto",
-                torch_dtype="auto",
-                trust_remote_code=True
+            from transformers import (
+                AutoTokenizer,
+                AutoModelForCausalLM,
+                BitsAndBytesConfig,
+                pipeline,
             )
-            
-            logger.info("Model loaded successfully for inference")
-            return model_instance
-            
-        except ImportError:
-            logger.warning("Transformers not available, using mock model")
-            return MockModel()
-        except Exception as e:
-            logger.error(f"Failed to load model for inference: {e}")
-            raise ModelNotAvailableProblem(f"Failed to load model: {str(e)}")
-    
-    def health_check(self) -> Dict[str, Any]:
-        """Check model health status."""
+            import torch
+        except Exception as e:  # dependencies missing
+            logger.warning(f"Transformers/torch unavailable, using mock pipeline: {e}")
+            self.pipe = _MockPipe()
+            self.loaded = True
+            return
+
+        quant_cfg = None
         try:
-            model_info = self.ensure_model()
-            return {
-                "status": "healthy",
-                "model_name": model_info.name,
-                "model_version": model_info.version,
-                "checksum_verified": bool(settings.MODEL_SHA256),
-                "last_loaded_at": model_info.loaded_at,
-                "size_mb": round(model_info.size_bytes / 1024 / 1024, 1)
-            }
+            from transformers import BitsAndBytesConfig  # noqa
+            quant_cfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+        except Exception as e:  # bitsandbytes not installed or CPU only
+            logger.warning(f"4-bit quantization unavailable, falling back to full precision: {e}")
+
+        logger.info(f"Loading base model {self.base_id} (quantized={quant_cfg is not None})")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.base_id,
+            cache_dir=str(self.cache_dir),
+            trust_remote_code=True,
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        model_kwargs: Dict[str, Any] = {
+            "cache_dir": str(self.cache_dir),
+            "trust_remote_code": True,
+            "device_map": "auto",
+        }
+        if quant_cfg is not None:
+            model_kwargs["quantization_config"] = quant_cfg
+
+        self.model = AutoModelForCausalLM.from_pretrained(self.base_id, **model_kwargs)
+
+        # Attempt LoRA adapter load lazily
+        if self.adapter_path and Path(self.adapter_path).exists():
+            try:
+                from peft import PeftModel
+                self.model = PeftModel.from_pretrained(self.model, self.adapter_path)
+                self.adapter_loaded = True
+                logger.info(f"Loaded LoRA adapter: {self.adapter_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load LoRA adapter ({self.adapter_path}): {e}")
+
+        try:
+            from transformers import pipeline as hf_pipeline
+            self.pipe = hf_pipeline(
+                "text-generation",
+                model=self.model,
+                tokenizer=self.tokenizer,
+                device_map="auto",
+                torch_dtype=getattr(self.model, "dtype", None),
+            )
         except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "model_name": settings.MODEL_ID
-            }
+            logger.warning(f"Falling back to mock pipeline: {e}")
+            self.pipe = _MockPipe()
+
+        self.loaded = True
+        logger.info(
+            f"Tutor model ready in {time.time()-t0:.1f}s adapter={self.adapter_loaded} quant={quant_cfg is not None}"
+        )
+
+    # -------------------- Prompt & Generation -------------------- #
+    @staticmethod
+    def build_prompt(
+        system_goal: str,
+        student_input: str,
+        level: str = "beginner",
+        mode: str = "explanation",
+        hint_level: Optional[int] = None,
+    ) -> str:
+        """Construct a structured tutoring prompt.
+
+        Modes: explanation | hint | reflection
+        Output contract: JSON with keys: reason, response, next_hint (optional)
+        """
+        scaffold_directive = {
+            "explanation": "Provide a scaffolded explanation then a reflective question.",
+            "hint": "Give ONLY the next minimal Socratic hint. Do NOT give the final answer.",
+            "reflection": "Facilitate metacognition: ask learner to evaluate their approach.",
+        }.get(mode, "Provide a helpful response.")
+
+        hint_meta = f"HintLevel:{hint_level}" if hint_level else ""
+        prompt = (
+            f"<|system|>Role: Adaptive expert tutor. Goal:{system_goal}. StudentLevel:{level}. {scaffold_directive} "
+            f"Output JSON: {{\"reason\":..., \"response\":..., \"next_hint\": optional}} {hint_meta}</|system|>\n"
+            f"<|student|>{student_input}</|student|>\n<|tutor|>"
+        )
+        return prompt
+
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: Optional[int] = None,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> str:
+        if not self.loaded:
+            raise RuntimeError("Model not loaded - call load() first")
+        max_new_tokens = max_new_tokens or self.max_new_tokens_default
+        out = self.pipe(
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            do_sample=True,
+            pad_token_id=self.tokenizer.eos_token_id if self.tokenizer else None,
+            eos_token_id=self.tokenizer.eos_token_id if self.tokenizer else None,
+        )[0]["generated_text"]
+        return out[len(prompt):].strip()
+
+    # -------------------- Parsing -------------------- #
+    @staticmethod
+    def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+        """Attempt to locate and parse first JSON object in text."""
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        snippet = text[start : end + 1]
+        try:
+            return json.loads(snippet)
+        except Exception:
+            return None
+
+    def structured_generate(
+        self,
+        system_goal: str,
+        student_input: str,
+        level: str = "beginner",
+        mode: str = "explanation",
+        hint_level: Optional[int] = None,
+        **gen_kwargs,
+    ) -> TutorGenerationResult:
+        prompt = self.build_prompt(system_goal, student_input, level, mode, hint_level)
+        raw = self.generate(prompt, **gen_kwargs)
+        data = self._extract_json(raw) or {}
+        return TutorGenerationResult(
+            raw=raw,
+            response=data.get("response", raw.strip()),
+            reasoning=data.get("reason"),
+            next_hint=data.get("next_hint"),
+            meta={"parsed": bool(data), "mode": mode, "level": level},
+        )
+
+    # -------------------- Info -------------------- #
+    def info(self) -> Dict[str, Any]:
+        return {
+            "base_model": self.base_id,
+            "adapter_loaded": self.adapter_loaded,
+            "adapter_path": self.adapter_path if self.adapter_loaded else None,
+            "loaded": self.loaded,
+        }
 
 
-class MockModel:
-    """Mock model for development/testing when real model not available."""
-    
-    def __call__(self, prompt: str, **kwargs) -> str:
-        """Generate mock response."""
-        return f"Mock response for: {prompt[:50]}..."
+# Global instance
+tutor_model = TutorModel()
 
 
-# Global model manager instance
-model_manager = ModelManager()
+def ensure_model():
+    tutor_model.load()
+
+
+def generate_tutor_response(
+    system_goal: str,
+    student_input: str,
+    level: str = "beginner",
+    mode: str = "explanation",
+    hint_level: Optional[int] = None,
+    **gen_kwargs,
+) -> TutorGenerationResult:
+    ensure_model()
+    return tutor_model.structured_generate(
+        system_goal=system_goal,
+        student_input=student_input,
+        level=level,
+        mode=mode,
+        hint_level=hint_level,
+        **gen_kwargs,
+    )
+
+
+"""Backwards compatibility shim (legacy API names used elsewhere maybe)"""
+model_manager = tutor_model  # type: ignore

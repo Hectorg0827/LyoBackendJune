@@ -1,0 +1,70 @@
+# Production Requirements for LyoBackend
+# Core FastAPI and web framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+
+# Database and ORM
+sqlalchemy[asyncio]==2.0.23
+asyncpg==0.29.0
+alembic==1.13.0
+psycopg2-binary==2.9.9
+
+# Redis for caching and pub/sub
+redis[hiredis]==4.6.0
+aioredis==2.0.1
+
+# Celery for background tasks
+celery[redis]==5.3.4
+flower==2.0.1
+
+# Authentication and security
+pyjwt[crypto]==2.8.0
+bcrypt==4.1.1
+python-multipart==0.0.6
+
+# HTTP client for external APIs
+aiohttp==3.9.1
+httpx==0.25.2
+
+# Validation and serialization
+pydantic[email]==2.5.0
+pydantic-settings==2.1.0
+
+# Configuration and environment
+python-decouple==3.8
+pyyaml==6.0.1
+
+# Push notifications (APNs)
+aioapns==3.1.0
+
+# WebSocket support
+websockets==12.0
+
+# Logging and monitoring
+structlog==23.2.0
+sentry-sdk[fastapi]==1.38.0
+
+# Development and testing (for smoke test)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Date and time handling
+python-dateutil==2.8.2
+
+# JSON handling
+orjson==3.9.10
+
+# CORS middleware (built-in with FastAPI)
+# python-cors not needed - using fastapi.middleware.cors.CORSMiddleware
+
+# File handling and utilities
+python-magic==0.4.27
+pillow==10.1.0
+
+# UUID support
+uuid==1.30
+
+# Typing extensions
+typing-extensions==4.8.0

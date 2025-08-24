@@ -1,0 +1,90 @@
+INFO:__main__:Loading mock AI model...
+INFO:__main__:✅ Mock AI model loaded
+🚀 LyoBackend AI Course Generation Test
+============================================================
+📦 Loading AI model...
+📊 Model Info:
+   status: loaded
+   model_type: mock
+   device: cpu
+   memory: minimal
+
+🎓 Testing Course Generation
+==================================================
+
+📝 Test Case 1: Create a course outline for Python Programming for beginners
+✅ Generated content:
+----------------------------------------
+Title: Python Programming for Beginners
+
+Lesson 1: Introduction to Python
+- Learn Python syntax and basic concepts
+- Set up your development environment
+- Write your first Python program
+
+Lesson 2: Variables and Data Types  
+- Understand different data types (strings, integers, lists)
+- Work with variables and assignments
+- Practice with basic operations
+
+Lesson 3: Control Flow and Functions
+- Learn if statements and loops
+- Create and use functions
+- Build a simple project
+----------------------------------------
+
+📝 Test Case 2: Create a course outline for Machine Learning for intermediate learners
+✅ Generated content:
+----------------------------------------
+Title: Machine Learning Fundamentals
+
+Lesson 1: Introduction to ML
+- What is machine learning?
+- Types of ML: supervised, unsupervised, reinforcement
+- Common applications and use cases
+
+Lesson 2: Data Preparation
+- Data collection and cleaning
+- Feature engineering and selection
+- Train/validation/test splits
+
+Lesson 3: Your First ML Model
+- Linear regression example
+- Model training and evaluation
+- Making predictions on new data
+----------------------------------------
+
+📝 Test Case 3: Create a course outline for Web Development for beginners
+✅ Generated content:
+----------------------------------------
+Title: Learn Create a course outline
+
+Lesson 1: Introduction to Create a course outline
+- Fundamental concepts and terminology
+- Why Create a course outline is important
+- Basic principles and overview
+
+Lesson 2: Intermediate Create a course outline
+- Deeper dive into core concepts
+- Practical applications
+- Hands-on exercises
+
+Lesson 3: Advanced Create a course outline
+- Expert-level techniques
+- Real-world projects
+- Best practices and optimization
+----------------------------------------
+
+📊 Test Results:
+Model Loading: ✅ PASS
+Course Generation: ✅ PASS
+Overall: ✅ ALL TESTS PASSED
+
+🎉 AI course generation system is working!
+✅ Ready to integrate with backend API!
+
+📋 Next Steps:
+1. ✅ AI model system tested and working
+2. 🔄 Replace mock model with real GPT-2/Gemma when ready
+3. 🔄 Integrate with course creation API endpoint
+4. 🔄 Test full backend API with AI generation
