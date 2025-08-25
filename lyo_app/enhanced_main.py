@@ -215,6 +215,12 @@ def create_app() -> FastAPI:
         app.include_router(learning_router)
     except ImportError:
         pass
+    try:
+        from lyo_app.storage_routes import router as storage_router
+        app.include_router(storage_router)
+        logger.info("✅ Google Cloud Storage routes integrated - File uploads and processing active!")
+    except ImportError as e:
+        logger.warning(f"Storage routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401
