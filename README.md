@@ -2,6 +2,26 @@
 
 A Scalable, Offline-First Modular Monolith for AI-driven EdTech and social platform.
 
+## 🚀 Quick Deploy to Google Cloud
+
+Deploy your LyoBackend to Google Cloud Run in one command:
+
+```bash
+./one-click-gcp-deploy.sh
+```
+
+**That's it!** The script automatically handles:
+- ✅ Google Cloud SDK setup and authentication
+- ✅ Project configuration and API enablement  
+- ✅ Docker image building and registry push
+- ✅ Secret management and service accounts
+- ✅ Cloud Run deployment with auto-scaling
+- ✅ Health checks and monitoring setup
+
+[📖 **See Google Cloud Quick Start Guide →**](GOOGLE_CLOUD_QUICK_START.md)
+
+---
+
 ## Architecture
 
 This application follows a **Modular Monolith** architecture with strict module boundaries:
