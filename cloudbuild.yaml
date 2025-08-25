@@ -38,7 +38,7 @@ steps:
     args:
     - -c
     - |
-      # Deploy with basic configuration
+      # Deploy with basic configuration + GCS integration
       gcloud run deploy ${_SERVICE} \
         --image ${_IMAGE} \
         --region ${_REGION} \
@@ -46,8 +46,8 @@ steps:
         --allow-unauthenticated \
         --port 8080 \
         --memory 2Gi \
-        --cpu 1 \
-        --set-env-vars "ENVIRONMENT=production,DEBUG=false,PORT=8080,GCP_PROJECT_ID=${PROJECT_ID}" \
+        --cpu 2 \
+        --set-env-vars "ENVIRONMENT=production,DEBUG=false,PORT=8080,GCP_PROJECT_ID=${PROJECT_ID},GCS_BUCKET_NAME=lyobackend-storage" \
         --quiet
       
       # Try to add secrets if they exist (non-blocking)
