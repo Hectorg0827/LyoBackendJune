@@ -12,6 +12,11 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from collections import deque
 import logging
+from functools import wraps
+import redis.asyncio as redis
+from contextlib import asynccontextmanager
+
+from lyo_app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +40,7 @@ class PerformanceMonitor:
     def __init__(self, max_metrics: int = 10000):
         self.metrics: deque = deque(maxlen=max_metrics)
         self.start_time = time.time()
+        self.redis_client: Optional[redis.Redis] = None
         self.alert_thresholds = {
             'response_time': 1.0,      # 1 second
             'memory_usage': 80.0,      # 80% of available memory
@@ -42,6 +48,19 @@ class PerformanceMonitor:
             'error_rate': 5.0          # 5% error rate
         }
         
+    async def initialize_redis(self):
+        """Initialize Redis connection for caching"""
+        try:
+            if settings.REDIS_URL:
+                self.redis_client = redis.from_url(settings.REDIS_URL)
+                await self.redis_client.ping()
+                logger.info("Redis connection established for performance monitoring")
+            else:
+                logger.warning("Redis URL not configured, caching disabled")
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            self.redis_client = None
+    
     def record_metric(self, metric: PerformanceMetric):
         """Record a performance metric"""
         self.metrics.append(metric)
@@ -73,8 +92,8 @@ class PerformanceMonitor:
         
         if recent_metrics:
             avg_response_time = sum(m.response_time for m in recent_metrics) / len(recent_metrics)
-            cache_hit_rate = sum(1 for m in recent_metrics if m.cache_hit) / len(recent_metrics) * 100
-            error_rate = sum(1 for m in recent_metrics if m.status_code >= 400) / len(recent_metrics) * 100
+            cache_hit_rate = len([m for m in recent_metrics if m.cache_hit]) / len(recent_metrics) * 100
+            error_rate = len([m for m in recent_metrics if m.status_code >= 400]) / len(recent_metrics) * 100
         else:
             avg_response_time = 0
             cache_hit_rate = 0
@@ -298,6 +317,48 @@ class PerformanceOptimizationEngine:
             score += 5
         
         return max(0, min(100, score))
+    
+    async def cache_performance_data(self, key: str, data: Any, ttl_seconds: int = 300):
+        """Cache performance data in Redis"""
+        if not self.redis_client:
+            return
+        
+        try:
+            await self.redis_client.setex(
+                f"perf:{key}",
+                ttl_seconds,
+                json.dumps(data, default=str)
+            )
+        except Exception as e:
+            logger.error(f"Failed to cache performance data: {e}")
+    
+    async def get_cached_performance_data(self, key: str) -> Optional[Any]:
+        """Retrieve cached performance data from Redis"""
+        if not self.redis_client:
+            return None
+        
+        try:
+            data = await self.redis_client.get(f"perf:{key}")
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.error(f"Failed to retrieve cached performance data: {e}")
+        
+        return None
+    
+    async def cache_endpoint_metrics(self, endpoint: str, metrics: Dict[str, Any]):
+        """Cache endpoint-specific performance metrics"""
+        await self.cache_performance_data(f"endpoint:{endpoint}", metrics, 600)  # 10 minutes
+    
+    async def get_cached_endpoint_metrics(self, endpoint: str) -> Optional[Dict[str, Any]]:
+        """Get cached endpoint metrics"""
+        return await self.get_cached_performance_data(f"endpoint:{endpoint}")
+    
+    async def close_redis(self):
+        """Close Redis connection"""
+        if self.redis_client:
+            await self.redis_client.close()
+            logger.info("Redis connection closed")
 
 # Global performance monitor instance
 _performance_monitor = None

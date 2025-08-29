@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # Application service with unified architecture
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+      args:
+        - ENV=${ENV:-production}
+    image: lyobackend-unified:${TAG:-latest}
+    container_name: lyobackend-unified
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - ENV=${ENV:-production}
+      - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      - db
+    volumes:
+      - app_data:/app/data
+    networks:
+      - lyo_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # PostgreSQL Database for production/staging environments
+  db:
+    image: postgres:14-alpine
+    container_name: lyobackend-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-lyoapp}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lyopassword}
+      - POSTGRES_DB=${POSTGRES_DB:-lyoapp_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - lyo_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lyoapp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and session management
+  redis:
+    image: redis:alpine
+    container_name: lyobackend-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - lyo_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  app_data:
+
+networks:
+  lyo_network:
+    driver: bridge

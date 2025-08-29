@@ -245,6 +245,9 @@ class CourseItem(Base):
     difficulty_level = Column(String(20), nullable=True)
     tags = Column(JSON, nullable=True)  # Array of tags
     
+    # Publishing status
+    is_published = Column(Boolean, default=False, nullable=False, index=True)
+    
     # Organization
     order_index = Column(Integer, nullable=False)
     

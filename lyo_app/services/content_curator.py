@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 import asyncio
 
-from lyo_app.models.enhanced import User, Course, ContentItem, Task
+from lyo_app.models.production import User, Course, CourseItem, Task
 from lyo_app.models.loading import ModelManager
 
 logger = logging.getLogger(__name__)
@@ -236,7 +236,7 @@ class ContentCurator:
     
     async def analyze_content_quality(
         self,
-        content_item: ContentItem,
+        content_item: CourseItem,
         db: AsyncSession
     ) -> Dict[str, Any]:
         """
@@ -469,23 +469,23 @@ class ContentCurator:
         db: AsyncSession, 
         content_type: Optional[ContentType], 
         exclude_user_id: str
-    ) -> List[ContentItem]:
+    ) -> List[CourseItem]:
         """Get available content items for recommendations."""
-        query = select(ContentItem).where(ContentItem.is_published == True)
+        query = select(CourseItem).where(CourseItem.is_published == True)
         
         if content_type:
-            query = query.where(ContentItem.content_type == content_type.value)
+            query = query.where(CourseItem.type == content_type.value)
         
         # Exclude content the user has already completed
         # This would be more sophisticated in production
         
-        result = await db.execute(query.order_by(ContentItem.updated_at.desc()).limit(100))
+        result = await db.execute(query.order_by(CourseItem.updated_at.desc()).limit(100))
         return result.scalars().all()
     
     async def _personalized_curation(
         self,
         user_profile: Dict[str, Any],
-        available_content: List[ContentItem],
+        available_content: List[CourseItem],
         limit: int
     ) -> List[Dict[str, Any]]:
         """Apply personalized curation algorithm."""
@@ -508,7 +508,7 @@ class ContentCurator:
                 scored_content.append({
                     "content_id": str(content.id),
                     "title": content.title,
-                    "content_type": content.content_type,
+                    "content_type": content.type,
                     "description": content.description,
                     "score": final_score,
                     "ai_score": ai_score,
@@ -528,7 +528,7 @@ class ContentCurator:
     
     async def _trending_curation(
         self, 
-        available_content: List[ContentItem], 
+        available_content: List[CourseItem], 
         limit: int
     ) -> List[Dict[str, Any]]:
         """Apply trending-based curation."""
@@ -554,7 +554,7 @@ class ContentCurator:
             trending_content.append({
                 "content_id": str(content.id),
                 "title": content.title,
-                "content_type": content.content_type,
+                "content_type": content.type,
                 "description": content.description,
                 "score": trending_score,
                 "engagement_metrics": content.metadata or {},
@@ -567,7 +567,7 @@ class ContentCurator:
     async def _skill_gap_curation(
         self,
         user_profile: Dict[str, Any],
-        available_content: List[ContentItem],
+        available_content: List[CourseItem],
         limit: int
     ) -> List[Dict[str, Any]]:
         """Curate content to fill skill gaps."""
@@ -592,7 +592,7 @@ class ContentCurator:
                 skill_gap_content.append({
                     "content_id": str(content.id),
                     "title": content.title,
-                    "content_type": content.content_type,
+                    "content_type": content.type,
                     "description": content.description,
                     "score": combined_score,
                     "gap_relevance": gap_relevance,
@@ -604,13 +604,13 @@ class ContentCurator:
         skill_gap_content.sort(key=lambda x: x["score"], reverse=True)
         return skill_gap_content[:limit]
     
-    def _build_content_analysis_prompt(self, content: ContentItem) -> str:
+    def _build_content_analysis_prompt(self, content: CourseItem) -> str:
         """Build prompt for content quality analysis."""
         return f"""
         Analyze the following educational content for quality, engagement, and effectiveness:
         
         Title: {content.title}
-        Type: {content.content_type}
+        Type: {content.type}
         Description: {content.description or "No description"}
         
         Please evaluate:
@@ -626,10 +626,10 @@ class ContentCurator:
         Return structured analysis.
         """
     
-    def _build_personalization_prompt(self, profile: Dict[str, Any], content: List[ContentItem]) -> str:
+    def _build_personalization_prompt(self, profile: Dict[str, Any], content: List[CourseItem]) -> str:
         """Build prompt for personalized content scoring."""
         content_summary = "\n".join([
-            f"ID: {c.id}, Title: {c.title}, Type: {c.content_type}"
+            f"ID: {c.id}, Title: {c.title}, Type: {c.type}"
             for c in content[:20]  # Limit for token efficiency
         ])
         
@@ -648,7 +648,7 @@ class ContentCurator:
         Return scores as JSON with content IDs as keys.
         """
     
-    def _calculate_metadata_score(self, content: ContentItem, profile: Dict[str, Any]) -> float:
+    def _calculate_metadata_score(self, content: CourseItem, profile: Dict[str, Any]) -> float:
         """Calculate relevance score based on metadata."""
         score = 0.5  # Base score
         
@@ -672,13 +672,13 @@ class ContentCurator:
         
         return min(1.0, score)
     
-    def _simple_content_scoring(self, content: List[ContentItem], limit: int) -> List[Dict[str, Any]]:
+    def _simple_content_scoring(self, content: List[CourseItem], limit: int) -> List[Dict[str, Any]]:
         """Simple fallback scoring method."""
         return [
             {
                 "content_id": str(c.id),
                 "title": c.title,
-                "content_type": c.content_type,
+                "content_type": c.type,
                 "description": c.description,
                 "score": 0.5,  # Default score
                 "created_at": c.created_at.isoformat(),
@@ -722,11 +722,11 @@ class ContentCurator:
             "completion_streak": 3
         }
     
-    async def _get_content_by_skills(self, skills: List[str], db: AsyncSession) -> List[ContentItem]:
+    async def _get_content_by_skills(self, skills: List[str], db: AsyncSession) -> List[CourseItem]:
         """Get content items related to specific skills."""
         # This would use proper skill tagging in production
         result = await db.execute(
-            select(ContentItem).where(ContentItem.is_published == True)
+            select(CourseItem).where(CourseItem.is_published == True)
             .limit(50)
         )
         return result.scalars().all()
@@ -735,7 +735,7 @@ class ContentCurator:
         self, 
         profile: Dict[str, Any], 
         skills: List[str], 
-        content: List[ContentItem],
+        content: List[CourseItem],
         difficulty: str
     ) -> str:
         """Build prompt for learning path generation."""
@@ -766,7 +766,7 @@ class ContentCurator:
         """Get discovery content for exploration."""
         # Random recent content for discovery
         result = await db.execute(
-            select(ContentItem).where(ContentItem.is_published == True)
+            select(CourseItem).where(CourseItem.is_published == True)
             .order_by(func.random()).limit(limit)
         )
         content_items = result.scalars().all()
@@ -775,7 +775,7 @@ class ContentCurator:
             {
                 "content_id": str(c.id),
                 "title": c.title,
-                "content_type": c.content_type,
+                "content_type": c.type,
                 "description": c.description,
                 "score": 0.6,  # Discovery content gets moderate score
                 "created_at": c.created_at.isoformat(),
@@ -791,19 +791,19 @@ class ContentCurator:
         limit: int
     ) -> List[Dict[str, Any]]:
         """Fallback recommendations when AI is unavailable."""
-        query = select(ContentItem).where(ContentItem.is_published == True)
+        query = select(CourseItem).where(CourseItem.is_published == True)
         
         if content_type:
-            query = query.where(ContentItem.content_type == content_type.value)
+            query = query.where(CourseItem.type == content_type.value)
         
-        result = await db.execute(query.order_by(ContentItem.created_at.desc()).limit(limit))
+        result = await db.execute(query.order_by(CourseItem.created_at.desc()).limit(limit))
         content_items = result.scalars().all()
         
         return [
             {
                 "content_id": str(c.id),
                 "title": c.title,
-                "content_type": c.content_type,
+                "content_type": c.type,
                 "description": c.description,
                 "score": 0.5,
                 "created_at": c.created_at.isoformat(),

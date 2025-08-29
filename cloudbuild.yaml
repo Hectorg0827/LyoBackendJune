@@ -47,7 +47,7 @@ steps:
         --port 8080 \
         --memory 2Gi \
         --cpu 2 \
-        --set-env-vars "ENVIRONMENT=production,DEBUG=false,PORT=8080,GCP_PROJECT_ID=${PROJECT_ID},GCS_BUCKET_NAME=lyobackend-storage" \
+        --set-env-vars "ENVIRONMENT=production,DEBUG=false,PORT=8080,GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=lyobackend-storage" \
         --quiet
       
       # Try to add secrets if they exist (non-blocking)
@@ -81,8 +81,8 @@ steps:
 
 substitutions:
   _SERVICE: 'lyo-backend'
-  _REGION: 'us-central1'  
-  _IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/lyo-backend-repo/${_SERVICE}:${SHORT_SHA}'
+  _REGION: 'us-central1'
+  _IMAGE: '${_REGION}-docker.pkg.dev/$PROJECT_ID/lyo-backend-repo/${_SERVICE}:${SHORT_SHA}'
 
 options:
   logging: CLOUD_LOGGING_ONLY

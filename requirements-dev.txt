@@ -1,0 +1,28 @@
+# Development-only Dependencies
+# These are not needed in production
+
+# Code Quality & Formatting
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+mypy==1.7.1
+pre-commit==3.5.0
+
+# Development Tools
+ipython==8.18.1
+
+# Testing (extended)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+factory-boy==3.3.0
+faker==20.1.0
+
+# Documentation (if needed)
+# sphinx==7.2.6
+# sphinx-rtd-theme==1.3.0
+
+# Development Database Tools (optional)
+# pgcli==4.0.1  # PostgreSQL CLI
+# litecli==1.9.0  # SQLite CLI
