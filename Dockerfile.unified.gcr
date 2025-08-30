@@ -1,0 +1,70 @@
+# Dockerfile.unified.gcr
+# Optimized Docker configuration for LyoBackend with unified architecture for GCR deployment
+
+# Use Python 3.9 as the base image (official Google Cloud recommended base)
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PORT=8000 \
+    PYTHONPATH=/app
+
+# Create non-root user for security
+RUN addgroup --system app && \
+    adduser --system --ingroup app app
+
+# Install system dependencies (minimal set for production)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    curl \
+    postgresql-client \
+    libpq-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Accept build argument for environment
+ARG ENV=production
+ENV ENV=${ENV}
+
+# Install common monitoring/observability tools for Google Cloud
+RUN pip install --no-cache-dir \
+    google-cloud-logging \
+    google-cloud-trace \
+    google-cloud-monitoring \
+    opencensus-ext-stackdriver
+
+# Copy requirements first for better layer caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Make the startup script executable
+RUN chmod +x start_unified.py
+
+# Set proper permissions
+RUN chown -R app:app /app
+
+# Switch to non-root user
+USER app
+
+# Expose port
+EXPOSE 8000
+
+# Health check (Google Cloud compatible)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Command to run the application with unified architecture
+# Use exec form for proper signal handling
+CMD ["./start_unified.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

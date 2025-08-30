@@ -62,13 +62,16 @@ class EnhancedSettings(BaseSettings):
     # DATABASE SETTINGS
     # ============================================================================
     
-    # PostgreSQL
+    # PostgreSQL (Production Recommended)
     DATABASE_URL: str = Field(..., description="Database connection URL")
     DATABASE_ECHO: bool = Field(False, description="Echo SQL queries")
     DATABASE_POOL_SIZE: int = Field(20, description="Database connection pool size")
     DATABASE_MAX_OVERFLOW: int = Field(30, description="Database max overflow connections")
     DATABASE_POOL_TIMEOUT: int = Field(30, description="Database pool timeout (seconds)")
     DATABASE_POOL_RECYCLE: int = Field(3600, description="Database pool recycle time (seconds)")
+    
+    # Legacy SQLite (Development Only)
+    SQLITE_DATABASE_URL: str = Field("sqlite+aiosqlite:///./lyo_app_dev.db", description="SQLite database URL for development")
     
     # Redis
     REDIS_URL: str = Field("redis://localhost:6379/0", description="Redis connection URL")
@@ -296,10 +299,27 @@ class EnhancedSettings(BaseSettings):
     # ENVIRONMENT-SPECIFIC CONFIGURATIONS
     # ============================================================================
     
+    def get_database_url(self) -> str:
+        """Get the appropriate database URL based on environment"""
+        # Always use PostgreSQL for production and staging for better performance and scalability
+        if self.is_production() or self.is_staging():
+            # Validate the DATABASE_URL for production/staging
+            if not self.DATABASE_URL or 'sqlite' in self.DATABASE_URL.lower():
+                raise ValueError(f"Invalid DATABASE_URL for {self.ENVIRONMENT} environment. PostgreSQL is required.")
+            return self.DATABASE_URL
+        else:
+            # Use PostgreSQL or SQLite for development based on configuration
+            # Prefer PostgreSQL even in development for consistency with production
+            if self.DATABASE_URL and 'postgresql' in self.DATABASE_URL.lower():
+                return self.DATABASE_URL
+            else:
+                # Fall back to SQLite only in development
+                return self.SQLITE_DATABASE_URL
+    
     def get_database_config(self) -> Dict[str, Any]:
         """Get database configuration"""
         return {
-            'url': self.DATABASE_URL,
+            'url': self.get_database_url(),
             'echo': self.DATABASE_ECHO,
             'pool_size': self.DATABASE_POOL_SIZE,
             'max_overflow': self.DATABASE_MAX_OVERFLOW,

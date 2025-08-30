@@ -1,29 +1,66 @@
-FROM python:3.11-slim
+# Dockerfile for LyoBackend Phase 3
+# Optimized for Google Cloud Run deployment with all Phase 3 features
 
+# Use Python 3.9 slim as base image
+FROM python:3.9-slim
+
+# Set working directory
 WORKDIR /app
 
-# Install curl for health check
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Set environment variables for production
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PORT=8000 \
+    PYTHONPATH=/app \
+    ENVIRONMENT=production
 
-# Install minimal requirements
+# Create non-root user for security
+RUN addgroup --system app && \
+    adduser --system --ingroup app app
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    curl \
+    postgresql-client \
+    libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Google Cloud client libraries for monitoring and logging
 RUN pip install --no-cache-dir \
-    fastapi==0.104.1 \
-    uvicorn[standard]==0.24.0 \
-    google-cloud-storage==2.17.0 \
-    python-multipart==0.0.6
+    google-cloud-logging \
+    google-cloud-trace \
+    google-cloud-monitoring \
+    opencensus-ext-stackdriver
 
-# Copy app
-COPY simple_main.py .
+# Copy cloud-optimized requirements first for better layer caching
+COPY requirements-cloud.txt .
 
-# Environment
-ENV PORT=8080
-ENV PYTHONUNBUFFERED=1
-ENV GCS_BUCKET_NAME=lyobackend-storage
+# Install Python dependencies using cloud-optimized requirements
+RUN pip install --no-cache-dir -r requirements-cloud.txt
 
-EXPOSE 8080
+# Copy application code
+COPY . .
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s CMD curl -f http://localhost:8080/health || exit 1
+# Make startup scripts executable
+RUN chmod +x start_unified.py start_server.py
 
-# Run app
-CMD ["python", "simple_main.py"]
+# Set proper permissions
+RUN chown -R app:app /app
+
+# Switch to non-root user
+USER app
+
+# Expose port
+EXPOSE 8000
+
+# Health check for Cloud Run
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Start the application with Phase 3 features
+CMD ["python", "start_unified.py", "--host", "0.0.0.0", "--port", "8000"]

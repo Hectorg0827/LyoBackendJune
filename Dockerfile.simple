@@ -1,30 +1,39 @@
-FROM python:3.11-slim
+# Simple Dockerfile for LyoBackend Phase 3
+# Uses minimal requirements to avoid dependency conflicts
 
+FROM python:3.9-slim
+
+# Set working directory
 WORKDIR /app
 
-# Install curl for health check
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install minimal requirements
-RUN pip install --no-cache-dir \
-    fastapi==0.104.1 \
-    uvicorn[standard]==0.24.0 \
-    google-cloud-storage==2.17.0 \
-    python-multipart==0.0.6
+# Copy requirements first for better caching
+COPY requirements-minimal.txt .
 
-# Copy app
-COPY simple_main.py .
-COPY cors.json .
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-minimal.txt
 
-# Environment
-ENV PORT=8080
-ENV PYTHONUNBUFFERED=1
-ENV GCS_BUCKET_NAME=lyobackend-storage
+# Copy application code
+COPY lyo_app/ ./lyo_app/
+COPY start_unified.py .
+COPY alembic.ini .
+COPY .env.simple .env
 
-EXPOSE 8080
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash app \
+    && chown -R app:app /app
+USER app
+
+# Expose port
+EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s CMD curl -f http://localhost:8080/health || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Run app
-CMD ["python", "simple_main.py"]
+# Start the application
+CMD ["python", "start_unified.py"]

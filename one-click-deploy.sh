@@ -36,7 +36,15 @@ if [ -f "deployment-config.txt" ]; then
     if [ ! -z "$SERVICE_URL" ]; then
         echo ""
         echo "[3] Step 3: Testing deployment..."
-        python3 test_cloud_deployment.py "$SERVICE_URL"
+        
+        # Use fresh deployment checker if available, otherwise use legacy
+        if [ -f "check_deployment_status_fresh.py" ]; then
+            echo "Using fresh deployment status checker..."
+            python3 check_deployment_status_fresh.py --detailed
+        else
+            echo "Using legacy deployment test..."
+            python3 test_cloud_deployment.py "$SERVICE_URL"
+        fi
         
         echo ""
         echo "*** Deployment Complete!"
@@ -49,6 +57,7 @@ if [ -f "deployment-config.txt" ]; then
         echo "1. Update your mobile app to use: $SERVICE_URL"
         echo "2. Monitor: ./monitor_deployment.py lyo-backend us-central1"
         echo "3. View logs: gcloud run logs read --service=lyo-backend"
+        echo "4. Quick status check anytime: ./quick_status.sh"
     fi
 else
     echo ""

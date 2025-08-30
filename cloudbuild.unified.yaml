@@ -1,0 +1,97 @@
+# cloudbuild.unified.yaml
+# Cloud Build configuration for LyoBackend unified architecture
+
+steps:
+  # Step 1: Print build information
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Building LyoBackend unified architecture for ${_ENV} environment"
+        echo "Build ID: $BUILD_ID"
+        echo "Project ID: $PROJECT_ID"
+        echo "Commit SHA: $COMMIT_SHA"
+
+  # Step 2: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg=ENV=${_ENV}'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-${SHORT_SHA}'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-latest'
+      - '-f'
+      - 'Dockerfile.unified.gcr'
+      - '.'
+    id: 'build-image'
+
+  # Step 3: Run tests on the built image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'run'
+      - '--rm'
+      - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-${SHORT_SHA}'
+      - './test_unified_architecture.py'
+    id: 'run-tests'
+
+  # Step 4: Push the Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-${SHORT_SHA}'
+    id: 'push-image-versioned'
+
+  # Step 5: Push the latest tag
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-latest'
+    id: 'push-image-latest'
+
+  # Step 6: Deploy to Cloud Run (conditionally)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
+          echo "Deploying to Cloud Run service ${_SERVICE_NAME} in ${_REGION}..."
+          gcloud run deploy ${_SERVICE_NAME} \
+            --image gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-${SHORT_SHA} \
+            --platform managed \
+            --region ${_REGION} \
+            --allow-unauthenticated \
+            --set-env-vars="ENV=${_ENV}" \
+            --memory=${_MEMORY} \
+            --cpu=${_CPU} \
+            --port=${_PORT} \
+            --project=$PROJECT_ID
+        else
+          echo "Skipping Cloud Run deployment as _DEPLOY_TO_CLOUD_RUN is not set to 'true'"
+        fi
+    id: 'deploy-to-cloud-run'
+
+# Define the images to be pushed
+images:
+  - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-${SHORT_SHA}'
+  - 'gcr.io/$PROJECT_ID/lyobackend-unified:${_ENV}-latest'
+
+# Define substitution variables with defaults
+substitutions:
+  _ENV: 'production'
+  _DEPLOY_TO_CLOUD_RUN: 'false'
+  _SERVICE_NAME: 'lyobackend-unified'
+  _REGION: 'us-central1'
+  _MEMORY: '1Gi'
+  _CPU: '1'
+  _PORT: '8000'
+
+# Define options
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: 'CLOUD_LOGGING_ONLY'
+
+# Define timeout (30 minutes)
+timeout: '1800s'

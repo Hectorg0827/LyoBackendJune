@@ -129,9 +129,31 @@ class Settings(BaseSettings):
     
     @field_validator("DATABASE_URL")
     def validate_database_url(cls, v):
-        """Validate database URL format."""
-        if not v.startswith(("postgresql://", "postgresql+asyncpg://")):
-            raise ValueError("DATABASE_URL must be a PostgreSQL URL")
+        """Validate database URL format.
+        
+        Enforces PostgreSQL for production environments to ensure
+        proper scalability, reliability, and data integrity.
+        """
+        # Get environment from environment variable if available
+        environment = os.getenv("ENVIRONMENT", "development").lower()
+        
+        # For production and staging, enforce PostgreSQL
+        if environment in ["production", "staging"]:
+            if not v.startswith(("postgresql://", "postgresql+asyncpg://")):
+                raise ValueError(f"DATABASE_URL in {environment} environment must be a PostgreSQL URL")
+        
+        # For all environments, validate the URL format
+        if v.startswith(("postgresql://", "postgresql+asyncpg://")):
+            # Validate PostgreSQL URL format
+            if not ("/" in v and "@" in v) and not v.endswith("?host=/cloudsql/"):
+                raise ValueError("Invalid PostgreSQL URL format")
+        elif v.startswith(("sqlite://", "sqlite+aiosqlite://")):
+            # Allow SQLite only for development and testing
+            if environment not in ["development", "testing"]:
+                raise ValueError(f"SQLite is not supported in {environment} environment")
+        else:
+            raise ValueError("DATABASE_URL must be either PostgreSQL or SQLite (development only)")
+            
         return v
 
 
