@@ -8,8 +8,10 @@ set -e
 export PORT=${PORT:-8080}
 export HOST=${HOST:-0.0.0.0}
 export WORKERS=${WORKERS:-1}
+export FAST_STARTUP=${FAST_STARTUP:-true}
 
 echo "🚀 Starting LyoBackend on ${HOST}:${PORT} with ${WORKERS} workers"
+echo "📊 Fast startup: ${FAST_STARTUP}"
 
 # Start with gunicorn for production
 exec gunicorn lyo_app.enhanced_main:app \

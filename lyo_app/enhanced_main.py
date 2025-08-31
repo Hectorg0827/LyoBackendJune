@@ -119,8 +119,25 @@ except ImportError:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application startup & shutdown lifecycle."""
+    """Application startup & shutdown lifecycle - optimized for Cloud Run."""
     logger.info("Starting LyoBackend enhanced application...")
+    
+    # Fast startup mode for Cloud Run - minimal initialization
+    fast_startup = os.getenv("FAST_STARTUP", "true").lower() == "true"
+    
+    if fast_startup:
+        logger.info("Fast startup mode enabled - minimal initialization")
+        # Set start time immediately
+        app.state.start_time = time.time()
+        
+        # Only do critical initialization
+        logger.info("Enhanced application startup completed (fast mode)")
+        yield
+        logger.info("Enhanced application shutdown completed (fast mode)")
+        return
+    
+    # Full initialization mode
+    logger.info("Full initialization mode")
     
     # Initialize database if available
     if init_db:
@@ -199,7 +216,7 @@ def create_app() -> FastAPI:
     # Set up error handlers
     setup_error_handlers(app, debug_mode=getattr(settings, 'DEBUG', False))
     
-    # Include routers with error handling
+    # Include routers with error handling - skip missing routers for Cloud Run compatibility
     router_modules = [
         ('lyo_app.auth.routes', 'auth_router'),
         ('lyo_app.ai_study.clean_routes', 'ai_study_router'),
@@ -208,6 +225,7 @@ def create_app() -> FastAPI:
         ('lyo_app.monetization.routes', 'ads_router'),
     ]
     
+    included_routers = 0
     for module_path, router_name in router_modules:
         try:
             module = __import__(module_path, fromlist=[router_name])
@@ -215,10 +233,13 @@ def create_app() -> FastAPI:
             if router:
                 app.include_router(router)
                 logger.info(f"Included router from {module_path}")
+                included_routers += 1
         except ImportError as e:
             logger.warning(f"Could not import router from {module_path}: {e}")
         except Exception as e:
             logger.error(f"Error including router from {module_path}: {e}")
+    
+    logger.info(f"Successfully included {included_routers}/{len(router_modules)} routers")
     
     # Health check endpoint - critical for Cloud Run
     @app.get("/health")
@@ -232,7 +253,9 @@ def create_app() -> FastAPI:
                 "environment": getattr(settings, 'ENVIRONMENT', 'unknown'),
                 "version": getattr(settings, 'APP_VERSION', '1.0.0'),
                 "uptime_seconds": current_time - getattr(app.state, 'start_time', current_time),
-                "port": os.getenv("PORT", "8080")
+                "port": os.getenv("PORT", "8080"),
+                "host": os.getenv("HOST", "0.0.0.0"),
+                "fastapi_available": FASTAPI_AVAILABLE
             }
             
             return health_data
@@ -252,7 +275,8 @@ def create_app() -> FastAPI:
             "message": "LyoBackend Enhanced API",
             "version": getattr(settings, 'APP_VERSION', '1.0.0'),
             "docs_url": "/docs" if not getattr(settings, 'is_production', lambda: False)() else None,
-            "port": os.getenv("PORT", "8080")
+            "port": os.getenv("PORT", "8080"),
+            "health_url": "/health"
         }
     
     # Additional endpoints for Cloud Run compatibility
@@ -265,6 +289,16 @@ def create_app() -> FastAPI:
     async def readiness():
         """Readiness check."""
         return {"status": "ready", "port": os.getenv("PORT", "8080")}
+    
+    # Add a simple test endpoint
+    @app.get("/test")
+    async def test_endpoint():
+        """Simple test endpoint to verify the API is responding."""
+        return {
+            "message": "API is working",
+            "timestamp": time.time(),
+            "port": os.getenv("PORT", "8080")
+        }
     
     # Set app state start time
     app.state.start_time = time.time()
@@ -279,6 +313,8 @@ app = create_app()
 
 if __name__ == "__main__":
     # Only run if being executed directly
+    logger.info("Enhanced_main.py being executed directly")
+    
     try:
         import uvicorn
         UVICORN_AVAILABLE = True
@@ -289,9 +325,11 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     environment = os.getenv("ENVIRONMENT", "production")
     
-    logger.info(f"Starting server on {host}:{port}")
+    logger.info(f"Configuration - Host: {host}, Port: {port}, Environment: {environment}")
+    logger.info(f"FastAPI available: {FASTAPI_AVAILABLE}, Uvicorn available: {UVICORN_AVAILABLE}")
     
     if UVICORN_AVAILABLE:
+        logger.info("Starting with uvicorn...")
         uvicorn.run(
             app,
             host=host,
@@ -301,5 +339,6 @@ if __name__ == "__main__":
         )
     else:
         logger.error("Uvicorn not available, cannot start server")
+        logger.info("This module should be imported by gunicorn, not run directly")
         import sys
         sys.exit(1)

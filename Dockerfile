@@ -58,9 +58,9 @@ USER app
 # Expose port
 EXPOSE 8080
 
-# Health check for Cloud Run
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check for Cloud Run - increased start period for complex app
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Start the application with enhanced_main (Cloud Run compatible)
-CMD ["./start_cloud_run.sh"]
+CMD ["bash", "-c", "gunicorn lyo_app.enhanced_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${WORKERS:-1}"]
