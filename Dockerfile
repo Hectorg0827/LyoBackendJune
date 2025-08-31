@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=off \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PORT=8000 \
+    PORT=8080 \
     PYTHONPATH=/app \
     ENVIRONMENT=production
 
@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir -r requirements-cloud.txt
 COPY . .
 
 # Make startup scripts executable
-RUN chmod +x start_unified.py start_server.py
+RUN chmod +x start_unified.py start_server.py start_cloud_run.sh
 
 # Set proper permissions
 RUN chown -R app:app /app
@@ -56,11 +56,11 @@ RUN chown -R app:app /app
 USER app
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8080
 
-# Health check for Cloud Run
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check for Cloud Run - increased start period for complex app
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Start the application with Phase 3 features
-CMD ["python", "start_unified.py", "--host", "0.0.0.0", "--port", "8000"]
+# Start the application with enhanced_main (Cloud Run compatible)
+CMD ["bash", "-c", "gunicorn lyo_app.enhanced_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${WORKERS:-1}"]

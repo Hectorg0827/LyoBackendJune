@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     ENABLE_WEBSOCKETS: bool = Field(default=True, env="ENABLE_WEBSOCKETS")
     ENABLE_MODERATION: bool = Field(default=True, env="ENABLE_MODERATION")
     ENABLE_ANALYTICS: bool = Field(default=True, env="ENABLE_ANALYTICS")
+    ENABLE_ADVANCED_SOCRATIC: bool = Field(default=True, env="ENABLE_ADVANCED_SOCRATIC")
+    ENABLE_RETRIEVAL_AUGMENTATION: bool = Field(default=False, env="ENABLE_RETRIEVAL_AUGMENTATION")
+    ENABLE_ADAPTIVE_DIFFICULTY: bool = Field(default=True, env="ENABLE_ADAPTIVE_DIFFICULTY")
+    ENABLE_HISTORY_SUMMARIZATION: bool = Field(default=True, env="ENABLE_HISTORY_SUMMARIZATION")
+    ENABLE_STRATEGY_METRICS: bool = Field(default=True, env="ENABLE_STRATEGY_METRICS")
+    ENABLE_SUPERIOR_AI_MODE: bool = Field(default=True, env="ENABLE_SUPERIOR_AI_MODE")
     
     # Content & Media
     MAX_FILE_SIZE_MB: int = Field(default=100, env="MAX_FILE_SIZE_MB")

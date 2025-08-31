@@ -1,3 +1,34 @@
+"""Pytest configuration & fixtures migrated from misnamed pytest.ini (which contained Python code)."""
+
+import os
+import pytest
+from pathlib import Path
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "performance: performance tests")
+    config.addinivalue_line("markers", "integration: integration tests")
+    config.addinivalue_line("markers", "slow: slow tests")
+    config.addinivalue_line("markers", "database: db tests")
+    config.addinivalue_line("markers", "api: api tests")
+    os.environ.setdefault("ENVIRONMENT", "testing")
+    os.environ.setdefault("DEBUG", "False")
+    os.environ.setdefault("TESTING", "True")
+    # Provide mandatory config values so pydantic Settings doesn't fail during import
+    os.environ.setdefault("SECRET_KEY", "test-secret-key")
+    os.environ.setdefault("GCS_BUCKET_NAME", "test-bucket")
+    os.environ.setdefault("GCS_PROJECT_ID", "test-project")
+    # Optional cloud vars to avoid downstream conditional logic issues
+    os.environ.setdefault("GCS_CREDENTIALS_PATH", "")
+    os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
+    os.environ.setdefault("GOOGLE_AI_API_KEY", "test-google-key")
+
+@pytest.fixture(scope="session")
+def test_data_dir():
+    return Path(__file__).parent / "test_data"
+
+@pytest.fixture(scope="session")
+def fixtures_dir():
+    return Path(__file__).parent / "fixtures"
 """
 Comprehensive Testing Infrastructure
 Provides base test classes, fixtures, and utilities for testing the LyoBackend.
