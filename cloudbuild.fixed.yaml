@@ -1,0 +1,92 @@
+steps:
+  # Create Artifact Registry repository if it doesn't exist
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+    - -c
+    - |
+      # Enable required services
+      gcloud services enable artifactregistry.googleapis.com --quiet
+      gcloud services enable run.googleapis.com --quiet
+      
+      # Create repository (non-blocking if exists)
+      gcloud artifacts repositories create lyo-backend-repo \
+        --repository-format=docker \
+        --location=${_REGION} \
+        --description="Lyo Backend Docker images" \
+        --quiet || echo "Repository may already exist"
+      
+      # Configure Docker authentication  
+      gcloud auth configure-docker ${_REGION}-docker.pkg.dev --quiet
+
+  # Build the container image using the fixed Dockerfile
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-f', 'Dockerfile.fixed',
+      '-t', '${_IMAGE}',
+      '.'
+    ]
+
+  # Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_IMAGE}']
+
+  # Deploy to Cloud Run with improved startup configuration
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+    - -c
+    - |
+      # Deploy with enhanced configuration for superior AI backend
+      gcloud run deploy ${_SERVICE} \
+        --image ${_IMAGE} \
+        --region ${_REGION} \
+        --platform managed \
+        --allow-unauthenticated \
+        --port 8080 \
+        --memory 4Gi \
+        --cpu 4 \
+        --timeout 900 \
+        --concurrency 100 \
+        --max-instances 10 \
+        --set-env-vars "ENVIRONMENT=production,DEBUG=false,PORT=8080,GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=lyobackend-storage,SUPERIOR_AI_ENABLED=true" \
+        --quiet
+      
+      # Try to add secrets if they exist (non-blocking)
+      echo "Configuring secrets for superior AI backend..."
+      
+      # Check and add JWT secret
+      if gcloud secrets describe jwt-secret-key --quiet 2>/dev/null; then
+        gcloud run services update ${_SERVICE} \
+          --region ${_REGION} \
+          --update-secrets="JWT_SECRET_KEY=jwt-secret-key:latest" \
+          --quiet || echo "Warning: Could not set JWT_SECRET_KEY"
+      fi
+      
+      # Check and add database URL  
+      if gcloud secrets describe database-url --quiet 2>/dev/null; then
+        gcloud run services update ${_SERVICE} \
+          --region ${_REGION} \
+          --update-secrets="DATABASE_URL=database-url:latest" \
+          --quiet || echo "Warning: Could not set DATABASE_URL"
+      fi
+      
+      # Check and add Gemini API key for superior AI
+      if gcloud secrets describe gemini-api-key --quiet 2>/dev/null; then
+        gcloud run services update ${_SERVICE} \
+          --region ${_REGION} \
+          --update-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
+          --quiet || echo "Warning: Could not set GEMINI_API_KEY"
+      fi
+      
+      echo "Superior AI backend deployment completed successfully!"
+
+substitutions:
+  _SERVICE: 'lyo-backend'
+  _REGION: 'us-central1'
+  _IMAGE: '${_REGION}-docker.pkg.dev/$PROJECT_ID/lyo-backend-repo/${_SERVICE}:${SHORT_SHA}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
