@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy and install Phase 2 requirements
+COPY requirements-phase2.txt .
+RUN pip install --no-cache-dir -r requirements-phase2.txt
+
+# Copy Phase 2 app
+COPY cloud_main_phase2.py .
+
+EXPOSE 8080
+
+CMD ["python", "cloud_main_phase2.py"]

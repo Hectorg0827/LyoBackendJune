@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements-super-minimal.txt .
+RUN pip install --no-cache-dir -r requirements-super-minimal.txt
+
+COPY cloud_main_minimal.py .
+
+EXPOSE 8080
+
+CMD ["python", "cloud_main_minimal.py"]

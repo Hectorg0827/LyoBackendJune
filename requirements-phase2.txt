@@ -1,0 +1,30 @@
+# Phase 2: Conservative AI Integration
+# Building on Phase 1 with minimal new dependencies
+
+# Core Framework (from Phase 1)
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# Database (from Phase 1)
+sqlalchemy[asyncio]==2.0.23
+aiosqlite==0.19.0
+
+# Basic Security (from Phase 1)
+passlib[bcrypt]==1.7.4
+python-decouple==3.8
+
+# File Upload (from Phase 1)
+python-multipart==0.0.6
+
+# HTTP (from Phase 1)
+httpx==0.25.2
+
+# JSON Performance (from Phase 1)
+orjson==3.9.10
+
+# NEW: Google Gemini Integration (minimal)
+google-generativeai==0.3.2
+
+# NEW: Enhanced Error Handling
+structlog==23.2.0

@@ -1,0 +1,25 @@
+# Phase 1: Core Dependencies
+# FastAPI + Database + Basic Security
+
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Database
+sqlalchemy[asyncio]==2.0.23
+aiosqlite==0.19.0
+
+# Basic Security
+passlib[bcrypt]==1.7.4
+python-decouple==3.8
+
+# File Upload
+python-multipart==0.0.6
+
+# HTTP
+httpx==0.25.2
+
+# JSON Performance
+orjson==3.9.10

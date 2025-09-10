@@ -507,21 +507,17 @@ async def _store_generated_quiz(
         # Don't fail the main request if storage fails
 
 def _generate_fallback_quiz(question_count: int, quiz_type: str) -> List[QuizQuestion]:
-    """Generate fallback quiz when AI fails"""
+    """DISABLED: No fallback quiz - force real AI or fail"""
     
-    fallback_questions = []
-    
-    for i in range(question_count):
-        question = QuizQuestion(
-            question=f"Sample question {i+1}: What is a key concept from this learning material?",
-            options=[
-                f"A) Concept option {i+1}A",
-                f"B) Concept option {i+1}B", 
-                f"C) Concept option {i+1}C",
-                f"D) Concept option {i+1}D"
-            ],
-            correctAnswer="A"
-        )
-        fallback_questions.append(question)
-    
-    return fallback_questions
+    # PRODUCTION MODE: NO MOCK DATA ALLOWED
+    logger.error("❌ FALLBACK QUIZ TRIGGERED - THIS SHOULD NEVER HAPPEN IN PRODUCTION")
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "AI_SERVICE_UNAVAILABLE",
+            "message": "Quiz generation requires functional AI service. No mock data available.",
+            "solution": "Check Gemini API configuration and try again",
+            "mock_data": False,
+            "fallback_disabled": True
+        }
+    )
