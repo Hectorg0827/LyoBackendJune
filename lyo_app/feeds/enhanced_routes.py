@@ -359,27 +359,103 @@ async def get_trending_content(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(verify_access_token)
 ):
-    """Get trending content with real-time viral detection"""
+    """Get trending content with REAL viral detection from database"""
     
-    # Mock trending algorithm - would use real data in production
-    trending_items = []
-    
-    for i in range(limit):
-        trending_items.append({
-            'id': f'trending_{i}',
-            'title': f'Trending Item {i}',
-            'viral_score': 0.95 - (i * 0.01),
-            'engagement_velocity': 1000 - (i * 20),
-            'trending_duration_hours': 12 + i,
-            'category': category or 'general'
-        })
-    
-    return {
-        'items': trending_items,
-        'time_window': time_window,
-        'last_updated': datetime.utcnow().isoformat(),
-        'algorithm_version': 'viral_detection_v2.0'
-    }
+    # REAL trending algorithm using database queries
+    try:
+        from sqlalchemy import text, desc
+        from datetime import datetime, timedelta
+        
+        # Calculate time window
+        time_delta_map = {
+            "1h": timedelta(hours=1),
+            "6h": timedelta(hours=6), 
+            "24h": timedelta(hours=24),
+            "7d": timedelta(days=7)
+        }
+        
+        since_time = datetime.utcnow() - time_delta_map.get(time_window, timedelta(hours=24))
+        
+        # REAL database query for trending posts
+        query = text("""
+            SELECT 
+                p.id,
+                p.title,
+                p.content,
+                p.created_at,
+                COUNT(DISTINCT pr.id) as reaction_count,
+                COUNT(DISTINCT c.id) as comment_count,
+                (COUNT(DISTINCT pr.id) + COUNT(DISTINCT c.id) * 2) as engagement_score,
+                u.username as creator_name
+            FROM posts p
+            LEFT JOIN post_reactions pr ON p.id = pr.post_id AND pr.created_at >= :since_time
+            LEFT JOIN comments c ON p.id = c.post_id AND c.created_at >= :since_time  
+            LEFT JOIN users u ON p.user_id = u.id
+            WHERE p.created_at >= :since_time
+            GROUP BY p.id, p.title, p.content, p.created_at, u.username
+            ORDER BY engagement_score DESC, p.created_at DESC
+            LIMIT :limit_param
+        """)
+        
+        result = await db.execute(
+            query, 
+            {
+                "since_time": since_time,
+                "limit_param": limit
+            }
+        )
+        
+        trending_items = []
+        for row in result.fetchall():
+            # Calculate viral score based on engagement
+            viral_score = min(0.95, row.engagement_score / 100.0)  # Normalize to 0-0.95
+            
+            trending_items.append({
+                'id': f'post_{row.id}',
+                'title': row.title,
+                'content_preview': (row.content or '')[:100] + '...' if row.content else '',
+                'viral_score': viral_score,
+                'engagement_velocity': row.engagement_score,
+                'reaction_count': row.reaction_count,
+                'comment_count': row.comment_count,
+                'creator': row.creator_name,
+                'created_at': row.created_at.isoformat() if row.created_at else None,
+                'category': category or 'social',
+                'type': 'real_post'
+            })
+        
+        # If no real trending content, return empty with explanation
+        if not trending_items:
+            return {
+                'items': [],
+                'message': 'No trending content available in the selected time window',
+                'time_window': time_window,
+                'last_updated': datetime.utcnow().isoformat(),
+                'algorithm_version': 'real_data_v3.0',
+                'mock_data': False,
+                'real_database_query': True
+            }
+        
+        return {
+            'items': trending_items,
+            'time_window': time_window,
+            'last_updated': datetime.utcnow().isoformat(),
+            'algorithm_version': 'real_viral_detection_v3.0',
+            'mock_data': False,
+            'real_database_query': True
+        }
+        
+    except Exception as e:
+        logger.error(f"Real trending query failed: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "TRENDING_SERVICE_UNAVAILABLE",
+                "message": "Could not fetch trending content from database",
+                "mock_data": False,
+                "fallback_disabled": True
+            }
+        )
 
 @router.get("/discovery")
 @monitor_performance("discovery_feed")

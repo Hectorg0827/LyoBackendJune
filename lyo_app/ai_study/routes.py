@@ -16,7 +16,7 @@ from sqlalchemy import select, and_, desc, func
 from pydantic import BaseModel, Field, validator
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.security import verify_access_token
+from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.core.monitoring import monitor_request
 
@@ -100,7 +100,7 @@ class StudySessionContinueResponse(BaseModel):
 @monitor_request("ai_study_session_create")
 async def create_study_session(
     request: StudySessionCreateRequest,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -133,7 +133,7 @@ async def create_study_session(
 async def continue_study_session(
     session_id: int,
     request: StudySessionContinueRequest,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -183,7 +183,7 @@ async def continue_study_session(
 @monitor_request("ai_study_session_history")
 async def get_study_session_history(
     session_id: int,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -226,67 +226,8 @@ async def get_study_session_history(
         )
 
 # ============================================================================
-# AI Study Mode API Routes
+# AI Study Mode API Routes - Simplified and Fixed
 # ============================================================================
-
-@router.post("/sessions", response_model=StudySessionCreateResponse)
-async def create_study_session(
-    request: StudySessionCreateRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
-):
-    """Create a new AI study session for a learning resource."""
-    try:
-        # Process the conversation through our AI service
-        response = await study_mode_service.process_conversation(
-            user_id=current_user.id,
-            request=request,
-            db=db
-        )
-        
-        # Schedule analytics update in background
-        background_tasks.add_task(
-            _update_study_analytics,
-            current_user.id,
-            request.resource_id,
-            db
-        )
-        
-        logger.info(f"Study conversation processed for user {current_user.id}, session {response.session_id}")
-        return response
-        
-    except ValueError as e:
-        logger.warning(f"Study session validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Study session error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail="Failed to process study conversation. Please try again."
-        )
-
-
-@router.post("/sessions", response_model=StudySessionResponse)
-async def create_study_session(
-    request: StudySessionRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
-):
-    """Create a new AI study session for a learning resource."""
-    try:
-        session = await study_mode_service.create_study_session(
-            user_id=current_user.id,
-            request=request,
-            db=db
-        )
-        
-        return StudySessionResponse(**session.to_dict())
-        
-    except Exception as e:
-        logger.error(f"Failed to create study session: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to create study session")
-
 
 @router.get("/sessions", response_model=List[StudySessionResponse])
 async def get_user_study_sessions(
@@ -295,7 +236,7 @@ async def get_user_study_sessions(
     limit: int = Query(20, ge=1, le=100, description="Number of sessions to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get user's study sessions with optional filtering."""
     try:
@@ -324,7 +265,7 @@ async def get_user_study_sessions(
 async def get_study_session(
     session_id: str = Path(..., description="Study session ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get a specific study session by ID."""
     try:
@@ -355,7 +296,7 @@ async def update_study_session(
     session_id: str = Path(..., description="Study session ID"),
     request: StudySessionUpdate = ...,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Update a study session."""
     try:
@@ -405,7 +346,7 @@ async def generate_quiz(
     request: QuizGenerationRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate an AI-powered quiz for a learning resource.
@@ -415,7 +356,7 @@ async def generate_quiz(
     """
     try:
         # Generate quiz through our AI service
-        response = await study_mode_service.generate_quiz(
+        response = await quiz_generation_service.generate_quiz(
             user_id=current_user.id,
             request=request,
             db=db
@@ -450,7 +391,7 @@ async def get_user_quizzes(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get user's generated quizzes with optional filtering."""
     try:
@@ -516,7 +457,7 @@ async def get_user_quizzes(
 async def get_quiz(
     quiz_id: str = Path(..., description="Quiz ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get a specific quiz by ID."""
     try:
@@ -585,101 +526,19 @@ async def submit_quiz_attempt(
     quiz_id: str = Path(..., description="Quiz ID"),
     request: QuizAttemptRequest = ...,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Submit a quiz attempt for grading and analysis."""
 # ============================================================================
 # ENHANCED AI QUIZ GENERATION ENDPOINTS  
 # ============================================================================
 
-@router.post("/generate-quiz", response_model=QuizGenerationResponse)
-@monitor_request("ai_quiz_generation")
-async def generate_quiz(
-    request: QuizGenerationRequest,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(verify_access_token),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Generate an intelligent, contextual quiz using advanced AI.
-    
-    This endpoint uses AI to create customized quiz questions that match the
-    specified difficulty level, question type, and learning objectives with
-    enhanced intelligence and adaptive capabilities.
-    """
-    try:
-        # Convert to our enhanced service request format
-        from .quiz_generation_service import QuizGenerationRequest as ServiceRequest
-        
-        service_request = ServiceRequest(
-            resource_id=request.resource_id,
-            resource_type=getattr(request, 'resource_type', 'lesson'),
-            quiz_type=request.quiz_type,
-            question_count=request.question_count,
-            difficulty_level=request.difficulty_level,
-            focus_areas=getattr(request, 'focus_areas', []) or [],
-            learning_objectives=getattr(request, 'learning_objectives', []) or [],
-            time_limit_minutes=getattr(request, 'time_limit_minutes', None)
-        )
-        
-        generated_quiz = await quiz_generation_service.generate_quiz(
-            user_id=current_user.id,
-            request=service_request,
-            db=db
-        )
-        
-        # Convert to API response format
-        return QuizGenerationResponse(
-            quiz_id=generated_quiz.quiz_id,
-            title=generated_quiz.title,
-            description=getattr(generated_quiz, 'description', ''),
-            quiz_type=generated_quiz.difficulty_level,  # Map appropriately
-            question_count=generated_quiz.total_questions,
-            estimated_duration_minutes=generated_quiz.estimated_duration_minutes,
-            difficulty_level=generated_quiz.difficulty_level.value,
-            questions=[
-                {
-                    "id": f"q_{i}",
-                    "question": q.question,
-                    "question_type": q.question_type.value,
-                    "options": q.options,
-                    "correct_answer": "",  # Hide for active quiz
-                    "explanation": q.explanation,
-                    "difficulty": q.difficulty_score,
-                    "topic": generated_quiz.subject_area,
-                    "points": 1
-                }
-                for i, q in enumerate(generated_quiz.questions)
-            ],
-            generation_metadata=generated_quiz.generation_metadata
-        )
-        
-        # Schedule analytics update in background
-        background_tasks.add_task(
-            _update_quiz_analytics,
-            current_user.id,
-            generated_quiz.quiz_id,
-            db
-        )
-        
-        logger.info(f"Enhanced quiz generated for user {current_user.id}: {generated_quiz.quiz_id}")
-        
-    except ValueError as e:
-        logger.warning(f"Quiz generation validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Enhanced quiz generation error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail="Failed to generate AI quiz. Please try again."
-        )
-
 @router.post("/generate-adaptive-quiz", response_model=QuizGenerationResponse)
 @monitor_request("ai_adaptive_quiz_generation")
 async def generate_adaptive_quiz(
     resource_id: str = Field(..., description="Learning resource ID"),
     include_performance_history: bool = Field(default=True, description="Use performance history"),
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -745,7 +604,7 @@ async def get_quiz_attempts(
     limit: int = Query(10, ge=1, le=50),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get user's attempts for a specific quiz."""
     try:
@@ -788,7 +647,7 @@ async def get_quiz_attempts(
                 correct_answers=attempt.correct_answers,
                 total_questions=attempt.total_questions,
                 percentage=attempt.score or 0,
-                grade=study_mode_service._calculate_grade(attempt.score or 0),
+                grade=_calculate_grade(attempt.score or 0),
                 time_taken_minutes=attempt.duration_minutes or 0,
                 detailed_results=[],  # Empty for list view
                 performance_insights={},  # Empty for list view
@@ -812,7 +671,7 @@ async def get_quiz_attempts(
 async def get_study_analytics(
     days: int = Query(30, ge=1, le=365, description="Number of days to analyze"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get comprehensive study analytics for the user."""
     try:
@@ -978,48 +837,6 @@ async def _update_attempt_analytics(user_id: int, attempt_id: str, db: AsyncSess
 # ENHANCED UTILITY AND HEALTH ENDPOINTS
 # ============================================================================
 
-@router.get("/study-mode/health")
-async def study_mode_health_check():
-    """Enhanced health check for AI study mode services"""
-    
-    try:
-        # Test AI service connectivity
-        ai_health = "healthy"
-        try:
-            from lyo_app.core.ai_resilience import ai_resilience_manager
-            status = await ai_resilience_manager.get_health_status()
-            if not status.get("models"):
-                ai_health = "degraded"
-        except Exception:
-            ai_health = "unhealthy"
-        
-        return {
-            "status": "healthy",
-            "timestamp": time.time(),
-            "services": {
-                "study_session_service": "healthy",
-                "quiz_generation_service": "healthy",
-                "ai_resilience_manager": ai_health,
-                "socratic_tutoring": "healthy",
-                "adaptive_learning": "healthy"
-            },
-            "features": {
-                "socratic_tutoring": True,
-                "adaptive_quizzes": True,
-                "multiple_question_types": True,
-                "performance_analytics": True,
-                "conversation_memory": True,
-                "ai_powered_feedback": True
-            }
-        }
-        
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": time.time()
-        }
-
 @router.get("/study-mode/capabilities")
 async def get_study_mode_capabilities():
     """Get available AI study mode capabilities and configuration"""
@@ -1103,7 +920,7 @@ async def get_study_mode_capabilities():
 @router.get("/study-sessions")
 @monitor_request("ai_study_sessions_list")
 async def list_user_study_sessions(
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = 20,
     offset: int = 0
@@ -1150,73 +967,15 @@ async def list_user_study_sessions(
         )
 
 
-# ============================================================================
-# BACKGROUND TASK FUNCTIONS FOR AI ANALYTICS
-# ============================================================================
-
-async def _update_study_analytics(user_id: int, resource_id: str, db: AsyncSession):
-    """Update AI study analytics in the background"""
-    try:
-        # Enhanced analytics for AI study sessions
-        logger.info(f"Updated AI study analytics for user {user_id}, resource {resource_id}")
-    except Exception as e:
-        logger.error(f"Failed to update AI study analytics: {e}")
-
-
-async def _update_quiz_analytics(user_id: int, quiz_id: str, db: AsyncSession):
-    """Update AI quiz analytics in the background"""
-    try:
-        # Enhanced analytics for AI-generated quizzes
-        logger.info(f"Updated AI quiz analytics for user {user_id}, quiz {quiz_id}")
-    except Exception as e:
-        logger.error(f"Failed to update AI quiz analytics: {e}")
-
-
-async def _update_attempt_analytics(user_id: int, attempt_id: str, db: AsyncSession):
-    """Update AI attempt analytics in the background"""
-    try:
-        # Enhanced analytics for AI-powered quiz attempts
-        logger.info(f"Updated AI attempt analytics for user {user_id}, attempt {attempt_id}")
-    except Exception as e:
-        logger.error(f"Failed to update AI attempt analytics: {e}")
-
-
-async def _calculate_learning_streak(user_id: int, db: AsyncSession) -> int:
-    """Calculate the user's current learning streak with AI insights"""
-    try:
-        # Enhanced streak calculation with AI learning patterns
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        
-        result = await db.execute(
-            select(func.date(StudySession.started_at))
-            .where(
-                and_(
-                    StudySession.user_id == user_id,
-                    StudySession.started_at >= thirty_days_ago
-                )
-            )
-            .distinct()
-            .order_by(desc(func.date(StudySession.started_at)))
-        )
-        
-        study_dates = [row[0] for row in result.fetchall()]
-        
-        if not study_dates:
-            return 0
-        
-        # Calculate consecutive days from today
-        streak = 0
-        today = datetime.utcnow().date()
-        
-        for i, study_date in enumerate(study_dates):
-            expected_date = today - timedelta(days=i)
-            if study_date == expected_date:
-                streak += 1
-            else:
-                break
-        
-        return streak
-        
-    except Exception as e:
-        logger.error(f"Failed to calculate AI learning streak: {e}")
-        return 0
+def _calculate_grade(score: float) -> str:
+    """Calculate letter grade from score percentage"""
+    if score >= 90:
+        return "A"
+    elif score >= 80:
+        return "B"
+    elif score >= 70:
+        return "C"
+    elif score >= 60:
+        return "D"
+    else:
+        return "F"
