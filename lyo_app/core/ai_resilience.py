@@ -346,20 +346,9 @@ class AIResilienceManager:
             del self.request_cache[oldest]
 
     def _get_fallback_response(self, message: str, error: str) -> Dict[str, Any]:
-        return {
-            "response": random.choice(
-                [
-                    "I'm temporarily unable to process your request. Please try again soon.",
-                    "Experiencing technical issues; retry shortly.",
-                    "AI services unavailable right now; please retry in a minute.",
-                ]
-            ),
-            "model": "fallback",
-            "tokens_used": 0,
-            "timestamp": time.time(),
-            "error": error,
-            "is_fallback": True,
-        }
+        # PRODUCTION MODE: NO FALLBACKS ALLOWED - RAISE ERROR INSTEAD
+        logger.error(f"❌ AI FALLBACK TRIGGERED - BLOCKING MOCK RESPONSES: {error}")
+        raise Exception(f"AI_SERVICE_REQUIRED: Real AI service unavailable. Error: {error}. No fallback responses allowed in production.")
 
     async def get_health_status(self) -> Dict[str, Any]:
         status = {

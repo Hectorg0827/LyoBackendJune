@@ -1,0 +1,38 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/lyobackend/lyo-backend-repo/lyo-backend:$BUILD_ID', '-f', 'Dockerfile.phase1', '.']
+  
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/lyobackend/lyo-backend-repo/lyo-backend:$BUILD_ID']
+  
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'lyo-backend'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/lyobackend/lyo-backend-repo/lyo-backend:$BUILD_ID'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'GOOGLE_CLOUD_PROJECT=lyobackend'
+      - '--max-instances'
+      - '10'
+      - '--memory'
+      - '1Gi'
+      - '--cpu'
+      - '1'
+      - '--concurrency'
+      - '100'
+      - '--timeout'
+      - '300s'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

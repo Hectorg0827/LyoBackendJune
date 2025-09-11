@@ -246,7 +246,7 @@ class StudySessionService:
             self.session_cache[session_key] = current_conversation
             
             # Prepare response
-            return {
+            response_data = {
                 "response": ai_response["content"],
                 "updated_conversation_history": [
                     {
@@ -265,6 +265,8 @@ class StudySessionService:
                 "tutoring_insights": ai_response.get("tutoring_insights", {}),
                 "suggested_next_steps": ai_response.get("suggested_next_steps", [])
             }
+            
+            return response_data
             
         except Exception as e:
             logger.error(f"Error continuing study session: {e}")
