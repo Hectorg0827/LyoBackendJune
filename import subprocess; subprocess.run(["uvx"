@@ -1,0 +1,1 @@
+import subprocess; subprocess.run(["uvx", "--from", "git+https://github.com/github/spec-
