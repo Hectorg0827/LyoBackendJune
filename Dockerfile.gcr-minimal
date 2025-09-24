@@ -1,0 +1,47 @@
+# Minimal Production Dockerfile for GCR - Fully Functional Backend
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages directly
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    sqlalchemy==2.0.23 \
+    aiosqlite==0.19.0 \
+    pydantic==2.5.0 \
+    pydantic-settings==2.1.0 \
+    python-multipart==0.0.6 \
+    google-generativeai==0.8.3
+
+# Copy only essential files
+COPY fully_functional_backend.py .
+COPY lyo_app/ ./lyo_app/
+
+# Create database directory
+RUN mkdir -p /app/data
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
+ENV ENVIRONMENT=production
+ENV DEBUG=false
+
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# Start the fully functional backend
+CMD ["python", "-m", "uvicorn", "fully_functional_backend:app", "--host", "0.0.0.0", "--port", "8080"]
