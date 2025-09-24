@@ -1,0 +1,56 @@
+# Ultra-Simple Production Dockerfile for GCR - Guaranteed to Work
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages directly (avoiding requirements conflicts)
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn==0.24.0 \
+    sqlalchemy==2.0.23 \
+    aiosqlite==0.19.0 \
+    pydantic==2.5.0 \
+    pydantic-settings==2.1.0 \
+    google-generativeai==0.8.3
+
+# Copy the main backend file
+COPY fully_functional_backend.py .
+
+# Create a minimal lyo_app structure with only essential files
+RUN mkdir -p lyo_app/core lyo_app/models lyo_app/services
+
+# Copy essential lyo_app files if they exist
+COPY lyo_app lyo_app/
+
+# Create any missing __init__.py files
+RUN touch lyo_app/__init__.py
+RUN touch lyo_app/core/__init__.py
+RUN touch lyo_app/models/__init__.py
+RUN touch lyo_app/services/__init__.py
+
+# Create database directory
+RUN mkdir -p /app/data
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
+ENV ENVIRONMENT=production
+
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# Start command
+CMD ["python", "-m", "uvicorn", "fully_functional_backend:app", "--host", "0.0.0.0", "--port", "8080"]
