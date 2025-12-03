@@ -5,6 +5,17 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+# Ensure Prometheus multiprocess directory exists before any imports that might use it
+if "PROMETHEUS_MULTIPROC_DIR" not in os.environ:
+    os.environ["PROMETHEUS_MULTIPROC_DIR"] = "/tmp/prometheus_multiproc_dir"
+
+if not os.path.exists(os.environ["PROMETHEUS_MULTIPROC_DIR"]):
+    try:
+        os.makedirs(os.environ["PROMETHEUS_MULTIPROC_DIR"], exist_ok=True)
+        print(f"Created Prometheus multiprocess directory: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
+    except Exception as e:
+        print(f"Failed to create Prometheus directory: {e}")
+
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
