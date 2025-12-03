@@ -38,7 +38,8 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc_dir
 
 # Copy application code
 COPY --chown=app:app . .
