@@ -525,3 +525,286 @@ def _generate_fallback_quiz(question_count: int, quiz_type: str) -> List[QuizQue
         fallback_questions.append(question)
     
     return fallback_questions
+
+
+# ============================================================================
+# PUBLIC AI CHAT ENDPOINT (NO AUTH REQUIRED)
+# ============================================================================
+
+class ChatRequest(BaseModel):
+    """Simple chat request"""
+    message: str = Field(..., description="User's message")
+    conversationHistory: Optional[List[ConversationMessage]] = Field(default=None, description="Optional chat history")
+    context: Optional[str] = Field(default=None, description="Optional context like course topic")
+
+class ChatResponse(BaseModel):
+    """Simple chat response"""
+    response: str = Field(..., description="AI response")
+    conversationHistory: List[ConversationMessage] = Field(..., description="Updated conversation history")
+
+@router.post("/chat")
+async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
+    """
+    POST /api/v1/ai/chat
+    Public AI chat endpoint - NO AUTHENTICATION REQUIRED
+    
+    Simple chat interface for quick AI interactions.
+    Used by iOS app for course generation and general AI chat.
+    """
+    try:
+        # Build system prompt
+        system_prompt = """You are Lyo, a friendly and helpful educational AI assistant. 
+You help students learn by providing clear, accurate, and engaging explanations.
+Be concise but thorough. Use examples when helpful."""
+
+        if request.context:
+            system_prompt += f"\n\nContext: {request.context}"
+
+        # Build messages
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add conversation history if provided
+        if request.conversationHistory:
+            for msg in request.conversationHistory:
+                messages.append({"role": msg.role, "content": msg.content})
+        
+        # Add current message
+        messages.append({"role": "user", "content": request.message})
+        
+        # Call AI
+        ai_response = await ai_resilience_manager.chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1000,
+            provider_order=["gemini-pro", "gemini-flash", "openai"]
+        )
+        
+        # Build updated history
+        updated_history = []
+        if request.conversationHistory:
+            for msg in request.conversationHistory:
+                updated_history.append(ConversationMessage(role=msg.role, content=msg.content))
+        
+        updated_history.append(ConversationMessage(role="user", content=request.message))
+        updated_history.append(ConversationMessage(role="assistant", content=ai_response["content"]))
+        
+        logger.info(f"Public chat completed successfully")
+        
+        return ChatResponse(
+            response=ai_response["content"],
+            conversationHistory=updated_history
+        )
+        
+    except Exception as e:
+        logger.error(f"Public chat failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Chat failed: {str(e)}"
+        )
+
+
+# ============================================================================
+# COURSE GENERATION ENDPOINT (NO AUTH REQUIRED)
+# ============================================================================
+
+class CourseLessonResponse(BaseModel):
+    """Individual lesson in a course"""
+    id: str = Field(..., description="Unique lesson ID")
+    title: str = Field(..., description="Lesson title")
+    description: str = Field(..., description="Lesson description")
+    content: str = Field(..., description="Full lesson content")
+    duration_minutes: int = Field(default=15, description="Estimated duration")
+    order: int = Field(..., description="Order within module")
+
+class CourseModuleResponse(BaseModel):
+    """Module containing lessons"""
+    id: str = Field(..., description="Unique module ID")
+    title: str = Field(..., description="Module title")
+    description: str = Field(..., description="Module description")
+    lessons: List[CourseLessonResponse] = Field(..., description="Lessons in this module")
+    order: int = Field(..., description="Order within course")
+
+class CourseGenerationRequest(BaseModel):
+    """Request to generate a full course"""
+    topic: str = Field(..., description="Course topic/title")
+    description: Optional[str] = Field(default=None, description="Optional description")
+    difficulty: str = Field(default="intermediate", description="beginner/intermediate/advanced")
+    num_modules: int = Field(default=3, ge=1, le=10, description="Number of modules")
+    lessons_per_module: int = Field(default=3, ge=1, le=10, description="Lessons per module")
+
+class CourseGenerationResponse(BaseModel):
+    """Generated course response"""
+    id: str = Field(..., description="Generated course ID")
+    title: str = Field(..., description="Course title")
+    description: str = Field(..., description="Course description")
+    difficulty: str = Field(..., description="Difficulty level")
+    estimated_hours: float = Field(..., description="Estimated completion time")
+    modules: List[CourseModuleResponse] = Field(..., description="Course modules")
+    generated_at: str = Field(..., description="Generation timestamp")
+
+@router.post("/generate-course", response_model=CourseGenerationResponse)
+async def generate_course_endpoint(request: CourseGenerationRequest) -> CourseGenerationResponse:
+    """
+    POST /api/v1/ai/generate-course
+    Generate a complete AI course - NO AUTHENTICATION REQUIRED
+    
+    Creates a structured course with modules and lessons using AI.
+    This is a public endpoint for the iOS course generation feature.
+    """
+    try:
+        import uuid
+        from datetime import datetime
+        
+        logger.info(f"Generating course for topic: {request.topic}")
+        
+        # Build the prompt for course generation
+        course_prompt = f"""Generate a comprehensive educational course on the topic: "{request.topic}"
+
+Requirements:
+- Difficulty level: {request.difficulty}
+- Number of modules: {request.num_modules}
+- Lessons per module: {request.lessons_per_module}
+{f'- Additional context: {request.description}' if request.description else ''}
+
+Generate the course in the following JSON format ONLY (no other text):
+{{
+    "title": "Course Title",
+    "description": "A comprehensive description of the course",
+    "modules": [
+        {{
+            "title": "Module 1 Title",
+            "description": "Module description",
+            "lessons": [
+                {{
+                    "title": "Lesson 1 Title",
+                    "description": "Brief lesson description",
+                    "content": "Full detailed lesson content with explanations, examples, and key concepts. Make this substantial and educational.",
+                    "duration_minutes": 15
+                }}
+            ]
+        }}
+    ]
+}}
+
+Make the content educational, engaging, and appropriate for the {request.difficulty} level.
+Each lesson should have substantial, useful content (at least 200 words).
+Include practical examples and clear explanations."""
+
+        # Call AI to generate course
+        ai_response = await ai_resilience_manager.chat_completion(
+            messages=[{"role": "user", "content": course_prompt}],
+            temperature=0.7,
+            max_tokens=4000,
+            provider_order=["gemini-pro", "gemini-flash", "openai"]
+        )
+        
+        # Parse the JSON response
+        try:
+            json_content = ai_response["content"].strip()
+            # Clean markdown formatting if present
+            if json_content.startswith("```json"):
+                json_content = json_content.replace("```json", "").replace("```", "").strip()
+            elif json_content.startswith("```"):
+                json_content = json_content.replace("```", "").strip()
+            
+            course_data = json.loads(json_content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI course response: {e}")
+            logger.debug(f"AI response was: {ai_response['content'][:500]}...")
+            # Generate fallback course
+            course_data = _generate_fallback_course(request)
+        
+        # Build response with proper IDs
+        course_id = str(uuid.uuid4())
+        modules = []
+        total_duration = 0
+        
+        for mod_idx, mod_data in enumerate(course_data.get("modules", [])):
+            module_id = str(uuid.uuid4())
+            lessons = []
+            
+            for les_idx, les_data in enumerate(mod_data.get("lessons", [])):
+                lesson_id = str(uuid.uuid4())
+                duration = les_data.get("duration_minutes", 15)
+                total_duration += duration
+                
+                lessons.append(CourseLessonResponse(
+                    id=lesson_id,
+                    title=les_data.get("title", f"Lesson {les_idx + 1}"),
+                    description=les_data.get("description", ""),
+                    content=les_data.get("content", "Content coming soon..."),
+                    duration_minutes=duration,
+                    order=les_idx + 1
+                ))
+            
+            modules.append(CourseModuleResponse(
+                id=module_id,
+                title=mod_data.get("title", f"Module {mod_idx + 1}"),
+                description=mod_data.get("description", ""),
+                lessons=lessons,
+                order=mod_idx + 1
+            ))
+        
+        estimated_hours = round(total_duration / 60, 1)
+        
+        logger.info(f"Course generated successfully: {course_data.get('title', request.topic)}")
+        
+        return CourseGenerationResponse(
+            id=course_id,
+            title=course_data.get("title", request.topic),
+            description=course_data.get("description", f"A comprehensive course on {request.topic}"),
+            difficulty=request.difficulty,
+            estimated_hours=estimated_hours,
+            modules=modules,
+            generated_at=datetime.utcnow().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"Course generation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Course generation failed: {str(e)}"
+        )
+
+
+def _generate_fallback_course(request: CourseGenerationRequest) -> Dict[str, Any]:
+    """Generate a fallback course structure when AI fails"""
+    modules = []
+    
+    for mod_idx in range(request.num_modules):
+        lessons = []
+        for les_idx in range(request.lessons_per_module):
+            lessons.append({
+                "title": f"Lesson {les_idx + 1}: Introduction to {request.topic}",
+                "description": f"Learn the fundamentals of {request.topic}",
+                "content": f"""Welcome to this lesson on {request.topic}!
+
+In this lesson, we'll explore the key concepts and fundamentals you need to know.
+
+## Key Concepts
+
+1. **Understanding the Basics**: Before diving deep, it's important to understand the foundational concepts.
+
+2. **Practical Applications**: We'll look at how these concepts apply in real-world scenarios.
+
+3. **Best Practices**: Learn the recommended approaches and techniques.
+
+## Summary
+
+This lesson covered the essential aspects of {request.topic}. In the next lesson, we'll build on these concepts with more advanced topics.
+
+Take your time to review this material and make sure you understand each concept before moving forward.""",
+                "duration_minutes": 15
+            })
+        
+        modules.append({
+            "title": f"Module {mod_idx + 1}: {request.topic} Fundamentals",
+            "description": f"Master the core concepts of {request.topic}",
+            "lessons": lessons
+        })
+    
+    return {
+        "title": f"Complete Guide to {request.topic}",
+        "description": f"A comprehensive course covering all aspects of {request.topic} at the {request.difficulty} level.",
+        "modules": modules
+    }
