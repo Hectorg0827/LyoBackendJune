@@ -161,4 +161,4 @@ psutil==5.9.6
 py-cpuinfo==9.0.0
 
 # Optional GPU Monitoring
-nvidia-ml-py==12.535.133
+nvidia-ml-py==12.535.133aiofiles>=23.2.1
