@@ -53,6 +53,8 @@ class QuizType(str, enum.Enum):
     OPEN_ENDED = "open_ended"
     TRUE_FALSE = "true_false"
     FILL_IN_BLANK = "fill_in_blank"
+    MATCHING = "matching"
+    SHORT_ANSWER = "short_answer"
 
 
 # ============================================================================

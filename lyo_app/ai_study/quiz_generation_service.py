@@ -10,22 +10,18 @@ from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 from enum import Enum
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 
 from lyo_app.core.database import get_db
 from lyo_app.ai_agents.orchestrator import ai_orchestrator
 from lyo_app.learning.models import Course, Lesson
-from lyo_app.ai_study.models import QuizSession, QuizQuestion, QuizAttempt, QuestionType
+from lyo_app.ai_study.models import GeneratedQuiz as DBGeneratedQuiz, QuizAttempt, QuizType as DBQuizType
 from lyo_app.core.ai_resilience import ai_resilience_manager
 
 logger = logging.getLogger(__name__)
 
-class QuizType(str, Enum):
-    MULTIPLE_CHOICE = "multiple_choice"
-    OPEN_ENDED = "open_ended"
-    TRUE_FALSE = "true_false"
-    FILL_BLANK = "fill_blank"
-    MATCHING = "matching"
-    SHORT_ANSWER = "short_answer"
+# Use the Enum from models.py to ensure consistency
+QuizType = DBQuizType
 
 class DifficultyLevel(str, Enum):
     BEGINNER = "beginner"
@@ -100,64 +96,68 @@ class QuizGenerationService:
                 request
             )
             
-            # Create quiz session in database
-            quiz_session = QuizSession(
+            # Convert questions to JSON-serializable format
+            questions_json = [
+                {
+                    "question": q.question,
+                    "question_type": q.question_type.value,
+                    "options": q.options,
+                    "correct_answer": q.correct_answer,
+                    "explanation": q.explanation,
+                    "difficulty_score": q.difficulty_score,
+                    "estimated_time_seconds": q.estimated_time_seconds,
+                    "metadata": q.metadata
+                }
+                for q in questions
+            ]
+
+            # Create quiz in database
+            db_quiz = DBGeneratedQuiz(
                 user_id=user_id,
                 resource_id=request.resource_id,
-                resource_type=request.resource_type,
-                quiz_type=request.quiz_type.value,
-                question_count=len(questions),
+                # resource_type is not in GeneratedQuiz model, storing in metadata if needed
+                
+                quiz_type=request.quiz_type,
+                title=f"Quiz: {resource_context.get('title', 'Study Quiz')}",
+                description=f"Generated quiz for {resource_context.get('title')}",
                 difficulty_level=request.difficulty_level.value,
-                time_limit_minutes=request.time_limit_minutes,
-                metadata={
-                    "generation_request": request.__dict__,
-                    "resource_context": resource_context,
-                    "generation_timestamp": time.time()
-                }
+                estimated_duration_minutes=sum(q.estimated_time_seconds for q in questions) // 60 + 1,
+                
+                questions=questions_json,
+                question_count=len(questions),
+                
+                ai_model_used="gemini-pro",
+                generation_time_ms=int(time.time() * 1000), # Placeholder
+                
+                # Store extra metadata
+                # generation_metadata is not a column in GeneratedQuiz, but we can use it in the DTO
             )
             
-            db.add(quiz_session)
+            db.add(db_quiz)
             db.commit()
-            db.refresh(quiz_session)
-            
-            # Save questions to database
-            for i, question in enumerate(questions):
-                db_question = QuizQuestion(
-                    session_id=quiz_session.id,
-                    question_number=i + 1,
-                    question_text=question.question,
-                    question_type=QuestionType(question.question_type.value),
-                    options=question.options,
-                    correct_answer=json.dumps(question.correct_answer),
-                    explanation=question.explanation,
-                    difficulty_score=question.difficulty_score,
-                    estimated_time_seconds=question.estimated_time_seconds,
-                    metadata=question.metadata
-                )
-                db.add(db_question)
-            
-            db.commit()
+            db.refresh(db_quiz)
             
             # Create complete quiz object
             generated_quiz = GeneratedQuiz(
-                quiz_id=str(quiz_session.id),
-                title=f"Quiz: {resource_context.get('title', 'Study Quiz')}",
+                quiz_id=str(db_quiz.id),
+                title=db_quiz.title,
                 questions=questions,
                 total_questions=len(questions),
-                estimated_duration_minutes=sum(q.estimated_time_seconds for q in questions) // 60 + 1,
+                estimated_duration_minutes=db_quiz.estimated_duration_minutes,
                 difficulty_level=request.difficulty_level,
                 subject_area=resource_context.get('subject_area', 'General'),
                 learning_objectives=resource_context.get('learning_objectives', []),
                 generation_metadata={
-                    "session_id": quiz_session.id,
+                    "session_id": db_quiz.session_id,
                     "generated_at": time.time(),
-                    "ai_model_used": "gpt-4",
-                    "generation_version": "1.0"
+                    "ai_model_used": db_quiz.ai_model_used,
+                    "generation_version": "1.0",
+                    "resource_context": resource_context
                 }
             )
             
             # Cache the quiz
-            self.quiz_cache[str(quiz_session.id)] = generated_quiz
+            self.quiz_cache[str(db_quiz.id)] = generated_quiz
             
             return generated_quiz
             
@@ -219,41 +219,40 @@ class QuizGenerationService:
                 return self.quiz_cache[quiz_id]
             
             # Load from database
-            quiz_session = db.query(QuizSession).filter(QuizSession.id == int(quiz_id)).first()
-            if not quiz_session:
+            db_quiz = db.query(DBGeneratedQuiz).filter(DBGeneratedQuiz.id == quiz_id).first()
+            if not db_quiz:
                 return None
             
-            # Get questions
-            db_questions = db.query(QuizQuestion).filter(
-                QuizQuestion.session_id == quiz_session.id
-            ).order_by(QuizQuestion.question_number).all()
-            
-            # Convert to quiz questions
+            # Parse questions from JSON
             questions = []
-            for db_q in db_questions:
+            for q_data in db_quiz.questions:
                 question = QuizQuestion(
-                    question=db_q.question_text,
-                    question_type=QuizType(db_q.question_type.value),
-                    options=db_q.options,
-                    correct_answer=json.loads(db_q.correct_answer) if db_q.correct_answer else None,
-                    explanation=db_q.explanation,
-                    difficulty_score=db_q.difficulty_score,
-                    estimated_time_seconds=db_q.estimated_time_seconds,
-                    metadata=db_q.metadata
+                    question=q_data.get("question", ""),
+                    question_type=QuizType(q_data.get("question_type", QuizType.MULTIPLE_CHOICE.value)),
+                    options=q_data.get("options"),
+                    correct_answer=q_data.get("correct_answer"),
+                    explanation=q_data.get("explanation"),
+                    difficulty_score=q_data.get("difficulty_score", 0.5),
+                    estimated_time_seconds=q_data.get("estimated_time_seconds", 60),
+                    metadata=q_data.get("metadata", {})
                 )
                 questions.append(question)
             
             # Reconstruct quiz
+            # Note: Some metadata might be missing if not stored explicitly, inferring defaults
             quiz = GeneratedQuiz(
                 quiz_id=quiz_id,
-                title=f"Quiz: {quiz_session.metadata.get('resource_context', {}).get('title', 'Study Quiz')}",
+                title=db_quiz.title,
                 questions=questions,
-                total_questions=len(questions),
-                estimated_duration_minutes=quiz_session.time_limit_minutes or sum(q.estimated_time_seconds for q in questions) // 60 + 1,
-                difficulty_level=DifficultyLevel(quiz_session.difficulty_level),
-                subject_area=quiz_session.metadata.get('resource_context', {}).get('subject_area', 'General'),
-                learning_objectives=quiz_session.metadata.get('resource_context', {}).get('learning_objectives', []),
-                generation_metadata=quiz_session.metadata
+                total_questions=db_quiz.question_count,
+                estimated_duration_minutes=db_quiz.estimated_duration_minutes,
+                difficulty_level=DifficultyLevel(db_quiz.difficulty_level) if db_quiz.difficulty_level else DifficultyLevel.INTERMEDIATE,
+                subject_area="General", # Not stored in DBGeneratedQuiz directly
+                learning_objectives=[], # Not stored in DBGeneratedQuiz directly
+                generation_metadata={
+                    "ai_model_used": db_quiz.ai_model_used,
+                    "created_at": db_quiz.created_at.isoformat() if db_quiz.created_at else None
+                }
             )
             
             # Cache the quiz
@@ -476,7 +475,7 @@ IMPORTANT: Respond with ONLY valid JSON. No additional text, explanations, or fo
                 time_estimates = {
                     QuizType.MULTIPLE_CHOICE: 45,
                     QuizType.TRUE_FALSE: 30,
-                    QuizType.FILL_BLANK: 60,
+                    QuizType.FILL_IN_BLANK: 60,
                     QuizType.SHORT_ANSWER: 120,
                     QuizType.OPEN_ENDED: 300,
                     QuizType.MATCHING: 90
@@ -571,12 +570,13 @@ IMPORTANT: Respond with ONLY valid JSON. No additional text, explanations, or fo
             # Get recent quiz attempts
             recent_attempts = db.query(QuizAttempt).filter(
                 QuizAttempt.user_id == user_id
-            ).order_by(desc(QuizAttempt.created_at)).limit(10).all()
+            ).order_by(desc(QuizAttempt.started_at)).limit(10).all()
             
             # Calculate performance metrics
             if recent_attempts:
-                avg_score = sum(attempt.score for attempt in recent_attempts) / len(recent_attempts)
-                avg_completion_time = sum(attempt.completion_time_seconds for attempt in recent_attempts if attempt.completion_time_seconds) / len(recent_attempts)
+                avg_score = sum(attempt.score for attempt in recent_attempts if attempt.score is not None) / len(recent_attempts)
+                # Note: completion_time_seconds is not in QuizAttempt model, it has duration_minutes
+                avg_completion_time = sum(attempt.duration_minutes * 60 for attempt in recent_attempts if attempt.duration_minutes) / len(recent_attempts)
             else:
                 avg_score = 0.7  # Default assumption
                 avg_completion_time = 300  # 5 minutes default
