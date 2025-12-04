@@ -23,6 +23,16 @@ from email.mime.multipart import MIMEMultipart
 import aiofiles
 import os
 
+# Ensure prometheus multiprocess directory exists
+# This must be done before any prometheus metrics are instantiated
+prometheus_dir = os.environ.get('PROMETHEUS_MULTIPROC_DIR', '/tmp/prometheus_multiproc_dir')
+try:
+    if not os.path.exists(prometheus_dir):
+        os.makedirs(prometheus_dir, exist_ok=True)
+        print(f"Created prometheus directory: {prometheus_dir}")
+except Exception as e:
+    print(f"Failed to create prometheus directory {prometheus_dir}: {e}")
+
 from fastapi import Request, Response
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
