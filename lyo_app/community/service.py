@@ -13,15 +13,19 @@ from sqlalchemy.orm import selectinload
 from lyo_app.community.models import (
     StudyGroup, GroupMembership, CommunityEvent, EventAttendance,
     StudyGroupStatus, StudyGroupPrivacy, MembershipRole,
-    EventStatus, AttendanceStatus
+    EventStatus, AttendanceStatus, CommunityQuestion, CommunityAnswer
 )
 from lyo_app.community.schemas import (
     StudyGroupCreate, StudyGroupUpdate,
     GroupMembershipCreate, GroupMembershipUpdate,
     CommunityEventCreate, CommunityEventUpdate,
-    EventAttendanceCreate, EventAttendanceUpdate
+    EventAttendanceCreate, EventAttendanceUpdate,
+    CommunityQuestionCreate, CommunityAnswerCreate,
+    EventBeacon, QuestionBeacon, UserActivityBeacon
 )
-
+from lyo_app.auth.models import User
+from lyo_app.stack.models import StackItem, StackItemType, StackItemStatus
+import uuid
 
 class CommunityService:
     """Service class for community features - study groups and events."""
@@ -944,6 +948,156 @@ class CommunityService:
             "user_groups_count": user_groups_count,
             "user_events_count": user_events_count,
         }
+
+    # Phase 3: Campus Map & Beacons
+    
+    async def get_event_beacons(
+        self, 
+        db: AsyncSession, 
+        lat: float, 
+        lng: float, 
+        radius_km: float,
+        limit: int = 100
+    ) -> List[EventBeacon]:
+        """
+        Get event beacons within a radius.
+        """
+        # Naive bounding box: 1 degree ~ 111km
+        delta = radius_km / 111.0
+        
+        query = (
+            select(CommunityEvent)
+            .where(CommunityEvent.latitude.is_not(None))
+            .where(CommunityEvent.longitude.is_not(None))
+            .where(CommunityEvent.latitude.between(lat - delta, lat + delta))
+            .where(CommunityEvent.longitude.between(lng - delta, lng + delta))
+            .where(CommunityEvent.status.in_([EventStatus.SCHEDULED, EventStatus.ONGOING]))
+            .limit(limit)
+        )
+        
+        result = await db.execute(query)
+        events = result.scalars().all()
+        
+        return [
+            EventBeacon(
+                id=e.id,
+                title=e.title,
+                latitude=e.latitude,
+                longitude=e.longitude,
+                location_name=e.location,
+                start_time=e.start_time,
+                end_time=e.end_time,
+            )
+            for e in events
+        ]
+
+    async def get_question_beacons(
+        self, 
+        db: AsyncSession, 
+        lat: float, 
+        lng: float, 
+        radius_km: float,
+        limit: int = 100
+    ) -> List[QuestionBeacon]:
+        """
+        Get question beacons within a radius.
+        """
+        delta = radius_km / 111.0
+        
+        query = (
+            select(CommunityQuestion)
+            .where(CommunityQuestion.latitude.is_not(None))
+            .where(CommunityQuestion.longitude.is_not(None))
+            .where(CommunityQuestion.latitude.between(lat - delta, lat + delta))
+            .where(CommunityQuestion.longitude.between(lng - delta, lng + delta))
+            .where(CommunityQuestion.is_resolved == False)
+            .limit(limit)
+        )
+        
+        result = await db.execute(query)
+        questions = result.scalars().all()
+        
+        return [
+            QuestionBeacon(
+                id=q.id,
+                text=q.text,
+                latitude=q.latitude,
+                longitude=q.longitude,
+                location_name=q.location_name,
+                is_resolved=q.is_resolved,
+            )
+            for q in questions
+        ]
+
+    async def get_user_activity_beacons(
+        self, 
+        db: AsyncSession, 
+        lat: float, 
+        lng: float, 
+        radius_km: float,
+        current_user: User
+    ) -> List[UserActivityBeacon]:
+        """
+        Get user activity beacons. (Stub implementation for now)
+        """
+        # In a real implementation, we would query user locations or check-ins.
+        # For now, return an empty list or mock data if needed.
+        return []
+
+    async def create_question(
+        self, 
+        db: AsyncSession, 
+        user_id: int, 
+        data: CommunityQuestionCreate
+    ) -> CommunityQuestion:
+        """
+        Create a new location-based question.
+        """
+        db_question = CommunityQuestion(
+            user_id=user_id,
+            text=data.text,
+            latitude=data.latitude,
+            longitude=data.longitude,
+            location_name=data.location_name,
+            created_at=datetime.utcnow(),
+        )
+        
+        db.add(db_question)
+        await db.commit()
+        await db.refresh(db_question)
+        
+        return db_question
+
+    async def get_question(self, db: AsyncSession, question_id: uuid.UUID) -> Optional[CommunityQuestion]:
+        result = await db.execute(select(CommunityQuestion).where(CommunityQuestion.id == question_id))
+        return result.scalar_one_or_none()
+
+    async def create_answer(
+        self, 
+        db: AsyncSession, 
+        question_id: uuid.UUID, 
+        user_id: int, 
+        data: CommunityAnswerCreate
+    ) -> CommunityAnswer:
+        """
+        Answer a community question.
+        """
+        db_answer = CommunityAnswer(
+            question_id=question_id,
+            user_id=user_id,
+            text=data.text,
+            created_at=datetime.utcnow(),
+        )
+        
+        db.add(db_answer)
+        await db.commit()
+        await db.refresh(db_answer)
+        
+        return db_answer
+
+    async def get_event(self, db: AsyncSession, event_id: int) -> Optional[CommunityEvent]:
+        result = await db.execute(select(CommunityEvent).where(CommunityEvent.id == event_id))
+        return result.scalar_one_or_none()
 
     # Helper Methods
     async def _has_group_permission(

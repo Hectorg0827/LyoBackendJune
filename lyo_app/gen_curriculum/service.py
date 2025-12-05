@@ -6,9 +6,12 @@ Builds on existing curriculum_agent.py
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import hashlib
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.personalization.service import personalization_engine
+from lyo_app.core.redis_cache import redis_cache
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,13 @@ class GenerativeCurriculumEngine:
         """
         Generate fully adaptive curriculum using multi-agent pipeline
         """
+        # Check cache first
+        cache_key = f"curriculum:{user_id}:{hashlib.md5(learning_goal.encode()).hexdigest()}"
+        cached_curriculum = await redis_cache.get(cache_key)
+        if cached_curriculum:
+            logger.info(f"🎯 Cache hit for curriculum: {learning_goal}")
+            return cached_curriculum
+
         logger.info(f"Generating adaptive curriculum for user {user_id}")
         
         try:
@@ -92,6 +102,9 @@ class GenerativeCurriculumEngine:
             }
         }
         
+        # Cache the result (expire in 24 hours)
+        await redis_cache.set(cache_key, curriculum, expire=86400)
+
         return curriculum
     
     async def generate_content(
@@ -103,6 +116,19 @@ class GenerativeCurriculumEngine:
         """
         Generate personalized learning content using AI
         """
+        from lyo_app.gen_curriculum.schemas import GeneratedContentResponse, GenerationStatus
+
+        # Check cache
+        # Create a unique key based on request parameters
+        req_hash = hashlib.md5(request.json().encode()).hexdigest()
+        cache_key = f"content:{req_hash}"
+        
+        cached_data = await redis_cache.get(cache_key)
+        if cached_data:
+            logger.info(f"🎯 Cache hit for content: {request.topic}")
+            # Reconstruct Pydantic model from dict
+            return GeneratedContentResponse(**cached_data)
+
         logger.info(f"Generating {request.content_type} for skill: {request.skill_id}")
         
         start_time = datetime.utcnow()
@@ -130,9 +156,7 @@ class GenerativeCurriculumEngine:
             
             generation_time = (datetime.utcnow() - start_time).total_seconds()
             
-            from lyo_app.gen_curriculum.schemas import GeneratedContentResponse, GenerationStatus
-            
-            return GeneratedContentResponse(
+            response = GeneratedContentResponse(
                 id=content_record.id,
                 content_type=request.content_type,
                 title=processed_content["title"],
@@ -148,6 +172,12 @@ class GenerativeCurriculumEngine:
                 created_at=content_record.created_at,
                 updated_at=content_record.updated_at
             )
+
+            # Cache the response (expire in 1 hour)
+            # Convert to dict/json compatible format
+            await redis_cache.set(cache_key, json.loads(response.json()), expire=3600)
+            
+            return response
             
         except Exception as e:
             logger.error(f"Content generation failed: {e}")

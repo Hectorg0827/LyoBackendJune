@@ -6,9 +6,11 @@ Defines the database schema for social feed functionality.
 from datetime import datetime
 from typing import Optional, List
 from enum import Enum
+import uuid
 
 from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import UUID
 
 from lyo_app.core.database import Base
 
@@ -23,6 +25,14 @@ class PostType(str, Enum):
     COURSE_PROGRESS = "course_progress"
 
 
+class FeedItemType(str, Enum):
+    """Types of items in the feed."""
+    POST = "post"
+    RECOMMENDATION = "recommendation"
+    AD = "ad"
+    NOTIFICATION = "notification"
+
+
 class ReactionType(str, Enum):
     """Types of reactions to posts."""
     LIKE = "like"
@@ -30,6 +40,15 @@ class ReactionType(str, Enum):
     LAUGH = "laugh"
     CELEBRATE = "celebrate"
     SUPPORT = "support"
+
+
+class InteractionType(str, Enum):
+    """Types of interactions a user can have with a post."""
+    LIKE = "like"
+    COMMENT = "comment"
+    SHARE = "share"
+    BOOKMARK = "bookmark"
+    CAPTURE = "capture"
 
 
 class Post(Base):
@@ -248,15 +267,15 @@ class FeedItem(Base):
         return f"<FeedItem(user_id={self.user_id}, post_id={self.post_id}, score={self.score})>"
 
 
-class UserInteraction(Base):
-    """Model for tracking user interactions with posts for the addictive algorithm."""
+class UserPostInteraction(Base):
+    """Model to track user interactions with posts for AI optimization."""
     
-    __tablename__ = "user_interactions"
+    __tablename__ = "user_post_interactions"
     
     # Primary key
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     
-    # User who performed the interaction
+    # User who interacted
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), nullable=False, index=True
     )
@@ -266,16 +285,51 @@ class UserInteraction(Base):
         ForeignKey("posts.id"), nullable=False, index=True
     )
     
-    # Type of interaction (view, like, comment, share, etc.)
-    interaction_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Interaction metrics
+    viewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    liked: Mapped[bool] = mapped_column(Boolean, default=False)
+    commented: Mapped[bool] = mapped_column(Boolean, default=False)
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
     
-    # How long the user engaged with the content (in seconds)
-    engagement_duration: Mapped[Optional[float]] = mapped_column(default=0.0)
+    # Time spent viewing (in seconds)
+    view_duration: Mapped[Optional[float]] = mapped_column(default=0.0)
     
-    # Timestamp
-    created_at: Mapped[datetime] = mapped_column(
+    # Timestamps
+    first_viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_interacted_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
     
     def __repr__(self) -> str:
-        return f"<UserInteraction(user_id={self.user_id}, post_id={self.post_id}, type={self.interaction_type})>"
+        return f"<UserPostInteraction(user_id={self.user_id}, post_id={self.post_id})>"
+
+
+class UserInteraction(Base):
+    """Model for user interactions with posts (likes, comments, shares, etc.)."""
+    
+    __tablename__ = "user_interactions"
+    
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # User who interacted
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    
+    # Post that was interacted with
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id"), nullable=False, index=True
+    )
+    
+    # Type of interaction
+    interaction_type: Mapped[InteractionType] = mapped_column(SQLEnum(InteractionType), nullable=False)
+    
+    # Timestamp
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    
+    def __repr__(self) -> str:
+        return f"<UserInteraction(user_id={self.user_id}, post_id={self.post_id}, type='{self.interaction_type}')>"
+

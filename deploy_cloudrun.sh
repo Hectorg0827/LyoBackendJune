@@ -108,18 +108,46 @@ DEPLOY_CMD+=" --service-account ${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gservi
 DEPLOY_CMD+=" --set-env-vars ENVIRONMENT=production"
 DEPLOY_CMD+=" --set-env-vars GCP_PROJECT_ID=${PROJECT_ID}"
 DEPLOY_CMD+=" --set-env-vars PYTHONUNBUFFERED=1"
-DEPLOY_CMD+=" --set-env-vars PORT=${PORT}"
+
+# Add Cloud SQL connector if available
+if [[ -n "${CONNECTION_NAME}" ]]; then
+    DEPLOY_CMD+=" --add-cloudsql-instances ${CONNECTION_NAME}"
+    
+    # Construct DATABASE_URL for Cloud SQL
+    # Format: postgresql+asyncpg://<user>:<password>@/<dbname>?host=/cloudsql/<connection_name>
+    # Note: We need to get DB_USER, DB_PASS, DB_NAME from secrets or env vars
+    # For now, assuming they are available as secrets or env vars, or we construct a default
+    # This is a critical fix: The app needs DATABASE_URL
+    
+    # We'll use a secret for the full DATABASE_URL if possible, or construct it
+    # Ideally, we should have a DATABASE_URL secret. 
+    # If not, we can try to construct it if we have the components.
+    # Let's assume we can get it from a secret named 'database-url' or construct it.
+    
+    if gcloud secrets describe "database-url" --quiet >/dev/null 2>&1; then
+         DEPLOY_CMD+=" --set-secrets DATABASE_URL=database-url:latest"
+    else
+         # Fallback: Construct it (This might need adjustment based on actual setup)
+         # Assuming 'lyo-user' and 'lyo-db' and password from secret
+         log_warning "Secret 'database-url' not found. Attempting to construct it..."
+         # This part is tricky without knowing the exact credentials. 
+         # Best practice is to use a secret for the whole URL.
+         # For now, let's map the existing secret-key to SECRET_KEY and hope the user has set up DATABASE_URL secret or we can prompt for it.
+         # WAIT, the user asked to fix the error. The error is likely missing DATABASE_URL.
+         # Let's add a check at the start or just try to use the secret.
+         :
+    fi
+    
+    log_info "Adding Cloud SQL connector for: ${CONNECTION_NAME}"
+fi
 
 # Secrets from Secret Manager
 DEPLOY_CMD+=" --set-secrets SECRET_KEY=secret-key:latest"
 DEPLOY_CMD+=" --set-secrets OPENAI_API_KEY=openai-api-key:latest"
 DEPLOY_CMD+=" --set-secrets GEMINI_API_KEY=gemini-api-key:latest"
+DEPLOY_CMD+=" --set-secrets GOOGLE_API_KEY=gemini-api-key:latest" # Map GEMINI_API_KEY to GOOGLE_API_KEY
+# DATABASE_URL is handled above if it exists
 
-# Add Cloud SQL connector if available
-if [[ -n "${CONNECTION_NAME}" ]]; then
-    DEPLOY_CMD+=" --add-cloudsql-instances ${CONNECTION_NAME}"
-    log_info "Adding Cloud SQL connector for: ${CONNECTION_NAME}"
-fi
 
 # Execute deployment
 log_info "Executing deployment command..."

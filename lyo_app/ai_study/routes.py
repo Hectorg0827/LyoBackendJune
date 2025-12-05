@@ -16,7 +16,7 @@ from sqlalchemy import select, and_, desc, func
 from pydantic import BaseModel, Field, validator
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.security import verify_access_token
+from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.core.monitoring import monitor_request
 
@@ -28,7 +28,10 @@ from .schemas import (
     StudySessionRequest, StudySessionResponse, StudyConversationRequest, 
     StudyConversationResponse, QuizGenerationRequest, QuizGenerationResponse,
     QuizAttemptRequest, QuizAttemptResponse, StudySessionUpdate,
-    StudyAnalyticsResponse, StudyModeHealthResponse, StudyModeError
+    StudyAnalyticsResponse, StudyModeHealthResponse, StudyModeError,
+    StudySessionCreateRequest, StudySessionCreateResponse,
+    StudySessionContinueRequest, StudySessionContinueResponse,
+    ConversationMessage
 )
 
 logger = logging.getLogger(__name__)
@@ -39,57 +42,7 @@ router = APIRouter(prefix="/api/v1/ai", tags=["AI Study Mode"])
 # ENHANCED REQUEST/RESPONSE SCHEMAS FOR AI INTELLIGENCE
 # ============================================================================
 
-class StudySessionCreateRequest(BaseModel):
-    """Enhanced request to create a new AI-powered study session"""
-    resource_id: str = Field(..., description="ID of the learning material")
-    resource_type: str = Field(default="lesson", description="Type of resource (course, lesson, topic)")
-    tutoring_style: str = Field(default="socratic", description="Tutoring approach (socratic, collaborative, explanatory, practical)")
-    
-    @validator('tutoring_style')
-    def validate_tutoring_style(cls, v):
-        valid_styles = ["socratic", "collaborative", "explanatory", "practical"]
-        if v not in valid_styles:
-            raise ValueError(f"tutoring_style must be one of: {valid_styles}")
-        return v
 
-class StudySessionCreateResponse(BaseModel):
-    """Enhanced response from creating an AI study session"""
-    session_id: int
-    resource_title: str
-    welcome_message: str
-    conversation_history: List[Dict[str, Any]]
-    tutoring_style: str
-    difficulty_level: str
-    subject_area: str
-
-class ConversationMessage(BaseModel):
-    """Individual message in conversation history"""
-    role: str = Field(..., description="Message role: system, user, or assistant")
-    content: str = Field(..., description="Message content")
-    timestamp: Optional[float] = Field(None, description="Message timestamp")
-    
-    @validator('role')
-    def validate_role(cls, v):
-        valid_roles = ["system", "user", "assistant"]
-        if v not in valid_roles:
-            raise ValueError(f"role must be one of: {valid_roles}")
-        return v
-
-class StudySessionContinueRequest(BaseModel):
-    """Enhanced request to continue an AI study session"""
-    user_input: str = Field(..., description="The user's latest message")
-    conversation_history: Optional[List[ConversationMessage]] = Field(
-        None, 
-        description="The entire chat history (optional, will use cached if not provided)"
-    )
-
-class StudySessionContinueResponse(BaseModel):
-    """Enhanced response from continuing an AI study session"""
-    response: str = Field(..., description="The AI's guided response")
-    updated_conversation_history: List[Dict[str, Any]] = Field(..., description="Complete updated conversation history")
-    session_metadata: Dict[str, Any] = Field(..., description="Session analytics and metadata")
-    tutoring_insights: Dict[str, Any] = Field(..., description="AI insights about the learning interaction")
-    suggested_next_steps: List[str] = Field(..., description="Suggested next actions for the learner")
 
 
 # ============================================================================
@@ -100,7 +53,7 @@ class StudySessionContinueResponse(BaseModel):
 @monitor_request("ai_study_session_create")
 async def create_study_session(
     request: StudySessionCreateRequest,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -133,7 +86,7 @@ async def create_study_session(
 async def continue_study_session(
     session_id: int,
     request: StudySessionContinueRequest,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -183,7 +136,7 @@ async def continue_study_session(
 @monitor_request("ai_study_session_history")
 async def get_study_session_history(
     session_id: int,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -234,7 +187,7 @@ async def create_study_session(
     request: StudySessionCreateRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new AI study session for a learning resource."""
     try:
@@ -271,7 +224,7 @@ async def create_study_session(
 async def create_study_session(
     request: StudySessionRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new AI study session for a learning resource."""
     try:
@@ -295,7 +248,7 @@ async def get_user_study_sessions(
     limit: int = Query(20, ge=1, le=100, description="Number of sessions to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get user's study sessions with optional filtering."""
     try:
@@ -324,7 +277,7 @@ async def get_user_study_sessions(
 async def get_study_session(
     session_id: str = Path(..., description="Study session ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get a specific study session by ID."""
     try:
@@ -355,7 +308,7 @@ async def update_study_session(
     session_id: str = Path(..., description="Study session ID"),
     request: StudySessionUpdate = ...,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Update a study session."""
     try:
@@ -405,7 +358,7 @@ async def generate_quiz(
     request: QuizGenerationRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate an AI-powered quiz for a learning resource.
@@ -450,7 +403,7 @@ async def get_user_quizzes(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get user's generated quizzes with optional filtering."""
     try:
@@ -516,7 +469,7 @@ async def get_user_quizzes(
 async def get_quiz(
     quiz_id: str = Path(..., description="Quiz ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get a specific quiz by ID."""
     try:
@@ -585,7 +538,7 @@ async def submit_quiz_attempt(
     quiz_id: str = Path(..., description="Quiz ID"),
     request: QuizAttemptRequest = ...,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Submit a quiz attempt for grading and analysis."""
 # ============================================================================
@@ -597,7 +550,7 @@ async def submit_quiz_attempt(
 async def generate_quiz(
     request: QuizGenerationRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -677,9 +630,9 @@ async def generate_quiz(
 @router.post("/generate-adaptive-quiz", response_model=QuizGenerationResponse)
 @monitor_request("ai_adaptive_quiz_generation")
 async def generate_adaptive_quiz(
-    resource_id: str = Field(..., description="Learning resource ID"),
-    include_performance_history: bool = Field(default=True, description="Use performance history"),
-    current_user: User = Depends(verify_access_token),
+    resource_id: str = Query(..., description="Learning resource ID"),
+    include_performance_history: bool = Query(default=True, description="Use performance history"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -745,7 +698,7 @@ async def get_quiz_attempts(
     limit: int = Query(10, ge=1, le=50),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get user's attempts for a specific quiz."""
     try:
@@ -812,7 +765,7 @@ async def get_quiz_attempts(
 async def get_study_analytics(
     days: int = Query(30, ge=1, le=365, description="Number of days to analyze"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get comprehensive study analytics for the user."""
     try:
@@ -1103,7 +1056,7 @@ async def get_study_mode_capabilities():
 @router.get("/study-sessions")
 @monitor_request("ai_study_sessions_list")
 async def list_user_study_sessions(
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = 20,
     offset: int = 0

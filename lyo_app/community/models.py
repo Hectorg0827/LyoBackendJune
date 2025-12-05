@@ -7,8 +7,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum, Float
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
 
 from lyo_app.core.database import Base
 
@@ -90,10 +92,10 @@ class StudyGroup(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    creator = relationship("User", back_populates="created_study_groups")
-    course = relationship("Course", back_populates="study_groups")
-    memberships = relationship("GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
-    events = relationship("CommunityEvent", back_populates="study_group")
+    #     creator = relationship("User", back_populates="created_study_groups")
+    #     course = relationship("Course", back_populates="study_groups")
+    #     memberships = relationship("GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
+    #     events = relationship("CommunityEvent", back_populates="study_group")
 
 
 class GroupMembership(Base):
@@ -118,9 +120,9 @@ class GroupMembership(Base):
     approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # Relationships
-    user = relationship("User", foreign_keys=[user_id], back_populates="group_memberships")
-    study_group = relationship("StudyGroup", back_populates="memberships")
-    approved_by = relationship("User", foreign_keys=[approved_by_id])
+    #     user = relationship("User", foreign_keys=[user_id], back_populates="group_memberships")
+    #     study_group = relationship("StudyGroup", back_populates="memberships")
+    #     approved_by = relationship("User", foreign_keys=[approved_by_id])
     
     # Constraints
     __table_args__ = (
@@ -143,10 +145,14 @@ class CommunityEvent(Base):
     event_type = Column(SQLEnum(EventType), nullable=False, default=EventType.STUDY_SESSION)
     status = Column(SQLEnum(EventStatus), nullable=False, default=EventStatus.SCHEDULED)
     
-    # Event details
-    location = Column(String(300), nullable=True)  # Physical or virtual location
-    meeting_url = Column(String(500), nullable=True)  # Video call link
-    max_attendees = Column(Integer, nullable=True)  # None means unlimited
+    # Location
+    location = Column(String(300), nullable=True)  # Human readable location or URL
+    is_online = Column(Boolean, nullable=False, default=False)
+    meeting_url = Column(String(500), nullable=True)
+    
+    # Geo-location for Campus Map
+    latitude = Column(Float, nullable=True, index=True)
+    longitude = Column(Float, nullable=True, index=True)
     
     # Timing
     start_time = Column(DateTime, nullable=False, index=True)
@@ -164,11 +170,11 @@ class CommunityEvent(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    organizer = relationship("User", back_populates="organized_events")
-    study_group = relationship("StudyGroup", back_populates="events")
-    course = relationship("Course", back_populates="community_events")
-    lesson = relationship("Lesson", back_populates="community_events")
-    attendances = relationship("EventAttendance", back_populates="event", cascade="all, delete-orphan")
+    #     organizer = relationship("User", back_populates="organized_events")
+    #     study_group = relationship("StudyGroup", back_populates="events")
+    #     course = relationship("Course", back_populates="community_events")
+    #     lesson = relationship("Lesson", back_populates="community_events")
+    #     attendances = relationship("EventAttendance", back_populates="event", cascade="all, delete-orphan")
 
 
 class EventAttendance(Base):
@@ -196,8 +202,8 @@ class EventAttendance(Base):
     feedback_at = Column(DateTime, nullable=True)
     
     # Relationships
-    user = relationship("User", back_populates="event_attendances")
-    event = relationship("CommunityEvent", back_populates="attendances")
+    #     user = relationship("User", back_populates="event_attendances")
+    #     event = relationship("CommunityEvent", back_populates="attendances")
     
     # Constraints
     __table_args__ = (
@@ -206,20 +212,74 @@ class EventAttendance(Base):
     )
 
 
+class CommunityQuestion(Base):
+    """
+    Question model for location-based questions (Campus Map).
+    """
+    __tablename__ = "community_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), index=True
+    )
+
+    text: Mapped[str] = mapped_column(String(500))
+
+    # Location (optional but key for Campus)
+    latitude: Mapped[float | None] = mapped_column(Float, index=True)
+    longitude: Mapped[float | None] = mapped_column(Float, index=True)
+    location_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Relationship to answers
+    answers = relationship("CommunityAnswer", back_populates="question", cascade="all, delete-orphan")
+
+
+class CommunityAnswer(Base):
+    """
+    Answer model for community questions.
+    """
+    __tablename__ = "community_answers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("community_questions.id"), index=True
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), index=True
+    )
+
+    text: Mapped[str] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    question = relationship("CommunityQuestion", back_populates="answers")
+
+
 # Add reverse relationships to existing models (these would be added to the respective model files)
 """
 Additional relationships to add to existing models:
 
 User model additions:
-    created_study_groups = relationship("StudyGroup", back_populates="creator")
-    group_memberships = relationship("GroupMembership", back_populates="user", foreign_keys=[GroupMembership.user_id])
-    organized_events = relationship("CommunityEvent", back_populates="organizer")
-    event_attendances = relationship("EventAttendance", back_populates="user")
+    #     created_study_groups = relationship("StudyGroup", back_populates="creator")
+    #     group_memberships = relationship("GroupMembership", back_populates="user", foreign_keys=[GroupMembership.user_id])
+    #     organized_events = relationship("CommunityEvent", back_populates="organizer")
+    #     event_attendances = relationship("EventAttendance", back_populates="user")
 
 Course model additions:
-    study_groups = relationship("StudyGroup", back_populates="course")
-    community_events = relationship("CommunityEvent", back_populates="course")
+    #     study_groups = relationship("StudyGroup", back_populates="course")
+    #     community_events = relationship("CommunityEvent", back_populates="course")
 
 Lesson model additions:
-    community_events = relationship("CommunityEvent", back_populates="lesson")
-"""
+    #     community_events = relationship("CommunityEvent", back_populates="lesson")
+# """

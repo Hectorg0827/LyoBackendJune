@@ -1,4 +1,3 @@
-
 """Unified Tutor Model Loader & Generation Utilities
 
 Provides:
@@ -266,3 +265,11 @@ def generate_tutor_response(
 
 """Backwards compatibility shim (legacy API names used elsewhere maybe)"""
 model_manager = tutor_model  # type: ignore
+
+def generate_course_content(prompt: str, **kwargs) -> str:
+    """
+    Generate course content using the loaded model.
+    Shim for compatibility with ai_model_manager.generate_course_content interface.
+    """
+    ensure_model()
+    return tutor_model.generate(prompt, **kwargs)

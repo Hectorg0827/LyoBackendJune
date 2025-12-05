@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.dependencies import verify_access_token
+from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.feeds.addictive_algorithm import addictive_feed_algorithm
 from lyo_app.core.enhanced_monitoring import monitor_performance, handle_errors, ErrorCategory
@@ -105,7 +105,7 @@ async def get_personalized_feed(
     request: FeedRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get ultra-addictive personalized feed using TikTok-style algorithm
@@ -247,7 +247,7 @@ async def track_interaction(
     request: InteractionRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Track user interaction with feed content for algorithm optimization
@@ -292,7 +292,7 @@ async def get_feed_analytics(
     feed_type: str = Query("home", description="Feed type to analyze"),
     time_range: str = Query("7d", description="Time range (1d, 7d, 30d)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get detailed feed analytics and personalization insights
@@ -357,7 +357,7 @@ async def get_trending_content(
     time_window: str = Query("24h", description="Trending time window (1h, 6h, 24h, 7d)"),
     limit: int = Query(20, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get trending content with real-time viral detection"""
     
@@ -388,7 +388,7 @@ async def get_discovery_content(
     novelty_boost: bool = Query(True, description="Boost novel content types"),
     limit: int = Query(15, ge=1, le=30),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get discovery content for exploration and serendipity"""
     
@@ -420,7 +420,7 @@ async def get_user_suggestions(
     only_new_users: bool = Query(True, description="Only suggest new creators to follow"),
     limit: int = Query(15, ge=1, le=30),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get personalized user/content suggestions with optional sponsored items"""
 
@@ -487,7 +487,7 @@ async def get_binge_mode_feed(
     content_mix: str = Query("balanced", description="Content mix (focused, balanced, diverse)"),
     limit: int = Query(50, ge=20, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get optimized feed for binge-watching sessions
@@ -607,7 +607,7 @@ async def _process_interaction(
 
 @router.get("/debug/algorithm-state")
 async def get_algorithm_debug_info(
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get debug information about the feed algorithm (admin only)"""
     
@@ -635,7 +635,7 @@ async def get_algorithm_debug_info(
 @router.post("/debug/reset-user-profile")
 async def reset_user_profile(
     target_user_id: Optional[int] = None,
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Reset user profile for algorithm debugging"""
     

@@ -1,6 +1,7 @@
 """JWT authentication system with access and refresh tokens."""
 
 import jwt
+import json
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import Depends, HTTPException, status
@@ -12,6 +13,27 @@ from lyo_app.core.settings import settings
 from lyo_app.core.problems import AuthenticationProblem, AuthorizationProblem
 from lyo_app.core.database import get_db
 from lyo_app.models.enhanced import User
+from lyo_app.auth.jwt_cache import JWTCache
+from lyo_app.core.logging import logger
+
+# Lazy import for redis_manager to avoid startup issues
+_redis_manager = None
+_redis_checked = False
+
+
+def _get_redis_manager():
+    """Lazily get redis_manager for rate limiting."""
+    global _redis_manager, _redis_checked
+    if not _redis_checked:
+        try:
+            from lyo_app.core.redis_v2 import redis_manager
+            _redis_manager = redis_manager
+        except (ImportError, Exception) as e:
+            logger.debug(f"Redis not available for rate limiting: {e}")
+            _redis_manager = None
+        _redis_checked = True
+    return _redis_manager
+
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -19,6 +41,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # JWT bearer token extraction
 security = HTTPBearer(auto_error=False)
 
+# Initialize JWT Cache
+jwt_cache = JWTCache(ttl=300)  # 5 minutes cache
 
 class TokenData:
     """Token payload data structure."""
@@ -37,7 +61,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Generate password hash."""
-    return pwd_context.hash(password)
+    # Bcrypt has a 72-byte limit, truncate if necessary
+    password_bytes = password.encode('utf-8')[:72]
+    return pwd_context.hash(password_bytes.decode('utf-8'))
 
 
 def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]] = None) -> str:
@@ -83,9 +109,9 @@ def create_refresh_token(user_id: str) -> str:
     return encoded_jwt
 
 
-def verify_token(token: str, expected_type: str = "access") -> TokenData:
+async def verify_token_async(token: str, expected_type: str = "access") -> TokenData:
     """
-    Verify and decode JWT token.
+    Verify and decode JWT token with caching.
     
     Args:
         token: JWT token string
@@ -97,6 +123,59 @@ def verify_token(token: str, expected_type: str = "access") -> TokenData:
     Raises:
         AuthenticationProblem: If token is invalid or expired
     """
+    # Try cache first for access tokens
+    if expected_type == "access":
+        cached_payload = await jwt_cache.get_cached_payload(token)
+        if cached_payload:
+            # Reconstruct TokenData from cache
+            exp_timestamp = cached_payload.get("exp")
+            exp_datetime = datetime.fromtimestamp(exp_timestamp)
+            return TokenData(
+                user_id=cached_payload.get("user_id"),
+                token_type=cached_payload.get("token_type"),
+                exp=exp_datetime,
+                **{k: v for k, v in cached_payload.items() if k not in ["user_id", "token_type", "exp"]}
+            )
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"require": ["exp", "iat", "user_id", "token_type"]}
+        )
+        
+        user_id: str = payload.get("user_id")
+        token_type: str = payload.get("token_type")
+        exp_timestamp: float = payload.get("exp")
+        
+        if not user_id:
+            raise AuthenticationProblem("Token missing user_id")
+        
+        if token_type != expected_type:
+            raise AuthenticationProblem(f"Invalid token type. Expected {expected_type}")
+        
+        exp_datetime = datetime.fromtimestamp(exp_timestamp)
+        
+        # Cache successful validation for access tokens
+        if expected_type == "access":
+            await jwt_cache.cache_payload(token, payload)
+        
+        return TokenData(
+            user_id=user_id,
+            token_type=token_type,
+            exp=exp_datetime,
+            **{k: v for k, v in payload.items() if k not in ["user_id", "token_type", "exp"]}
+        )
+        
+    except jwt.ExpiredSignatureError:
+        raise AuthenticationProblem("Token has expired")
+    except jwt.InvalidTokenError as e:
+        raise AuthenticationProblem(f"Invalid token: {str(e)}")
+
+def verify_token(token: str, expected_type: str = "access") -> TokenData:
+    """Synchronous wrapper for verify_token (for backward compatibility)."""
+    # Note: This bypasses async cache. Use verify_token_async where possible.
     try:
         payload = jwt.decode(
             token,
@@ -130,14 +209,20 @@ def verify_token(token: str, expected_type: str = "access") -> TokenData:
         raise AuthenticationProblem(f"Invalid token: {str(e)}")
 
 
-def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+# ... (imports)
+
+async def authenticate_user(db: AsyncSession, email: str, password: str) -> Optional[User]:
     """
     Authenticate user with email and password.
     
     Returns:
         User object if authentication successful, None otherwise
     """
-    user = db.query(User).filter(User.email == email).first()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
     
     if not user:
         return None
@@ -153,7 +238,7 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
         if user.login_attempts >= settings.MAX_LOGIN_ATTEMPTS:
             user.locked_until = datetime.utcnow() + timedelta(minutes=30)
         
-        db.commit()
+        await db.commit()
         return None
     
     # Reset login attempts on successful auth
@@ -162,7 +247,7 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
         user.locked_until = None
     
     user.last_login_at = datetime.utcnow()
-    db.commit()
+    await db.commit()
     
     return user
 
@@ -177,7 +262,7 @@ def check_account_locked(user: User) -> bool:
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ) -> User:
     """
     Dependency to get current authenticated user.
@@ -193,9 +278,11 @@ async def get_current_user(
         raise AuthenticationProblem("Authentication required")
     
     token = credentials.credentials
-    token_data = verify_token(token, "access")
+    # Use async verification with cache
+    token_data = await verify_token_async(token, "access")
     
-    user = db.query(User).filter(User.id == token_data.user_id).first()
+    result = await db.execute(select(User).where(User.id == token_data.user_id))
+    user = result.scalars().first()
     
     if not user:
         raise AuthorizationProblem("User not found")
@@ -211,7 +298,7 @@ async def get_current_user(
 
 async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ) -> Optional[User]:
     """
     Dependency to get current user if authenticated, None otherwise.
@@ -250,22 +337,38 @@ def require_verified_user(current_user: User = Depends(get_current_user)) -> Use
 
 
 class RateLimiter:
-    """Simple in-memory rate limiter for authentication endpoints."""
+    """Rate limiter with Redis backend support."""
     
     def __init__(self):
         self.attempts: Dict[str, Dict[str, Any]] = {}
     
+    @property
+    def redis_enabled(self) -> bool:
+        """Check if Redis is available."""
+        return _get_redis_manager() is not None
+    
+    async def check_rate_limit_async(self, identifier: str, max_attempts: int = 5, window_minutes: int = 15) -> bool:
+        """
+        Check if identifier is within rate limit (Async/Redis).
+        """
+        redis = _get_redis_manager()
+        if redis:
+            try:
+                key = f"rate_limit:{identifier}"
+                current = await redis.incr(key)
+                if current == 1:
+                    await redis.expire(key, window_minutes * 60)
+                return current <= max_attempts
+            except Exception as e:
+                logger.warning(f"Redis rate limit check failed: {e}")
+                # Fallback to in-memory
+                return self.check_rate_limit(identifier, max_attempts, window_minutes)
+        else:
+            return self.check_rate_limit(identifier, max_attempts, window_minutes)
+
     def check_rate_limit(self, identifier: str, max_attempts: int = 5, window_minutes: int = 15) -> bool:
         """
-        Check if identifier is within rate limit.
-        
-        Args:
-            identifier: IP address or user identifier
-            max_attempts: Maximum attempts allowed
-            window_minutes: Time window in minutes
-            
-        Returns:
-            True if within limit, False if exceeded
+        Check if identifier is within rate limit (Sync/In-memory).
         """
         now = datetime.utcnow()
         window_start = now - timedelta(minutes=window_minutes)
@@ -288,6 +391,18 @@ class RateLimiter:
     
     def reset_attempts(self, identifier: str):
         """Reset rate limit for identifier."""
+        # Just clear in-memory - to clear redis, use reset_attempts_async 
+        self.attempts.pop(identifier, None)
+        
+    async def reset_attempts_async(self, identifier: str):
+        """Reset rate limit for identifier (Async)."""
+        redis = _get_redis_manager()
+        if redis:
+            try:
+                key = f"rate_limit:{identifier}"
+                await redis.delete(key)
+            except Exception as e:
+                logger.warning(f"Redis rate limit reset failed: {e}")
         self.attempts.pop(identifier, None)
 
 

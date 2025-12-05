@@ -1,30 +1,66 @@
 steps:
-  # Build the container image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/lyo-backend:$COMMIT_SHA', '.']
-  
-  # Push the container image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/lyo-backend:$COMMIT_SHA']
-  
-  # Deploy container image to Cloud Run
+  # Create Artifact Registry repository if it doesn't exist
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - 'run'
-      - 'deploy'
-      - 'lyo-backend'
-      - '--image'
-      - 'gcr.io/$PROJECT_ID/lyo-backend:$COMMIT_SHA'
-      - '--region'
-      - 'us-central1'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
-      - '--memory'
-      - '1Gi'
-      - '--timeout'
-      - '300'
+    - -c
+    - |
+      # Enable required services
+      gcloud services enable artifactregistry.googleapis.com --quiet
+      gcloud services enable run.googleapis.com --quiet
+      
+      # Create repository (non-blocking if exists)
+      gcloud artifacts repositories create lyo-backend-repo \
+        --repository-format=docker \
+        --location=${_REGION} \
+        --description="Lyo Backend Docker images" \
+        --quiet || echo "Repository may already exist"
+      
+      # Configure Docker authentication  
+      gcloud auth configure-docker ${_REGION}-docker.pkg.dev --quiet
 
-images:
-  - 'gcr.io/$PROJECT_ID/lyo-backend:$COMMIT_SHA'
+  # Build the container image using the lightweight Dockerfile.cloud
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-f', 'Dockerfile.cloud',
+      '-t', '${_IMAGE}',
+      '.'
+    ]
+
+  # Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_IMAGE}']
+
+  # Deploy to Cloud Run (with all configuration)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+    - -c
+    - |
+      # Deploy with full configuration including Redis, secrets, and VPC connector
+      gcloud run deploy ${_SERVICE} \
+        --image ${_IMAGE} \
+        --region ${_REGION} \
+        --platform managed \
+        --allow-unauthenticated \
+        --port 8080 \
+        --memory 2Gi \
+        --cpu 2 \
+        --min-instances 1 \
+        --max-instances 10 \
+        --vpc-connector=lyo-connector \
+        --set-env-vars "ENVIRONMENT=production,DEBUG=false,GCP_PROJECT_ID=lyobackend,GCS_BUCKET_NAME=lyobackend-storage,REDIS_HOST=10.57.97.243,REDIS_PORT=6379" \
+        --set-secrets="SECRET_KEY=jwt-secret:latest,DATABASE_URL=database-url:latest,GEMINI_API_KEY=gemini-api-key:latest,OPENAI_API_KEY=openai-api-key:latest,STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_PUBLISHABLE_KEY=stripe-publishable-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest" \
+        --quiet
+      
+      echo "Deployment completed successfully!"
+
+substitutions:
+  _SERVICE: 'lyo-backend-production'
+  _REGION: 'us-central1'  
+  _IMAGE: 'us-central1-docker.pkg.dev/lyobackend/lyo-backend-repo/lyo-backend-production:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'

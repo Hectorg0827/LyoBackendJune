@@ -15,7 +15,25 @@ import numpy as np
 from scipy import stats
 
 import structlog
-from prometheus_client import Counter, Histogram, Gauge
+
+# Optional prometheus metrics
+try:
+    from prometheus_client import Counter, Histogram, Gauge
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    class Counter:
+        def __init__(self, *args, **kwargs): pass
+        def inc(self, *args, **kwargs): pass
+        def labels(self, *args, **kwargs): return self
+    class Histogram:
+        def __init__(self, *args, **kwargs): pass
+        def observe(self, *args, **kwargs): pass
+        def labels(self, *args, **kwargs): return self
+    class Gauge:
+        def __init__(self, *args, **kwargs): pass
+        def set(self, *args, **kwargs): pass
+        def labels(self, *args, **kwargs): return self
 
 logger = structlog.get_logger(__name__)
 

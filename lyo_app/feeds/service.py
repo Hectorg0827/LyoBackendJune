@@ -12,13 +12,17 @@ from sqlalchemy.orm import selectinload
 
 from lyo_app.feeds.models import (
     Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem,
-    PostType, ReactionType
+    PostType, ReactionType, UserInteraction, InteractionType
 )
 from lyo_app.feeds.schemas import (
     PostCreate, PostUpdate, CommentCreate, CommentUpdate,
     PostReactionCreate, CommentReactionCreate, UserFollowCreate
 )
-from lyo_app.monetization.engine import interleave_ads
+from lyo_app.feeds.services_ranking import rank_posts_for_user
+from lyo_app.stack import crud as stack_crud
+from lyo_app.stack.models import StackItemType
+from lyo_app.stack.schemas import StackItemCreate
+from lyo_app.tasks import video_tasks
 
 
 class FeedsService:
@@ -120,7 +124,9 @@ class FeedsService:
         db: AsyncSession,
         current_user_id: int,
         page: int = 1,
-        per_page: int = 20
+        per_page: int = 20,
+        course_id: Optional[int] = None,
+        lesson_id: Optional[int] = None
     ) -> dict:
         """
         Get public posts for discovery feed with pagination.
@@ -130,26 +136,45 @@ class FeedsService:
             current_user_id: Current user ID for permission checks
             page: Page number (1-based)
             per_page: Maximum number of records to return
+            course_id: Optional course context
+            lesson_id: Optional lesson context
             
         Returns:
             Paginated public feed response
         """
         offset = (page - 1) * per_page
         
+        # Build query
+        query = select(Post).where(Post.is_public == True)
+        
+        if lesson_id:
+            query = query.where(Post.lesson_id == lesson_id)
+        elif course_id:
+            query = query.where(Post.course_id == course_id)
+            
         # Get public posts
         result = await db.execute(
-            select(Post)
-            .where(Post.is_public == True)
+            query
             .order_by(desc(Post.created_at))
             .offset(offset)
             .limit(per_page)
         )
         posts = result.scalars().all()
         
+        # Apply AI ranking (stub)
+        # We need the user object for ranking, but we only have ID here.
+        # For the stub it's fine, but ideally we'd fetch the user.
+        # Let's skip fetching user for now as the stub doesn't use it yet.
+        posts = await rank_posts_for_user(list(posts), user=None, context={"course_id": course_id, "lesson_id": lesson_id})
+        
         # Get total count
-        count_result = await db.execute(
-            select(func.count(Post.id)).where(Post.is_public == True)
-        )
+        count_query = select(func.count(Post.id)).where(Post.is_public == True)
+        if lesson_id:
+            count_query = count_query.where(Post.lesson_id == lesson_id)
+        elif course_id:
+            count_query = count_query.where(Post.course_id == course_id)
+            
+        count_result = await db.execute(count_query)
         total = count_result.scalar()
         
         # Convert to PostRead format
@@ -200,15 +225,12 @@ class FeedsService:
             }
             posts_data.append(post_data)
         
-        interleaved = interleave_ads([{"type": "post", "post": p} for p in posts_data], placement="feed", every=5)
-        sponsored = [x for x in interleaved if x.get("type") == "ad"]
         return {
             "posts": posts_data,
             "total": total or 0,
             "page": page,
             "per_page": per_page,
             "has_next": total > page * per_page,
-            "sponsored": sponsored or None,
         }
 
     async def create_comment(
@@ -592,15 +614,12 @@ class FeedsService:
             }
             posts_data.append(post_data)
         
-        interleaved = interleave_ads([{"type": "post", "post": p} for p in posts_data], placement="feed", every=5)
-        sponsored = [x for x in interleaved if x.get("type") == "ad"]
         return {
             "posts": posts_data,
             "total": total or 0,
             "page": page,
             "per_page": per_page,
             "has_next": total > page * per_page,
-            "sponsored": sponsored or None,
         }
 
     async def _fan_out_post_to_followers(self, db: AsyncSession, post: Post) -> None:
@@ -1089,15 +1108,12 @@ class FeedsService:
             }
             posts_data.append(post_data)
         
-        interleaved = interleave_ads([{"type": "post", "post": p} for p in posts_data], placement="feed", every=5)
-        sponsored = [x for x in interleaved if x.get("type") == "ad"]
         return {
             "posts": posts_data,
             "total": total or 0,
             "page": page,
             "per_page": per_page,
             "has_next": total > page * per_page,
-            "sponsored": sponsored or None,
         }
 
     async def get_user_stats(self, db: AsyncSession, user_id: int) -> dict:
@@ -1112,3 +1128,65 @@ class FeedsService:
             User social statistics
         """
         return await self.get_user_statistics(db, user_id)
+
+    async def capture_post(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        post_id: int
+    ):
+        """
+        Capture a post to the user's stack.
+        
+        Args:
+            db: Database session
+            user_id: User ID capturing the post
+            post_id: Post ID to capture
+            
+        Returns:
+            Created StackItem
+        """
+        # 1. Validate post exists
+        post = await self.get_post_by_id(db, post_id)
+        if not post:
+            raise ValueError("Post not found")
+            
+        # 2. Create UserInteraction
+        interaction = UserInteraction(
+            user_id=user_id,
+            post_id=post_id,
+            interaction_type=InteractionType.CAPTURE,
+            created_at=datetime.utcnow()
+        )
+        db.add(interaction)
+        
+        # 3. Create StackItem
+        # We use the stack crud directly here
+        stack_item_in = StackItemCreate(
+            type=StackItemType.VIDEO,
+            ref_id=str(post_id),
+            context_data={
+                "source": "discover",
+                "course_id": post.course_id,
+                "lesson_id": post.lesson_id,
+                "original_post_id": post_id
+            },
+            title=f"Captured Video: {post.id}", # Placeholder title
+            content=post.content or ""
+        )
+        
+        stack_item = await stack_crud.create_stack_item(db, user_id, stack_item_in)
+        
+        # 4. Trigger background task
+        # We use .delay() if celery is set up, or just call it if testing/mocking
+        try:
+            video_tasks.process_captured_video.delay(
+                stack_item_id=str(stack_item.id),
+                post_id=post_id,
+                user_id=str(user_id)
+            )
+        except Exception as e:
+            # Fallback if celery is not running or configured
+            print(f"Warning: Could not queue video task: {e}")
+            
+        return stack_item

@@ -1,0 +1,44 @@
+steps:
+  # Build the production LyoBackend using Dockerfile.production
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-f', 'Dockerfile.production',
+      '-t', 'gcr.io/$PROJECT_ID/lyo-backend-production:latest',
+      '-t', 'gcr.io/$PROJECT_ID/lyo-backend-production:$BUILD_ID',
+      '.'
+    ]
+    timeout: '600s'
+
+  # Push the production container
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '--all-tags', 'gcr.io/$PROJECT_ID/lyo-backend-production']
+    timeout: '300s'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args: [
+      'run', 'deploy', 'lyo-backend-production',
+      '--image', 'gcr.io/$PROJECT_ID/lyo-backend-production:latest',
+      '--platform', 'managed',
+      '--region', 'us-central1',
+      '--allow-unauthenticated',
+      '--port', '8080',
+      '--memory', '2Gi',
+      '--cpu', '2',
+      '--max-instances', '10',
+      '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,GOOGLE_API_KEY=AIzaSyAXqRkBk_PUuiy8WKCQ66v447NmTE_tCK0,CORS_ORIGINS=["https://lyo.app"]',
+      '--set-secrets', 'SECRET_KEY=jwt-secret:latest,DATABASE_URL=database-url:latest',
+      '--add-cloudsql-instances', 'lyobackend:us-central1:my-instance',
+      '--timeout', '300s'
+    ]
+    timeout: '600s'
+
+timeout: '1800s'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+  
+images:
+  - 'gcr.io/$PROJECT_ID/lyo-backend-production:latest'
+  - 'gcr.io/$PROJECT_ID/lyo-backend-production:$BUILD_ID'

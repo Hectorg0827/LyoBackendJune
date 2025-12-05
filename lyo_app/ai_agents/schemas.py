@@ -29,6 +29,29 @@ class AIModelTypeEnum(str, Enum):
     HYBRID = "hybrid"
 
 
+class ResponseModeEnum(str, Enum):
+    """Chat response modes."""
+    CHAT = "chat"
+    COURSE = "course"
+    EXPLAINER = "explainer"
+
+
+class QuickExplainerData(BaseModel):
+    """Data for quick explainer mode."""
+    concept: str = Field(..., description="Concept name")
+    explanation: str = Field(..., description="Short explanation")
+    chips: List[str] = Field(..., description="Action chips")
+
+
+class CourseProposalData(BaseModel):
+    """Data for course proposal mode."""
+    title: str = Field(..., description="Course title")
+    subtext: str = Field(..., description="Course subtext/topics")
+    summary: str = Field(..., description="Course summary")
+    modules: List[str] = Field(..., description="List of modules")
+    button_text: str = Field("Start Learning", description="CTA button text")
+
+
 # Mentor Conversation Schemas
 class MentorMessageRequest(BaseModel):
     """Request to send message to AI mentor."""
@@ -52,6 +75,11 @@ class MentorMessageResponse(BaseModel):
     conversation_id: str = Field(..., description="Conversation session ID")
     engagement_state: UserEngagementStateEnum = Field(..., description="User's current engagement state")
     timestamp: datetime = Field(..., description="Timestamp of the response")
+    
+    # Enhanced UI Modes
+    response_mode: ResponseModeEnum = Field(ResponseModeEnum.CHAT, description="Display mode: chat, course, or explainer")
+    quick_explainer: Optional[QuickExplainerData] = Field(None, description="Data for quick explainer mode")
+    course_proposal: Optional[CourseProposalData] = Field(None, description="Data for course proposal mode")
 
 
 class ConversationHistoryResponse(BaseModel):

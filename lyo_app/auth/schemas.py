@@ -8,6 +8,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
+from lyo_app.auth.security_middleware import SecurityConfig
+
 
 class UserBase(BaseModel):
     """Base user schema with common fields."""
@@ -26,8 +28,8 @@ class UserCreate(UserBase):
     password: str = Field(
         ..., 
         min_length=8, 
-        max_length=100,
-        description="Password (minimum 8 characters)"
+        max_length=SecurityConfig.MAX_PASSWORD_BYTES,
+        description="Password (minimum 8 characters, must contain at least 3 of: uppercase, lowercase, digit, special character)"
     )
     confirm_password: str = Field(..., description="Password confirmation")
 
@@ -71,6 +73,7 @@ class Token(BaseModel):
     """Schema for JWT token response."""
     
     access_token: str = Field(..., description="JWT access token")
+    refresh_token: Optional[str] = Field(None, description="JWT refresh token")
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
 
@@ -80,6 +83,12 @@ class TokenData(BaseModel):
     
     user_id: Optional[int] = None
     username: Optional[str] = None
+
+
+class RefreshTokenRequest(BaseModel):
+    """Schema for refresh token request."""
+    
+    refresh_token: str = Field(..., description="Refresh token")
 
 
 class EmailVerificationRequest(BaseModel):
@@ -125,3 +134,37 @@ class MessageResponse(BaseModel):
     """Schema for simple message responses."""
     
     message: str = Field(..., description="Response message")
+
+
+# Firebase Auth Schemas
+class FirebaseAuthRequest(BaseModel):
+    """Schema for Firebase authentication request."""
+    
+    id_token: str = Field(..., description="Firebase ID token from client")
+
+
+class FirebaseAuthResponse(BaseModel):
+    """Schema for Firebase authentication response."""
+    
+    model_config = ConfigDict(from_attributes=True)
+    
+    user: "UserRead" = Field(..., description="Authenticated user data")
+    access_token: str = Field(..., description="Backend JWT access token")
+    token_type: str = Field(default="bearer", description="Token type")
+    expires_in: int = Field(..., description="Token expiration time in seconds")
+    is_new_user: bool = Field(default=False, description="Whether this is a newly created user")
+
+
+class FirebaseLinkRequest(BaseModel):
+    """Schema for linking Firebase account to existing user."""
+    
+    id_token: str = Field(..., description="Firebase ID token to link")
+
+
+class FirebaseLinkResponse(BaseModel):
+    """Schema for Firebase link response."""
+    
+    message: str = Field(..., description="Link result message")
+    firebase_uid: str = Field(..., description="Linked Firebase UID")
+    auth_provider: str = Field(..., description="Auth provider (google, apple, etc.)")
+

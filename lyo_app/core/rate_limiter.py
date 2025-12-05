@@ -3,6 +3,7 @@ Production-ready rate limiting with Redis backend.
 Provides scalable rate limiting across multiple application instances.
 """
 
+import os
 import time
 import redis
 import hashlib
@@ -12,6 +13,27 @@ from fastapi import Request, HTTPException
 from lyo_app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def get_redis_url() -> Optional[str]:
+    """Get Redis URL from environment or settings."""
+    # Check env vars first (for Cloud Run)
+    env_url = os.getenv("REDIS_URL")
+    if env_url:
+        return env_url
+    
+    # Build from REDIS_HOST/REDIS_PORT
+    host = os.getenv("REDIS_HOST")
+    port = os.getenv("REDIS_PORT", "6379")
+    if host:
+        return f"redis://{host}:{port}/0"
+    
+    # Fall back to settings.effective_redis_url if available
+    if hasattr(settings, 'effective_redis_url'):
+        return settings.effective_redis_url
+    
+    # Last resort - settings.redis_url
+    return getattr(settings, 'redis_url', None)
 
 
 class RedisRateLimiter:
@@ -31,10 +53,15 @@ class RedisRateLimiter:
             window_seconds: Time window in seconds
             block_duration: How long to block after limit exceeded
         """
-        self.redis_url = redis_url or settings.redis_url
+        self.redis_url = redis_url or get_redis_url()
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.block_duration = block_duration
+        
+        if not self.redis_url:
+            logger.warning("No Redis URL configured - rate limiting will use in-memory fallback")
+            self.redis_client = None
+            return
         
         try:
             self.redis_client = redis.from_url(self.redis_url, decode_responses=True)

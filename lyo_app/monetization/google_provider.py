@@ -7,9 +7,15 @@ No server-side ad fetching is performed (Google SDKs are client-side).
 """
 from __future__ import annotations
 
+import os
 from typing import Dict, Optional
 
-from lyo_app.core.enhanced_config import settings
+# Try to import enhanced_config, fallback to simple config if validation fails
+try:
+    from lyo_app.core.enhanced_config import settings
+except (ValueError, Exception):
+    # If enhanced_config validation fails, use simple config
+    from lyo_app.core.config import settings
 
 
 def get_provider_config() -> Dict[str, Optional[str]]:
@@ -18,28 +24,28 @@ def get_provider_config() -> Dict[str, Optional[str]]:
     Clients (web/mobile) should use these IDs with Google SDKs (IMA/AdMob/Ad Manager).
     """
     return {
-        "enabled": bool(settings.GOOGLE_ADS_ENABLED),
-        "network_code": settings.GOOGLE_ADS_NETWORK_CODE,
-        "app_id_ios": settings.GOOGLE_ADS_APP_ID_IOS,
-        "app_id_android": settings.GOOGLE_ADS_APP_ID_ANDROID,
+        "enabled": bool(getattr(settings, 'GOOGLE_ADS_ENABLED', False)),
+        "network_code": getattr(settings, 'GOOGLE_ADS_NETWORK_CODE', None),
+        "app_id_ios": getattr(settings, 'GOOGLE_ADS_APP_ID_IOS', None),
+        "app_id_android": getattr(settings, 'GOOGLE_ADS_APP_ID_ANDROID', None),
         "placements": {
-            "feed": settings.GOOGLE_ADS_FEED_UNIT_ID,
-            "story": settings.GOOGLE_ADS_STORY_UNIT_ID,
-            "post": settings.GOOGLE_ADS_POST_UNIT_ID,
-            "timer": settings.GOOGLE_ADS_TIMER_UNIT_ID,
+            "feed": getattr(settings, 'GOOGLE_ADS_FEED_UNIT_ID', None),
+            "story": getattr(settings, 'GOOGLE_ADS_STORY_UNIT_ID', None),
+            "post": getattr(settings, 'GOOGLE_ADS_POST_UNIT_ID', None),
+            "timer": getattr(settings, 'GOOGLE_ADS_TIMER_UNIT_ID', None),
         },
     }
 
 
 def validate_provider_ready() -> bool:
-    if not settings.GOOGLE_ADS_ENABLED:
+    if not getattr(settings, 'GOOGLE_ADS_ENABLED', False):
         return False
     # Minimal requirement: at least one ad unit configured
     placements = [
-        settings.GOOGLE_ADS_FEED_UNIT_ID,
-        settings.GOOGLE_ADS_STORY_UNIT_ID,
-        settings.GOOGLE_ADS_POST_UNIT_ID,
-        settings.GOOGLE_ADS_TIMER_UNIT_ID,
+        getattr(settings, 'GOOGLE_ADS_FEED_UNIT_ID', None),
+        getattr(settings, 'GOOGLE_ADS_STORY_UNIT_ID', None),
+        getattr(settings, 'GOOGLE_ADS_POST_UNIT_ID', None),
+        getattr(settings, 'GOOGLE_ADS_TIMER_UNIT_ID', None),
     ]
     return any(bool(p) for p in placements)
 

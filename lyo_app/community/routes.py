@@ -17,9 +17,14 @@ from lyo_app.community.schemas import (
     StudyGroupCreate, StudyGroupUpdate, StudyGroupRead,
     GroupMembershipCreate, GroupMembershipUpdate, GroupMembershipRead,
     CommunityEventCreate, CommunityEventUpdate, CommunityEventRead,
-    EventAttendanceCreate, EventAttendanceUpdate, EventAttendanceRead
+    EventAttendanceCreate, EventAttendanceUpdate, EventAttendanceRead,
+    BeaconBase, CommunityQuestionCreate, CommunityQuestionRead,
+    CommunityAnswerCreate, CommunityAnswerRead
 )
 from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
+from lyo_app.stack import crud as stack_crud
+from lyo_app.stack.models import StackItemType
+import uuid
 
 router = APIRouter()
 community_service = CommunityService()
@@ -431,50 +436,136 @@ async def update_event_attendance(
 
 
 @router.delete("/events/{event_id}/attend", status_code=status.HTTP_204_NO_CONTENT)
-async def cancel_event_attendance(
+async def leave_event(
     event_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Cancel attendance for an event."""
-    try:
-        success = await community_service.cancel_event_attendance(
-            db=db,
-            event_id=event_id,
-            user_id=current_user.id
-        )
-        if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to cancel attendance")
+    success = await community_service.leave_event(
+        db=db,
+        event_id=event_id,
+        user_id=current_user.id
+    )
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance not found")
 
 
-@router.get("/events/{event_id}/attendees", response_model=List[EventAttendanceRead])
-async def get_event_attendees(
-    event_id: int,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+# --- Phase 3: Campus Map & Beacons ---
+
+@router.get("/beacons", response_model=List[BeaconBase])
+async def get_beacons(
+    lat: float,
+    lng: float,
+    radius_km: float = 10.0,
+    limit: int = Query(100, ge=1, le=500),
+    include_events: bool = True,
+    include_users: bool = True,
+    include_questions: bool = True,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get attendees for an event."""
-    try:
-        attendees = await community_service.get_event_attendees(
-            db=db,
-            event_id=event_id,
-            user_id=current_user.id,
-            skip=skip,
-            limit=limit
-        )
-        return attendees
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch attendees")
+    """Get map beacons (events, questions, users) near a location."""
+    beacons: List[BeaconBase] = []
+
+    # Distribute limit across types roughly equally if multiple are selected
+    # This is a simple heuristic; in a real app we might want more sophisticated paging
+    types_count = sum([include_events, include_users, include_questions])
+    if types_count == 0:
+        return []
+    
+    per_type_limit = limit  # Or limit // types_count if we wanted strict total limit
+
+    if include_events:
+        event_beacons = await community_service.get_event_beacons(db, lat, lng, radius_km, limit=per_type_limit)
+        beacons.extend(event_beacons)
+
+    if include_users:
+        user_beacons = await community_service.get_user_activity_beacons(db, lat, lng, radius_km, current_user)
+        beacons.extend(user_beacons)
+
+    if include_questions:
+        question_beacons = await community_service.get_question_beacons(db, lat, lng, radius_km, limit=per_type_limit)
+        beacons.extend(question_beacons)
+
+    return beacons
+
+
+@router.post("/questions", response_model=CommunityQuestionRead)
+async def create_question(
+    payload: CommunityQuestionCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Drop a question card at a location."""
+    question = await community_service.create_question(
+        db,
+        user_id=current_user.id,
+        data=payload,
+    )
+    
+    # Create StackItem for this question
+    await stack_crud.create_stack_item(
+        db,
+        user_id=current_user.id,
+        type=StackItemType.QUESTION,
+        ref_id=str(question.id),
+        context_data={
+            "location_name": question.location_name,
+            "latitude": question.latitude,
+            "longitude": question.longitude,
+            "text": question.text
+        },
+    )
+    return question
+
+
+@router.post("/questions/{question_id}/answers", response_model=CommunityAnswerRead)
+async def answer_question(
+    question_id: uuid.UUID,
+    payload: CommunityAnswerCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Answer a community question."""
+    question = await community_service.get_question(db, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    answer = await community_service.create_answer(
+        db,
+        question_id=question_id,
+        user_id=current_user.id,
+        data=payload,
+    )
+    return answer
+
+
+@router.post("/events/{event_id}/save")
+async def save_event_to_stack(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save an event to the user's stack."""
+    event = await community_service.get_event(db, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    stack_item = await stack_crud.create_stack_item(
+        db,
+        user_id=current_user.id,
+        type=StackItemType.EVENT,
+        ref_id=str(event_id),
+        context_data={
+            "title": event.title,
+            "location_name": event.location,
+            "start_time": event.start_time.isoformat() if event.start_time else None,
+            "latitude": event.latitude,
+            "longitude": event.longitude
+        },
+    )
+    return stack_item
 
 
 # User-specific endpoints

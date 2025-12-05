@@ -2,10 +2,10 @@
 # Enhanced with enterprise-grade infrastructure components
 
 # Core Framework
-fastapi==0.104.1
+fastapi>=0.110.0
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
 
 # Database - Polyglot Persistence
 sqlalchemy[asyncio]==2.0.23
@@ -89,7 +89,7 @@ firebase-admin==6.5.0
 websockets==12.0
 
 # Enhanced Media Processing
-opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78
 imageio==2.34.0
 moviepy==1.0.3
 

@@ -305,9 +305,10 @@ class EnhancedStorageSystem:
         self.cdn_manager = CDNManager()
         self.image_processor = ImageProcessor()
         self.video_processor = VideoProcessor()
+        self._initialized = False
         
-        # Initialize storage clients
-        asyncio.create_task(self._initialize_clients())
+        # Initialize storage clients lazily
+        # asyncio.create_task(self._initialize_clients())
     
     async def _initialize_clients(self):
         """Initialize storage and cache clients"""
@@ -345,6 +346,12 @@ class EnhancedStorageSystem:
         
         except Exception as e:
             logger.error(f"Storage client initialization failed: {e}")
+            
+    async def ensure_initialized(self):
+        """Ensure clients are initialized"""
+        if not self._initialized:
+            await self._initialize_clients()
+            self._initialized = True
     
     async def upload_file(
         self,
@@ -362,6 +369,8 @@ class EnhancedStorageSystem:
         """
         
         try:
+            await self.ensure_initialized()
+            
             # Read file data
             file_data = await file.read()
             file_size = len(file_data)
@@ -600,6 +609,7 @@ class EnhancedStorageSystem:
         """Delete file from all storage locations"""
         
         success = True
+        await self.ensure_initialized()
         
         # Delete from R2
         if self.r2_client:
@@ -642,6 +652,8 @@ class EnhancedStorageSystem:
     
     async def get_upload_stats(self) -> Dict[str, Any]:
         """Get upload statistics and storage health"""
+        
+        await self.ensure_initialized()
         
         stats = {
             'storage_providers': {

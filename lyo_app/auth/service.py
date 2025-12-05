@@ -75,9 +75,13 @@ class AuthService:
             db.add(user)
             await db.flush()  # Get the user ID
             
-            # Assign default student role
-            rbac_service = RBACService(db)
-            await rbac_service.assign_default_role_to_user(user.id, RoleType.STUDENT)
+            # Assign default student role (optional - may fail if RBAC tables don't exist)
+            try:
+                rbac_service = RBACService(db)
+                await rbac_service.assign_default_role_to_user(user.id, RoleType.STUDENT)
+            except Exception as rbac_error:
+                # RBAC not available, continue without roles
+                print(f"Warning: Could not assign role (RBAC may not be initialized): {rbac_error}")
             
             await db.commit()
             
@@ -127,10 +131,70 @@ class AuthService:
             expires_delta=access_token_expires
         )
         
+        # Create refresh token
+        refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
+        refresh_token = create_access_token(
+            data={"sub": str(user.id), "type": "refresh"},
+            expires_delta=refresh_token_expires
+        )
+        
         return Token(
             access_token=access_token,
+            refresh_token=refresh_token,
             token_type="bearer",
             expires_in=settings.access_token_expire_minutes * 60  # Convert to seconds
+        )
+
+    async def refresh_token(self, db: AsyncSession, refresh_token: str) -> Token:
+        """
+        Refresh access token using a valid refresh token.
+        
+        Args:
+            db: Database session
+            refresh_token: Refresh token string
+            
+        Returns:
+            New JWT token response
+            
+        Raises:
+            ValueError: If token is invalid
+        """
+        # Verify token
+        payload = verify_token(refresh_token)
+        if not payload or payload.get("type") != "refresh":
+            raise ValueError("Invalid refresh token")
+            
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("Invalid refresh token payload")
+            
+        # Get user
+        user = await self.get_user_by_id(db, int(user_id))
+        if not user:
+            raise ValueError("User not found")
+            
+        if not user.is_active:
+            raise ValueError("Account is disabled")
+            
+        # Create new access token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "username": user.username},
+            expires_delta=access_token_expires
+        )
+        
+        # Create new refresh token
+        refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
+        new_refresh_token = create_access_token(
+            data={"sub": str(user.id), "type": "refresh"},
+            expires_delta=refresh_token_expires
+        )
+        
+        return Token(
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            token_type="bearer",
+            expires_in=settings.access_token_expire_minutes * 60
         )
 
     async def get_user_by_id(self, db: AsyncSession, user_id: int, include_roles: bool = True) -> Optional[User]:
@@ -140,16 +204,17 @@ class AuthService:
         Args:
             db: Database session
             user_id: User ID to search for
-            include_roles: Whether to load user roles
+            include_roles: Whether to load user roles (currently disabled - roles relationship commented out)
             
         Returns:
             User instance if found, None otherwise
         """
         query = select(User).where(User.id == user_id)
-        if include_roles:
-            query = query.options(
-                selectinload(User.roles).selectinload(Role.permissions)
-            )
+        # Note: Roles relationship commented out to avoid circular imports - RBAC disabled
+        # if include_roles:
+        #     query = query.options(
+        #         selectinload(User.roles).selectinload(Role.permissions)
+        #     )
         
         result = await db.execute(query)
         return result.scalar_one_or_none()
@@ -161,16 +226,17 @@ class AuthService:
         Args:
             db: Database session
             email: Email address to search for
-            include_roles: Whether to load user roles
+            include_roles: Whether to load user roles (currently disabled - roles relationship commented out)
             
         Returns:
             User instance if found, None otherwise
         """
         query = select(User).where(User.email == email)
-        if include_roles:
-            query = query.options(
-                selectinload(User.roles).selectinload(Role.permissions)
-            )
+        # Note: Roles relationship commented out to avoid circular imports - RBAC disabled
+        # if include_roles:
+        #     query = query.options(
+        #         selectinload(User.roles).selectinload(Role.permissions)
+        #     )
         
         result = await db.execute(query)
         return result.scalar_one_or_none()
@@ -189,15 +255,14 @@ class AuthService:
         result = await db.execute(select(User).where(User.username == username))
         return result.scalar_one_or_none()
 
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        """
-        Verify a password against its hash.
-        
-        Args:
-            plain_password: Plain text password
-            hashed_password: Hashed password
-            
-        Returns:
-            True if password matches, False otherwise
-        """
-        return verify_password(plain_password, hashed_password)
+
+# Thin async helper used by enhanced routes and validation scripts
+async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
+    """Module-level helper to fetch a user by ID.
+
+    This mirrors AuthService.get_user_by_id but is easier to import from
+    routes and validation code (e.g. lyo_app.auth.dependencies).
+    """
+
+    service = AuthService()
+    return await service.get_user_by_id(db, user_id)

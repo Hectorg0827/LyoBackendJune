@@ -46,7 +46,7 @@ class InteractionType(str, Enum):
 
 class StudyGroup(Base):
     """Collaborative study groups"""
-    __tablename__ = "study_groups"
+    __tablename__ = "collaborative_study_groups"
     
     id = Column(Integer, primary_key=True, index=True)
     
@@ -96,12 +96,12 @@ class StudyGroup(Base):
 
 class GroupMembership(Base):
     """Membership in study groups"""
-    __tablename__ = "group_memberships"
+    __tablename__ = "collaborative_group_memberships"
     
     id = Column(Integer, primary_key=True, index=True)
     
     # References
-    group_id = Column(Integer, ForeignKey("study_groups.id"), nullable=False, index=True)
+    group_id = Column(Integer, ForeignKey("collaborative_study_groups.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     # Membership details
@@ -136,7 +136,7 @@ class PeerInteraction(Base):
     # Participants
     initiator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     recipient_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    group_id = Column(Integer, ForeignKey("study_groups.id"), index=True)
+    group_id = Column(Integer, ForeignKey("collaborative_study_groups.id"), index=True)
     
     # Interaction details
     interaction_type = Column(String, nullable=False)  # InteractionType enum
@@ -188,7 +188,7 @@ class KnowledgeExchange(Base):
     # Context
     exchange_medium = Column(String)  # chat, video, voice, document
     duration_minutes = Column(Float)
-    group_context = Column(Integer, ForeignKey("study_groups.id"))
+    group_context = Column(Integer, ForeignKey("collaborative_study_groups.id"))
     
     # Outcomes
     follow_up_needed = Column(Boolean, default=False)
@@ -208,7 +208,7 @@ class PeerAssessment(Base):
     # Assessment context
     assessor_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     assessed_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    group_id = Column(Integer, ForeignKey("study_groups.id"), index=True)
+    group_id = Column(Integer, ForeignKey("collaborative_study_groups.id"), index=True)
     
     # What's being assessed
     skill_id = Column(String, nullable=False, index=True)
@@ -246,7 +246,7 @@ class CollaborativeLearningSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     
     # Session metadata
-    group_id = Column(Integer, ForeignKey("study_groups.id"), nullable=False, index=True)
+    group_id = Column(Integer, ForeignKey("collaborative_study_groups.id"), nullable=False, index=True)
     title = Column(String, nullable=False)
     description = Column(Text)
     
@@ -370,7 +370,7 @@ class CollaborationAnalytics(Base):
     
     # Scope
     user_id = Column(Integer, ForeignKey("users.id"), index=True)  # Individual analytics
-    group_id = Column(Integer, ForeignKey("study_groups.id"), index=True)  # Group analytics
+    group_id = Column(Integer, ForeignKey("collaborative_study_groups.id"), index=True)  # Group analytics
     
     # Time period
     period_start = Column(DateTime, nullable=False, index=True)
