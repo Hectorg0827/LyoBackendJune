@@ -552,6 +552,10 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
     Used by iOS app for course generation and general AI chat.
     """
     try:
+        # Ensure AI manager is initialized
+        if not ai_resilience_manager.session:
+            await ai_resilience_manager.initialize()
+        
         # Build system prompt
         system_prompt = """You are Lyo, a friendly and helpful educational AI assistant. 
 You help students learn by providing clear, accurate, and engaging explanations.
@@ -579,6 +583,9 @@ Be concise but thorough. Use examples when helpful."""
             provider_order=["gemini-pro", "gemini-flash", "openai"]
         )
         
+        # Extract content with fallback
+        response_content = ai_response.get("content", ai_response.get("response", "I apologize, but I couldn't generate a response. Please try again."))
+        
         # Build updated history
         updated_history = []
         if request.conversationHistory:
@@ -586,12 +593,12 @@ Be concise but thorough. Use examples when helpful."""
                 updated_history.append(ConversationMessage(role=msg.role, content=msg.content))
         
         updated_history.append(ConversationMessage(role="user", content=request.message))
-        updated_history.append(ConversationMessage(role="assistant", content=ai_response["content"]))
+        updated_history.append(ConversationMessage(role="assistant", content=response_content))
         
         logger.info(f"Public chat completed successfully")
         
         return ChatResponse(
-            response=ai_response["content"],
+            response=response_content,
             conversationHistory=updated_history
         )
         
