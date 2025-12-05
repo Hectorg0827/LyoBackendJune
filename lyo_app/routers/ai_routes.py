@@ -191,11 +191,16 @@ async def generate_quiz(request: AIGenerateRequest):
 async def ai_health():
     """Check AI service health"""
     try:
-        ai_client = get_ai_client()
+        # Check if AI resilience manager is initialized
+        is_available = (
+            ai_resilience_manager is not None and 
+            hasattr(ai_resilience_manager, 'session') and 
+            ai_resilience_manager.session is not None
+        )
         return {
-            "status": "healthy",
-            "ai_available": ai_client is not None,
-            "models": ["gemini-pro", "gpt-4o-mini"]
+            "status": "healthy" if is_available else "initializing",
+            "ai_available": is_available,
+            "models": ["gemini-pro", "gemini-flash", "gpt-4o-mini"]
         }
     except Exception as e:
         return {
