@@ -50,6 +50,7 @@ class SecurityConfig:
     
     # Input validation
     MIN_PASSWORD_LENGTH = 8
+    MAX_PASSWORD_BYTES = 72  # Bcrypt limit
     MAX_INPUT_LENGTH = 1000
     ALLOWED_FILE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".pdf", ".txt", ".md"}
     MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
