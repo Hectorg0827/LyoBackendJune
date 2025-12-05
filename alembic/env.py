@@ -25,11 +25,18 @@ from lyo_app.core.database import Base
 # Import all models to ensure they're registered with Base
 from lyo_app.auth.models import User  # noqa: F401
 from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
-from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
+from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem, UserPostInteraction  # noqa: F401
 from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
 from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
-from lyo_app.resources.models import EducationalResource, ResourceTag, CourseResource, ResourceCollection  # noqa: F401
+# from lyo_app.resources.models import EducationalResource, ResourceTag, CourseResource, ResourceCollection  # noqa: F401
 from lyo_app.ai_agents.models import *  # noqa: F401
+from lyo_app.adaptive_learning.models import *  # noqa: F401
+from lyo_app.ai_study.models import *  # noqa: F401
+from lyo_app.collaboration.models import *  # noqa: F401
+from lyo_app.affect.models import *  # noqa: F401
+from lyo_app.gen_curriculum.models import *  # noqa: F401
+from lyo_app.stack.models import StackItem  # noqa: F401
+from lyo_app.classroom.models import ClassroomSession  # noqa: F401
 
 target_metadata = Base.metadata
 
@@ -41,6 +48,9 @@ def get_url():
     if url.startswith("postgresql+asyncpg://"):
         # Convert async URL to sync for alembic
         url = url.replace("postgresql+asyncpg://", "postgresql://")
+    elif url.startswith("sqlite+aiosqlite://"):
+        # Convert async SQLite to sync for alembic
+        url = url.replace("sqlite+aiosqlite://", "sqlite://")
     return url
 
 # Set the database URL for alembic

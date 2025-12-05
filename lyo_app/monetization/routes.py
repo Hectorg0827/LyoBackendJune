@@ -6,7 +6,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from lyo_app.auth.dependencies import verify_access_token
+from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.monetization.google_provider import (
     get_provider_config,
@@ -26,7 +26,7 @@ class AdConfigResponse(BaseModel):
 
 
 @router.get("/config", response_model=AdConfigResponse)
-async def get_ad_config(current_user: User = Depends(verify_access_token)):
+async def get_ad_config(current_user: User = Depends(get_current_user)):
     cfg = get_provider_config()
     if not cfg.get("enabled"):
         raise HTTPException(status_code=404, detail="Ads disabled")
@@ -43,7 +43,7 @@ class AdEvent(BaseModel):
 
 
 @router.post("/event")
-async def post_ad_event(event: AdEvent, current_user: User = Depends(verify_access_token)):
+async def post_ad_event(event: AdEvent, current_user: User = Depends(get_current_user)):
     try:
         record_event(event.event_type, event.model_dump())
         return {"ok": True}

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.dependencies import verify_access_token
+from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.storage.enhanced_storage import enhanced_storage, MediaType
 from lyo_app.core.enhanced_monitoring import monitor_performance, handle_errors, ErrorCategory
@@ -88,7 +88,7 @@ async def upload_file(
     metadata: Optional[str] = Form(None),  # JSON string of metadata
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Upload file with intelligent processing and optimization
@@ -229,7 +229,7 @@ async def batch_upload_files(
     request_data: str = Form(...),  # JSON string of BatchUploadRequest
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Upload multiple files in batch with parallel processing
@@ -298,7 +298,7 @@ async def get_file_url(
     storage_path: str,
     variant: Optional[str] = Query(None, description="File variant (thumbnail, small, medium, large)"),
     download: bool = Query(False, description="Force download"),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get file URL with optional variant and download handling
@@ -348,7 +348,7 @@ async def get_file_url(
 @monitor_performance("get_file_metadata")
 async def get_file_metadata(
     storage_path: str,
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get detailed file metadata"""
     
@@ -383,7 +383,7 @@ async def get_file_metadata(
 async def delete_file(
     storage_path: str,
     permanent: bool = Query(False, description="Permanently delete (cannot be undone)"),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Delete file from storage"""
     
@@ -437,7 +437,7 @@ async def optimize_existing_file(
     quality_preset: str = Query("medium", description="Quality preset (thumbnail, small, medium, large)"),
     generate_variants: bool = Query(True, description="Generate additional variants"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Optimize existing file with new settings
@@ -481,7 +481,7 @@ async def optimize_existing_file(
 @monitor_performance("cdn_purge")
 async def purge_cdn_cache(
     urls: List[str],
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Purge CDN cache for specific URLs"""
     
@@ -505,7 +505,7 @@ async def purge_cdn_cache(
 @router.get("/stats", response_model=StorageStatsResponse)
 @monitor_performance("storage_stats")
 async def get_storage_statistics(
-    current_user: User = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get comprehensive storage statistics"""
     

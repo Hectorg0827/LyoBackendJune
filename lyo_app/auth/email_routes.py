@@ -240,20 +240,8 @@ async def send_verification_email_background(
 ):
     """Send verification email in background."""
     try:
-        # In production, use proper email service (SendGrid, SES, etc.)
-        verification_url = f"http://localhost:8000/api/v1/auth/verify-email/confirm?token={token}"
-        
-        # For now, log the verification URL (in production, send actual email)
-        logger.info(f"Verification email for {email}: {verification_url}")
-        
-        # TODO: Replace with actual email sending
-        # await send_email(
-        #     to=email,
-        #     subject="Verify your LyoApp account",
-        #     template="verification_email.html",
-        #     context={"name": name, "verification_url": verification_url}
-        # )
-        
+        from lyo_app.auth.email_sender import email_sender
+        await email_sender.send_verification_email(email, name, token)
     except Exception as e:
         logger.error(f"Failed to send verification email to {email}: {e}")
 
@@ -265,19 +253,7 @@ async def send_password_reset_email_background(
 ):
     """Send password reset email in background."""
     try:
-        # In production, use proper email service
-        reset_url = f"http://localhost:8000/reset-password?token={token}"
-        
-        # For now, log the reset URL (in production, send actual email)
-        logger.info(f"Password reset email for {email}: {reset_url}")
-        
-        # TODO: Replace with actual email sending
-        # await send_email(
-        #     to=email,
-        #     subject="Reset your LyoApp password",
-        #     template="password_reset_email.html",
-        #     context={"name": name, "reset_url": reset_url}
-        # )
-        
+        from lyo_app.auth.email_sender import email_sender
+        await email_sender.send_password_reset_email(email, name, token)
     except Exception as e:
         logger.error(f"Failed to send reset email to {email}: {e}")

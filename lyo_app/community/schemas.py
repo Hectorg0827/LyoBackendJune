@@ -4,8 +4,9 @@ Defines request/response models for study groups and community events.
 """
 
 from datetime import datetime
-from typing import Optional, List
-
+from typing import Optional, List, Literal, Union
+from uuid import UUID
+from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
 from lyo_app.community.models import (
@@ -160,19 +161,87 @@ class EventAttendanceUpdate(BaseModel):
 
 
 class EventAttendanceRead(BaseModel):
-    """Schema for reading attendance data."""
+    """Schema for reading event attendance data."""
     
     model_config = ConfigDict(from_attributes=True)
     
     id: int = Field(..., description="Attendance ID")
+    status: AttendanceStatus = Field(..., description="Attendance status")
     user_id: int = Field(..., description="User ID")
     event_id: int = Field(..., description="Event ID")
-    status: AttendanceStatus = Field(..., description="Attendance status")
-    rating: Optional[int] = Field(None, description="Event rating")
-    feedback: Optional[str] = Field(None, description="Event feedback")
     registered_at: datetime = Field(..., description="Registration timestamp")
-    attended_at: Optional[datetime] = Field(None, description="Attendance timestamp")
-    feedback_at: Optional[datetime] = Field(None, description="Feedback timestamp")
+
+
+# --- Phase 3: Campus Map Schemas ---
+
+class CommunityQuestionCreate(BaseModel):
+    text: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_name: Optional[str] = None
+
+class CommunityQuestionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    text: str
+    latitude: Optional[float]
+    longitude: Optional[float]
+    location_name: Optional[str]
+    is_resolved: bool
+    created_at: datetime
+    user_id: int
+
+class CommunityAnswerCreate(BaseModel):
+    text: str
+
+class CommunityAnswerRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    text: str
+    created_at: datetime
+    user_id: int
+    question_id: UUID
+
+# Beacon Schemas
+
+class BeaconType(str, Enum):
+    EVENT = "event"
+    USER_ACTIVITY = "user_activity"
+    QUESTION = "question"
+
+class EventBeacon(BaseModel):
+    type: Literal["event"] = "event"
+    id: int
+    title: str
+    latitude: float
+    longitude: float
+    location_name: Optional[str]
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    relevance_score: Optional[float] = None
+
+class UserActivityBeacon(BaseModel):
+    type: Literal["user_activity"] = "user_activity"
+    user_id: int
+    display_name: str
+    latitude: Optional[float]
+    longitude: Optional[float]
+    recent_topics: List[str] = []
+    level: Optional[int] = None
+    xp: Optional[int] = None
+
+class QuestionBeacon(BaseModel):
+    type: Literal["question"] = "question"
+    id: UUID
+    text: str
+    latitude: float
+    longitude: float
+    location_name: Optional[str]
+    is_resolved: bool
+
+BeaconBase = Union[EventBeacon, UserActivityBeacon, QuestionBeacon]
 
 
 # Response Schemas

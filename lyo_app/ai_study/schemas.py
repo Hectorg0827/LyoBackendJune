@@ -32,12 +32,58 @@ class StudySessionRequest(BaseModel):
         return v
 
 
+class StudySessionCreateRequest(BaseModel):
+    """Enhanced request to create a new AI-powered study session"""
+    resource_id: str = Field(..., description="ID of the learning material")
+    resource_type: str = Field(default="lesson", description="Type of resource (course, lesson, topic)")
+    tutoring_style: str = Field(default="socratic", description="Tutoring approach (socratic, collaborative, explanatory, practical)")
+    
+    @validator('tutoring_style')
+    def validate_tutoring_style(cls, v):
+        valid_styles = ["socratic", "collaborative", "explanatory", "practical"]
+        if v not in valid_styles:
+            raise ValueError(f"tutoring_style must be one of: {valid_styles}")
+        return v
+
+
+class StudySessionCreateResponse(BaseModel):
+    """Enhanced response from creating an AI study session"""
+    session_id: int
+    resource_title: str
+    welcome_message: str
+    conversation_history: List[Dict[str, Any]]
+    tutoring_style: str
+    difficulty_level: str
+    subject_area: str
+
+
 class ConversationMessage(BaseModel):
     """A single message in the conversation history"""
     role: MessageRole = Field(..., description="Role of the message sender")
     content: str = Field(..., description="Message content")
     timestamp: Optional[datetime] = Field(None, description="When the message was sent")
     token_count: Optional[int] = Field(None, description="Number of tokens in the message")
+
+
+class StudySessionContinueRequest(BaseModel):
+    """Enhanced request to continue an AI study session"""
+    user_input: str = Field(..., description="The user's latest message")
+    conversation_history: Optional[List[ConversationMessage]] = Field(
+        None, 
+        description="The entire chat history (optional, will use cached if not provided)"
+    )
+
+
+class StudySessionContinueResponse(BaseModel):
+    """Enhanced response from continuing an AI study session"""
+    response: str = Field(..., description="The AI's guided response")
+    updated_conversation_history: List[Dict[str, Any]] = Field(..., description="Complete updated conversation history")
+    session_metadata: Dict[str, Any] = Field(..., description="Session analytics and metadata")
+    tutoring_insights: Dict[str, Any] = Field(..., description="AI insights about the learning interaction")
+    suggested_next_steps: List[str] = Field(..., description="Suggested next actions for the learner")
+
+
+
 
 
 class StudyConversationRequest(BaseModel):
@@ -268,3 +314,23 @@ class StudyModeHealthResponse(BaseModel):
     total_sessions_today: int = Field(..., description="Total sessions created today")
     avg_response_time_ms: float = Field(..., description="Average AI response time")
     service_uptime_seconds: int = Field(..., description="Service uptime in seconds")
+
+
+# ============================================================================
+# ANSWER ANALYSIS SCHEMAS
+# ============================================================================
+
+class AnswerAnalysisRequest(BaseModel):
+    """Request for answer analysis"""
+    question: str = Field(..., description="The quiz question")
+    correct_answer: str = Field(..., description="The correct answer")
+    user_answer: str = Field(..., description="User's answer")
+
+
+class AnswerAnalysisResponse(BaseModel):
+    """Response for answer analysis"""
+    feedback: str = Field(..., description="AI feedback")
+    is_correct: bool = Field(..., description="Whether the answer is correct")
+    partial_credit: Optional[float] = Field(None, description="Partial credit score (0-1)")
+    suggestions: List[str] = Field(default_factory=list, description="Suggestions for improvement")
+    related_concepts: List[str] = Field(default_factory=list, description="Related concepts to review")

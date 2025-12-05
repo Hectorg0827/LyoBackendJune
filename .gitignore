@@ -174,3 +174,4 @@ uploads/
 # Logs
 logs/
 *.log
+lyobackend-service-account-key.json

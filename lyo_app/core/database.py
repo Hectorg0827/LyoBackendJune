@@ -4,10 +4,12 @@ Provides database engine, session factory, and base model class.
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy import MetaData, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import DeclarativeBase
@@ -44,7 +46,25 @@ def get_engine_config():
     return config
 
 # Create async engine with dynamic configuration
-engine = create_async_engine(settings.database_url, **get_engine_config())
+db_url = settings.database_url
+
+# Inject password from environment variable if available and missing in URL
+# This is crucial for Cloud Run where password is provided as a separate secret
+db_password = os.getenv("DB_PASSWORD")
+if db_password and "postgresql" in db_url:
+    try:
+        url_obj = make_url(db_url)
+        if url_obj.password is None:
+            url_obj = url_obj.set(password=db_password)
+            db_url = str(url_obj)
+            logger.info("✅ Injected DB_PASSWORD into database URL")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to inject DB_PASSWORD: {e}")
+
+if db_url and db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+engine = create_async_engine(db_url, **get_engine_config())
 
 # Add connection event listeners for better debugging
 @event.listens_for(engine.sync_engine, "connect")
@@ -59,6 +79,18 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA temp_store=MEMORY")
         cursor.close()
 
+@event.listens_for(engine.sync_engine, "before_cursor_execute")
+def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    conn.info.setdefault('query_start_time', []).append(time.time())
+
+@event.listens_for(engine.sync_engine, "after_cursor_execute")
+def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    total = time.time() - conn.info['query_start_time'].pop(-1)
+    if total > 0.5:  # Log queries taking longer than 500ms
+        logger.warning(f"Slow Query: {total:.4f}s\n{statement}\nParameters: {parameters}")
+
+import time
+
 # Create async session factory with better configuration
 AsyncSessionLocal = async_sessionmaker(
     engine,
@@ -71,7 +103,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 class Base(DeclarativeBase):
     """Base class for all database models."""
-    
+
     metadata = MetaData(
         naming_convention={
             "ix": "ix_%(column_0_label)s",
@@ -115,11 +147,17 @@ async def init_db() -> None:
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
         from lyo_app.auth.rbac import Role, Permission, role_permissions, user_roles  # noqa: F401
-        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
+        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion, CourseItem, CourseStatus  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
-        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
+        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge, GamificationProfile  # noqa: F401
         from lyo_app.ai_study.models import StudySession, StudyMessage, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
+        from lyo_app.tasks.models import Task, TaskState  # noqa: F401
+        from lyo_app.notifications.models import PushDevice  # noqa: F401
+        # Import new mentor chat models
+        from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
+        from lyo_app.stack.models import StackItem  # noqa: F401
+        from lyo_app.classroom.models import ClassroomSession  # noqa: F401
         
         await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully")

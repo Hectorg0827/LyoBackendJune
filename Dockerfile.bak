@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install curl for health check
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements-cloud.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-cloud.txt
+
+# Copy application code
+COPY lyo_app/ ./lyo_app/
+COPY cloud_main.py .
+COPY alembic.ini .
+COPY alembic/ ./alembic/
+
+# Create non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Environment
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
+ENV GCS_BUCKET_NAME=lyobackend-storage
+ENV ENVIRONMENT=production
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run with uvicorn
+CMD ["uvicorn", "cloud_main:app", "--host", "0.0.0.0", "--port", "8080"]

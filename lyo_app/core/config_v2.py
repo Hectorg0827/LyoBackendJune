@@ -48,13 +48,13 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = Field(default=20, env="DATABASE_POOL_SIZE")
     DATABASE_MAX_OVERFLOW: int = Field(default=30, env="DATABASE_MAX_OVERFLOW")
     
-    # Redis - Google Memorystore
-    REDIS_URL: Optional[RedisDsn] = Field(None, env="REDIS_URL")
+    # Redis - Google Memorystore (REDIS_HOST/PORT must be defined before REDIS_URL for validator)
     REDIS_HOST: str = Field(default="localhost", env="REDIS_HOST")
     REDIS_PORT: int = Field(default=6379, env="REDIS_PORT")
     REDIS_DB: int = Field(default=0, env="REDIS_DB")
     REDIS_PASSWORD: Optional[str] = Field(None, env="REDIS_PASSWORD")
-    REDIS_POOL_SIZE: int = Field(default=10, env="REDIS_POOL_SIZE")
+    REDIS_URL: Optional[RedisDsn] = Field(None, env="REDIS_URL")
+    REDIS_POOL_SIZE: int = Field(default=20, env="REDIS_POOL_SIZE")  # Increased for better concurrent performance
     
     # Google Cloud Storage
     GCS_BUCKET_NAME: str = Field(..., env="GCS_BUCKET_NAME")

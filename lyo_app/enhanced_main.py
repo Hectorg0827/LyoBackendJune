@@ -5,19 +5,9 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-# Ensure Prometheus multiprocess directory exists before any imports that might use it
-if "PROMETHEUS_MULTIPROC_DIR" not in os.environ:
-    os.environ["PROMETHEUS_MULTIPROC_DIR"] = "/tmp/prometheus_multiproc_dir"
-
-if not os.path.exists(os.environ["PROMETHEUS_MULTIPROC_DIR"]):
-    try:
-        os.makedirs(os.environ["PROMETHEUS_MULTIPROC_DIR"], exist_ok=True)
-        print(f"Created Prometheus multiprocess directory: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
-    except Exception as e:
-        print(f"Failed to create Prometheus directory: {e}")
-
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 try:  # Config import (enhanced first)
     from lyo_app.core.enhanced_config import settings
@@ -32,6 +22,13 @@ from lyo_app.core.enhanced_monitoring import (
     performance_monitor,
     ErrorCategory,  # noqa: F401 (kept for potential future use)
 )
+
+# Setup secure logging (masks API keys) - optional module
+try:
+    from lyo_app.core.secure_config import setup_secure_logging
+    setup_secure_logging()
+except ImportError:
+    pass  # secure_config is optional
 
 try:  # Sentry optional
     import sentry_sdk
@@ -56,8 +53,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup & shutdown lifecycle."""
     logger.info("Starting LyoBackend with enhanced features...")
     setup_logging()
-    await init_db()
-    logger.info("Database initialized")
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        # Continue startup even if DB fails, to allow debugging
+    
     if (
         hasattr(settings, "SENTRY_DSN")
         and getattr(settings, "SENTRY_DSN", None)
@@ -161,18 +163,74 @@ def create_app() -> FastAPI:
         docs_url=None if settings.is_production() else "/docs",
         redoc_url=None if settings.is_production() else "/redoc",
     )
-    # Middleware
+    # Middleware - Security First
+    from lyo_app.middleware.security_middleware import SecurityMiddleware
+    from lyo_app.core.structured_logging import setup_logging as setup_structured_logging
+    
+    # Setup structured logging
+    log_level = os.getenv("LOG_LEVEL", "INFO")
+    setup_structured_logging(
+        environment=settings.ENVIRONMENT,
+        log_level=log_level,
+        json_logs=(settings.ENVIRONMENT in ("production", "staging"))
+    )
+    
+    # Add security middleware (rate limiting, audit logging, security headers)
+    app.add_middleware(
+        SecurityMiddleware,
+        enable_rate_limiting=True,
+        enable_audit_logging=True,
+        enable_security_headers=True
+    )
+    
+    # CORS
     app.add_middleware(CORSMiddleware, **settings.get_cors_config())
+    
+    # Add response compression for bandwidth optimization (60-80% reduction)
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    
+    # Performance and error monitoring
     app.middleware("http")(performance_monitoring_middleware)
     app.middleware("http")(enhanced_error_middleware)
-    app.middleware("http")(security_headers_middleware)
     app.middleware("http")(request_size_middleware)
     setup_error_handlers(app)
     # Routers
     from lyo_app.auth.routes import router as auth_router
-    from lyo_app.ai_study.clean_routes import router as ai_study_router
-    from lyo_app.feeds.enhanced_routes import router as feeds_router
-    from lyo_app.storage.enhanced_routes import router as storage_router
+    try:
+        from lyo_app.ai_study.clean_routes import router as ai_study_router
+    except ImportError:
+        from lyo_app.ai_study.routes import router as ai_study_router
+        logger.warning("Using basic AI study routes (clean routes unavailable)")
+    
+    # Include Vision routes
+    try:
+        from lyo_app.ai_study.vision_routes import router as vision_router
+        app.include_router(vision_router)
+        logger.info("✅ Gemini Vision routes integrated - Multimodal image analysis active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import Vision routes: {e}")
+
+    # Include Recommendations and Embeddings routes
+    try:
+        from lyo_app.ai_study.recommendations_routes import router as recommendations_router
+        app.include_router(recommendations_router)
+        logger.info("✅ Recommendations & Embeddings routes integrated - Smart content discovery active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Could not import Recommendations routes: {e}")
+    
+    try:
+        from lyo_app.feeds.enhanced_routes import router as feeds_router
+    except ImportError:
+        from lyo_app.feeds.routes import router as feeds_router
+        logger.warning("Using basic feeds routes (enhanced routes unavailable)")
+    try:
+        from lyo_app.storage.enhanced_routes import router as storage_router
+    except ImportError:
+        try:
+            from lyo_app.storage_routes import router as storage_router
+        except ImportError:
+            storage_router = None
+            logger.warning("Storage routes unavailable")
     from lyo_app.monetization.routes import router as ads_router
     try:
         from lyo_app.api.v1 import api_router
@@ -181,11 +239,45 @@ def create_app() -> FastAPI:
         logger.info("✅ API v1 routes integrated - 10/10 backend achieved!")
     except ImportError as e:  # noqa: BLE001
         logger.warning(f"API v1 routes not available: {e}")
-    app.include_router(auth_router)
+
+    # Analytics & Profiling
+    try:
+        from lyo_app.api.analytics import router as analytics_router
+        app.include_router(analytics_router, prefix="/api/v1")
+        logger.info("✅ Analytics routes integrated - Implicit Behavioral Profiling active!")
+    except ImportError as e:
+        logger.warning(f"Analytics routes not available: {e}")
+
+    app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
     app.include_router(feeds_router)
-    app.include_router(storage_router)
+    if storage_router:
+        app.include_router(storage_router)
     app.include_router(ads_router)
+    
+    # AI API Routes - Dual AI System
+    try:
+        from lyo_app.routers.ai_routes import router as ai_router
+        app.include_router(ai_router)
+        logger.info("✅ AI API routes integrated - Dual AI system (Gemini + OpenAI) active!")
+    except ImportError as e:
+        logger.warning(f"AI API routes not available: {e}")
+    
+    # AI Chat - Unified chat endpoint with OpenAI + Gemini
+    try:
+        from lyo_app.ai_chat.routes import router as ai_chat_router
+        app.include_router(ai_chat_router)
+        logger.info("✅ AI Chat routes integrated - Unified chat with TTS (OpenAI + Gemini)!")
+    except ImportError as e:
+        logger.warning(f"AI Chat routes not available: {e}")
+    
+    # TTS (Text-to-Speech) - Audio Learning
+    try:
+        from lyo_app.tts.routes import router as tts_router
+        app.include_router(tts_router)
+        logger.info("✅ TTS routes integrated - Audio learning with OpenAI voices active!")
+    except ImportError as e:
+        logger.warning(f"TTS routes not available: {e}")
     
     # Phase 1: Generative AI Tutor Foundation
     try:
@@ -210,6 +302,30 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Collaborative Learning routes not available: {e}")
     
+    try:
+        from lyo_app.adaptive_learning.routes import router as adaptive_router
+        app.include_router(adaptive_router)
+        logger.info("✅ Adaptive Learning routes integrated - AI-powered personalized sessions active!")
+    except ImportError as e:
+        logger.warning(f"Adaptive Learning routes not available: {e}")
+    
+    # Chat Module - Mode-based routing with agents
+    try:
+        from lyo_app.chat import chat_router
+        app.include_router(chat_router, prefix="/api/v1")
+        logger.info("✅ Chat routes integrated - Mode-based routing (Explainer, Planner, Practice, Notes) active!")
+    except ImportError as e:
+        logger.warning(f"Chat routes not available: {e}")
+    
+    # Optional legacy/feature routers (only include if present)
+    # Health Check Routes (Phase 4: Observability)
+    try:
+        from lyo_app.routers.health_routes import router as health_router
+        app.include_router(health_router)
+        logger.info("✅ Health check routes integrated - /health/live, /health/ready endpoints active!")
+    except ImportError as e:
+        logger.warning(f"Health check routes not available: {e}")
+    
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router
@@ -226,6 +342,26 @@ def create_app() -> FastAPI:
         app.include_router(learning_router)
     except ImportError:
         pass
+    try:
+        from lyo_app.storage_routes import router as storage_router
+        app.include_router(storage_router)
+        logger.info("✅ Google Cloud Storage routes integrated - File uploads and processing active!")
+    except ImportError as e:
+        logger.warning(f"Storage routes not available: {e}")
+
+    try:
+        from lyo_app.stack.routes import router as stack_router
+        app.include_router(stack_router)
+        logger.info("✅ Stack routes integrated - Personal knowledge stack active!")
+    except ImportError as e:
+        logger.warning(f"Stack routes not available: {e}")
+
+    try:
+        from lyo_app.classroom.routes import router as classroom_router
+        app.include_router(classroom_router)
+        logger.info("✅ Classroom routes integrated - Virtual classroom sessions active!")
+    except ImportError as e:
+        logger.warning(f"Classroom routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401
@@ -300,7 +436,38 @@ def create_app() -> FastAPI:
         return health_status
 
     @app.get("/metrics")
-    async def get_metrics():  # noqa: D401
+    async def prometheus_metrics():
+        """
+        Prometheus metrics endpoint (Phase 4: Observability)
+        Returns metrics in Prometheus format if available
+        """
+        try:
+            from lyo_app.core.prometheus_metrics import (
+                metrics_endpoint_handler,
+                get_metrics_content_type,
+                PROMETHEUS_AVAILABLE
+            )
+            
+            if PROMETHEUS_AVAILABLE:
+                from fastapi.responses import Response
+                metrics_data = metrics_endpoint_handler()
+                return Response(
+                    content=metrics_data,
+                    media_type=get_metrics_content_type()
+                )
+            else:
+                # Fallback to basic metrics
+                return {
+                    "message": "Prometheus not installed, showing basic metrics",
+                    "metrics": performance_monitor.get_performance_summary()
+                }
+        except Exception as e:
+            logger.error(f"Metrics endpoint error: {e}")
+            return {"error": str(e)}
+    
+    @app.get("/metrics/legacy")
+    async def get_legacy_metrics():  # noqa: D401
+        """Legacy metrics endpoint with system information"""
         if not settings.ENABLE_METRICS:
             raise HTTPException(status_code=404, detail="Metrics disabled")
         metrics = performance_monitor.get_performance_summary()
@@ -355,7 +522,16 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+# Create app lazily to avoid import-time errors
+_app = None
+
+def get_app():
+    global _app
+    if _app is None:
+        _app = create_app()
+    return _app
+
+app = get_app()
 
 if PROMETHEUS_AVAILABLE and settings.ENABLE_METRICS:
     @app.get("/prometheus")

@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     storage_provider: str = Field(default="local", description="Storage provider: local, aws_s3, cloudflare_r2")
     storage_bucket: Optional[str] = Field(default=None, description="Storage bucket name")
     cdn_domain: Optional[str] = Field(default=None, description="CDN domain for faster file delivery")
+    CDN_BASE_URL: Optional[str] = Field(default=None, description="CDN base URL for file delivery")
     
     # AWS Configuration
     aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key")
@@ -198,6 +199,7 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="LyoApp Backend", description="Application name (legacy)")
     APP_VERSION: str = Field(default="1.0.0", description="Application version (legacy)")
     CLOUDFLARE_ZONE_ID: Optional[str] = Field(default=None, description="Cloudflare zone ID for CDN management")
+    CLOUDFLARE_API_TOKEN: Optional[str] = Field(default=None, description="Cloudflare API token for CDN management")
     
     @field_validator('youtube_api_key', 'gemini_api_key', 'podchaser_api_key')
     @classmethod

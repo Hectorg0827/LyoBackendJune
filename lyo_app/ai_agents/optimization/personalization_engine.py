@@ -13,14 +13,31 @@ import json
 import hashlib
 
 import structlog
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-import pandas as pd
+
+# Optional sklearn imports
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    from sklearn.decomposition import PCA
+    from sklearn.cluster import KMeans
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    TfidfVectorizer = None
+    cosine_similarity = None
+    PCA = None
+    KMeans = None
+
+# Optional pandas import
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    pd = None
 
 from lyo_app.learning.models import CourseEnrollment, LessonCompletion
-from lyo_app.feeds.models import Post, UserInteraction
+from lyo_app.feeds.models import Post, UserPostInteraction
 from lyo_app.community.models import StudyGroup, GroupMembership
 
 logger = structlog.get_logger(__name__)
@@ -195,9 +212,16 @@ class UserEmbeddingModel:
         self.embedding_dim = embedding_dim
         self.user_embeddings: Dict[int, np.ndarray] = {}
         self.content_embeddings: Dict[str, np.ndarray] = {}
-        self.tfidf_vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
-        self.pca = PCA(n_components=embedding_dim)
-        self.kmeans = KMeans(n_clusters=10, random_state=42)
+        
+        if SKLEARN_AVAILABLE:
+            self.tfidf_vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+            self.pca = PCA(n_components=embedding_dim)
+            self.kmeans = KMeans(n_clusters=10, random_state=42)
+        else:
+            logger.warning("scikit-learn not available. Personalization features will be limited.")
+            self.tfidf_vectorizer = None
+            self.pca = None
+            self.kmeans = None
         
     async def generate_user_embedding(self, user_profile: UserProfile, interaction_history: List[Dict]) -> np.ndarray:
         """Generate dense embedding for user based on profile and interactions."""
@@ -217,8 +241,12 @@ class UserEmbeddingModel:
                 padding = np.zeros(self.embedding_dim - len(combined_features))
                 combined_features = np.concatenate([combined_features, padding])
             elif len(combined_features) > self.embedding_dim:
-                # Use PCA to reduce dimensionality
-                combined_features = self.pca.fit_transform(combined_features.reshape(1, -1))[0]
+                # Use PCA to reduce dimensionality if available
+                if self.pca:
+                    combined_features = self.pca.fit_transform(combined_features.reshape(1, -1))[0]
+                else:
+                    # Truncate if PCA not available
+                    combined_features = combined_features[:self.embedding_dim]
             
             # Cache the embedding
             self.user_embeddings[user_profile.user_id] = combined_features
@@ -294,7 +322,7 @@ class UserEmbeddingModel:
     
     def cluster_users(self) -> Dict[int, int]:
         """Cluster users into similar groups."""
-        if len(self.user_embeddings) < 10:
+        if len(self.user_embeddings) < 10 or not self.kmeans:
             return {}
         
         user_ids = list(self.user_embeddings.keys())

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.dependencies import verify_access_token
+from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
 
 from .schemas import (
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/v1/personalization", tags=["Personalization"])
 @router.patch("/state")
 async def update_personalization_state(
     update: PersonalizationStateUpdate,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -49,7 +49,7 @@ async def update_personalization_state(
 @router.post("/trace")
 async def trace_knowledge(
     request: KnowledgeTraceRequest,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -73,7 +73,7 @@ async def trace_knowledge(
 async def get_next_action(
     lesson_id: str = None,
     current_skill: str = None,
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> NextActionResponse:
     """
@@ -98,7 +98,7 @@ async def get_next_action(
 
 @router.get("/mastery", response_model=MasteryProfile)
 async def get_mastery_profile(
-    current_user: User = Depends(verify_access_token),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> MasteryProfile:
     """

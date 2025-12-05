@@ -1,6 +1,13 @@
 # Gunicorn production configuration for LyoBackendJune
 import multiprocessing
 import os
+import shutil
+
+# Create Prometheus metrics directory immediately
+prometheus_dir = "/tmp/prometheus_multiproc_dir"
+if os.path.exists(prometheus_dir):
+    shutil.rmtree(prometheus_dir)
+os.makedirs(prometheus_dir, exist_ok=True)
 
 # Server socket
 bind = "0.0.0.0:8000"

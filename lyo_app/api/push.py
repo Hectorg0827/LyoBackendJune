@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from lyo_app.core.database import get_db_session
 from lyo_app.auth.jwt_auth import require_active_user
 from lyo_app.models.enhanced import User, PushDevice
-from lyo_app.core.problems import ValidationProblem, NotFoundProblem
+from lyo_app.core.problems import ValidationProblem, ResourceNotFoundProblem
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ async def unregister_device(
     device = result.scalar_one_or_none()
     
     if not device:
-        raise NotFoundProblem("Device not found")
+        raise ResourceNotFoundProblem("Device not found")
     
     await db.delete(device)
     await db.commit()
@@ -179,7 +179,7 @@ async def deactivate_device(
     device = result.scalar_one_or_none()
     
     if not device:
-        raise NotFoundProblem("Device not found")
+        raise ResourceNotFoundProblem("Device not found")
     
     device.is_active = False
     await db.commit()

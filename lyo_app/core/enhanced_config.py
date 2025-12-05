@@ -34,7 +34,7 @@ class EnhancedSettings(BaseSettings):
     # ============================================================================
     
     APP_NAME: str = Field("LyoBackend", description="Application name")
-    APP_VERSION: str = Field("2.0.0", description="Application version")
+    APP_VERSION: str = Field("3.1.1-CLOUD", description="Application version")
     APP_DESCRIPTION: str = Field("LyoBackend AI-Powered Learning Platform", description="Application description")
     
     # Environment
@@ -72,6 +72,8 @@ class EnhancedSettings(BaseSettings):
     
     # Redis
     REDIS_URL: str = Field("redis://localhost:6379/0", description="Redis connection URL")
+    REDIS_HOST: Optional[str] = Field(None, description="Redis host")
+    REDIS_PORT: int = Field(6379, description="Redis port")
     REDIS_CACHE_TTL: int = Field(3600, description="Default Redis cache TTL (seconds)")
     REDIS_MAX_CONNECTIONS: int = Field(20, description="Redis max connections")
     
@@ -81,10 +83,10 @@ class EnhancedSettings(BaseSettings):
     
     # Google Gemini
     GOOGLE_API_KEY: str = Field("", description="Google Gemini API key")
-    GEMINI_MODEL_DEFAULT: str = Field("gemini-pro", description="Default Gemini model")
+    GEMINI_MODEL_DEFAULT: str = Field("gemini-1.5-flash", description="Default Gemini model")
     GEMINI_MODEL_VISION: str = Field("gemini-pro-vision", description="Gemini vision model")
     GEMINI_MODEL_FLASH: str = Field("gemini-1.5-flash", description="Gemini flash model")
-    GEMINI_MAX_TOKENS: int = Field(8192, description="Gemini max tokens")
+    GEMINI_MAX_TOKENS: int = Field(4096, description="Gemini max tokens")
     GEMINI_TEMPERATURE: float = Field(0.7, description="Gemini temperature")
     GEMINI_TOP_P: float = Field(0.8, description="Gemini top_p")
     GEMINI_TOP_K: int = Field(40, description="Gemini top_k")
@@ -291,6 +293,20 @@ class EnhancedSettings(BaseSettings):
         if v > 1024 * 1024 * 1024:  # 1GB maximum
             raise ValueError('Max upload size cannot exceed 1GB')
         return v
+    
+    @validator('REDIS_URL', pre=True, always=True)
+    def assemble_redis_url(cls, v: Optional[str], values: Dict[str, Any]) -> str:
+        """Assemble Redis URL from host and port if not provided"""
+        if v and v != "redis://localhost:6379/0":
+            return v
+        
+        host = values.get('REDIS_HOST')
+        port = values.get('REDIS_PORT', 6379)
+        
+        if host:
+            return f"redis://{host}:{port}/0"
+        
+        return v or "redis://localhost:6379/0"
     
     # ============================================================================
     # ENVIRONMENT-SPECIFIC CONFIGURATIONS

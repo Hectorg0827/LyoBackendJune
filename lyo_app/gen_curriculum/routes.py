@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
-from lyo_app.core.auth import verify_access_token
+from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.models import User
 from lyo_app.gen_curriculum.schemas import (
     ContentGenerationRequest,
     GeneratedContentResponse,
@@ -35,7 +36,7 @@ async def generate_content(
     request: ContentGenerationRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate personalized learning content using AI
@@ -98,7 +99,7 @@ async def generate_learning_path(
     request: LearningPathRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate personalized learning path with adaptive progression
@@ -149,7 +150,7 @@ async def generate_full_curriculum(
     request: CurriculumGenerationRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate complete curriculum with modules, lessons, and assessments
@@ -200,7 +201,7 @@ async def generate_full_curriculum(
 async def get_content(
     content_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get generated content by ID with usage tracking"""
     try:
@@ -211,7 +212,7 @@ async def get_content(
         # Track content access
         await gen_curriculum_engine.track_content_access(
             content_id=content_id,
-            user_id=current_user["user_id"],
+            user_id=current_user.id,
             db=db
         )
         
@@ -228,7 +229,7 @@ async def get_content(
 async def get_learning_path(
     path_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get learning path with current progress"""
     try:
@@ -237,7 +238,7 @@ async def get_learning_path(
             raise HTTPException(status_code=404, detail="Learning path not found")
         
         # Update last accessed timestamp
-        await gen_curriculum_engine.update_path_access(path_id, current_user["user_id"], db)
+        await gen_curriculum_engine.update_path_access(path_id, current_user.id, db)
         
         return path
         
@@ -253,7 +254,7 @@ async def submit_content_feedback(
     content_id: int,
     feedback: ContentFeedbackRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Submit learner feedback on generated content
@@ -274,14 +275,14 @@ async def submit_content_feedback(
         feedback_id = await gen_curriculum_engine.store_content_feedback(
             content_id=content_id,
             feedback=feedback,
-            user_id=current_user["user_id"],
+            user_id=current_user.id,
             db=db
         )
         
         # Update personalization based on feedback
         if feedback.mastery_after is not None:
             await personalization_engine.update_mastery_from_feedback(
-                user_id=current_user["user_id"],
+                user_id=current_user.id,
                 skill_id=content.skill_id,
                 mastery_change=feedback.mastery_after - (feedback.mastery_before or 0),
                 db=db
@@ -301,7 +302,7 @@ async def adapt_learning_path(
     path_id: int,
     adaptation_request: PathAdaptationRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Adapt learning path based on learner performance and feedback
@@ -318,7 +319,7 @@ async def adapt_learning_path(
         if not path:
             raise HTTPException(status_code=404, detail="Learning path not found")
         
-        if path.user_id != current_user["user_id"]:
+        if path.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Perform adaptation
@@ -342,7 +343,7 @@ async def adapt_learning_path(
 async def get_content_quality_metrics(
     content_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get comprehensive quality metrics for generated content"""
     try:
@@ -364,12 +365,12 @@ async def get_user_learning_paths(
     user_id: int,
     active_only: bool = True,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """Get all learning paths for a user"""
     try:
         # Verify user can access these paths
-        if user_id != current_user["user_id"]:
+        if user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied")
         
         paths = await gen_curriculum_engine.get_user_learning_paths(
@@ -392,7 +393,7 @@ async def bulk_generate_content(
     requests: List[ContentGenerationRequest],
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(verify_access_token)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate multiple pieces of content efficiently
@@ -410,7 +411,7 @@ async def bulk_generate_content(
             _bulk_generate_content,
             task_id=task_id,
             requests=requests,
-            user_id=current_user["user_id"],
+            user_id=current_user.id,
             db=db
         )
         

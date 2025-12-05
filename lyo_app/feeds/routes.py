@@ -19,6 +19,7 @@ from lyo_app.feeds.schemas import (
     FeedResponse, UserStatsResponse
 )
 from lyo_app.feeds.service import FeedsService
+from lyo_app.stack.schemas import StackItemRead
 
 
 router = APIRouter()
@@ -436,7 +437,9 @@ async def get_public_feed(
     current_user: Annotated[UserRead, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(20, ge=1, le=100, description="Items per page")
+    per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    course_id: Optional[int] = Query(None, description="Filter by course ID"),
+    lesson_id: Optional[int] = Query(None, description="Filter by lesson ID")
 ) -> FeedResponse:
     """
     Get public feed.
@@ -446,11 +449,52 @@ async def get_public_feed(
         db: Database session
         page: Page number (1-based)
         per_page: Number of items per page
+        course_id: Optional course context
+        lesson_id: Optional lesson context
         
     Returns:
         Paginated public feed response
     """
-    return await feeds_service.get_public_feed(db, current_user.id, page, per_page)
+    return await feeds_service.get_public_feed(
+        db, 
+        current_user.id, 
+        page, 
+        per_page,
+        course_id=course_id,
+        lesson_id=lesson_id
+    )
+
+
+@router.post("/posts/{post_id}/capture", response_model=StackItemRead)
+async def capture_post(
+    post_id: int,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+) -> StackItemRead:
+    """
+    Capture a post to the user's stack.
+    
+    Args:
+        post_id: Post ID to capture
+        current_user: Current authenticated user
+        db: Database session
+        
+    Returns:
+        Created StackItem
+    """
+    try:
+        stack_item = await feeds_service.capture_post(db, current_user.id, post_id)
+        return StackItemRead.model_validate(stack_item)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to capture post: {str(e)}"
+        )
 
 
 @router.get("/users/{user_id}/posts", response_model=FeedResponse)
