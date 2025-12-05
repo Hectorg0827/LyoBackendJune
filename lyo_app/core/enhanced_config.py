@@ -81,8 +81,9 @@ class EnhancedSettings(BaseSettings):
     # AI SERVICE SETTINGS
     # ============================================================================
     
-    # Google Gemini
+    # Google Gemini - supports both GOOGLE_API_KEY and GEMINI_API_KEY
     GOOGLE_API_KEY: str = Field("", description="Google Gemini API key")
+    GEMINI_API_KEY: Optional[str] = Field(None, description="Google Gemini API key (alternative)")
     GEMINI_MODEL_DEFAULT: str = Field("gemini-1.5-flash", description="Default Gemini model")
     GEMINI_MODEL_VISION: str = Field("gemini-pro-vision", description="Gemini vision model")
     GEMINI_MODEL_FLASH: str = Field("gemini-1.5-flash", description="Gemini flash model")
@@ -341,11 +342,15 @@ class EnhancedSettings(BaseSettings):
             'allow_headers': self.CORS_HEADERS
         }
     
+    def get_gemini_api_key(self) -> str:
+        """Get Gemini API key, supporting both env var names"""
+        return self.GOOGLE_API_KEY or self.GEMINI_API_KEY or ""
+    
     def get_ai_config(self) -> Dict[str, Any]:
         """Get AI configuration"""
         return {
             'google': {
-                'api_key': self.GOOGLE_API_KEY,
+                'api_key': self.get_gemini_api_key(),
                 'models': {
                     'default': self.GEMINI_MODEL_DEFAULT,
                     'vision': self.GEMINI_MODEL_VISION,
@@ -498,8 +503,9 @@ def validate_settings():
         if not settings.SECRET_KEY or len(settings.SECRET_KEY) < 32:
             errors.append("SECRET_KEY must be at least 32 characters long")
         
-        if not settings.GOOGLE_API_KEY:
-            errors.append("GOOGLE_API_KEY is required in production")
+        # Support both GOOGLE_API_KEY and GEMINI_API_KEY
+        if not settings.get_gemini_api_key():
+            errors.append("GOOGLE_API_KEY or GEMINI_API_KEY is required in production")
         
         if not settings.DATABASE_URL:
             errors.append("DATABASE_URL is required")
