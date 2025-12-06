@@ -43,6 +43,41 @@ from lyo_app.ai_agents.multi_agent_v2.model_manager import (
     TaskComplexity
 )
 
+# Tutor Agent
+from lyo_app.ai_agents.multi_agent_v2.agents.tutor_agent import (
+    TutorAgent,
+    get_tutor_agent,
+    TutorPersonality,
+    ExplanationStyle,
+    UserContext,
+    TutorMessage,
+    HintLevel,
+    TutorResponse,
+    HintResponse,
+    TutorExplanation
+)
+
+# Exercise Validator
+from lyo_app.ai_agents.multi_agent_v2.agents.exercise_validator import (
+    ExerciseValidator,
+    get_exercise_validator,
+    ExerciseContext,
+    AnswerType,
+    ValidationResult,
+    CodeExecutionResult
+)
+
+# Media Service
+from lyo_app.ai_agents.multi_agent_v2.agents.media_service import (
+    MediaService,
+    get_media_service,
+    ImageGenerationRequest,
+    DiagramGenerationRequest,
+    ImageStyle,
+    DiagramType,
+    MediaResult
+)
+
 __all__ = [
     # Base
     "BaseAgent",
@@ -75,5 +110,34 @@ __all__ = [
     "ModelManager",
     "ModelConfig",
     "ModelTier",
-    "TaskComplexity"
+    "TaskComplexity",
+    
+    # Tutor Agent
+    "TutorAgent",
+    "get_tutor_agent",
+    "TutorPersonality",
+    "ExplanationStyle",
+    "UserContext",
+    "TutorMessage",
+    "HintLevel",
+    "TutorResponse",
+    "HintResponse",
+    "TutorExplanation",
+    
+    # Exercise Validator
+    "ExerciseValidator",
+    "get_exercise_validator",
+    "ExerciseContext",
+    "AnswerType",
+    "ValidationResult",
+    "CodeExecutionResult",
+    
+    # Media Service
+    "MediaService",
+    "get_media_service",
+    "ImageGenerationRequest",
+    "DiagramGenerationRequest",
+    "ImageStyle",
+    "DiagramType",
+    "MediaResult"
 ]

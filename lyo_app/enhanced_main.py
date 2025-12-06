@@ -378,6 +378,22 @@ def create_app() -> FastAPI:
         logger.info("✅ Classroom routes integrated - Virtual classroom sessions active!")
     except ImportError as e:
         logger.warning(f"Classroom routes not available: {e}")
+    
+    # Multi-Agent Course Generation v2
+    try:
+        from lyo_app.ai_agents.multi_agent_v2.routes import router as course_gen_router
+        app.include_router(course_gen_router)
+        logger.info("✅ Multi-Agent Course Generation v2 integrated - 5-agent pipeline with Gemini 2.5 Pro + 1.5 Flash!")
+    except ImportError as e:
+        logger.warning(f"Multi-Agent Course Generation v2 routes not available: {e}")
+    
+    # AI Tutor and Exercise Validation v2
+    try:
+        from lyo_app.ai_agents.multi_agent_v2.tutor_routes import router as tutor_router
+        app.include_router(tutor_router)
+        logger.info("✅ AI Tutor & Exercise Validator integrated - Context-aware tutoring with code sandbox!")
+    except ImportError as e:
+        logger.warning(f"AI Tutor v2 routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401
@@ -581,6 +597,10 @@ async def root():  # noqa: D401
             "personalization": "/api/v1/personalization",
             "gen_curriculum": "/api/v1/gen-curriculum",
             "collaboration": "/api/v1/collaboration",
+            "course_generation_v2": "/api/v2/courses",
+            "tutor_v2": "/api/v2/tutor",
+            "exercises_v2": "/api/v2/exercises",
+            "media_v2": "/api/v2/media",
         },
         "features": {
             "ai_study_mode": getattr(settings, "ENABLE_AI_STUDY_MODE", True),
