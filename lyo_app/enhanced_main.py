@@ -279,6 +279,22 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"TTS routes not available: {e}")
     
+    # Image Generation - DALL-E 3 for educational visuals
+    try:
+        from lyo_app.image_gen.routes import router as image_gen_router
+        app.include_router(image_gen_router)
+        logger.info("✅ Image Generation routes integrated - DALL-E 3 educational visuals active!")
+    except ImportError as e:
+        logger.warning(f"Image Generation routes not available: {e}")
+    
+    # AI Classroom - Unified intelligent learning experience
+    try:
+        from lyo_app.ai_classroom.routes import router as ai_classroom_router
+        app.include_router(ai_classroom_router)
+        logger.info("✅ AI Classroom routes integrated - Award-winning learning experience active!")
+    except ImportError as e:
+        logger.warning(f"AI Classroom routes not available: {e}")
+    
     # Phase 1: Generative AI Tutor Foundation
     try:
         from lyo_app.personalization.routes import router as personalization_router
