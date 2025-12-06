@@ -7,11 +7,12 @@ MIT Architecture Engineering - Fail-Safe Validation Layer
 
 import ast
 import re
+import asyncio
 import logging
 from typing import Tuple, List, Optional, Set
 from pydantic import ValidationError
 
-from lyo_app.ai_agents.schemas.course_schemas import (
+from lyo_app.ai_agents.multi_agent_v2.schemas.course_schemas import (
     CourseIntent,
     CurriculumStructure,
     LessonContent,
@@ -33,28 +34,32 @@ class GateValidationError(Exception):
         super().__init__(f"Gate {gate_name} failed: {errors}")
 
 
-class ValidationResult:
+class GateResult:
     """Result of a gate validation"""
     
     def __init__(
         self, 
         passed: bool, 
-        data: Optional[any] = None, 
-        errors: List[str] = None,
-        warnings: List[str] = None
+        issues: List[str] = None,
+        warnings: List[str] = None,
+        fixable: bool = True
     ):
         self.passed = passed
-        self.data = data
-        self.errors = errors or []
+        self.issues = issues or []
         self.warnings = warnings or []
+        self.fixable = fixable
     
     def to_dict(self):
         return {
             "passed": self.passed,
-            "errors": self.errors,
+            "issues": self.issues,
             "warnings": self.warnings,
-            "has_data": self.data is not None
+            "fixable": self.fixable
         }
+
+
+# Alias for backward compatibility
+ValidationResult = GateResult
 
 
 class PipelineGates:
@@ -69,25 +74,17 @@ class PipelineGates:
     """
     
     @staticmethod
-    def gate_1_validate_intent(data: dict) -> ValidationResult:
+    async def gate_1_validate_intent(intent: CourseIntent) -> GateResult:
         """
         Gate 1: Validate Orchestrator output (CourseIntent)
         
         Checks:
-        - Schema compliance
         - Topic is meaningful (not just "course" or "learn")
         - Duration is reasonable for topic complexity
         - Learning objectives are specific and actionable
         """
-        errors = []
+        issues = []
         warnings = []
-        
-        # Schema validation
-        try:
-            intent = CourseIntent(**data)
-        except ValidationError as e:
-            error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return ValidationResult(False, None, error_msgs)
         
         # Semantic validation
         topic_lower = intent.topic.lower()
@@ -95,7 +92,7 @@ class PipelineGates:
         # Check topic quality
         weak_topics = ["course", "learn", "study", "thing", "stuff", "something", "topic"]
         if any(topic_lower == weak for weak in weak_topics):
-            errors.append(f"Topic '{intent.topic}' is too vague - needs to be specific")
+            issues.append(f"Topic '{intent.topic}' is too vague - needs to be specific")
         
         # Check for suspiciously short topics
         if len(intent.topic.split()) == 1 and len(intent.topic) < 5:
@@ -127,33 +124,25 @@ class PipelineGates:
         if intent.target_audience == DifficultyLevel.BEGINNER and len(intent.prerequisites) > 3:
             warnings.append("Beginner course has many prerequisites - verify this is correct")
         
-        passed = len(errors) == 0
-        return ValidationResult(passed, intent if passed else None, errors, warnings)
+        passed = len(issues) == 0
+        return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
     
     @staticmethod
-    def gate_2_validate_curriculum(
-        data: dict, 
+    async def gate_2_validate_curriculum(
+        curriculum: CurriculumStructure, 
         intent: CourseIntent
-    ) -> ValidationResult:
+    ) -> GateResult:
         """
         Gate 2: Validate Curriculum Architect output
         
         Checks:
-        - Schema compliance
         - Module count is appropriate for duration
         - Prerequisites form a valid DAG (no cycles)
         - All learning objectives are covered
         - Lesson distribution is balanced
         """
-        errors = []
+        issues = []
         warnings = []
-        
-        # Schema validation (includes cycle detection)
-        try:
-            curriculum = CurriculumStructure(**data)
-        except ValidationError as e:
-            error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return ValidationResult(False, None, error_msgs)
         
         # Check module count vs duration
         hours = intent.estimated_duration_hours
@@ -186,28 +175,24 @@ class PipelineGates:
         all_lesson_ids = []
         for module in curriculum.modules:
             for lesson in module.lessons:
-                if lesson.id in all_lesson_ids:
-                    errors.append(f"Duplicate lesson ID: {lesson.id}")
-                all_lesson_ids.append(lesson.id)
+                if lesson.lesson_id in all_lesson_ids:
+                    issues.append(f"Duplicate lesson ID: {lesson.lesson_id}")
+                all_lesson_ids.append(lesson.lesson_id)
         
         # Verify module IDs are unique
-        module_ids = [m.id for m in curriculum.modules]
+        module_ids = [m.module_id for m in curriculum.modules]
         if len(module_ids) != len(set(module_ids)):
-            errors.append("Duplicate module IDs detected")
+            issues.append("Duplicate module IDs detected")
         
-        # Check first module has no prerequisites
-        if curriculum.modules and curriculum.modules[0].prerequisites:
-            warnings.append("First module has prerequisites - users might not be able to start")
-        
-        passed = len(errors) == 0
-        return ValidationResult(passed, curriculum if passed else None, errors, warnings)
+        passed = len(issues) == 0
+        return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
     
     @staticmethod
-    def gate_3_validate_content(
+    async def gate_3_validate_content(
         lesson_data: dict,
         curriculum: CurriculumStructure,
         all_lesson_ids: Set[str]
-    ) -> ValidationResult:
+    ) -> GateResult:
         """
         Gate 3: Validate Content Creator output (per lesson)
         
@@ -218,7 +203,7 @@ class PipelineGates:
         - Content has sufficient depth
         - Exercises have valid solutions
         """
-        errors = []
+        issues = []
         warnings = []
         
         # Schema validation
@@ -226,34 +211,33 @@ class PipelineGates:
             lesson = LessonContent(**lesson_data)
         except ValidationError as e:
             error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return ValidationResult(False, None, error_msgs)
+            return GateResult(passed=False, issues=error_msgs, fixable=True)
         
         # Check lesson ID exists in curriculum
         if lesson.lesson_id not in all_lesson_ids:
-            errors.append(f"Unknown lesson ID: {lesson.lesson_id}")
+            issues.append(f"Unknown lesson ID: {lesson.lesson_id}")
         
         # Validate code blocks
         code_errors = 0
         for i, block in enumerate(lesson.content_blocks):
-            if block.block.type == "code":
-                code_block = block.block
-                if code_block.language == "python":
+            if block.block_type == "code":
+                if hasattr(block, 'language') and block.language == "python":
                     try:
-                        ast.parse(code_block.code)
+                        ast.parse(block.code)
                     except SyntaxError as e:
                         code_errors += 1
                         warnings.append(f"Block {i}: Python syntax error at line {e.lineno}: {e.msg}")
         
         if code_errors > len(lesson.content_blocks) // 3:
-            errors.append(f"Too many code blocks with syntax errors ({code_errors})")
+            issues.append(f"Too many code blocks with syntax errors ({code_errors})")
         
         # Check content depth (word count)
         total_words = 0
         for b in lesson.content_blocks:
-            if hasattr(b.block, 'content'):
-                total_words += len(b.block.content.split())
-            if hasattr(b.block, 'explanation') and b.block.explanation:
-                total_words += len(b.block.explanation.split())
+            if hasattr(b, 'content'):
+                total_words += len(b.content.split())
+            if hasattr(b, 'explanation') and b.explanation:
+                total_words += len(b.explanation.split())
         
         if total_words < 150:
             warnings.append(f"Lesson content might be too shallow ({total_words} words)")
@@ -261,25 +245,24 @@ class PipelineGates:
             warnings.append(f"Lesson content might be too long ({total_words} words)")
         
         # Check for variety
-        block_types = [b.block.type for b in lesson.content_blocks]
+        block_types = [b.block_type for b in lesson.content_blocks]
         if len(set(block_types)) < 2:
             warnings.append("Lesson lacks variety - only one type of content block")
         
         # Check exercises have non-trivial solutions
         for block in lesson.content_blocks:
-            if block.block.type == "exercise":
-                exercise = block.block
-                if len(exercise.solution.strip()) < 15:
+            if block.block_type == "exercise":
+                if hasattr(block, 'solution') and len(block.solution.strip()) < 15:
                     warnings.append("Exercise has very short solution - might be trivial")
         
-        passed = len(errors) == 0
-        return ValidationResult(passed, lesson if passed else None, errors, warnings)
+        passed = len(issues) == 0
+        return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
     
     @staticmethod
-    def gate_4_validate_assessments(
+    async def gate_4_validate_assessments(
         data: dict,
         curriculum: CurriculumStructure
-    ) -> ValidationResult:
+    ) -> GateResult:
         """
         Gate 4: Validate Assessment Designer output
         
@@ -290,7 +273,7 @@ class PipelineGates:
         - Answer distributions are reasonable (not all A's)
         - Difficulty progression makes sense
         """
-        errors = []
+        issues = []
         warnings = []
         
         # Schema validation
@@ -298,13 +281,13 @@ class PipelineGates:
             assessments = CourseAssessments(**data)
         except ValidationError as e:
             error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return ValidationResult(False, None, error_msgs)
+            return GateResult(passed=False, issues=error_msgs, fixable=True)
         
         # Get all lesson IDs from curriculum
         all_lesson_ids = set()
         for module in curriculum.modules:
             for lesson in module.lessons:
-                all_lesson_ids.add(lesson.id)
+                all_lesson_ids.add(lesson.lesson_id)
         
         # Check every lesson has a quiz
         lesson_ids_with_quiz = {q.lesson_id for q in assessments.lesson_quizzes}
@@ -315,13 +298,13 @@ class PipelineGates:
         # Check for extra quizzes (IDs not in curriculum)
         extra_quizzes = lesson_ids_with_quiz - all_lesson_ids
         if extra_quizzes:
-            errors.append(f"Quizzes reference unknown lessons: {extra_quizzes}")
+            issues.append(f"Quizzes reference unknown lessons: {extra_quizzes}")
         
         # Check module assessments
-        module_ids = {m.id for m in curriculum.modules}
+        module_ids = {m.module_id for m in curriculum.modules}
         for assessment in assessments.module_assessments:
             if assessment.module_id not in module_ids:
-                errors.append(f"Assessment references unknown module: {assessment.module_id}")
+                issues.append(f"Assessment references unknown module: {assessment.module_id}")
         
         # Check answer distribution
         total_mc = 0
@@ -329,9 +312,9 @@ class PipelineGates:
         
         for quiz in assessments.lesson_quizzes:
             for q in quiz.questions:
-                if hasattr(q.question, 'correct_answer') and isinstance(q.question.correct_answer, int):
+                if hasattr(q, 'correct_answer') and isinstance(q.correct_answer, int):
                     total_mc += 1
-                    answer_distribution[q.question.correct_answer] += 1
+                    answer_distribution[q.correct_answer] += 1
         
         if total_mc > 10:
             # Check if answers are too concentrated
@@ -344,11 +327,11 @@ class PipelineGates:
             if len(quiz.questions) < 2:
                 warnings.append(f"Quiz {quiz.lesson_id} has only {len(quiz.questions)} question(s)")
         
-        passed = len(errors) == 0
-        return ValidationResult(passed, assessments if passed else None, errors, warnings)
+        passed = len(issues) == 0
+        return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
     
     @staticmethod
-    def gate_5_validate_qa(data: dict) -> ValidationResult:
+    async def gate_5_validate_qa(data: dict) -> GateResult:
         """
         Gate 5: Final validation of QA report
         
@@ -358,7 +341,7 @@ class PipelineGates:
         - Critical issues block approval
         - Report is complete
         """
-        errors = []
+        issues = []
         warnings = []
         
         # Schema validation
@@ -366,12 +349,12 @@ class PipelineGates:
             qa = QualityReport(**data)
         except ValidationError as e:
             error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return ValidationResult(False, None, error_msgs)
+            return GateResult(passed=False, issues=error_msgs, fixable=True)
         
         # Check for critical issues
         critical_issues = [i for i in qa.issues if i.severity == "critical"]
         if critical_issues and qa.approved:
-            errors.append("Cannot approve course with critical issues")
+            issues.append("Cannot approve course with critical issues")
         
         # Ensure score makes sense relative to issues
         high_severity_count = sum(1 for i in qa.issues if i.severity in ["critical", "high"])
@@ -386,35 +369,35 @@ class PipelineGates:
         if abs(qa.overall_score - avg_component) > 2.0:
             warnings.append("Overall score doesn't align with component scores")
         
-        passed = len(errors) == 0
-        return ValidationResult(passed, qa if passed else None, errors, warnings)
+        passed = len(issues) == 0
+        return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
     
     @staticmethod
-    def validate_full_course(
+    async def validate_full_course(
         intent: CourseIntent,
         curriculum: CurriculumStructure,
         lessons: List[LessonContent],
         assessments: CourseAssessments,
         qa_report: QualityReport
-    ) -> ValidationResult:
+    ) -> GateResult:
         """
         Final validation of the complete course before saving.
         
         Checks cross-component consistency.
         """
-        errors = []
+        issues = []
         warnings = []
         
         # Check lesson count matches curriculum
         expected_lessons = sum(len(m.lessons) for m in curriculum.modules)
         if len(lessons) != expected_lessons:
-            errors.append(f"Expected {expected_lessons} lessons but got {len(lessons)}")
+            issues.append(f"Expected {expected_lessons} lessons but got {len(lessons)}")
         
         # Check all lessons are accounted for
         lesson_ids_in_curriculum = set()
         for module in curriculum.modules:
             for lesson in module.lessons:
-                lesson_ids_in_curriculum.add(lesson.id)
+                lesson_ids_in_curriculum.add(lesson.lesson_id)
         
         lesson_ids_generated = {l.lesson_id for l in lessons}
         
@@ -422,7 +405,7 @@ class PipelineGates:
         extra = lesson_ids_generated - lesson_ids_in_curriculum
         
         if missing:
-            errors.append(f"Missing lesson content for: {missing}")
+            issues.append(f"Missing lesson content for: {missing}")
         if extra:
             warnings.append(f"Extra lessons not in curriculum: {extra}")
         
@@ -437,13 +420,8 @@ class PipelineGates:
             if qa_report.overall_score >= 7.0:
                 warnings.append("QA score is passing but not approved - review issues")
         
-        passed = len(errors) == 0
-        return ValidationResult(
-            passed, 
-            {"validated": True} if passed else None, 
-            errors, 
-            warnings
-        )
+        passed = len(issues) == 0
+        return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
 
 
 class GateRunner:
@@ -454,7 +432,7 @@ class GateRunner:
     
     def __init__(self, max_retries: int = 2):
         self.max_retries = max_retries
-        self.gate_results: List[ValidationResult] = []
+        self.gate_results: List[GateResult] = []
     
     async def run_gate(
         self,
@@ -462,17 +440,21 @@ class GateRunner:
         *args,
         gate_name: str = "unknown",
         **kwargs
-    ) -> ValidationResult:
+    ) -> GateResult:
         """
         Run a gate with logging and error handling.
         
         Returns:
-            ValidationResult with pass/fail status
+            GateResult with pass/fail status
         """
         logger.info(f"Running gate: {gate_name}")
         
         try:
-            result = gate_func(*args, **kwargs)
+            # Support both async and sync gate functions
+            if asyncio.iscoroutinefunction(gate_func):
+                result = await gate_func(*args, **kwargs)
+            else:
+                result = gate_func(*args, **kwargs)
             self.gate_results.append(result)
             
             if result.passed:
@@ -480,16 +462,15 @@ class GateRunner:
                 if result.warnings:
                     logger.warning(f"Gate {gate_name} warnings: {result.warnings}")
             else:
-                logger.error(f"Gate {gate_name} FAILED: {result.errors}")
+                logger.error(f"Gate {gate_name} FAILED: {result.issues}")
             
             return result
             
         except Exception as e:
             logger.exception(f"Gate {gate_name} threw exception: {e}")
-            return ValidationResult(
-                False, 
-                None, 
-                [f"Gate exception: {str(e)}"]
+            return GateResult(
+                passed=False, 
+                issues=[f"Gate exception: {str(e)}"]
             )
     
     def get_summary(self) -> dict:
@@ -498,6 +479,6 @@ class GateRunner:
             "total_gates": len(self.gate_results),
             "passed": sum(1 for r in self.gate_results if r.passed),
             "failed": sum(1 for r in self.gate_results if not r.passed),
-            "total_errors": sum(len(r.errors) for r in self.gate_results),
+            "total_issues": sum(len(r.issues) for r in self.gate_results),
             "total_warnings": sum(len(r.warnings) for r in self.gate_results)
         }

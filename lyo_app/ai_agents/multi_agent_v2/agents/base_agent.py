@@ -3,6 +3,10 @@ Base Agent Class for Multi-Agent Course Generation.
 Uses structured output enforcement via Pydantic.
 
 MIT Architecture Engineering - Production Grade Agent Framework
+
+Model Selection:
+- Gemini 2.5 Pro: Complex tasks (orchestrator, curriculum, QA)
+- Gemini 1.5 Flash: High-volume tasks (content, assessments)
 """
 
 import asyncio
@@ -23,6 +27,12 @@ from tenacity import (
 )
 
 from lyo_app.core.config import settings
+from lyo_app.ai_agents.multi_agent_v2.model_manager import (
+    ModelManager, 
+    ModelConfig,
+    ModelTier,
+    TaskComplexity
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +135,7 @@ class BaseAgent(ABC, Generic[T]):
     Base class for all course generation agents.
     
     Features:
+    - Intelligent model selection (Gemini 2.5 Pro vs 1.5 Flash)
     - Structured output enforcement via Pydantic
     - Automatic retries with exponential backoff
     - Fallback to simpler prompts on failure
@@ -136,30 +147,41 @@ class BaseAgent(ABC, Generic[T]):
         self,
         name: str,
         output_schema: Type[T],
-        model_name: str = "gemini-1.5-flash",
-        temperature: float = 0.7,
-        max_tokens: int = 8192,
+        model_name: Optional[str] = None,  # Auto-selected based on task
+        temperature: Optional[float] = None,  # Auto-selected based on task
+        max_tokens: Optional[int] = None,  # Auto-selected based on task
         max_retries: int = 3,
-        timeout_seconds: float = 90.0
+        timeout_seconds: float = 120.0,  # Increased for Gemini 2.5 Pro
+        force_model_tier: Optional[ModelTier] = None  # Override model selection
     ):
         self.name = name
         self.output_schema = output_schema
-        self.model_name = model_name
-        self.temperature = temperature
-        self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
         self.metrics = AgentMetrics(name)
+        
+        # Get model configuration from ModelManager
+        if force_model_tier:
+            model_config = ModelManager.MODELS[force_model_tier]
+        else:
+            model_config = ModelManager.get_model_for_task(name)
+        
+        # Use provided values or defaults from model config
+        self.model_name = model_name or model_config.model_name
+        self.temperature = temperature if temperature is not None else model_config.temperature
+        self.max_tokens = max_tokens or model_config.max_tokens
+        
+        logger.info(f"Agent '{name}' using model: {self.model_name} (temp={self.temperature}, max_tokens={self.max_tokens})")
         
         # Initialize Gemini
         api_key = getattr(settings, 'google_api_key', None) or getattr(settings, 'gemini_api_key', None)
         if api_key:
             genai.configure(api_key=api_key)
             self.model = genai.GenerativeModel(
-                model_name,
+                self.model_name,
                 generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens,
+                    "temperature": self.temperature,
+                    "max_output_tokens": self.max_tokens,
                     "response_mime_type": "application/json"
                 }
             )
@@ -172,6 +194,16 @@ class BaseAgent(ABC, Generic[T]):
     @property
     def is_available(self) -> bool:
         return self._available
+    
+    @property
+    def model_tier(self) -> str:
+        """Get the model tier being used"""
+        if "2.5" in self.model_name or "2.0" in self.model_name:
+            return "PREMIUM (Gemini 2.5 Pro)"
+        elif "flash" in self.model_name.lower():
+            return "STANDARD (Gemini 1.5 Flash)"
+        else:
+            return f"CUSTOM ({self.model_name})"
     
     @abstractmethod
     def get_system_prompt(self) -> str:

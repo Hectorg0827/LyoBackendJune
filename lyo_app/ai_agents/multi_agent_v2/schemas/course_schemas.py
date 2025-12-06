@@ -6,7 +6,7 @@ MIT Architecture Engineering - Production Grade Schemas
 """
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import List, Optional, Union, Annotated, Any
+from typing import List, Optional, Union, Annotated, Any, Literal, Dict
 from enum import Enum
 from uuid import UUID, uuid4
 from datetime import datetime
@@ -21,6 +21,24 @@ class DifficultyLevel(str, Enum):
     BEGINNER = "beginner"
     INTERMEDIATE = "intermediate"
     ADVANCED = "advanced"
+
+
+class LessonType(str, Enum):
+    """Types of lessons in a course"""
+    CONCEPT = "concept"
+    TUTORIAL = "tutorial"
+    EXERCISE = "exercise"
+    PROJECT = "project"
+    QUIZ = "quiz"
+    REVIEW = "review"
+
+
+class TeachingStyle(str, Enum):
+    """Teaching styles for course delivery"""
+    INTERACTIVE = "interactive"
+    PROJECT_BASED = "project-based"
+    LECTURE = "lecture"
+    HANDS_ON = "hands-on"
 
 
 class ContentBlockType(str, Enum):
@@ -51,7 +69,6 @@ class CourseIntent(BaseModel):
     This is the foundation that all other agents build upon.
     """
     
-    job_id: UUID = Field(default_factory=uuid4, description="Unique job identifier")
     topic: str = Field(..., min_length=3, max_length=200, description="Main course topic")
     target_audience: DifficultyLevel = Field(..., description="Target difficulty level")
     estimated_duration_hours: int = Field(..., ge=1, le=100, description="Estimated total hours")
@@ -70,9 +87,9 @@ class CourseIntent(BaseModel):
         max_length=10,
         description="Categorization tags"
     )
-    teaching_style: str = Field(
-        default="interactive",
-        description="Teaching approach: interactive, lecture, project-based"
+    teaching_style: TeachingStyle = Field(
+        default=TeachingStyle.INTERACTIVE,
+        description="Teaching approach"
     )
     
     @field_validator('learning_objectives')
@@ -197,189 +214,225 @@ class CurriculumStructure(BaseModel):
 
 class TextBlock(BaseModel):
     """Text content block for explanations"""
-    type: str = Field(default="text", frozen=True)
+    block_type: Literal["text"] = Field(default="text")
+    title: str = Field(..., min_length=3, max_length=100)
     content: str = Field(..., min_length=50)
     format: str = Field(default="markdown", description="text, markdown, html")
+    order: int = Field(..., ge=0)
 
 
 class CodeBlock(BaseModel):
     """Code content block with syntax validation"""
-    type: str = Field(default="code", frozen=True)
+    block_type: Literal["code"] = Field(default="code")
+    title: str = Field(..., min_length=3, max_length=100)
     language: str = Field(
         ..., 
-        pattern=r'^(python|javascript|java|cpp|sql|html|css|typescript|rust|go)$'
+        pattern=r'^(python|javascript|java|cpp|sql|html|css|typescript|rust|go|bash|json|yaml)$'
     )
-    code: str = Field(..., min_length=10)
+    code: str = Field(..., min_length=5)
     explanation: Optional[str] = Field(default=None)
-    runnable: bool = Field(default=True)
-    expected_output: Optional[str] = Field(default=None)
+    filename: Optional[str] = Field(default=None)
+    order: int = Field(..., ge=0)
 
 
 class ExerciseBlock(BaseModel):
     """Interactive exercise block"""
-    type: str = Field(default="exercise", frozen=True)
-    prompt: str = Field(..., min_length=20)
-    starter_code: Optional[str] = Field(default=None)
+    block_type: Literal["exercise"] = Field(default="exercise")
+    title: str = Field(..., min_length=3, max_length=100)
+    instructions: str = Field(..., min_length=20)
+    difficulty: str = Field(default="medium", pattern=r'^(easy|medium|hard)$')
+    hints: List[str] = Field(default_factory=list, max_length=5)
     solution: str = Field(..., min_length=10)
-    hints: List[str] = Field(default_factory=list, max_length=3)
-    difficulty: DifficultyLevel = Field(default=DifficultyLevel.INTERMEDIATE)
-    test_cases: List[str] = Field(default_factory=list, description="Test cases for validation")
-
-
-class ContentBlock(BaseModel):
-    """Wrapper for any content block type"""
-    block: Union[TextBlock, CodeBlock, ExerciseBlock] = Field(
-        ..., 
-        discriminator='type'
-    )
+    expected_output: Optional[str] = Field(default=None)
     order: int = Field(..., ge=0)
+
+
+class MediaBlock(BaseModel):
+    """Media content block for diagrams and images"""
+    block_type: Literal["media"] = Field(default="media")
+    title: str = Field(..., min_length=3, max_length=100)
+    media_type: str = Field(..., pattern=r'^(diagram|image|video)$')
+    url: str = Field(default="placeholder")
+    alt_text: str = Field(..., min_length=5)
+    caption: Optional[str] = Field(default=None)
+    order: int = Field(..., ge=0)
+
+
+# Union type for all content blocks - uses discriminated union on block_type
+ContentBlock = Annotated[
+    Union[TextBlock, CodeBlock, ExerciseBlock, MediaBlock],
+    Field(discriminator="block_type")
+]
 
 
 class LessonContent(BaseModel):
     """Complete lesson content from Content Creator"""
     
-    lesson_id: str = Field(..., pattern=r'^les_\d+_\d+$')
-    title: str = Field(..., min_length=5, max_length=100)
-    content_blocks: List[ContentBlock] = Field(..., min_length=3, max_length=25)
-    key_takeaways: List[str] = Field(..., min_length=2, max_length=5)
-    estimated_minutes: int = Field(..., ge=5, le=60)
-    next_lesson_preview: Optional[str] = Field(default=None, description="Teaser for next lesson")
-    
-    @model_validator(mode='after')
-    def has_variety(self) -> 'LessonContent':
-        """Ensure lesson has variety of content types"""
-        types = {b.block.type for b in self.content_blocks}
-        if len(types) < 2:
-            raise ValueError("Lesson must have at least 2 different content types")
-        return self
+    lesson_id: str = Field(..., pattern=r'^mod\d+_les\d+$')
+    title: str = Field(..., min_length=5, max_length=200)
+    lesson_type: LessonType = Field(default=LessonType.CONCEPT)
+    introduction: str = Field(..., min_length=50)
+    content_blocks: List[ContentBlock] = Field(..., min_length=1, max_length=25)
+    summary: str = Field(..., min_length=20)
+    key_takeaways: List[str] = Field(..., min_length=1, max_length=10)
+    next_steps: Optional[str] = Field(default=None, description="What comes next")
 
 
 # ============================================================
 # STEP 4: Assessment Designer Output
 # ============================================================
 
+class QuestionOption(BaseModel):
+    """Option for multiple choice question"""
+    label: str = Field(..., pattern=r'^[A-D]$')
+    text: str = Field(..., min_length=1)
+
+
 class MultipleChoiceQuestion(BaseModel):
     """Multiple choice question with 4 options"""
-    type: str = Field(default="multiple_choice", frozen=True)
-    question: str = Field(..., min_length=20)
-    options: List[str] = Field(..., min_length=4, max_length=4)
-    correct_answer: int = Field(..., ge=0, le=3, description="Index of correct option (0-3)")
-    explanation: str = Field(..., min_length=20)
-    difficulty: DifficultyLevel = Field(default=DifficultyLevel.INTERMEDIATE)
-    
-    @field_validator('options')
-    @classmethod
-    def options_unique(cls, v: List[str]) -> List[str]:
-        if len(set(v)) != len(v):
-            raise ValueError("All options must be unique")
-        return v
+    question_type: Literal["multiple_choice"] = Field(default="multiple_choice")
+    question_id: str = Field(...)
+    question: str = Field(..., min_length=10)
+    options: List[QuestionOption] = Field(..., min_length=4, max_length=4)
+    correct_answer: str = Field(..., pattern=r'^[A-D]$')
+    explanation: str = Field(..., min_length=10)
+    difficulty: str = Field(default="medium", pattern=r'^(easy|medium|hard)$')
+    learning_objective: Optional[str] = Field(default=None)
+    points: int = Field(default=10, ge=1)
 
 
 class TrueFalseQuestion(BaseModel):
     """True/False question"""
-    type: str = Field(default="true_false", frozen=True)
-    statement: str = Field(..., min_length=20)
+    question_type: Literal["true_false"] = Field(default="true_false")
+    question_id: str = Field(...)
+    statement: str = Field(..., min_length=10)
     correct_answer: bool
-    explanation: str = Field(..., min_length=20)
-    difficulty: DifficultyLevel = Field(default=DifficultyLevel.BEGINNER)
+    explanation: str = Field(..., min_length=10)
+    difficulty: str = Field(default="easy", pattern=r'^(easy|medium|hard)$')
+    learning_objective: Optional[str] = Field(default=None)
+    points: int = Field(default=5, ge=1)
 
 
-class CodeQuestion(BaseModel):
-    """Code completion/debugging question"""
-    type: str = Field(default="code_completion", frozen=True)
-    prompt: str = Field(..., min_length=20)
-    language: str = Field(default="python")
-    starter_code: str = Field(...)
+class FillBlankQuestion(BaseModel):
+    """Fill in the blank question"""
+    question_type: Literal["fill_blank"] = Field(default="fill_blank")
+    question_id: str = Field(...)
+    question_with_blank: str = Field(..., min_length=10)
+    correct_answer: str = Field(...)
+    acceptable_answers: List[str] = Field(default_factory=list)
+    hint: Optional[str] = Field(default=None)
+    difficulty: str = Field(default="medium", pattern=r'^(easy|medium|hard)$')
+    learning_objective: Optional[str] = Field(default=None)
+    points: int = Field(default=10, ge=1)
+
+
+class TestCase(BaseModel):
+    """Test case for coding question"""
+    input: str = Field(...)
     expected_output: str = Field(...)
+
+
+class CodingQuestion(BaseModel):
+    """Coding question with test cases"""
+    question_type: Literal["coding"] = Field(default="coding")
+    question_id: str = Field(...)
+    problem_statement: str = Field(..., min_length=20)
+    starter_code: Optional[str] = Field(default=None)
     solution: str = Field(..., min_length=10)
-    test_cases: List[str] = Field(..., min_length=1, max_length=5)
-    difficulty: DifficultyLevel = Field(default=DifficultyLevel.INTERMEDIATE)
+    test_cases: List[TestCase] = Field(..., min_length=1)
+    language: str = Field(default="python")
+    difficulty: str = Field(default="medium", pattern=r'^(easy|medium|hard)$')
+    learning_objective: Optional[str] = Field(default=None)
+    points: int = Field(default=25, ge=1)
 
 
-class QuizQuestion(BaseModel):
-    """Union of all question types"""
-    question: Union[MultipleChoiceQuestion, TrueFalseQuestion, CodeQuestion] = Field(
-        ...,
-        discriminator='type'
-    )
-
-
-class LessonQuiz(BaseModel):
-    """Quiz for a single lesson"""
-    
-    lesson_id: str = Field(..., pattern=r'^les_\d+_\d+$')
-    questions: List[QuizQuestion] = Field(..., min_length=3, max_length=10)
-    passing_score: float = Field(default=0.7, ge=0.5, le=1.0)
-    time_limit_minutes: Optional[int] = Field(default=None, ge=5, le=30)
-    
-    @model_validator(mode='after')
-    def validate_answer_distribution(self) -> 'LessonQuiz':
-        """Check that MC answers aren't all the same"""
-        mc_answers = []
-        for q in self.questions:
-            if hasattr(q.question, 'correct_answer') and isinstance(q.question.correct_answer, int):
-                mc_answers.append(q.question.correct_answer)
-        
-        # If all answers are the same (and there are more than 2), flag it
-        if mc_answers and len(set(mc_answers)) == 1 and len(mc_answers) > 2:
-            raise ValueError("All multiple choice answers are the same option - vary them")
-        
-        return self
+# Union type for all question types
+QuizQuestion = Annotated[
+    Union[MultipleChoiceQuestion, TrueFalseQuestion, FillBlankQuestion, CodingQuestion],
+    Field(discriminator="question_type")
+]
 
 
 class ModuleAssessment(BaseModel):
     """Assessment for completing a module"""
     
-    module_id: str = Field(..., pattern=r'^mod_\d+$')
+    module_id: str = Field(...)
     title: str = Field(default="Module Assessment")
-    questions: List[QuizQuestion] = Field(..., min_length=5, max_length=20)
-    passing_score: float = Field(default=0.7, ge=0.5, le=1.0)
-    time_limit_minutes: Optional[int] = Field(default=None, ge=10, le=60)
+    passing_score: int = Field(default=70, ge=50, le=100)
+    questions: List[QuizQuestion] = Field(..., min_length=3, max_length=20)
+
+
+class FinalExam(BaseModel):
+    """Final comprehensive exam"""
+    
+    title: str = Field(default="Final Exam")
+    description: str = Field(default="Comprehensive course assessment")
+    time_limit_minutes: int = Field(default=60, ge=15, le=180)
+    passing_score: int = Field(default=70, ge=50, le=100)
+    questions: List[QuizQuestion] = Field(..., min_length=10, max_length=50)
+    weight_per_module: Dict[str, float] = Field(default_factory=dict)
 
 
 class CourseAssessments(BaseModel):
     """All assessments for the course"""
     
-    lesson_quizzes: List[LessonQuiz] = Field(...)
-    module_assessments: List[ModuleAssessment] = Field(...)
-    final_exam: Optional[ModuleAssessment] = Field(default=None)
+    module_assessments: List[ModuleAssessment] = Field(default_factory=list)
+    final_exam: Optional[FinalExam] = Field(default=None)
 
 
 # ============================================================
 # STEP 5: Quality Assurance Output
 # ============================================================
 
+class QualityLevel(str, Enum):
+    """Quality assessment levels"""
+    EXCELLENT = "excellent"
+    GOOD = "good"
+    ACCEPTABLE = "acceptable"
+    NEEDS_WORK = "needs_work"
+    POOR = "poor"
+
+
 class QualityIssue(BaseModel):
     """A quality issue found by QA Agent"""
     
-    location: str = Field(..., description="e.g., mod_1.les_1_1.content_block_3")
-    severity: str = Field(..., pattern=r'^(critical|high|medium|low)$')
-    issue_type: str = Field(..., description="e.g., accuracy, clarity, completeness")
+    issue_id: str = Field(...)
+    severity: str = Field(..., pattern=r'^(critical|major|minor)$')
+    location: str = Field(..., description="e.g., lesson mod1_les2, assessment mod2_q3")
     description: str = Field(..., min_length=10)
     suggested_fix: Optional[str] = Field(default=None)
+    regeneration_required: bool = Field(default=False)
+
+
+class QualityCheck(BaseModel):
+    """Single quality dimension check"""
+    
+    dimension: str = Field(..., description="accuracy, pedagogy, completeness, consistency, engagement, accessibility")
+    score: int = Field(..., ge=0, le=100)
+    level: QualityLevel
+    issues_found: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+
+
+class PriorityImprovement(BaseModel):
+    """Priority improvement suggestion"""
+    
+    priority: int = Field(..., ge=1, le=10)
+    improvement: str = Field(...)
+    impact: str = Field(...)
+    effort: str = Field(..., pattern=r'^(low|medium|high)$')
 
 
 class QualityReport(BaseModel):
     """Quality assurance report from QA Agent"""
     
-    overall_score: float = Field(..., ge=0, le=10)
-    content_accuracy_score: float = Field(..., ge=0, le=10)
-    pedagogical_score: float = Field(..., ge=0, le=10)
-    engagement_score: float = Field(..., ge=0, le=10)
-    issues: List[QualityIssue] = Field(default_factory=list)
-    recommendations: List[str] = Field(default_factory=list)
-    approved: bool = Field(default=False)
-    
-    @model_validator(mode='after')
-    def auto_approve_logic(self) -> 'QualityReport':
-        """Auto-approve if score >= 7 and no critical issues"""
-        has_critical = any(i.severity == "critical" for i in self.issues)
-        # Only auto-set approved if it wasn't explicitly set
-        if self.overall_score >= 7.0 and not has_critical:
-            object.__setattr__(self, 'approved', True)
-        elif has_critical:
-            object.__setattr__(self, 'approved', False)
-        return self
+    quality_checks: List[QualityCheck] = Field(default_factory=list)
+    critical_issues: List[QualityIssue] = Field(default_factory=list)
+    overall_score: int = Field(..., ge=0, le=100)
+    overall_level: QualityLevel = Field(default=QualityLevel.ACCEPTABLE)
+    summary: str = Field(...)
+    recommendation: str = Field(..., pattern=r'^(publish|publish_with_minor_fixes|fix_and_review|regenerate)$')
+    priority_improvements: List[PriorityImprovement] = Field(default_factory=list)
 
 
 # ============================================================
@@ -389,41 +442,16 @@ class QualityReport(BaseModel):
 class GeneratedCourse(BaseModel):
     """Complete generated course with all components"""
     
-    job_id: UUID
+    course_id: str = Field(...)
     intent: CourseIntent
     curriculum: CurriculumStructure
     lessons: List[LessonContent]
-    assessments: CourseAssessments
-    quality_report: QualityReport
+    assessments: Optional[CourseAssessments] = Field(default=None)
+    qa_report: Optional[QualityReport] = Field(default=None)
     
     # Metadata
-    generation_time_seconds: float = Field(..., ge=0)
-    total_tokens_used: int = Field(..., ge=0)
-    ai_provider: str = Field(default="gemini-1.5-flash")
-    version: str = Field(default="2.0.0")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    
-    # Status
-    is_published: bool = Field(default=False)
-    is_approved: bool = Field(default=False)
-    
-    @model_validator(mode='after')
-    def set_approval_status(self) -> 'GeneratedCourse':
-        """Set course approval based on QA report"""
-        object.__setattr__(self, 'is_approved', self.quality_report.approved)
-        return self
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "job_id": "550e8400-e29b-41d4-a716-446655440000",
-                "intent": {"topic": "Python Programming"},
-                "curriculum": {"modules": []},
-                "lessons": [],
-                "assessments": {"lesson_quizzes": [], "module_assessments": []},
-                "quality_report": {"overall_score": 8.5, "approved": True}
-            }
-        }
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generation_duration_seconds: float = Field(default=0.0, ge=0)
 
 
 # ============================================================
@@ -433,7 +461,7 @@ class GeneratedCourse(BaseModel):
 class CourseGenerationRequest(BaseModel):
     """API request to generate a new course"""
     
-    prompt: str = Field(..., min_length=10, max_length=1000)
+    prompt: str = Field(..., min_length=10, max_length=2000)
     difficulty: Optional[DifficultyLevel] = Field(default=None)
     max_duration_hours: Optional[int] = Field(default=None, ge=1, le=100)
     teaching_style: Optional[str] = Field(default="interactive")
@@ -444,7 +472,7 @@ class CourseGenerationRequest(BaseModel):
 class CourseGenerationStatus(BaseModel):
     """Status response for course generation job"""
     
-    job_id: UUID
+    job_id: str
     status: str = Field(..., description="pending, running, completed, failed")
     progress_percent: int = Field(..., ge=0, le=100)
     current_step: str = Field(...)
@@ -457,7 +485,7 @@ class CourseGenerationStatus(BaseModel):
 class RegenerationRequest(BaseModel):
     """Request to regenerate a specific part of a course"""
     
-    course_id: UUID
+    course_id: str
     target: str = Field(..., description="What to regenerate: lesson, module, quiz, etc.")
     target_id: str = Field(..., description="ID of the element to regenerate")
     feedback: Optional[str] = Field(default=None, description="User feedback for improvement")
