@@ -118,34 +118,34 @@ class AIResilienceManager:
     async def initialize(self):
         gemini_key = get_secret("GEMINI_API_KEY", settings.gemini_api_key or "")
         self.models = {
-            "gemini-pro": AIModelConfig(
-                name="Google Gemini Pro",
-                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
+            "gemini-2.0-flash": AIModelConfig(
+                name="Google Gemini 2.0 Flash",
+                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent",
                 api_key=gemini_key,
                 max_tokens=2000,
                 timeout=30,
                 priority=1,
+                cost_per_token=0.001,
+                capabilities=["chat", "code", "analysis", "creative", "multimodal"],
+            ),
+            "gemini-2.5-flash": AIModelConfig(
+                name="Google Gemini 2.5 Flash",
+                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent",
+                api_key=gemini_key,
+                max_tokens=2000,
+                timeout=30,
+                priority=2,
                 cost_per_token=0.002,
                 capabilities=["chat", "code", "analysis", "creative", "multimodal"],
             ),
-            "gemini-pro-vision": AIModelConfig(
-                name="Google Gemini Pro Vision",
-                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-pro-vision:generateContent",
-                api_key=gemini_key,
-                max_tokens=1500,
-                timeout=25,
-                priority=2,
-                cost_per_token=0.003,
-                capabilities=["chat", "vision", "multimodal", "analysis"],
-            ),
-            "gemini-1.5-flash": AIModelConfig(
-                name="Google Gemini 1.5 Flash",
-                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+            "gemini-2.0-flash-lite": AIModelConfig(
+                name="Google Gemini 2.0 Flash Lite",
+                endpoint="https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent",
                 api_key=gemini_key,
                 max_tokens=1000,
                 timeout=15,
                 priority=3,
-                cost_per_token=0.001,
+                cost_per_token=0.0005,
                 capabilities=["chat", "fast", "lightweight"],
             ),
         }
@@ -188,11 +188,14 @@ class AIResilienceManager:
                 return cached
         if provider_order:
             provider_map = {
-                "google": "gemini-pro",
-                "gemini": "gemini-pro",
-                "gemini-pro": "gemini-pro",
-                "gemini-vision": "gemini-pro-vision",
-                "gemini-flash": "gemini-1.5-flash",
+                "google": "gemini-2.0-flash",
+                "gemini": "gemini-2.0-flash",
+                "gemini-pro": "gemini-2.0-flash",
+                "gemini-vision": "gemini-2.5-flash",
+                "gemini-flash": "gemini-2.0-flash-lite",
+                "gemini-2.0-flash": "gemini-2.0-flash",
+                "gemini-2.5-flash": "gemini-2.5-flash",
+                "openai": "gemini-2.0-flash",  # Fallback to Gemini if OpenAI requested
             }
             available_models = [
                 provider_map.get(p)
