@@ -123,7 +123,7 @@ async def study_session_endpoint(
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
-            provider_order=["gemini-pro", "gemini-vision", "gemini-flash"]  # Google Gemini models
+            provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"]  # Google Gemini models
         )
         
         # 6. Build updated conversation history to maintain state
@@ -227,7 +227,7 @@ async def generate_quiz_endpoint(
             messages=[{"role": "user", "content": quiz_prompt}],
             temperature=0.3,  # Lower temperature for consistency
             max_tokens=2000,
-            provider_order=["gemini-pro", "gemini-flash"]  # Google Gemini models
+            provider_order=["gemini-2.0-flash", "gemini-2.0-flash-lite"]  # Google Gemini models
         )
         
         # 3. Parse and validate the JSON from AI before sending to client
@@ -333,7 +333,7 @@ async def analyze_answer_endpoint(
             messages=[{"role": "user", "content": feedback_prompt}],
             temperature=0.6,  # Moderate temperature for personalized but consistent feedback
             max_tokens=500,
-            provider_order=["gemini-pro", "gemini-flash"]  # Google Gemini models
+            provider_order=["gemini-2.0-flash", "gemini-2.0-flash-lite"]  # Google Gemini models
         )
         
         logger.info(f"Answer analysis completed for user {current_user.id}")
@@ -580,7 +580,7 @@ Be concise but thorough. Use examples when helpful."""
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
-            provider_order=["gemini-pro", "gemini-flash", "openai"]
+            provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "openai"]
         )
         
         # Extract content with fallback
@@ -702,7 +702,7 @@ Include practical examples and clear explanations."""
             messages=[{"role": "user", "content": course_prompt}],
             temperature=0.7,
             max_tokens=4000,
-            provider_order=["gemini-pro", "gemini-flash", "openai"]
+            provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "openai"]
         )
         
         # Parse the JSON response
