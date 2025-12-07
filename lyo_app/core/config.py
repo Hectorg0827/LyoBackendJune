@@ -274,11 +274,13 @@ class Settings(BaseSettings):
         
         return self
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        extra = "ignore"  # Ignore extra fields to prevent validation errors
+    # Pydantic V2 configuration
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+        "extra": "ignore"  # Ignore extra fields to prevent validation errors
+    }
 
 
 @lru_cache()
