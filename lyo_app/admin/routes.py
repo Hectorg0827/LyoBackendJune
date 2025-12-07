@@ -53,8 +53,9 @@ class RoleResponse(BaseModel):
     permissions: List[str]
     user_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class PermissionResponse(BaseModel):
@@ -62,8 +63,9 @@ class PermissionResponse(BaseModel):
     name: str
     description: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class UserSummary(BaseModel):
@@ -77,8 +79,9 @@ class UserSummary(BaseModel):
     roles: List[str]
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 router = APIRouter(

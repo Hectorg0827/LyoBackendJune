@@ -5,7 +5,8 @@ Enterprise-grade configuration management with environment-specific settings
 
 import os
 from typing import Dict, Any, Optional, List
-from pydantic import BaseSettings, validator, Field
+from pydantic import Field, field_validator, FieldValidationInfo
+from pydantic_settings import BaseSettings
 from enum import Enum
 
 import structlog
@@ -142,53 +143,55 @@ class ProductionSettings(BaseSettings):
     ENABLE_THREAT_DETECTION: bool = True
     ENABLE_COST_OPTIMIZATION: bool = True
     ENABLE_DISTRIBUTED_TRACING: bool = True
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+    }
         
-    @validator("ENVIRONMENT", pre=True)
+    @field_validator("ENVIRONMENT", mode="before")
     def validate_environment(cls, v):
         if isinstance(v, str):
             return Environment(v.lower())
         return v
     
-    @validator("SECRET_KEY", pre=True)
-    def validate_secret_key(cls, v):
+    @field_validator("SECRET_KEY", mode="before")
+    def validate_secret_key(cls, v, info: FieldValidationInfo):
+        environment = info.data.get("ENVIRONMENT", Environment.DEVELOPMENT)
         if not v or len(v) < 32:
-            if cls.ENVIRONMENT == Environment.PRODUCTION:
+            if environment == Environment.PRODUCTION:
                 raise ValueError("SECRET_KEY must be at least 32 characters in production")
             # Generate a key for development
             import secrets
             return secrets.token_urlsafe(32)
         return v
     
-    @validator("JWT_SECRET_KEY", pre=True, always=True)
-    def validate_jwt_secret(cls, v, values):
+    @field_validator("JWT_SECRET_KEY", mode="before")
+    def validate_jwt_secret(cls, v, info: FieldValidationInfo):
         if not v:
-            return values.get("SECRET_KEY")
+            return info.data.get("SECRET_KEY")
         return v
     
-    @validator("ENCRYPTION_KEY", pre=True, always=True)
-    def validate_encryption_key(cls, v, values):
+    @field_validator("ENCRYPTION_KEY", mode="before")
+    def validate_encryption_key(cls, v, info: FieldValidationInfo):
         if not v:
-            if values.get("ENVIRONMENT") == Environment.PRODUCTION:
+            if info.data.get("ENVIRONMENT") == Environment.PRODUCTION:
                 raise ValueError("ENCRYPTION_KEY required in production")
             # Generate for development
             from cryptography.fernet import Fernet
             return Fernet.generate_key().decode()
         return v
     
-    @validator("CORS_ORIGINS", pre=True)
-    def validate_cors_origins(cls, v, values):
-        if values.get("ENVIRONMENT") == Environment.PRODUCTION:
+    @field_validator("CORS_ORIGINS", mode="before")
+    def validate_cors_origins(cls, v, info: FieldValidationInfo):
+        if info.data.get("ENVIRONMENT") == Environment.PRODUCTION:
             if "*" in v:
                 logger.warning("CORS_ORIGINS should not contain '*' in production")
         return v
     
-    @validator("ALLOWED_HOSTS", pre=True) 
-    def validate_allowed_hosts(cls, v, values):
-        if values.get("ENVIRONMENT") == Environment.PRODUCTION:
+    @field_validator("ALLOWED_HOSTS", mode="before") 
+    def validate_allowed_hosts(cls, v, info: FieldValidationInfo):
+        if info.data.get("ENVIRONMENT") == Environment.PRODUCTION:
             if "*" in v:
                 logger.warning("ALLOWED_HOSTS should not contain '*' in production")
         return v

@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field, EmailStr, validator, HttpUrl
+from pydantic import BaseModel, Field, EmailStr, HttpUrl, field_validator
 from enum import Enum
 import uuid
 
@@ -89,8 +90,9 @@ class UserProfile(BaseModel):
     is_verified: bool
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 # Course Generation Models
@@ -146,8 +148,9 @@ class LessonSummary(BaseModel):
     summary: Optional[str]
     estimated_duration_minutes: Optional[int]
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class ContentItemResponse(BaseModel):
@@ -175,8 +178,9 @@ class ContentItemResponse(BaseModel):
     is_free: bool = True
     requires_subscription: bool = False
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class CourseResponse(BaseModel):
@@ -209,8 +213,9 @@ class CourseResponse(BaseModel):
     lessons: List[LessonSummary] = Field(default_factory=list)
     items: List[ContentItemResponse] = Field(default_factory=list)
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 # Feed Models
@@ -235,8 +240,9 @@ class FeedItemResponse(BaseModel):
     course_title: Optional[str]
     course_thumbnail_url: Optional[HttpUrl]
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class FeedResponse(BaseModel):
@@ -270,8 +276,9 @@ class GamificationProfileResponse(BaseModel):
     total_study_minutes: int
     badges: List[BadgeInfo] = Field(default_factory=list)
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 # Push Notification Models
@@ -294,8 +301,9 @@ class PushDeviceResponse(BaseModel):
     is_active: bool
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 # Pagination Models
@@ -351,7 +359,7 @@ class WSConnectionRequest(BaseModel):
     """WebSocket connection request parameters."""
     task_id: str
     
-    @validator('task_id')
+    @field_validator('task_id')
     def validate_task_id(cls, v):
         try:
             uuid.UUID(v)

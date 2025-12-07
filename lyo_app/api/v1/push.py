@@ -38,8 +38,9 @@ class PushDeviceResponse(BaseModel):
     is_active: bool
     registered_at: str
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class PushNotificationRequest(BaseModel):

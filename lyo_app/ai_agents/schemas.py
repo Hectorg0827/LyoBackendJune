@@ -6,7 +6,7 @@ Defines request/response models for all AI agent endpoints.
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 from lyo_app.learning.models import DifficultyLevel, ContentType
 
@@ -58,7 +58,7 @@ class MentorMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="Message to send to mentor")
     context: Optional[Dict[str, Any]] = Field(None, description="Optional context information")
     
-    @validator('message')
+    @field_validator('message')
     def validate_message(cls, v):
         if not v.strip():
             raise ValueError("Message cannot be empty")

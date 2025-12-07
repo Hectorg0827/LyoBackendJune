@@ -40,8 +40,9 @@ class ResourceResponse(BaseModel):
     isbn: Optional[str] = None
     tags: List[str] = []
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 class CourseCurationRequest(BaseModel):
     course_topic: str
