@@ -131,9 +131,9 @@ class Role(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
     
-    # Relationships
+    # Relationships - only link to permissions, user linking handled separately
     permissions = relationship("Permission", secondary=role_permissions, back_populates="roles")
-    users = relationship("User", secondary=user_roles, back_populates="roles")
+    # Note: User relationship removed to avoid mapper conflicts with different User models
     
     def __repr__(self) -> str:
         return f"<Role(id={self.id}, name='{self.name}')>"

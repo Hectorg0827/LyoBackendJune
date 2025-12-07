@@ -146,11 +146,14 @@ async def generate_ai_response(request: AIGenerateRequest):
         
         latency_ms = int((time.time() - start_time) * 1000)
         
+        # AI resilience manager returns "content" key
+        response_text = result.get("content") or result.get("response") or result.get("text") or ""
+        
         return AIGenerateResponse(
-            response=result.get("response", result.get("text", "")),
+            response=response_text,
             task_type=task_type,
             tokens_used=result.get("tokens_used"),
-            model_used=result.get("model", "gemini-pro"),
+            model_used=result.get("model", "Google Gemini 2.0 Flash"),
             latency_ms=latency_ms,
             success=True,
             error=None
