@@ -171,6 +171,9 @@ class AIResilienceManager:
         logger.info(
             f"AI Resilience Manager initialized with {len(self.models)} models"
         )
+        
+        # Pre-warm connection pool for faster first requests
+        await self._prewarm_connections()
 
     async def chat_completion(
         self,
@@ -186,6 +189,11 @@ class AIResilienceManager:
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached
+        
+        # Intelligent model routing based on message complexity
+        if not provider_order:
+            provider_order = self._select_optimal_provider(messages, max_tokens)
+        
         if provider_order:
             provider_map = {
                 "google": "gemini-2.0-flash",
@@ -306,6 +314,43 @@ class AIResilienceManager:
             available.remove(preference)
             available.insert(0, preference)
         return available
+    
+    def _select_optimal_provider(self, messages: List[Dict[str, str]], max_tokens: int) -> List[str]:
+        """Select optimal provider based on message complexity.
+        
+        Routes simple/short queries to flash-lite for 2x faster responses.
+        Routes complex queries to full flash models.
+        """
+        if not messages:
+            return ["gemini-flash"]  # Default to flash-lite
+        
+        last_message = messages[-1].get("content", "")
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        
+        # Simple query indicators
+        simple_patterns = [
+            "hello", "hi", "thanks", "help", "what is", "explain",
+            "define", "meaning of", "quick", "simple", "briefly"
+        ]
+        is_simple = any(p in last_message.lower() for p in simple_patterns)
+        
+        # Complex query indicators
+        complex_patterns = [
+            "analyze", "compare", "evaluate", "detailed", "comprehensive",
+            "research", "in-depth", "synthesize", "advanced", "complex"
+        ]
+        is_complex = any(p in last_message.lower() for p in complex_patterns)
+        
+        # Routing logic:
+        # - Short messages (<100 chars) + simple patterns -> flash-lite (fastest)
+        # - Complex patterns or long context -> gemini-2.0-flash (balanced)
+        # - Very complex or multimodal -> gemini-2.5-flash (most capable)
+        if len(last_message) < 100 and (is_simple or max_tokens < 256):
+            return ["gemini-flash", "gemini"]  # flash-lite first, then 2.0-flash
+        elif is_complex or total_chars > 2000 or max_tokens > 1500:
+            return ["gemini", "gemini-2.5-flash"]  # 2.0-flash first, then 2.5
+        else:
+            return ["gemini", "gemini-flash"]  # Default: 2.0-flash first
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:
@@ -369,6 +414,36 @@ class AIResilienceManager:
             }
         return status
 
+    async def _prewarm_connections(self):
+        """Pre-warm HTTP connection pool for faster first requests.
+        
+        Establishes connections to Gemini API endpoints to eliminate
+        cold-start latency (~50-100ms per connection).
+        """
+        try:
+            # Get any model's API key for the health check
+            sample_model = next(iter(self.models.values()), None)
+            if not sample_model or not sample_model.api_key:
+                logger.info("Skipping connection pre-warm: no API key configured")
+                return
+            
+            # Pre-warm with a lightweight request to Gemini's health endpoint
+            # Using the models list endpoint which is lightweight
+            prewarm_url = f"https://generativelanguage.googleapis.com/v1/models?key={sample_model.api_key}"
+            
+            async with self.session.get(
+                prewarm_url,
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as response:
+                if response.status == 200:
+                    logger.info("✅ Connection pool pre-warmed successfully")
+                else:
+                    logger.info(f"Connection pre-warm returned status {response.status}")
+        except asyncio.TimeoutError:
+            logger.info("Connection pre-warm timed out (non-critical)")
+        except Exception as e:
+            logger.info(f"Connection pre-warm failed (non-critical): {e}")
+    
     async def close(self):
         if self.session:
             await self.session.close()
