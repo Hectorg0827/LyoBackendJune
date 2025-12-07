@@ -34,7 +34,7 @@ class EnhancedSettings(BaseSettings):
     # ============================================================================
     
     APP_NAME: str = Field("LyoBackend", description="Application name")
-    APP_VERSION: str = Field("3.1.1-CLOUD", description="Application version")
+    APP_VERSION: str = Field("3.2.0-CLOUD", description="Application version")  # AI Chat + Course Generation Fixed
     APP_DESCRIPTION: str = Field("LyoBackend AI-Powered Learning Platform", description="Application description")
     
     # Environment
