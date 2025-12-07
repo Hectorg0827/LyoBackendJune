@@ -533,13 +533,36 @@ class ResponseCache:
         mode: str,
         context_hash: Optional[str] = None
     ) -> str:
-        """Generate a cache key based on message content and context"""
-        key_data = f"{mode}:{message}"
+        """Generate a cache key based on normalized message content and context.
+        
+        Normalizes message to improve cache hit rates:
+        - Lowercase conversion
+        - Whitespace normalization
+        - Punctuation cleanup for common variations
+        """
+        # Normalize message for better cache hit rates
+        normalized_message = self._normalize_message(message)
+        key_data = f"{mode}:{normalized_message}"
         if context_hash:
             key_data += f":{context_hash}"
         
         hash_value = hashlib.sha256(key_data.encode()).hexdigest()[:16]
         return f"{self._prefix}:{hash_value}"
+    
+    def _normalize_message(self, message: str) -> str:
+        """Normalize message for cache key generation.
+        
+        Improves cache hit rates by treating similar queries as equivalent:
+        - 'What is Python?' == 'what is python' == 'What is Python'
+        """
+        import re
+        # Lowercase and strip whitespace
+        normalized = message.lower().strip()
+        # Normalize multiple spaces to single space
+        normalized = re.sub(r'\s+', ' ', normalized)
+        # Remove trailing punctuation that doesn't change meaning
+        normalized = re.sub(r'[?!.]+$', '', normalized)
+        return normalized
     
     async def get(
         self,
