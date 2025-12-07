@@ -460,12 +460,14 @@ class EnhancedSettings(BaseSettings):
         """Check if running in staging"""
         return self.ENVIRONMENT == 'staging'
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        validate_assignment = True
-        extra = "ignore"  # Ignore extra fields from legacy config
+    # Pydantic V2 configuration
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True,
+        "validate_assignment": True,
+        "extra": "ignore"  # Ignore extra fields from legacy config
+    }
 
 # Global settings instance
 settings = EnhancedSettings()

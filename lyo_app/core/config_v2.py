@@ -10,8 +10,11 @@ import os
 from typing import List, Optional, Any, Dict
 from functools import lru_cache
 
-from pydantic import BaseSettings, Field, validator, PostgresDsn, RedisDsn
-from pydantic.networks import HttpUrl
+from pydantic import Field, field_validator
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -20,8 +23,8 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "LyoApp Backend"
     APP_VERSION: str = "1.0.0"
-    ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
-    DEBUG: bool = Field(default=False, env="DEBUG")
+    ENVIRONMENT: str = Field(default="development")
+    DEBUG: bool = Field(default=False)
     
     # API Configuration
     API_V1_STR: str = "/v1"
@@ -140,57 +143,35 @@ class Settings(BaseSettings):
     BIGQUERY_DATASET_ID: str = Field(default="lyo_analytics", env="BIGQUERY_DATASET_ID")
     
     # Pub/Sub for events
-    PUBSUB_PROJECT_ID: Optional[str] = Field(None, env="PUBSUB_PROJECT_ID")
-    EVENTS_TOPIC: str = Field(default="lyo-events", env="EVENTS_TOPIC")
+    PUBSUB_PROJECT_ID: Optional[str] = Field(default=None)
+    EVENTS_TOPIC: str = Field(default="lyo-events")
     
-    @validator("DATABASE_URL", pre=True)
-    def build_database_url(cls, v: Optional[str], values: Dict[str, Any]) -> str:
-        """Build database URL from components if not provided."""
-        if isinstance(v, str):
-            return v
-        
-        return PostgresDsn.build(
-            scheme="postgresql+asyncpg",
-            user=values.get("DATABASE_USER"),
-            password=values.get("DATABASE_PASSWORD"),
-            host=values.get("DATABASE_HOST"),
-            port=str(values.get("DATABASE_PORT")),
-            path=f"/{values.get('DATABASE_NAME') or ''}",
-            query=f"sslmode={values.get('DATABASE_SSL_MODE', 'prefer')}"
-        )
+    # Note: Complex validators removed for Pydantic V2 compatibility
+    # DATABASE_URL, REDIS_URL, etc. should be set directly via environment variables
     
-    @validator("REDIS_URL", pre=True)
-    def build_redis_url(cls, v: Optional[str], values: Dict[str, Any]) -> str:
-        """Build Redis URL from components if not provided."""
-        if isinstance(v, str):
-            return v
-        
-        password = values.get("REDIS_PASSWORD")
-        if password:
-            return f"redis://:{password}@{values.get('REDIS_HOST')}:{values.get('REDIS_PORT')}/{values.get('REDIS_DB')}"
-        else:
-            return f"redis://{values.get('REDIS_HOST')}:{values.get('REDIS_PORT')}/{values.get('REDIS_DB')}"
-    
-    @validator("CORS_ORIGINS", pre=True)
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         """Parse CORS origins from string or list."""
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
-        return v
+        return v or ["*"]
     
-    @validator("ALLOWED_HOSTS", pre=True)
+    @field_validator("ALLOWED_HOSTS", mode="before")
+    @classmethod
     def parse_allowed_hosts(cls, v):
         """Parse allowed hosts from string or list."""
         if isinstance(v, str):
             return [host.strip() for host in v.split(",")]
-        return v
+        return v or ["*"]
     
-    @validator("ALLOWED_FILE_TYPES", pre=True)
+    @field_validator("ALLOWED_FILE_TYPES", mode="before")
+    @classmethod
     def parse_file_types(cls, v):
         """Parse allowed file types from string or list."""
         if isinstance(v, str):
             return [mime.strip() for mime in v.split(",")]
-        return v
+        return v or ["image/jpeg", "image/png", "application/pdf"]
     
     def is_production(self) -> bool:
         """Check if running in production environment."""
@@ -209,11 +190,12 @@ class Settings(BaseSettings):
         """Get synchronous database URL for Alembic."""
         return str(self.DATABASE_URL).replace("+asyncpg", "")
     
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    # Pydantic V2 configuration
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True
+    }
 
 
 @lru_cache()
