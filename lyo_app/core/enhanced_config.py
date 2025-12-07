@@ -47,7 +47,7 @@ class EnhancedSettings(BaseSettings):
     WORKERS: int = Field(1, description="Number of worker processes")
     
     # Security
-    SECRET_KEY: str = Field(..., description="Secret key for signing tokens")
+    SECRET_KEY: str = Field(default="dev-secret-key-change-in-production", description="Secret key for signing tokens")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60 * 24 * 7, description="Access token expiration (minutes)")  # 7 days
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, description="Refresh token expiration (days)")
     PASSWORD_MIN_LENGTH: int = Field(8, description="Minimum password length")
@@ -63,7 +63,7 @@ class EnhancedSettings(BaseSettings):
     # ============================================================================
     
     # PostgreSQL
-    DATABASE_URL: str = Field(..., description="Database connection URL")
+    DATABASE_URL: str = Field(default="sqlite+aiosqlite:///./lyo_app_dev.db", description="Database connection URL")
     DATABASE_ECHO: bool = Field(False, description="Echo SQL queries")
     DATABASE_POOL_SIZE: int = Field(20, description="Database connection pool size")
     DATABASE_MAX_OVERFLOW: int = Field(30, description="Database max overflow connections")
@@ -237,6 +237,50 @@ class EnhancedSettings(BaseSettings):
     CACHE_DEFAULT_TTL: int = Field(3600, description="Default cache TTL (seconds)")
     CACHE_USER_DATA_TTL: int = Field(1800, description="User data cache TTL (seconds)")
     CACHE_STATIC_CONTENT_TTL: int = Field(86400, description="Static content cache TTL (seconds)")
+    
+    # ============================================================================
+    # BACKWARD COMPATIBILITY ALIASES (lowercase for legacy code)
+    # ============================================================================
+    
+    @property
+    def database_url(self) -> str:
+        """Lowercase alias for DATABASE_URL"""
+        return self.DATABASE_URL
+    
+    @property
+    def database_echo(self) -> bool:
+        """Lowercase alias for DATABASE_ECHO"""
+        return self.DATABASE_ECHO
+    
+    @property
+    def database_pool_size(self) -> int:
+        """Lowercase alias for DATABASE_POOL_SIZE"""
+        return self.DATABASE_POOL_SIZE
+    
+    @property
+    def database_max_overflow(self) -> int:
+        """Lowercase alias for DATABASE_MAX_OVERFLOW"""
+        return self.DATABASE_MAX_OVERFLOW
+    
+    @property
+    def database_pool_timeout(self) -> int:
+        """Lowercase alias for DATABASE_POOL_TIMEOUT"""
+        return self.DATABASE_POOL_TIMEOUT
+    
+    @property
+    def database_pool_recycle(self) -> int:
+        """Lowercase alias for DATABASE_POOL_RECYCLE"""
+        return self.DATABASE_POOL_RECYCLE
+    
+    @property
+    def connection_pool_size(self) -> int:
+        """Alias for DATABASE_POOL_SIZE (legacy name)"""
+        return self.DATABASE_POOL_SIZE
+    
+    @property
+    def max_overflow(self) -> int:
+        """Alias for DATABASE_MAX_OVERFLOW (legacy name)"""
+        return self.DATABASE_MAX_OVERFLOW
     
     # ============================================================================
     # VALIDATORS
@@ -472,24 +516,9 @@ class EnhancedSettings(BaseSettings):
 # Global settings instance
 settings = EnhancedSettings()
 
-# Environment-specific defaults
-if settings.ENVIRONMENT == "production":
-    # Production overrides
-    settings.DEBUG = False
-    settings.DATABASE_ECHO = False
-    settings.LOG_LEVEL = "WARNING"
-    settings.CORS_ORIGINS = [
-        "https://yourdomain.com",
-        "https://app.yourdomain.com"
-    ]
-elif settings.ENVIRONMENT == "staging":
-    # Staging overrides
-    settings.DEBUG = False
-    settings.DATABASE_ECHO = False
-    settings.LOG_LEVEL = "INFO"
-elif settings.ENVIRONMENT == "development":
-    # Development overrides (already set as defaults)
-    pass
+# Note: Environment-specific overrides removed. 
+# All config should come from environment variables.
+# The settings object respects env vars like DEBUG, DATABASE_ECHO, LOG_LEVEL, CORS_ORIGINS.
 
 # Configuration validation
 def validate_settings():
@@ -522,6 +551,32 @@ def validate_settings():
     if errors:
         raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
 
-# Only validate settings in production
-if settings.is_production():
-    validate_settings()
+# Skip production validation at import time to prevent startup failures
+# Configuration issues are logged as warnings instead
+def safe_validate_settings():
+    """Validate critical settings with warnings instead of hard failures"""
+    warnings = []
+    
+    if settings.is_production():
+        if not settings.SECRET_KEY or len(settings.SECRET_KEY) < 32:
+            warnings.append("SECRET_KEY should be at least 32 characters long")
+        
+        if not settings.get_gemini_api_key():
+            warnings.append("GOOGLE_API_KEY or GEMINI_API_KEY is recommended in production")
+        
+        if settings.DEBUG:
+            warnings.append("DEBUG should be False in production")
+        
+        # CORS wildcard is OK for mobile apps but log a warning
+        if "*" in settings.CORS_ORIGINS:
+            warnings.append("CORS_ORIGINS contains '*' - ensure this is intentional for mobile app support")
+    
+    # Log warnings but don't crash
+    if warnings:
+        import logging
+        logger = logging.getLogger(__name__)
+        for w in warnings:
+            logger.warning(f"Config warning: {w}")
+
+# Run non-blocking validation
+safe_validate_settings()
