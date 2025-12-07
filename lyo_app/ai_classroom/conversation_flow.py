@@ -627,9 +627,88 @@ What would you like to learn today?
 _conversation_manager: Optional[ConversationManager] = None
 
 
+async def _ai_chat_handler(message: str, context: List[Dict]) -> str:
+    """AI chat handler using the resilience manager"""
+    try:
+        from lyo_app.core.ai_resilience import ai_resilience_manager
+        
+        # Build messages for AI
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are Lyo, an expert AI tutor. Be clear, encouraging, and helpful. "
+                    "Use markdown for formatting. Include emojis sparingly for warmth. "
+                    "Explain concepts step-by-step when needed."
+                )
+            }
+        ]
+        
+        # Add context messages
+        for ctx_msg in context[-5:]:  # Last 5 messages for context
+            messages.append({
+                "role": ctx_msg.get("role", "user"),
+                "content": ctx_msg.get("content", "")
+            })
+        
+        # Add the current message
+        messages.append({"role": "user", "content": message})
+        
+        # Call AI with resilience
+        response = await ai_resilience_manager.chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1500
+        )
+        
+        return response.get("content", "I'd be happy to help you with that!")
+        
+    except Exception as e:
+        logger.error(f"AI chat handler error: {e}")
+        return (
+            "I'm having a temporary issue connecting to my AI capabilities. "
+            "Please try again in a moment! 🔄"
+        )
+
+
+async def _course_generation_handler(topic: str, preferences: Dict) -> Dict:
+    """Course generation handler using multi-agent system"""
+    try:
+        from lyo_app.chat.agents import agent_registry
+        from lyo_app.chat.models import ChatMode
+        
+        # Use the course planner agent
+        result = await agent_registry.process(
+            mode=ChatMode.COURSE_PLANNER,
+            message=f"Create a course on: {topic}",
+            context=preferences
+        )
+        
+        return {
+            "success": True,
+            "course_data": result
+        }
+        
+    except Exception as e:
+        logger.error(f"Course generation error: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 def get_conversation_manager() -> ConversationManager:
-    """Get or create the conversation manager singleton"""
+    """Get or create the conversation manager singleton with handlers registered"""
     global _conversation_manager
     if _conversation_manager is None:
         _conversation_manager = ConversationManager()
+        
+        # Register handlers
+        import asyncio
+        _conversation_manager.register_handlers(
+            chat_handler=_ai_chat_handler,
+            course_handler=_course_generation_handler
+        )
+        logger.info("ConversationManager created with AI handlers registered")
+        
     return _conversation_manager

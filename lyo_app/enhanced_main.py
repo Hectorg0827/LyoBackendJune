@@ -1,5 +1,6 @@
 """Enhanced LyoBackend FastAPI Application (clean restored version)."""
 
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -48,18 +49,86 @@ from lyo_app.auth.security_middleware import (
 )
 
 
+# Parallel initialization helpers
+async def _init_redis_safe():
+    """Initialize Redis with error handling"""
+    try:
+        from lyo_app.core.redis_client import init_redis
+        await init_redis()
+        logger.info("✓ Redis cache initialized")
+        return True
+    except Exception as e:
+        logger.warning(f"Redis initialization failed: {e}")
+        return False
+
+
+async def _init_storage_safe():
+    """Initialize storage with error handling"""
+    try:
+        from lyo_app.storage.enhanced_storage import enhanced_storage
+        await enhanced_storage._initialize_clients()
+        logger.info("✓ Enhanced storage system initialized")
+        return True
+    except Exception as e:
+        logger.warning(f"Storage system initialization failed: {e}")
+        return False
+
+
+async def _init_ai_safe():
+    """Initialize AI with error handling"""
+    try:
+        from lyo_app.core.ai_resilience import ai_resilience_manager
+        await ai_resilience_manager.initialize()
+        logger.info("✓ AI resilience system initialized")
+        return True
+    except Exception as e:
+        logger.warning(f"AI system initialization failed: {e}")
+        return False
+
+
+async def _init_firebase_safe():
+    """Initialize Firebase with error handling"""
+    try:
+        from lyo_app.integrations.firebase_client import firebase_client
+        if firebase_client.is_enabled():
+            logger.info("✓ Firebase client initialized (Firestore/Storage available)")
+        else:
+            logger.info("Firebase not enabled - continuing without it")
+        return True
+    except Exception as e:
+        logger.warning(f"Firebase initialization failed: {e}")
+        return False
+
+
+async def _init_vertex_safe():
+    """Initialize Vertex AI with error handling"""
+    try:
+        from lyo_app.integrations.vertex_ai_client import vertex_ai_client
+        if vertex_ai_client.is_enabled():
+            logger.info("✓ Vertex AI client ready")
+        else:
+            logger.info("Vertex AI not enabled - continuing")
+        return True
+    except Exception as e:
+        logger.warning(f"Vertex AI initialization skipped/failed: {e}")
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application startup & shutdown lifecycle."""
-    logger.info("Starting LyoBackend with enhanced features...")
+    """Application startup & shutdown lifecycle with parallel initialization."""
+    start_time = time.time()
+    logger.info("🚀 Starting LyoBackend with enhanced features...")
     setup_logging()
+    
+    # Database must init first (dependencies need it)
     try:
         await init_db()
-        logger.info("Database initialized")
+        logger.info("✓ Database initialized")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
-        # Continue startup even if DB fails, to allow debugging
     
+    # Sentry (synchronous, fast)
     if (
         hasattr(settings, "SENTRY_DSN")
         and getattr(settings, "SENTRY_DSN", None)
@@ -71,60 +140,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             release=settings.APP_VERSION,
             traces_sample_rate=0.1 if settings.is_production() else 1.0,
         )
-        logger.info("Sentry monitoring initialized")
-    # Redis
-    try:
-        from lyo_app.core.redis_client import init_redis
-
-        await init_redis()
-        logger.info("Redis cache initialized")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Redis initialization failed: {e}")
-    # Storage
-    try:
-        from lyo_app.storage.enhanced_storage import enhanced_storage
-
-        await enhanced_storage._initialize_clients()
-        logger.info("Enhanced storage system initialized")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Storage system initialization failed: {e}")
-    # AI Resilience
-    try:
-        from lyo_app.core.ai_resilience import ai_resilience_manager
-
-        await ai_resilience_manager.initialize()
-        logger.info("AI resilience system initialized")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"AI system initialization failed: {e}")
-    # Firebase optional
-    try:
-        from lyo_app.integrations.firebase_client import firebase_client
-
-        logger.info(
-            "Firebase client initialized (Firestore/Storage available)"
-            if firebase_client.is_enabled()
-            else "Firebase not enabled or credentials not present - continuing without it"
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Firebase initialization failed: {e}")
-    # Vertex AI optional
-    try:
-        from lyo_app.integrations.vertex_ai_client import vertex_ai_client
-
-        logger.info(
-            "Vertex AI client ready"
-            if vertex_ai_client.is_enabled()
-            else "Vertex AI not enabled (credentials or library missing) - continuing"
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Vertex AI initialization skipped/failed: {e}")
-    logger.info("LyoBackend startup completed successfully")
+        logger.info("✓ Sentry monitoring initialized")
+    
+    # PARALLEL INITIALIZATION - Major performance boost!
+    # These don't depend on each other, run them concurrently
+    logger.info("Initializing services in parallel...")
+    init_tasks = [
+        _init_redis_safe(),
+        _init_storage_safe(),
+        _init_ai_safe(),
+        _init_firebase_safe(),
+        _init_vertex_safe(),
+    ]
+    
+    results = await asyncio.gather(*init_tasks, return_exceptions=True)
+    successful = sum(1 for r in results if r is True)
+    
+    elapsed = time.time() - start_time
+    logger.info(f"🎉 LyoBackend startup completed in {elapsed:.2f}s ({successful}/5 services)")
+    
     yield
+    
     logger.info("Shutting down LyoBackend...")
     await close_db()
     try:
         from lyo_app.core.redis_client import close_redis
-
         await close_redis()
     except Exception:  # noqa: BLE001
         pass
