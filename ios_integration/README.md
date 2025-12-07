@@ -5,6 +5,40 @@
 https://lyo-backend-production-830162750094.us-central1.run.app
 ```
 
+## ⚡ Quick Start - Smart AI Service (Recommended)
+
+The easiest integration is `SmartAIService.swift` - it auto-detects user intent:
+
+```swift
+// Just copy SmartAIService.swift to your project and use it:
+
+// Auto-detects intent from message:
+let result = try await SmartAIService.shared.chat(message: "Teach me Python")
+// ^ Detects "teach me" → Uses COURSE_GENERATION → Returns full course!
+
+let result = try await SmartAIService.shared.chat(message: "What is recursion?")  
+// ^ Detects question → Uses EDUCATIONAL_EXPLANATION → Returns quick answer
+
+// Or use convenience methods:
+let course = try await SmartAIService.shared.createCourse(on: "Machine Learning")
+let quiz = try await SmartAIService.shared.quiz(on: "Python basics")
+```
+
+### Intent Detection Patterns
+
+| User Says | Detected Task | Result |
+|-----------|--------------|--------|
+| "Teach me X" | COURSE_GENERATION | Full structured course |
+| "Create a course on X" | COURSE_GENERATION | Full structured course |
+| "Learn about X" | COURSE_GENERATION | Full structured course |
+| "What is X?" | EDUCATIONAL_EXPLANATION | Quick explanation |
+| "Explain X" | EDUCATIONAL_EXPLANATION | Quick explanation |
+| "Quiz me on X" | QUIZ_GENERATION | Practice questions |
+| "Test my knowledge" | QUIZ_GENERATION | Practice questions |
+| "Summarize X" | NOTE_SUMMARIZATION | Key points summary |
+
+---
+
 ## 📁 Files to Copy
 
 Copy all files from this folder to your iOS project:
