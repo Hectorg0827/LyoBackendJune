@@ -341,36 +341,102 @@ class ConversationManager:
         intent: ChatIntent,
         message: str
     ) -> FlowResponse:
-        """Handle full course generation request"""
+        """Handle full course generation request - actually generates the course!"""
         session.state = ConversationState.GENERATING_COURSE
         
         topic = intent.topic or "your requested topic"
         session.current_topic = topic
         
-        # Prepare response with actions
-        content = (
-            f"🎓 Great choice! I'll create a comprehensive course on **{topic}** for you.\n\n"
-            f"This will include:\n"
-            f"• Structured curriculum with lessons\n"
-            f"• Interactive content and examples\n"
-            f"• Quizzes to test your understanding\n"
-            f"• Visual diagrams and explanations\n\n"
-            f"Starting generation now... This may take a minute."
-        )
-        
-        # If course handler is available, trigger generation
-        actions = []
+        # If course handler is available, actually generate the course
         if self._course_handler:
-            actions.append({
-                "type": "generate_course",
-                "topic": topic,
-                "preferences": {
+            try:
+                preferences = {
                     "level": intent.extracted_entities.get("level", "beginner"),
                     "time_constraint": intent.extracted_entities.get("time_constraint"),
                     "subtopics": intent.subtopics
                 }
-            })
-            
+                
+                # Actually call the course generation handler
+                course_result = await self._course_handler(topic, preferences)
+                
+                if course_result.get("success"):
+                    course_data = course_result.get("course_data", {})
+                    course_response = course_data.get("response", "")
+                    
+                    # Build rich response with course content
+                    content = (
+                        f"🎓 **Course Created: {topic}**\n\n"
+                        f"{course_response}\n\n"
+                        f"---\n"
+                        f"💡 *Ask me to explain any topic in more detail, or say 'quiz me' to test your knowledge!*"
+                    )
+                    
+                    session.state = ConversationState.IN_LESSON
+                    
+                    return FlowResponse(
+                        content=content,
+                        response_type="course",
+                        state=session.state,
+                        metadata={
+                            "intent": intent.to_dict(),
+                            "topic": topic,
+                            "generation_status": "completed",
+                            "course_data": course_data
+                        }
+                    )
+                else:
+                    error_msg = course_result.get("error", "Unknown error")
+                    logger.error(f"Course generation failed: {error_msg}")
+                    
+            except Exception as e:
+                logger.error(f"Course handler error: {e}")
+        
+        # Fallback if course handler fails or isn't available
+        # Use the chat handler to create course-like content
+        if self._chat_handler:
+            try:
+                course_prompt = (
+                    f"Create a structured mini-course on '{topic}'. Include:\n"
+                    f"1. Overview and learning objectives\n"
+                    f"2. Key concepts explained clearly\n"
+                    f"3. Practical examples\n"
+                    f"4. Summary of what was learned\n"
+                    f"Format with clear sections using markdown."
+                )
+                context = session.get_context_messages(limit=3)
+                course_content = await self._chat_handler(course_prompt, context)
+                
+                content = (
+                    f"🎓 **Course: {topic}**\n\n"
+                    f"{course_content}\n\n"
+                    f"---\n"
+                    f"💡 *Want to dive deeper? Ask me about any specific concept, or say 'quiz me' to test your knowledge!*"
+                )
+                
+                session.state = ConversationState.IN_LESSON
+                
+                return FlowResponse(
+                    content=content,
+                    response_type="course",
+                    state=session.state,
+                    metadata={
+                        "intent": intent.to_dict(),
+                        "topic": topic,
+                        "generation_status": "completed"
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Fallback course generation error: {e}")
+        
+        # Ultimate fallback
+        content = (
+            f"🎓 I'd love to create a course on **{topic}** for you!\n\n"
+            f"Unfortunately, I'm having trouble generating the full course right now. "
+            f"Let me give you a quick overview instead:\n\n"
+            f"**{topic}** is a fascinating subject. Ask me specific questions about it, "
+            f"and I'll explain each concept in detail!"
+        )
+        
         return FlowResponse(
             content=content,
             response_type="course",
@@ -378,9 +444,8 @@ class ConversationManager:
             metadata={
                 "intent": intent.to_dict(),
                 "topic": topic,
-                "generation_status": "started"
-            },
-            actions=actions
+                "generation_status": "fallback"
+            }
         )
         
     async def _handle_quiz_request(
