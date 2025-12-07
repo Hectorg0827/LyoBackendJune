@@ -3,7 +3,7 @@ Pydantic schemas for Collaborative Learning Phase 2
 Request and response models for peer learning and study groups
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from enum import Enum
@@ -101,8 +101,9 @@ class StudyGroupResponse(BaseModel):
     created_at: datetime
     created_by: int
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 class StudyGroupMemberResponse(BaseModel):
     id: int
@@ -117,8 +118,9 @@ class StudyGroupMemberResponse(BaseModel):
     skill_improvement: Dict[str, Any]
     is_active: bool
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 # ========================================
 # GROUP MATCHING SCHEMAS
@@ -144,8 +146,9 @@ class GroupRecommendationResponse(BaseModel):
     activity_level: str
     learning_effectiveness: Optional[float]
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 # ========================================
 # PEER INTERACTION SCHEMAS
@@ -159,7 +162,7 @@ class PeerInteractionCreate(BaseModel):
     context_skill_id: Optional[str] = None
     parent_interaction_id: Optional[int] = None  # For threaded responses
     
-    @validator('content')
+    @field_validator('content')
     def validate_content_length(cls, v, values):
         interaction_type = values.get('interaction_type')
         if interaction_type in [InteractionType.HINT, InteractionType.ENCOURAGEMENT]:
@@ -189,8 +192,9 @@ class PeerInteractionResponse(BaseModel):
     parent_interaction_id: Optional[int]
     responses: List['PeerInteractionResponse'] = Field(default_factory=list)
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 # ========================================
 # COLLABORATIVE LEARNING SESSION SCHEMAS
@@ -211,7 +215,7 @@ class CollaborativeLearningSessionCreate(BaseModel):
     is_recurring: bool = Field(False)
     recurrence_pattern: Optional[Dict[str, Any]] = None
     
-    @validator('scheduled_end')
+    @field_validator('scheduled_end')
     def validate_end_after_start(cls, v, values):
         start = values.get('scheduled_start')
         if start and v <= start:
@@ -243,8 +247,9 @@ class CollaborativeLearningSessionResponse(BaseModel):
     is_recurring: bool
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+        model_config = {
+            "from_attributes": True
+        }
 
 # ========================================
 # PEER MENTORSHIP SCHEMAS
@@ -279,8 +284,9 @@ class PeerMentorshipResponse(BaseModel):
     ended_at: Optional[datetime]
     target_duration_weeks: int
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 # ========================================
 # PEER ASSESSMENT SCHEMAS
@@ -316,8 +322,9 @@ class PeerAssessmentResponse(BaseModel):
     learning_impact: Optional[float]
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 # ========================================
 # ANALYTICS SCHEMAS
@@ -353,8 +360,9 @@ class CollaborationAnalyticsResponse(BaseModel):
     learning_achievements: List[Dict[str, Any]]
     recommendations: List[str]
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 # ========================================
 # SPECIAL PURPOSE SCHEMAS

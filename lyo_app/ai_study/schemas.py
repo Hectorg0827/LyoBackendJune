@@ -5,7 +5,7 @@ Request and response models for study sessions and quiz generation
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
 from .models import StudySessionStatus, MessageRole, QuizType
@@ -24,7 +24,7 @@ class StudySessionRequest(BaseModel):
     difficulty_level: Optional[str] = Field(None, description="Difficulty level of the material")
     learning_objectives: Optional[List[str]] = Field(None, description="Specific learning goals")
 
-    @validator('tutor_personality')
+    @field_validator('tutor_personality')
     def validate_personality(cls, v):
         allowed = ['socratic', 'encouraging', 'challenging', 'patient', 'direct']
         if v not in allowed:
@@ -38,7 +38,7 @@ class StudySessionCreateRequest(BaseModel):
     resource_type: str = Field(default="lesson", description="Type of resource (course, lesson, topic)")
     tutoring_style: str = Field(default="socratic", description="Tutoring approach (socratic, collaborative, explanatory, practical)")
     
-    @validator('tutoring_style')
+    @field_validator('tutoring_style')
     def validate_tutoring_style(cls, v):
         valid_styles = ["socratic", "collaborative", "explanatory", "practical"]
         if v not in valid_styles:
@@ -98,7 +98,7 @@ class StudyConversationRequest(BaseModel):
     user_typing_time_ms: Optional[int] = Field(None, description="Time user spent typing")
     request_help: bool = Field(False, description="Whether user is requesting help")
 
-    @validator('user_input')
+    @field_validator('user_input')
     def validate_user_input(cls, v):
         if not v or not v.strip():
             raise ValueError('User input cannot be empty')
@@ -106,7 +106,7 @@ class StudyConversationRequest(BaseModel):
             raise ValueError('User input too long (max 5000 characters)')
         return v.strip()
 
-    @validator('conversation_history')
+    @field_validator('conversation_history')
     def validate_conversation_history(cls, v):
         if len(v) > 100:  # Reasonable limit for conversation length
             raise ValueError('Conversation history too long (max 100 messages)')
@@ -142,7 +142,7 @@ class QuizGenerationRequest(BaseModel):
     exclude_topics: Optional[List[str]] = Field(None, description="Topics to avoid")
     session_id: Optional[str] = Field(None, description="Associated study session ID")
 
-    @validator('question_count')
+    @field_validator('question_count')
     def validate_question_count(cls, v):
         if v < 1 or v > 20:
             raise ValueError('Question count must be between 1 and 20')
@@ -162,7 +162,7 @@ class QuizQuestion(BaseModel):
     points: int = Field(default=1, description="Points awarded for correct answer")
     time_limit_seconds: Optional[int] = Field(None, description="Time limit for this question")
 
-    @validator('question')
+    @field_validator('question')
     def validate_question(cls, v):
         if not v or not v.strip():
             raise ValueError('Question cannot be empty')
@@ -205,7 +205,7 @@ class QuizAttemptRequest(BaseModel):
     difficulty_rating: Optional[int] = Field(None, description="Difficulty rating (1-5)")
     enjoyment_rating: Optional[int] = Field(None, description="Enjoyment rating (1-5)")
 
-    @validator('difficulty_rating', 'enjoyment_rating')
+    @field_validator('difficulty_rating', 'enjoyment_rating')
     def validate_ratings(cls, v):
         if v is not None and (v < 1 or v > 5):
             raise ValueError('Ratings must be between 1 and 5')

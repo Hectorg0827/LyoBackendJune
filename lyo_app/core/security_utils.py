@@ -7,7 +7,7 @@ import re
 import hashlib
 from typing import Any, Dict, List, Union
 import bleach
-from pydantic import validator
+from pydantic import field_validator
 
 
 def sanitize_input(data: Any) -> Any:
@@ -156,7 +156,7 @@ def validate_username(username: str) -> Dict[str, Union[bool, str]]:
 class SecurityValidators:
     """Pydantic validators for security."""
     
-    @validator('password')
+    @field_validator('password')
     def validate_password(cls, v):
         """Validate password strength."""
         if not v:
@@ -168,14 +168,14 @@ class SecurityValidators:
         
         return v
     
-    @validator('email')
+    @field_validator('email')
     def validate_email(cls, v):
         """Validate email format."""
         if not validate_email_format(v):
             raise ValueError("Invalid email format")
         return v.lower()
     
-    @validator('username')
+    @field_validator('username')
     def validate_username_field(cls, v):
         """Validate username."""
         validation = validate_username(v)

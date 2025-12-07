@@ -4,7 +4,7 @@ Generative Curriculum Phase 2 Schemas for advanced content generation
 
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
 
@@ -76,7 +76,7 @@ class ContentGenerationRequest(BaseModel):
     model_preference: Optional[str] = None
     quality_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
     
-    @validator('difficulty_level')
+    @field_validator('difficulty_level')
     def validate_difficulty(cls, v):
         if not 0.0 <= v <= 1.0:
             raise ValueError('Difficulty level must be between 0.0 and 1.0')
@@ -119,8 +119,9 @@ class GeneratedContentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class LearningPathRequest(BaseModel):
@@ -215,8 +216,9 @@ class LearningPathResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class ContentFeedbackRequest(BaseModel):
@@ -289,8 +291,9 @@ class PathAdaptationResponse(BaseModel):
     # Timestamps
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class ContentQualityMetrics(BaseModel):
@@ -323,8 +326,9 @@ class ContentQualityMetrics(BaseModel):
     # Last updated
     last_updated: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class CurriculumGenerationRequest(BaseModel):
@@ -384,5 +388,6 @@ class CurriculumGenerationResponse(BaseModel):
     created_at: datetime
     generation_time_seconds: float
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }

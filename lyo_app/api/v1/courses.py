@@ -41,8 +41,9 @@ class LessonResponse(BaseModel):
     order_index: int
     estimated_duration_minutes: int
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class CourseResponse(BaseModel):
@@ -56,8 +57,9 @@ class CourseResponse(BaseModel):
     created_at: str
     updated_at: str
     
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class CourseDetailResponse(CourseResponse):
