@@ -5,6 +5,7 @@ from datetime import datetime
 import asyncio
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db_session
@@ -34,7 +35,7 @@ async def health_check(db: AsyncSession = Depends(get_db_session)) -> Dict[str, 
     
     # Check database
     try:
-        await db.execute("SELECT 1")
+        await db.execute(text("SELECT 1"))
         health_data["components"]["database"] = {
             "status": "healthy",
             "message": "Database connection successful"
@@ -61,12 +62,18 @@ async def health_check(db: AsyncSession = Depends(get_db_session)) -> Dict[str, 
     
     # Check Redis (used by Celery and WebSocket)
     try:
-        from lyo_app.workers.celery_app import redis_client
-        await redis_client.ping()
-        health_data["components"]["redis"] = {
-            "status": "healthy",
-            "message": "Redis connection successful"
-        }
+        from lyo_app.core.redis_client import redis_client
+        if redis_client and redis_client.client:
+            await redis_client.ping()
+            health_data["components"]["redis"] = {
+                "status": "healthy",
+                "message": "Redis connection successful"
+            }
+        else:
+            health_data["components"]["redis"] = {
+                "status": "degraded",
+                "message": "Redis not connected"
+            }
     except Exception as e:
         health_data["status"] = "degraded"
         health_data["components"]["redis"] = {
@@ -82,7 +89,7 @@ async def database_health(db: AsyncSession = Depends(get_db_session)) -> Dict[st
     """Check database connectivity and basic operations."""
     try:
         # Test basic query
-        result = await db.execute("SELECT version() as version, now() as timestamp")
+        result = await db.execute(text("SELECT version() as version, now() as timestamp"))
         row = result.fetchone()
         
         return {
@@ -116,7 +123,7 @@ async def readiness_probe(db: AsyncSession = Depends(get_db_session)) -> Dict[st
     
     # Database check
     try:
-        await db.execute("SELECT 1")
+        await db.execute(text("SELECT 1"))
         checks.append({"component": "database", "status": "ready"})
     except Exception as e:
         checks.append({"component": "database", "status": "not_ready", "error": str(e)})

@@ -7,7 +7,7 @@ import asyncio
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import QueuePool
-from sqlalchemy import event
+from sqlalchemy import event, text
 import logging
 from contextlib import asynccontextmanager
 import random
@@ -179,7 +179,7 @@ class DatabaseManager:
         # Check primary database
         try:
             async with self.get_session() as session:
-                await session.execute("SELECT 1")
+                await session.execute(text("SELECT 1"))
                 results["primary"] = True
         except Exception as e:
             logger.error(f"Primary database health check failed: {e}")
@@ -188,7 +188,7 @@ class DatabaseManager:
         for i, factory in enumerate(self.read_session_factories):
             try:
                 session = factory()
-                await session.execute("SELECT 1")
+                await session.execute(text("SELECT 1"))
                 await session.close()
                 results["replicas"].append({"replica_id": i + 1, "healthy": True})
             except Exception as e:
