@@ -10,7 +10,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 try:
     from pydantic_settings import BaseSettings
 except ImportError:
@@ -242,52 +242,60 @@ class EnhancedSettings(BaseSettings):
     # VALIDATORS
     # ============================================================================
     
-    @validator('ENVIRONMENT')
+    @field_validator('ENVIRONMENT')
+    @classmethod
     def validate_environment(cls, v):
         allowed_envs = ['development', 'staging', 'production']
         if v not in allowed_envs:
             raise ValueError(f'Environment must be one of: {allowed_envs}')
         return v
     
-    @validator('LOG_LEVEL')
+    @field_validator('LOG_LEVEL')
+    @classmethod
     def validate_log_level(cls, v):
         allowed_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if v.upper() not in allowed_levels:
             raise ValueError(f'Log level must be one of: {allowed_levels}')
         return v.upper()
     
-    @validator('LOG_FORMAT')
+    @field_validator('LOG_FORMAT')
+    @classmethod
     def validate_log_format(cls, v):
         allowed_formats = ['json', 'text']
         if v not in allowed_formats:
             raise ValueError(f'Log format must be one of: {allowed_formats}')
         return v
     
-    @validator('PORT')
+    @field_validator('PORT')
+    @classmethod
     def validate_port(cls, v):
         if not 1 <= v <= 65535:
             raise ValueError('Port must be between 1 and 65535')
         return v
     
-    @validator('PASSWORD_MIN_LENGTH')
+    @field_validator('PASSWORD_MIN_LENGTH')
+    @classmethod
     def validate_password_min_length(cls, v):
         if v < 6:
             raise ValueError('Password minimum length must be at least 6')
         return v
     
-    @validator('GEMINI_TEMPERATURE')
+    @field_validator('GEMINI_TEMPERATURE')
+    @classmethod
     def validate_temperature(cls, v):
         if not 0.0 <= v <= 2.0:
             raise ValueError('Temperature must be between 0.0 and 2.0')
         return v
     
-    @validator('GEMINI_TOP_P')
+    @field_validator('GEMINI_TOP_P')
+    @classmethod
     def validate_top_p(cls, v):
         if not 0.0 <= v <= 1.0:
             raise ValueError('Top_p must be between 0.0 and 1.0')
         return v
     
-    @validator('MAX_UPLOAD_SIZE')
+    @field_validator('MAX_UPLOAD_SIZE')
+    @classmethod
     def validate_max_upload_size(cls, v):
         if v < 1024:  # 1KB minimum
             raise ValueError('Max upload size must be at least 1KB')
@@ -295,19 +303,8 @@ class EnhancedSettings(BaseSettings):
             raise ValueError('Max upload size cannot exceed 1GB')
         return v
     
-    @validator('REDIS_URL', pre=True, always=True)
-    def assemble_redis_url(cls, v: Optional[str], values: Dict[str, Any]) -> str:
-        """Assemble Redis URL from host and port if not provided"""
-        if v and v != "redis://localhost:6379/0":
-            return v
-        
-        host = values.get('REDIS_HOST')
-        port = values.get('REDIS_PORT', 6379)
-        
-        if host:
-            return f"redis://{host}:{port}/0"
-        
-        return v or "redis://localhost:6379/0"
+    # Note: REDIS_URL computed dynamically based on REDIS_HOST/PORT
+    # Removed validator that used pre=True/values pattern (incompatible with Pydantic V2)
     
     # ============================================================================
     # ENVIRONMENT-SPECIFIC CONFIGURATIONS
