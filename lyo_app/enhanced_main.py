@@ -449,8 +449,9 @@ def create_app() -> FastAPI:
         try:
             from sqlalchemy import text
             from lyo_app.core.database import engine
-            async with engine.begin() as conn:
-                await conn.execute(text("SELECT 1"))
+            async with engine.connect() as conn:
+                result = await conn.execute(text("SELECT 1"))
+                result.close()
             health_status["services"]["database"] = "healthy"
         except Exception as e:  # noqa: BLE001
             health_status["services"]["database"] = f"unhealthy: {e}"
@@ -458,8 +459,9 @@ def create_app() -> FastAPI:
         # Redis
         try:
             from lyo_app.core.redis_client import redis_client
-            if redis_client:
-                if await redis_client.ping():
+            if redis_client and redis_client.client:
+                pong = await redis_client.ping()
+                if pong:
                     health_status["services"]["redis"] = "healthy"
                 else:
                     health_status["services"]["redis"] = "not_connected"
@@ -509,6 +511,16 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001
             health_status["services"]["vertex_ai"] = f"error: {e}"
         return health_status
+
+    @app.get("/health/simple")
+    async def simple_health():
+        """Simple health check that doesn't require DB connection."""
+        return {
+            "status": "ok",
+            "version": settings.APP_VERSION,
+            "environment": settings.ENVIRONMENT,
+            "timestamp": time.time()
+        }
 
     @app.get("/metrics")
     async def prometheus_metrics():
