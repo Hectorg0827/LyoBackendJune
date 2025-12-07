@@ -34,7 +34,7 @@ class EnhancedSettings(BaseSettings):
     # ============================================================================
     
     APP_NAME: str = Field("LyoBackend", description="Application name")
-    APP_VERSION: str = Field("3.3.0-CLOUD", description="Application version")  # Startup fixes + missing models
+    APP_VERSION: str = Field("3.3.1-CLOUD", description="Application version")  # Latency optimizations
     APP_DESCRIPTION: str = Field("LyoBackend AI-Powered Learning Platform", description="Application description")
     
     # Environment
