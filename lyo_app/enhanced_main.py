@@ -407,9 +407,10 @@ def create_app() -> FastAPI:
         }
         # DB
         try:
+            from sqlalchemy import text
             from lyo_app.core.database import engine
             async with engine.begin() as conn:
-                await conn.execute("SELECT 1")
+                await conn.execute(text("SELECT 1"))
             health_status["services"]["database"] = "healthy"
         except Exception as e:  # noqa: BLE001
             health_status["services"]["database"] = f"unhealthy: {e}"
@@ -418,8 +419,10 @@ def create_app() -> FastAPI:
         try:
             from lyo_app.core.redis_client import redis_client
             if redis_client:
-                await redis_client.ping()
-                health_status["services"]["redis"] = "healthy"
+                if await redis_client.ping():
+                    health_status["services"]["redis"] = "healthy"
+                else:
+                    health_status["services"]["redis"] = "not_connected"
             else:
                 health_status["services"]["redis"] = "not_configured"
         except Exception as e:  # noqa: BLE001

@@ -47,6 +47,16 @@ class RedisClient:
             await self.client.close()
             self.client = None
     
+    async def ping(self) -> bool:
+        """Ping Redis to check connection health."""
+        if not self.client:
+            return False
+        try:
+            return await self.client.ping()
+        except Exception as e:
+            logger.error(f"Redis ping failed: {e}")
+            return False
+    
     async def set(
         self, 
         key: str, 
