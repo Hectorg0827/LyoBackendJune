@@ -77,8 +77,8 @@ class UserXP(Base):
     # Metadata
     earned_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     
-    # Relationships
-    user = relationship("User", back_populates="xp_records")
+    # Relationships - commented out due to missing back_populates in User model
+    # user = relationship("User", back_populates="xp_records")
 
 
 class Achievement(Base):
@@ -132,7 +132,7 @@ class UserAchievement(Base):
     completed_at = Column(DateTime, nullable=True, index=True)
     
     # Relationships
-    user = relationship("User", back_populates="user_achievements")
+    # user = relationship("User", back_populates="user_achievements")
     achievement = relationship("Achievement", back_populates="user_achievements")
     
     # Constraints
@@ -166,7 +166,7 @@ class Streak(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    user = relationship("User", back_populates="streaks")
+    # user = relationship("User", back_populates="streaks")
     
     # Constraints
     __table_args__ = (
@@ -199,7 +199,7 @@ class UserLevel(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    user = relationship("User", back_populates="user_level")
+    # user = relationship("User", back_populates="user_level")
 
 
 class LeaderboardEntry(Base):
@@ -231,7 +231,7 @@ class LeaderboardEntry(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     
     # Relationships
-    user = relationship("User", back_populates="leaderboard_entries")
+    # user = relationship("User", back_populates="leaderboard_entries")
     
     # Constraints
     __table_args__ = (
@@ -289,7 +289,7 @@ class UserBadge(Base):
     earned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    user = relationship("User", back_populates="user_badges")
+    # user = relationship("User", back_populates="user_badges")
     badge = relationship("Badge", back_populates="user_badges")
     
     # Constraints

@@ -23,20 +23,28 @@ if config.config_file_name is not None:
 from lyo_app.core.database import Base
 
 # Import all models to ensure they're registered with Base
+# Note: Import from .models directly to avoid circular imports through __init__.py
 from lyo_app.auth.models import User  # noqa: F401
 from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
 from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem, UserPostInteraction  # noqa: F401
-from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
+# Import community models directly to avoid circular imports
+import lyo_app.community.models  # noqa: F401
 from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
 # from lyo_app.resources.models import EducationalResource, ResourceTag, CourseResource, ResourceCollection  # noqa: F401
-from lyo_app.ai_agents.models import *  # noqa: F401
-from lyo_app.adaptive_learning.models import *  # noqa: F401
-from lyo_app.ai_study.models import *  # noqa: F401
-from lyo_app.collaboration.models import *  # noqa: F401
-from lyo_app.affect.models import *  # noqa: F401
-from lyo_app.gen_curriculum.models import *  # noqa: F401
+import lyo_app.ai_agents.models  # noqa: F401
+# import lyo_app.adaptive_learning.models  # noqa: F401 - module is empty
+import lyo_app.ai_study.models  # noqa: F401
+import lyo_app.collaboration.models  # noqa: F401
+import lyo_app.affect.models  # noqa: F401
+# import lyo_app.gen_curriculum.models  # noqa: F401 - has duplicate Lesson table
 from lyo_app.stack.models import StackItem  # noqa: F401
 from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+# AI Classroom - Graph-based Learning Engine
+from lyo_app.ai_classroom.models import (  # noqa: F401
+    GraphCourse, LearningNode, LearningEdge, Concept, Misconception,
+    MasteryState, ReviewSchedule, InteractionAttempt, CourseProgress,
+    CelebrationConfig, AdPlacementConfig
+)
 
 target_metadata = Base.metadata
 

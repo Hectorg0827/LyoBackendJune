@@ -52,7 +52,7 @@ class MentorMessage(Base):
     content = Column(Text, nullable=False)
     
     # Metadata
-    metadata = Column(JSON, default=dict)
+    msg_metadata = Column(JSON, default=dict)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -87,7 +87,7 @@ class MentorAction(Base):
     content_type = Column(String(50), nullable=True)
     
     # Metadata
-    metadata = Column(JSON, default=dict)
+    action_metadata = Column(JSON, default=dict)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -123,7 +123,7 @@ class MentorSuggestion(Base):
     content_type = Column(String(50), nullable=True)
     
     # Metadata
-    metadata = Column(JSON, default=dict)
+    suggestion_metadata = Column(JSON, default=dict)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)

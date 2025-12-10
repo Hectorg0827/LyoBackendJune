@@ -58,10 +58,10 @@ class LearnerState(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
-    mastery_records = relationship("LearnerMastery", back_populates="learner", cascade="all, delete-orphan")
-    affect_samples = relationship("AffectSample", back_populates="learner", cascade="all, delete-orphan")
-    repetition_schedules = relationship("SpacedRepetitionSchedule", back_populates="learner", cascade="all, delete-orphan")
+    # Relationships commented out due to missing FK between LearnerState and related tables
+    # mastery_records = relationship("LearnerMastery", back_populates="learner", cascade="all, delete-orphan")
+    # affect_samples = relationship("AffectSample", back_populates="learner", cascade="all, delete-orphan")
+    # repetition_schedules = relationship("SpacedRepetitionSchedule", back_populates="learner", cascade="all, delete-orphan")
 
 class LearnerMastery(Base):
     """Per-skill mastery tracking with uncertainty"""
@@ -91,7 +91,7 @@ class LearnerMastery(Base):
     mastery_achieved = Column(DateTime, nullable=True)
     
     # Relationships
-    learner = relationship("LearnerState", back_populates="mastery_records")
+    # learner = relationship("LearnerState", back_populates="mastery_records")
 
 class AffectSample(Base):
     """Aggregated affect samples (privacy-preserving)"""
@@ -118,7 +118,7 @@ class AffectSample(Base):
     aggregation_window = Column(Integer, default=60)  # Seconds
     
     # Relationships
-    learner = relationship("LearnerState", back_populates="affect_samples")
+    # learner = relationship("LearnerState", back_populates="affect_samples")
 
 class SpacedRepetitionSchedule(Base):
     """Spaced repetition scheduling for optimal retention"""
@@ -140,4 +140,4 @@ class SpacedRepetitionSchedule(Base):
     last_grade = Column(Integer, nullable=True)  # 0-5 scale
     
     # Relationships
-    learner = relationship("LearnerState", back_populates="repetition_schedules")
+    # learner = relationship("LearnerState", back_populates="repetition_schedules")

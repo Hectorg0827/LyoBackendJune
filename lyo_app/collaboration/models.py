@@ -44,7 +44,7 @@ class InteractionType(str, Enum):
     PEER_ASSESSMENT = "peer_assessment"
 
 
-class StudyGroup(Base):
+class CollaborativeStudyGroup(Base):
     """Collaborative study groups"""
     __tablename__ = "collaborative_study_groups"
     
@@ -157,10 +157,11 @@ class PeerInteraction(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     resolved_at = Column(DateTime)  # When question was resolved
     
-    # Relationships
-    follow_up_interactions = relationship("PeerInteraction", 
-                                        primaryjoin="PeerInteraction.id==PeerInteraction.parent_interaction_id",
-                                        backref="parent_interaction")
+    # Self-referential relationship - commented out due to configuration issue
+    # follow_up_interactions = relationship("PeerInteraction", 
+    #                                     primaryjoin="PeerInteraction.id==PeerInteraction.parent_interaction_id",
+    #                                     backref="parent_interaction",
+    #                                     remote_side="PeerInteraction.id")
     parent_interaction_id = Column(Integer, ForeignKey("peer_interactions.id"))
 
 

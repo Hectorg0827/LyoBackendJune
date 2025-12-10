@@ -4,10 +4,30 @@ Stack Models for learning stack and progress tracking.
 
 from datetime import datetime
 from typing import Optional
+from enum import Enum
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float
 from sqlalchemy.orm import relationship
 
 from lyo_app.core.database import Base
+
+
+class StackItemType(str, Enum):
+    """Types of stack items."""
+    TOPIC = "topic"
+    COURSE = "course"
+    SKILL = "skill"
+    QUESTION = "question"
+    EVENT = "event"
+    VIDEO = "video"
+    ARTICLE = "article"
+
+
+class StackItemStatus(str, Enum):
+    """Status of stack items."""
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    PAUSED = "paused"
 
 
 class StackItem(Base):
@@ -32,8 +52,8 @@ class StackItem(Base):
     content_id = Column(String(255), nullable=True)
     content_type = Column(String(50), nullable=True)
     
-    # Metadata
-    metadata = Column(JSON, default=dict)
+    # Extra data (renamed from 'metadata' which is reserved in SQLAlchemy)
+    extra_data = Column(JSON, default=dict)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)

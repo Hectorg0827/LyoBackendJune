@@ -1,7 +1,7 @@
 """Add social and messenger models
 
 Revision ID: 20250728_add_social
-Revises: 003_educational_resources
+Revises: 156c634b5cea
 Create Date: 2025-07-28 19:35:00.000000
 
 """
@@ -12,7 +12,7 @@ from datetime import datetime
 
 # revision identifiers, used by Alembic.
 revision = '20250728_add_social'
-down_revision = '003_educational_resources'
+down_revision = '156c634b5cea'  # Fixed: was referencing missing '003_educational_resources'
 branch_labels = None
 depends_on = None
 
