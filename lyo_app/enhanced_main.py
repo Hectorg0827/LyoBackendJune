@@ -335,6 +335,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"AI Classroom routes not available: {e}")
     
+    # AI Classroom Playback - Interactive Cinema Experience
+    try:
+        from lyo_app.ai_classroom.playback_routes import router as playback_router
+        app.include_router(playback_router)
+        logger.info("✅ AI Classroom Playback routes integrated - Netflix-like adaptive learning active!")
+    except ImportError as e:
+        logger.warning(f"AI Classroom Playback routes not available: {e}")
+    
     # Phase 1: Generative AI Tutor Foundation
     try:
         from lyo_app.personalization.routes import router as personalization_router
@@ -442,6 +450,8 @@ def create_app() -> FastAPI:
             "timestamp": time.time(),
             "version": settings.APP_VERSION,
             "environment": settings.ENVIRONMENT,
+            "firebase_project_id": os.getenv("FIREBASE_PROJECT_ID", "NOT_SET"),
+            "gcp_project_id": os.getenv("GCP_PROJECT_ID", "NOT_SET"),
             "features": settings.get_feature_flags(),
             "services": {},
         }

@@ -399,7 +399,7 @@ class FeedItem(Base):
     content = Column(Text, nullable=True)
     
     # Rich content
-    metadata = Column(JSON, nullable=True)  # Type-specific data
+    item_metadata = Column(JSON, nullable=True)  # Type-specific data (renamed from metadata)
     image_url = Column(String(500), nullable=True)
     link_url = Column(String(500), nullable=True)
     

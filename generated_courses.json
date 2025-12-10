@@ -1,0 +1,86 @@
+[
+  {
+    "id": "7d778c8f-db8b-4470-8e1e-8299a94eb09a",
+    "title": "Complete Guide to Python Programming Fundamentals",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "beginner"
+  },
+  {
+    "id": "5aab885c-6029-4113-bf16-cfaf9a6d0ab9",
+    "title": "Complete Guide to Machine Learning Basics",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "intermediate"
+  },
+  {
+    "id": "5301057d-4278-4e84-9c28-bfbe9897856b",
+    "title": "Complete Guide to JavaScript for Web Development",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "beginner"
+  },
+  {
+    "id": "8fc2fe11-a1e3-4cc7-bef9-fc099a724993",
+    "title": "Complete Guide to Data Science with Python",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "intermediate"
+  },
+  {
+    "id": "49d24127-a868-4d4a-985d-1e61006b2f0c",
+    "title": "Complete Guide to iOS App Development with SwiftUI",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "intermediate"
+  },
+  {
+    "id": "1f7c7f4e-14a1-4ef3-9dc7-9e21ac7c23e9",
+    "title": "Complete Guide to Deep Learning and Neural Networks",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "advanced"
+  },
+  {
+    "id": "fee5e082-4c22-4383-822a-2c12739ebea2",
+    "title": "Complete Guide to SQL and Database Design",
+    "modules": 3,
+    "lessons": 9,
+    "difficulty": "beginner"
+  },
+  {
+    "id": "0d308da7-6cee-412c-a9a1-ce058094b03a",
+    "title": "Complete Guide to React Native Mobile Development",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "intermediate"
+  },
+  {
+    "id": "264d319d-7f8e-46b1-adbf-15b242d05d38",
+    "title": "Complete Guide to Cloud Computing with AWS",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "intermediate"
+  },
+  {
+    "id": "1309b3ca-533e-4c2a-9cfa-a87739a45fc3",
+    "title": "Complete Guide to Cybersecurity Essentials",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "beginner"
+  },
+  {
+    "id": "e5bf86e0-837a-4a7b-a03b-b1d12b3e0ed8",
+    "title": "Advanced Blockchain and Web3 Development",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "advanced"
+  },
+  {
+    "id": "c855cd9e-b2bc-4a07-8717-8300509b5cbe",
+    "title": "Complete Guide to DevOps and CI/CD Pipelines",
+    "modules": 4,
+    "lessons": 12,
+    "difficulty": "intermediate"
+  }
+]

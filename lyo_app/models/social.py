@@ -15,7 +15,7 @@ class Story(Base):
     content_type = Column(String(50))  # image, video, text
     media_url = Column(String(500))
     text_content = Column(String(1000))
-    metadata = Column(JSON)
+    story_metadata = Column(JSON)
     expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=24))
     is_highlight = Column(Boolean, default=False)
     view_count = Column(Integer, default=0)
@@ -65,7 +65,7 @@ class Message(Base):
     content = Column(Text)
     message_type = Column(String(20))  # text, image, video, audio, file
     media_url = Column(String(500))
-    metadata = Column(JSON)
+    message_metadata = Column(JSON)
     is_edited = Column(Boolean, default=False)
     is_deleted = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -14,8 +14,18 @@ if not firebase_admin._apps:
         # Priority: Firebase credentials file > JSON env var > ADC
         cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
         cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-        # IMPORTANT: Use FIREBASE_PROJECT_ID first - this is the iOS Firebase project
-        project_id = os.getenv("FIREBASE_PROJECT_ID") or os.getenv("GCP_PROJECT_ID", "lyo-app")
+        # IMPORTANT: Read FIREBASE_PROJECT_ID from environment FIRST and use it
+        # This allows us to use service account from lyobackend project but accept tokens from lyo-app project
+        firebase_project_id = os.getenv("FIREBASE_PROJECT_ID")
+        gcp_project_id = os.getenv("GCP_PROJECT_ID", "lyobackend")
+        
+        # Default to lyo-app for iOS compatibility if not explicitly set
+        project_id = firebase_project_id or gcp_project_id or "lyo-app"
+        
+        logger.info(f"🔥 Firebase initialization:")
+        logger.info(f"   FIREBASE_PROJECT_ID env: {firebase_project_id}")
+        logger.info(f"   GCP_PROJECT_ID env: {gcp_project_id}")
+        logger.info(f"   Using project_id: {project_id}")
         
         cred = None
         
@@ -23,15 +33,21 @@ if not firebase_admin._apps:
         if cred_path and os.path.exists(cred_path):
             logger.info(f"📁 Loading Firebase credentials from file: {cred_path}")
             cred = credentials.Certificate(cred_path)
-            # Extract project_id from credentials if available
-            try:
-                import json
-                with open(cred_path) as f:
-                    cred_data = json.load(f)
-                    project_id = cred_data.get("project_id", project_id)
-                    logger.info(f"🔑 Using project_id from credentials: {project_id}")
-            except Exception:
-                pass
+            # DO NOT override project_id from credentials file if FIREBASE_PROJECT_ID is explicitly set
+            if not firebase_project_id:
+                # Only use credentials project_id as fallback if no env var set
+                try:
+                    import json
+                    with open(cred_path) as f:
+                        cred_data = json.load(f)
+                        creds_project_id = cred_data.get("project_id")
+                        if creds_project_id:
+                            project_id = creds_project_id
+                            logger.info(f"🔑 Using project_id from credentials (no env override): {project_id}")
+                except Exception:
+                    pass
+            else:
+                logger.info(f"✅ Keeping FIREBASE_PROJECT_ID from environment: {project_id}")
         
         # 2. Try JSON environment variable
         elif cred_json:

@@ -92,8 +92,8 @@ class StudyGroup(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
+    course = relationship("Course", back_populates="study_groups", lazy="select")
     #     creator = relationship("User", back_populates="created_study_groups")
-    #     course = relationship("Course", back_populates="study_groups")
     #     memberships = relationship("GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
     #     events = relationship("CommunityEvent", back_populates="study_group")
 

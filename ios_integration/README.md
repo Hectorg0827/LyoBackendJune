@@ -5,6 +5,68 @@
 https://lyo-backend-production-830162750094.us-central1.run.app
 ```
 
+---
+
+## 🎬 NEW: Interactive Cinema Mode (Netflix-like Learning)
+
+The **Interactive Cinema** feature transforms learning into a Netflix-like experience with:
+- Graph-based adaptive learning paths
+- Real-time interaction overlays (quizzes, choices)
+- TTS narration with AI-generated visuals
+- Spaced repetition for long-term retention
+- Celebration animations at milestones
+
+### Quick Start - Interactive Cinema
+
+```swift
+// 1. Import the service
+import InteractiveCinemaService
+
+// 2. Start a course
+let service = InteractiveCinemaService.shared
+let playback = try await service.startCourse(courseId: "uuid-here")
+
+// 3. Navigate through nodes
+let next = try await service.advancePlayback(
+    courseId: playback.courseId,
+    nextNodeId: playback.currentNode.edges.first?.targetNodeId
+)
+
+// 4. Submit interaction responses
+let result = try await service.submitInteraction(
+    courseId: playback.courseId,
+    nodeId: playback.currentNode.id,
+    interactionType: "quiz",
+    response: ["selected_answer": "B"]
+)
+
+// 5. Get spaced repetition reviews
+let reviews = try await service.getTodaysReviews()
+```
+
+### Interactive Cinema Files
+
+| File | Purpose |
+|------|---------|
+| `InteractiveCinemaService.swift` | API client for playback endpoints |
+| `InteractiveCinemaView.swift` | SwiftUI Netflix-style player UI |
+| `AdMobIntegration.swift` | Hybrid AdMob integration |
+| `CelebrationAnimations.swift` | Milestone celebration effects |
+
+### Interactive Cinema API Endpoints
+
+| Feature | Endpoint | Method |
+|---------|----------|--------|
+| Start Course | `/api/v1/playback/courses/{id}/start` | POST |
+| Get Playback | `/api/v1/playback/courses/{id}/current` | GET |
+| Advance Node | `/api/v1/playback/courses/{id}/advance` | POST |
+| Submit Interaction | `/api/v1/playback/interaction/submit` | POST |
+| Today's Reviews | `/api/v1/playback/review/today` | GET |
+| Submit Review | `/api/v1/playback/review/submit` | POST |
+| Ad Check | `/api/v1/playback/ads/check` | POST |
+
+---
+
 ## ⚡ Quick Start - Smart AI Service (Recommended)
 
 The easiest integration is `SmartAIService.swift` - it auto-detects user intent:

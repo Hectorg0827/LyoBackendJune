@@ -222,7 +222,7 @@ class SecurityEvent(Base):
     # Context
     ip_address = Column(String, nullable=True)
     user_agent = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)  # Additional event-specific data
+    event_metadata = Column(JSON, nullable=True)  # Additional event-specific data
     
     # Risk assessment
     risk_level = Column(String, default="low")  # low, medium, high, critical

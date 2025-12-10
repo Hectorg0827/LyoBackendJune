@@ -86,17 +86,15 @@ class User(Base):
     #     roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="noload", viewonly=True)
     
     # AI Agents relationships
-    #     engagement_state = relationship("UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="noload", viewonly=True)
-    #     mentor_interactions = relationship("MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
+    engagement_state = relationship("UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="noload", viewonly=True)
+    mentor_interactions = relationship("MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
     
     # AI Study relationships
-    # These relationships are commented out to avoid circular imports.
-    # The relationship is defined on the other side (StudySession, GeneratedQuiz, etc.)
-    # and can be accessed via backref if needed.
-    # study_sessions = relationship("StudySession", back_populates="user", lazy="noload", viewonly=True)
-    # generated_quizzes = relationship("GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
-    # quiz_attempts = relationship("QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
-    # study_analytics = relationship("StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
+    # These relationships are defined to satisfy back_populates requirements
+    study_sessions = relationship("StudySession", back_populates="user", lazy="noload", viewonly=True)
+    generated_quizzes = relationship("GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
+    quiz_attempts = relationship("QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
+    study_analytics = relationship("StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
     
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"

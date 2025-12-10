@@ -705,21 +705,27 @@ Include practical examples and clear explanations."""
             provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "openai"]
         )
         
-        # Parse the JSON response
-        try:
-            json_content = ai_response["content"].strip()
-            # Clean markdown formatting if present
-            if json_content.startswith("```json"):
-                json_content = json_content.replace("```json", "").replace("```", "").strip()
-            elif json_content.startswith("```"):
-                json_content = json_content.replace("```", "").strip()
-            
-            course_data = json.loads(json_content)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse AI course response: {e}")
-            logger.debug(f"AI response was: {ai_response['content'][:500]}...")
-            # Generate fallback course
+        # Check for fallback response (AI service unavailable)
+        if ai_response.get("is_fallback") or ai_response.get("model") == "fallback":
+            logger.warning("AI returned fallback response, generating fallback course")
             course_data = _generate_fallback_course(request)
+        else:
+            # Parse the JSON response
+            try:
+                # Handle both "content" and "response" keys
+                json_content = (ai_response.get("content") or ai_response.get("response", "{}")).strip()
+                # Clean markdown formatting if present
+                if json_content.startswith("```json"):
+                    json_content = json_content.replace("```json", "").replace("```", "").strip()
+                elif json_content.startswith("```"):
+                    json_content = json_content.replace("```", "").strip()
+                
+                course_data = json.loads(json_content)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse AI course response: {e}")
+                logger.debug(f"AI response was: {str(ai_response)[:500]}...")
+                # Generate fallback course
+                course_data = _generate_fallback_course(request)
         
         # Build response with proper IDs
         course_id = str(uuid.uuid4())

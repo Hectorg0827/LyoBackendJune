@@ -159,8 +159,17 @@ class AIResilienceManager:
                 )
             )
 
+        # Create SSL context with proper certificates for macOS compatibility
+        import ssl
+        try:
+            import certifi
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ssl_context = ssl.create_default_context()
+        
         connector = aiohttp.TCPConnector(
-            limit=100, limit_per_host=30, ttl_dns_cache=300, use_dns_cache=True
+            limit=100, limit_per_host=30, ttl_dns_cache=300, use_dns_cache=True,
+            ssl=ssl_context
         )
         timeout = aiohttp.ClientTimeout(total=60, connect=10)
         self.session = aiohttp.ClientSession(

@@ -255,6 +255,11 @@ Generate the course outline:"""
                 f"Apply {topic} concepts in practice",
                 f"Build confidence with {topic}"
             ],
+            "modules": [
+                {
+                    "title": f"Introduction to {topic.title()}",
+                    "description": f"Get started with {topic}",
+                    "objectives": [
                         f"Identify key principles in {topic}",
                         f"Apply foundational knowledge"
                     ],

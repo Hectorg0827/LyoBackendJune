@@ -147,17 +147,21 @@ async def init_db() -> None:
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
         from lyo_app.auth.rbac import Role, Permission, role_permissions, user_roles  # noqa: F401
-        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion, CourseItem, CourseStatus  # noqa: F401
+        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
-        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge, GamificationProfile  # noqa: F401
+        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
         from lyo_app.ai_study.models import StudySession, StudyMessage, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
-        from lyo_app.tasks.models import Task, TaskState  # noqa: F401
-        from lyo_app.notifications.models import PushDevice  # noqa: F401
         # Import new mentor chat models
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
         from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+        # Import AI Classroom graph learning models
+        from lyo_app.ai_classroom.models import (  # noqa: F401
+            GraphCourse, LearningNode, LearningEdge, Concept, Misconception,
+            MasteryState, ReviewSchedule, InteractionAttempt, CourseProgress,
+            CelebrationConfig, AdPlacementConfig
+        )
         
         await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully")

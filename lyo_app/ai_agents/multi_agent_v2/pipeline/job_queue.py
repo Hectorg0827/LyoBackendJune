@@ -12,9 +12,11 @@ from uuid import UUID, uuid4
 import json
 import logging
 
-from sqlalchemy import Column, String, Text, DateTime, Integer, Float, Boolean, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Integer, Float, Boolean, ForeignKey, JSON
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+# Use JSON instead of JSONB for SQLite compatibility; production uses PostgreSQL with JSONB benefits
+JSONB = JSON  # Alias for compatibility
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import relationship
