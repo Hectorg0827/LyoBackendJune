@@ -19,6 +19,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_async_session
+from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.models import User
 from lyo_app.ai_classroom.graph_service import GraphService, get_graph_service
 from lyo_app.ai_classroom.models import (
     GraphCourse, LearningNode, CourseProgress, NodeType, 
@@ -56,7 +58,7 @@ async def get_db() -> AsyncSession:
 @router.post("/courses/{course_id}/start")
 async def start_course(
     course_id: str,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> PlaybackState:
     """
@@ -66,6 +68,7 @@ async def start_course(
     few upcoming nodes for client-side pre-loading.
     """
     graph_service = get_graph_service(db)
+    user_id = str(current_user.id)
     
     # Get or create progress
     progress = await graph_service.get_or_create_progress(user_id, course_id)
@@ -104,7 +107,7 @@ async def start_course(
 @router.get("/courses/{course_id}/node/current")
 async def get_current_node(
     course_id: str,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> LearningNodeWithAssets:
     """
@@ -114,6 +117,7 @@ async def get_current_node(
     on initial load.
     """
     graph_service = get_graph_service(db)
+    user_id = str(current_user.id)
     progress = await graph_service.get_or_create_progress(user_id, course_id)
     
     if not progress.current_node_id:
@@ -130,7 +134,7 @@ async def get_current_node(
 async def advance_course(
     course_id: str,
     request: PlaybackAdvanceRequest,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     time_spent_seconds: int = Query(default=0, description="Time spent on current node"),
     db: AsyncSession = Depends(get_db)
 ) -> PlaybackState:
@@ -141,6 +145,7 @@ async def advance_course(
     For interaction nodes, use /submit instead.
     """
     graph_service = get_graph_service(db)
+    user_id = str(current_user.id)
     
     # Get best next node
     next_node = await graph_service.get_best_next_node(
@@ -190,7 +195,7 @@ async def advance_course(
 @router.get("/courses/{course_id}/lookahead")
 async def get_lookahead(
     course_id: str,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     count: int = Query(default=3, ge=1, le=10),
     db: AsyncSession = Depends(get_db)
 ) -> List[LearningNodeRead]:
@@ -201,6 +206,7 @@ async def get_lookahead(
     while the user watches the current one.
     """
     graph_service = get_graph_service(db)
+    user_id = str(current_user.id)
     progress = await graph_service.get_or_create_progress(user_id, course_id)
     
     if not progress.current_node_id:
@@ -219,7 +225,7 @@ async def get_lookahead(
 @router.post("/interactions/submit")
 async def submit_interaction(
     request: InteractionSubmitRequest,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> InteractionSubmitResponse:
     """
@@ -229,6 +235,7 @@ async def submit_interaction(
     the next node (could be next in sequence, or remediation).
     """
     graph_service = get_graph_service(db)
+    user_id = str(current_user.id)
     
     # Get the node
     node = await graph_service.get_node(request.node_id)
@@ -354,7 +361,7 @@ async def get_detailed_feedback(
 @router.post("/remediation/request")
 async def request_remediation(
     request: RemediationRequest,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> RemediationResponse:
     """
@@ -366,6 +373,7 @@ async def request_remediation(
     from lyo_app.ai_classroom.remediation_service import get_remediation_service
     
     graph_service = get_graph_service(db)
+    user_id = str(current_user.id)
     remediation_service = get_remediation_service(db)
     
     # Check budget
@@ -409,7 +417,7 @@ async def request_remediation(
 
 @router.get("/review/today")
 async def get_review_queue(
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     limit: int = Query(default=20, ge=1, le=50),
     db: AsyncSession = Depends(get_db)
 ) -> ReviewQueueResponse:
@@ -421,6 +429,7 @@ async def get_review_queue(
     from sqlalchemy import select, and_
     from sqlalchemy.orm import selectinload
     
+    user_id = str(current_user.id)
     now = datetime.utcnow()
     
     result = await db.execute(
@@ -466,7 +475,7 @@ async def get_review_queue(
 @router.post("/review/submit")
 async def submit_review(
     request: ReviewSubmitRequest,
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> ReviewSubmitResponse:
     """
@@ -475,6 +484,8 @@ async def submit_review(
     Uses SM-2 algorithm to calculate next review date.
     """
     from sqlalchemy import select, and_
+    
+    user_id = str(current_user.id)
     
     # Find the review schedule
     result = await db.execute(
@@ -545,7 +556,7 @@ async def submit_review(
 
 @router.get("/mastery/dashboard")
 async def get_mastery_dashboard(
-    user_id: str = Query(..., description="User ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> MasteryDashboard:
     """
@@ -553,7 +564,9 @@ async def get_mastery_dashboard(
     
     Shows overall progress, strong/weak areas, and review stats.
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, and_
+    
+    user_id = str(current_user.id)
     
     # Get all mastery states
     result = await db.execute(
