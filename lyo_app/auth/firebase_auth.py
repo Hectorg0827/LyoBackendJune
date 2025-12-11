@@ -83,6 +83,10 @@ class FirebaseAuthService:
         """
         Verify a Firebase ID token.
         
+        CRITICAL: Supports cross-project verification where:
+        - iOS app uses Firebase project 'lyo-app' (generates tokens with aud='lyo-app')
+        - Backend uses service account from 'lyobackend' project
+        
         Args:
             id_token: The Firebase ID token from the client
             
@@ -92,18 +96,52 @@ class FirebaseAuthService:
         Raises:
             ValueError: If token is invalid or expired
         """
+        import os
+        
         if not self.is_available():
             raise ValueError("Firebase authentication is not available")
         
+        # Get the expected audience from environment (the iOS Firebase project)
+        expected_audience = os.getenv("FIREBASE_PROJECT_ID", "lyo-app")
+        
         try:
+            # First, try standard verification
             decoded_token = firebase_auth.verify_id_token(id_token, check_revoked=True)
             return decoded_token
+        except firebase_auth.InvalidIdTokenError as e:
+            error_message = str(e)
+            
+            # Check if this is an audience mismatch error
+            if "audience" in error_message.lower() or "aud" in error_message.lower():
+                logger.warning(f"🔄 Audience mismatch detected, attempting cross-project verification...")
+                logger.warning(f"   Expected audience: {expected_audience}")
+                
+                # Try verification without audience check using Google's public keys
+                try:
+                    import google.auth.transport.requests
+                    import google.oauth2.id_token
+                    
+                    # Verify using Google's public keys (validates signature and expiry)
+                    request = google.auth.transport.requests.Request()
+                    decoded_token = google.oauth2.id_token.verify_firebase_token(
+                        id_token, 
+                        request,
+                        audience=expected_audience  # Use iOS project ID as audience
+                    )
+                    
+                    logger.info(f"✅ Cross-project token verification successful for uid: {decoded_token.get('uid')}")
+                    return decoded_token
+                    
+                except Exception as cross_verify_error:
+                    logger.error(f"❌ Cross-project verification also failed: {cross_verify_error}")
+                    raise ValueError(f"Invalid token: {str(e)}")
+            else:
+                raise ValueError(f"Invalid token: {str(e)}")
+                
         except firebase_auth.ExpiredIdTokenError:
             raise ValueError("Token has expired")
         except firebase_auth.RevokedIdTokenError:
             raise ValueError("Token has been revoked")
-        except firebase_auth.InvalidIdTokenError as e:
-            raise ValueError(f"Invalid token: {str(e)}")
         except Exception as e:
             logger.error(f"Token verification failed: {e}")
             raise ValueError(f"Token verification failed: {str(e)}")
