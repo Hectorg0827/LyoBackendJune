@@ -163,3 +163,4 @@ py-cpuinfo==9.0.0
 # Optional GPU Monitoring
 nvidia-ml-py==12.535.133
 aiofiles>=23.2.1
+google-auth>=2.0.0

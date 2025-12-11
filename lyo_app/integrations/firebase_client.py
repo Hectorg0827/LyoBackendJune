@@ -28,15 +28,28 @@ class FirebaseClient:
         if not _FIREBASE_AVAILABLE:
             return
         try:
-            project_id = os.getenv("GCP_PROJECT_ID")
-            # Preferred: ADC (on Cloud Run) else explicit service account path
+            # Use FIREBASE_PROJECT_ID for auth, GCP_PROJECT_ID for storage
+            firebase_project_id = os.getenv("FIREBASE_PROJECT_ID") or os.getenv("GCP_PROJECT_ID")
+            gcp_project_id = os.getenv("GCP_PROJECT_ID")
+            
+            # Priority: FIREBASE_CREDENTIALS_JSON > GOOGLE_APPLICATION_CREDENTIALS > ADC
             cred: Any
-            if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") and os.path.exists(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")):
+            cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
+            
+            if cred_json:
+                # Use Firebase-specific credentials from JSON env var
+                import json
+                cred_dict = json.loads(cred_json)
+                cred = credentials.Certificate(cred_dict)
+            elif os.getenv("GOOGLE_APPLICATION_CREDENTIALS") and os.path.exists(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")):
                 cred = credentials.Certificate(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
             else:
                 cred = credentials.ApplicationDefault()
+            
+            # Initialize with Firebase project ID for token verification
             firebase_admin.initialize_app(cred, {
-                "storageBucket": f"{project_id}.appspot.com" if project_id else None
+                "projectId": firebase_project_id,
+                "storageBucket": f"{gcp_project_id}.appspot.com" if gcp_project_id else None
             })
             self.db = firestore.client()
             try:
