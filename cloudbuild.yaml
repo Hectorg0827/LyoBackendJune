@@ -45,13 +45,15 @@ steps:
         --platform managed \
         --allow-unauthenticated \
         --port 8080 \
-        --memory 2Gi \
-        --cpu 2 \
+        --memory 8Gi \
+        --cpu 4 \
         --min-instances 1 \
         --max-instances 10 \
+        --timeout=300 \
+        --cpu-boost \
         --vpc-connector=lyo-connector \
-        --set-env-vars "ENVIRONMENT=production,DEBUG=false,FIREBASE_PROJECT_ID=lyo-app,GCP_PROJECT_ID=lyobackend,GCS_BUCKET_NAME=lyobackend-storage,REDIS_HOST=10.57.97.243,REDIS_PORT=6379" \
-        --set-secrets="SECRET_KEY=jwt-secret:latest,DATABASE_URL=database-url:latest,GEMINI_API_KEY=gemini-api-key:latest,OPENAI_API_KEY=openai-api-key:latest,STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_PUBLISHABLE_KEY=stripe-publishable-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest" \
+        --set-env-vars "ENVIRONMENT=production,DEBUG=false,GCP_PROJECT_ID=lyobackend,GCS_BUCKET_NAME=lyobackend-storage,REDIS_HOST=10.57.97.243,REDIS_PORT=6379,FIREBASE_PROJECT_ID=lyo-app,WORKERS=1" \
+        --set-secrets="SECRET_KEY=jwt-secret:latest,DATABASE_URL=database-url:latest,GEMINI_API_KEY=gemini-api-key:latest,OPENAI_API_KEY=openai-api-key:latest,STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_PUBLISHABLE_KEY=stripe-publishable-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest,FIREBASE_CREDENTIALS_JSON=firebase-credentials:latest" \
         --quiet
       
       echo "Deployment completed successfully!"

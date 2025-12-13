@@ -5,7 +5,7 @@ Request and response models for study sessions and quiz generation
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 from enum import Enum
 
 from .models import StudySessionStatus, MessageRole, QuizType
@@ -15,30 +15,13 @@ from .models import StudySessionStatus, MessageRole, QuizType
 # STUDY SESSION SCHEMAS
 # ============================================================================
 
-class StudySessionRequest(BaseModel):
-    """Request to start a new study session"""
-    resource_id: str = Field(..., description="ID of the learning material")
-    resource_title: Optional[str] = Field(None, description="Title of the resource")
-    resource_type: Optional[str] = Field(None, description="Type of resource (video, article, etc.)")
-    tutor_personality: str = Field("socratic", description="AI tutor personality")
-    difficulty_level: Optional[str] = Field(None, description="Difficulty level of the material")
-    learning_objectives: Optional[List[str]] = Field(None, description="Specific learning goals")
-
-    @field_validator('tutor_personality')
-    def validate_personality(cls, v):
-        allowed = ['socratic', 'encouraging', 'challenging', 'patient', 'direct']
-        if v not in allowed:
-            raise ValueError(f'Tutor personality must be one of: {", ".join(allowed)}')
-        return v
-
-
 class StudySessionCreateRequest(BaseModel):
     """Enhanced request to create a new AI-powered study session"""
     resource_id: str = Field(..., description="ID of the learning material")
     resource_type: str = Field(default="lesson", description="Type of resource (course, lesson, topic)")
     tutoring_style: str = Field(default="socratic", description="Tutoring approach (socratic, collaborative, explanatory, practical)")
     
-    @field_validator('tutoring_style')
+    @validator('tutoring_style')
     def validate_tutoring_style(cls, v):
         valid_styles = ["socratic", "collaborative", "explanatory", "practical"]
         if v not in valid_styles:
@@ -57,33 +40,29 @@ class StudySessionCreateResponse(BaseModel):
     subject_area: str
 
 
+class StudySessionRequest(BaseModel):
+    """Request to start a new study session"""
+    resource_id: str = Field(..., description="ID of the learning material")
+    resource_title: Optional[str] = Field(None, description="Title of the resource")
+    resource_type: Optional[str] = Field(None, description="Type of resource (video, article, etc.)")
+    tutor_personality: str = Field("socratic", description="AI tutor personality")
+    difficulty_level: Optional[str] = Field(None, description="Difficulty level of the material")
+    learning_objectives: Optional[List[str]] = Field(None, description="Specific learning goals")
+
+    @validator('tutor_personality')
+    def validate_personality(cls, v):
+        allowed = ['socratic', 'encouraging', 'challenging', 'patient', 'direct']
+        if v not in allowed:
+            raise ValueError(f'Tutor personality must be one of: {", ".join(allowed)}')
+        return v
+
+
 class ConversationMessage(BaseModel):
     """A single message in the conversation history"""
     role: MessageRole = Field(..., description="Role of the message sender")
     content: str = Field(..., description="Message content")
-    timestamp: Optional[datetime] = Field(None, description="When the message was sent")
+    timestamp: Optional[Union[datetime, float]] = Field(None, description="When the message was sent")
     token_count: Optional[int] = Field(None, description="Number of tokens in the message")
-
-
-class StudySessionContinueRequest(BaseModel):
-    """Enhanced request to continue an AI study session"""
-    user_input: str = Field(..., description="The user's latest message")
-    conversation_history: Optional[List[ConversationMessage]] = Field(
-        None, 
-        description="The entire chat history (optional, will use cached if not provided)"
-    )
-
-
-class StudySessionContinueResponse(BaseModel):
-    """Enhanced response from continuing an AI study session"""
-    response: str = Field(..., description="The AI's guided response")
-    updated_conversation_history: List[Dict[str, Any]] = Field(..., description="Complete updated conversation history")
-    session_metadata: Dict[str, Any] = Field(..., description="Session analytics and metadata")
-    tutoring_insights: Dict[str, Any] = Field(..., description="AI insights about the learning interaction")
-    suggested_next_steps: List[str] = Field(..., description="Suggested next actions for the learner")
-
-
-
 
 
 class StudyConversationRequest(BaseModel):
@@ -98,7 +77,7 @@ class StudyConversationRequest(BaseModel):
     user_typing_time_ms: Optional[int] = Field(None, description="Time user spent typing")
     request_help: bool = Field(False, description="Whether user is requesting help")
 
-    @field_validator('user_input')
+    @validator('user_input')
     def validate_user_input(cls, v):
         if not v or not v.strip():
             raise ValueError('User input cannot be empty')
@@ -106,7 +85,7 @@ class StudyConversationRequest(BaseModel):
             raise ValueError('User input too long (max 5000 characters)')
         return v.strip()
 
-    @field_validator('conversation_history')
+    @validator('conversation_history')
     def validate_conversation_history(cls, v):
         if len(v) > 100:  # Reasonable limit for conversation length
             raise ValueError('Conversation history too long (max 100 messages)')
@@ -128,6 +107,32 @@ class StudyConversationResponse(BaseModel):
     confidence_score: Optional[float] = Field(None, description="AI confidence in response (0-1)")
 
 
+# =========================================================================
+# CONTINUE SESSION SCHEMAS (required by routes)
+# =========================================================================
+
+
+class StudySessionContinueRequest(BaseModel):
+    """Request to continue an existing study session."""
+
+    user_input: str = Field(..., description="The user's latest message")
+    conversation_history: Optional[List[ConversationMessage]] = Field(
+        default=None, description="Optional conversation history override"
+    )
+
+
+class StudySessionContinueResponse(BaseModel):
+    """Response from continuing a study session."""
+
+    response: str = Field(..., description="The AI tutor response")
+    updated_conversation_history: List[ConversationMessage] = Field(
+        ..., description="Conversation including the latest AI response"
+    )
+    session_metadata: Dict[str, Any] = Field(..., description="Session metadata")
+    tutoring_insights: Dict[str, Any] = Field(default_factory=dict)
+    suggested_next_steps: List[str] = Field(default_factory=list)
+
+
 # ============================================================================
 # QUIZ GENERATION SCHEMAS
 # ============================================================================
@@ -142,7 +147,7 @@ class QuizGenerationRequest(BaseModel):
     exclude_topics: Optional[List[str]] = Field(None, description="Topics to avoid")
     session_id: Optional[str] = Field(None, description="Associated study session ID")
 
-    @field_validator('question_count')
+    @validator('question_count')
     def validate_question_count(cls, v):
         if v < 1 or v > 20:
             raise ValueError('Question count must be between 1 and 20')
@@ -162,7 +167,7 @@ class QuizQuestion(BaseModel):
     points: int = Field(default=1, description="Points awarded for correct answer")
     time_limit_seconds: Optional[int] = Field(None, description="Time limit for this question")
 
-    @field_validator('question')
+    @validator('question')
     def validate_question(cls, v):
         if not v or not v.strip():
             raise ValueError('Question cannot be empty')
@@ -205,7 +210,7 @@ class QuizAttemptRequest(BaseModel):
     difficulty_rating: Optional[int] = Field(None, description="Difficulty rating (1-5)")
     enjoyment_rating: Optional[int] = Field(None, description="Enjoyment rating (1-5)")
 
-    @field_validator('difficulty_rating', 'enjoyment_rating')
+    @validator('difficulty_rating', 'enjoyment_rating')
     def validate_ratings(cls, v):
         if v is not None and (v < 1 or v > 5):
             raise ValueError('Ratings must be between 1 and 5')
@@ -290,6 +295,26 @@ class StudyAnalyticsResponse(BaseModel):
 
 
 # ============================================================================
+# ANSWER ANALYSIS SCHEMAS
+# ============================================================================
+
+class AnswerAnalysisRequest(BaseModel):
+    """Request for analyzing a quiz answer"""
+    question: str = Field(..., description="The quiz question")
+    correctAnswer: str = Field(..., description="The correct answer")
+    userAnswer: str = Field(..., description="User's answer")
+
+
+class AnswerAnalysisResponse(BaseModel):
+    """Response from answer analysis"""
+    is_correct: bool = Field(..., description="Whether the answer was correct")
+    feedback: str = Field(..., description="Detailed feedback on the answer")
+    explanation: str = Field(..., description="Explanation of the correct answer")
+    score: float = Field(..., description="Score for the answer (0-1)")
+    improvement_suggestions: Optional[List[str]] = Field(None, description="Suggestions for improvement")
+
+
+# ============================================================================
 # ERROR RESPONSE SCHEMAS
 # ============================================================================
 
@@ -314,23 +339,3 @@ class StudyModeHealthResponse(BaseModel):
     total_sessions_today: int = Field(..., description="Total sessions created today")
     avg_response_time_ms: float = Field(..., description="Average AI response time")
     service_uptime_seconds: int = Field(..., description="Service uptime in seconds")
-
-
-# ============================================================================
-# ANSWER ANALYSIS SCHEMAS
-# ============================================================================
-
-class AnswerAnalysisRequest(BaseModel):
-    """Request for answer analysis"""
-    question: str = Field(..., description="The quiz question")
-    correct_answer: str = Field(..., description="The correct answer")
-    user_answer: str = Field(..., description="User's answer")
-
-
-class AnswerAnalysisResponse(BaseModel):
-    """Response for answer analysis"""
-    feedback: str = Field(..., description="AI feedback")
-    is_correct: bool = Field(..., description="Whether the answer is correct")
-    partial_credit: Optional[float] = Field(None, description="Partial credit score (0-1)")
-    suggestions: List[str] = Field(default_factory=list, description="Suggestions for improvement")
-    related_concepts: List[str] = Field(default_factory=list, description="Related concepts to review")

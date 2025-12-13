@@ -315,3 +315,32 @@ class XPSummaryRead(BaseModel):
     
     # Recent XP records
     recent_records: List[XPRecordRead] = Field(default=[], description="Recent XP records")
+
+
+# =============================================================================
+# Test-Compatible Schema Aliases
+# These provide backwards compatibility with test files that use different naming
+# =============================================================================
+
+class UserXPCreate(BaseModel):
+    """Test-compatible schema for creating XP records."""
+    user_id: str = Field(..., description="User ID")
+    points: int = Field(..., ge=0, description="XP points to add")
+    source: str = Field(..., description="XP source type")
+    source_id: Optional[str] = Field(None, description="Source entity ID")
+
+
+class StreakCreate(BaseModel):
+    """Test-compatible schema for creating/updating streaks."""
+    user_id: str = Field(..., description="User ID")
+    streak_type: str = Field(..., description="Type of streak")
+
+
+class LeaderboardEntryCreate(BaseModel):
+    """Test-compatible schema for creating leaderboard entries."""
+    user_id: str = Field(..., description="User ID")
+    leaderboard_type: str = Field(..., description="Leaderboard type")
+    score: int = Field(..., ge=0, description="Score value")
+    period_start: Optional[datetime] = Field(None, description="Period start")
+    period_end: Optional[datetime] = Field(None, description="Period end")
+

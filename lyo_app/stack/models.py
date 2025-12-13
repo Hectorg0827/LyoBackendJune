@@ -20,6 +20,7 @@ class StackItemType(str, Enum):
     EVENT = "event"
     VIDEO = "video"
     ARTICLE = "article"
+    SESSION = "session"
 
 
 class StackItemStatus(str, Enum):

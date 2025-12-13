@@ -242,15 +242,15 @@ class CDNManager:
     """Cloudflare CDN integration for global content delivery"""
     
     def __init__(self):
-        self.cloudflare_zone_id = settings.CLOUDFLARE_ZONE_ID
-        self.cloudflare_api_token = settings.CLOUDFLARE_API_TOKEN
-        self.cdn_base_url = settings.CDN_BASE_URL
+        self.cloudflare_zone_id = getattr(settings, "CLOUDFLARE_ZONE_ID", None)
+        self.cloudflare_api_token = getattr(settings, "CLOUDFLARE_API_TOKEN", None)
+        self.cdn_base_url = getattr(settings, "CDN_BASE_URL", None)
     
     async def purge_cache(self, urls: List[str]) -> bool:
         """Purge CDN cache for specific URLs"""
         
-        if not self.cloudflare_api_token:
-            logger.warning("Cloudflare API token not configured")
+        if not self.cloudflare_api_token or not self.cloudflare_zone_id:
+            logger.warning("Cloudflare CDN not configured")
             return False
         
         try:

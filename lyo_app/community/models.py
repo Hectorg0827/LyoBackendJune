@@ -7,9 +7,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum, Float, Uuid
 from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 from lyo_app.core.database import Base
@@ -92,8 +91,8 @@ class StudyGroup(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    course = relationship("Course", back_populates="study_groups", lazy="select")
     #     creator = relationship("User", back_populates="created_study_groups")
+    #     course = relationship("Course", back_populates="study_groups")
     #     memberships = relationship("GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
     #     events = relationship("CommunityEvent", back_populates="study_group")
 
@@ -219,7 +218,7 @@ class CommunityQuestion(Base):
     __tablename__ = "community_questions"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid, primary_key=True, default=uuid.uuid4
     )
 
     user_id: Mapped[int] = mapped_column(
@@ -229,14 +228,14 @@ class CommunityQuestion(Base):
     text: Mapped[str] = mapped_column(String(500))
 
     # Location (optional but key for Campus)
-    latitude: Mapped[float | None] = mapped_column(Float, index=True)
-    longitude: Mapped[float | None] = mapped_column(Float, index=True)
-    location_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, index=True, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, index=True, nullable=True)
+    location_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
 
     is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationship to answers
     answers = relationship("CommunityAnswer", back_populates="question", cascade="all, delete-orphan")
@@ -249,11 +248,11 @@ class CommunityAnswer(Base):
     __tablename__ = "community_answers"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid, primary_key=True, default=uuid.uuid4
     )
 
     question_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("community_questions.id"), index=True
+        Uuid, ForeignKey("community_questions.id"), index=True
     )
 
     user_id: Mapped[int] = mapped_column(

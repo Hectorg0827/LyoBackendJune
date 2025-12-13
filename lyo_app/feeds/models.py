@@ -8,9 +8,8 @@ from typing import Optional, List
 from enum import Enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enum as SQLEnum, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
 
 from lyo_app.core.database import Base
 
@@ -310,7 +309,7 @@ class UserInteraction(Base):
     __tablename__ = "user_interactions"
     
     # Primary key
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     
     # User who interacted
     user_id: Mapped[int] = mapped_column(

@@ -14,11 +14,12 @@ bind = "0.0.0.0:8000"
 backlog = 2048
 
 # Worker processes
-workers = min(multiprocessing.cpu_count() * 2 + 1, 8)
+workers = min(multiprocessing.cpu_count() * 2 + 1, 4)  # Reduced for Cloud Run
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_connections = 1000
-timeout = 30
-keepalive = 2
+timeout = 120  # Increased for slow startup with AI model loading
+graceful_timeout = 60
+keepalive = 5
 
 # Restart workers to prevent memory leaks
 max_requests = 1000
@@ -33,8 +34,8 @@ access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"
 # Process naming
 proc_name = "lyoapp-backend"
 
-# Preload app for better memory usage
-preload_app = True
+# Preload app for better memory usage (disabled for Cloud Run async startup)
+preload_app = False
 
 # Security
 limit_request_line = 4096

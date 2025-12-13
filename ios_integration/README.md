@@ -115,7 +115,7 @@ Copy all files from this folder to your iOS project:
 ## 🔧 Integration Steps
 
 ### Step 1: Add Files to Xcode
-1. Open `LYO Da ONE.xcodeproj` in Xcode
+1. Open `Lyo.xcodeproj` (from the `LYO_Da_ONE` folder) in Xcode
 2. Right-click on `Lyo/Services` → "Add Files to Lyo..."
 3. Select `AIClassroomService.swift` and `LyoAppAPIClient+Production.swift`
 4. Create folder `Lyo/Views/AIClassroom` 

@@ -290,7 +290,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
-    app.include_router(feeds_router)
+    app.include_router(feeds_router, prefix="/api/v1")
     if storage_router:
         app.include_router(storage_router)
     app.include_router(ads_router)
@@ -334,12 +334,12 @@ def create_app() -> FastAPI:
         logger.info("✅ AI Classroom routes integrated - Award-winning learning experience active!")
     except ImportError as e:
         logger.warning(f"AI Classroom routes not available: {e}")
-    
-    # AI Classroom Playback - Interactive Cinema Experience
+
+    # AI Classroom Playback - Interactive Cinema API (separate router)
     try:
         from lyo_app.ai_classroom.playback_routes import router as playback_router
         app.include_router(playback_router)
-        logger.info("✅ AI Classroom Playback routes integrated - Netflix-like adaptive learning active!")
+        logger.info("✅ AI Classroom Playback routes integrated - Interactive Cinema active!")
     except ImportError as e:
         logger.warning(f"AI Classroom Playback routes not available: {e}")
     
@@ -393,17 +393,20 @@ def create_app() -> FastAPI:
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router
-        app.include_router(community_router)
+        app.include_router(community_router, prefix="/community", tags=["community"])
+        app.include_router(community_router, prefix="/api/v1/community", tags=["community"])
     except ImportError:
         pass
     try:
         from lyo_app.gamification.routes import router as gamification_router
-        app.include_router(gamification_router)
+        app.include_router(gamification_router, prefix="/gamification", tags=["gamification"])
+        app.include_router(gamification_router, prefix="/api/v1/gamification", tags=["gamification"])
     except ImportError:
         pass
     try:
         from lyo_app.learning.routes import router as learning_router
-        app.include_router(learning_router)
+        app.include_router(learning_router, prefix="/learning", tags=["learning"])
+        app.include_router(learning_router, prefix="/api/v1/learning", tags=["learning"])
     except ImportError:
         pass
     try:
@@ -415,8 +418,9 @@ def create_app() -> FastAPI:
 
     try:
         from lyo_app.stack.routes import router as stack_router
-        app.include_router(stack_router)
-        logger.info("✅ Stack routes integrated - Personal knowledge stack active!")
+        app.include_router(stack_router, prefix="/stack")
+        app.include_router(stack_router, prefix="/api/v1/stack")
+        logger.info("✅ Stack routes integrated at /stack and /api/v1/stack - Personal knowledge stack active!")
     except ImportError as e:
         logger.warning(f"Stack routes not available: {e}")
 
@@ -450,8 +454,6 @@ def create_app() -> FastAPI:
             "timestamp": time.time(),
             "version": settings.APP_VERSION,
             "environment": settings.ENVIRONMENT,
-            "firebase_project_id": os.getenv("FIREBASE_PROJECT_ID", "NOT_SET"),
-            "gcp_project_id": os.getenv("GCP_PROJECT_ID", "NOT_SET"),
             "features": settings.get_feature_flags(),
             "services": {},
         }
@@ -459,9 +461,8 @@ def create_app() -> FastAPI:
         try:
             from sqlalchemy import text
             from lyo_app.core.database import engine
-            async with engine.connect() as conn:
-                result = await conn.execute(text("SELECT 1"))
-                result.close()
+            async with engine.begin() as conn:
+                await conn.execute(text("SELECT 1"))
             health_status["services"]["database"] = "healthy"
         except Exception as e:  # noqa: BLE001
             health_status["services"]["database"] = f"unhealthy: {e}"
@@ -469,9 +470,8 @@ def create_app() -> FastAPI:
         # Redis
         try:
             from lyo_app.core.redis_client import redis_client
-            if redis_client and redis_client.client:
-                pong = await redis_client.ping()
-                if pong:
+            if redis_client:
+                if await redis_client.ping():
                     health_status["services"]["redis"] = "healthy"
                 else:
                     health_status["services"]["redis"] = "not_connected"
@@ -521,16 +521,6 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001
             health_status["services"]["vertex_ai"] = f"error: {e}"
         return health_status
-
-    @app.get("/health/simple")
-    async def simple_health():
-        """Simple health check that doesn't require DB connection."""
-        return {
-            "status": "ok",
-            "version": settings.APP_VERSION,
-            "environment": settings.ENVIRONMENT,
-            "timestamp": time.time()
-        }
 
     @app.get("/metrics")
     async def prometheus_metrics():
