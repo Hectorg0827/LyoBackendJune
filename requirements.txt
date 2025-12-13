@@ -23,6 +23,7 @@ influxdb-client==1.40.0
 
 # Authentication & Zero-Trust Security
 passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
 python-jose[cryptography]==3.3.0
 bleach==6.1.0
 python-decouple==3.8

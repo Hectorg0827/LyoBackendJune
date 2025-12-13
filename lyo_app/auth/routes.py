@@ -35,7 +35,7 @@ async def get_current_user(
     db: Annotated[AsyncSession, Depends(get_db)]
 ) -> UserRead:
     """
-    Get current user from JWT token.
+    Get current user from JWT token or Firebase ID token.
     
     Args:
         credentials: HTTP Bearer token credentials
@@ -47,41 +47,117 @@ async def get_current_user(
     Raises:
         HTTPException: If token is invalid or user not found
     """
-    # Verify the JWT token
-    payload = verify_token(credentials.credentials)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    token = credentials.credentials
     
-    # Extract user ID from token
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Get user from database
-    try:
-        user_id = int(user_id)
-        user = await auth_service.get_user_by_id(db, user_id)
-        if not user:
+    # First try to verify as backend JWT token
+    payload = verify_token(token)
+    if payload:
+        # Extract user ID from JWT token
+        user_id = payload.get("sub")
+        if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
+                detail="Invalid token payload",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return UserRead.model_validate(user)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user ID in token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        
+        # Get user from database
+        try:
+            user_id = int(user_id)
+            user = await auth_service.get_user_by_id(db, user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return UserRead.model_validate(user)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid user ID in token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    
+    # If JWT verification fails, try Firebase token
+    try:
+        from lyo_app.auth.firebase_auth import firebase_auth_service
+        
+        if firebase_auth_service.is_available():
+            # Try to verify as Firebase ID token
+            firebase_data = await firebase_auth_service.verify_firebase_token(token)
+            firebase_uid = firebase_data.get("uid")
+            email = firebase_data.get("email")
+            
+            # Try to find user by Firebase UID
+            user = await firebase_auth_service.get_user_by_firebase_uid(db, firebase_uid)
+            
+            # If not found by UID, try by email
+            if not user and email:
+                user = await firebase_auth_service.get_user_by_email(db, email)
+            
+            # If user found, return it
+            if user:
+                return UserRead.model_validate(user)
+            
+            # User not found - auto-create from Firebase data
+            from lyo_app.auth.models import User
+            from lyo_app.auth.security import hash_password
+            import secrets
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            # Generate unique username from email or firebase_uid
+            base_username = (email.split('@')[0] if email else firebase_uid)[:40]
+            username = base_username
+            # Make username unique by appending random suffix
+            username = f"{base_username}_{secrets.token_hex(4)}"
+            
+            # Parse name if available
+            name = firebase_data.get("name", "")
+            first_name = ""
+            last_name = ""
+            if name:
+                parts = name.split(" ", 1)
+                first_name = parts[0]
+                last_name = parts[1] if len(parts) > 1 else ""
+            
+            logger.info(f"Auto-creating user from Firebase: email={email}, uid={firebase_uid}, username={username}")
+            
+            new_user = User(
+                email=email or f"{firebase_uid}@firebase.local",
+                username=username,
+                hashed_password=hash_password(secrets.token_urlsafe(32)),
+                first_name=first_name,
+                last_name=last_name,
+                firebase_uid=firebase_uid,
+                auth_provider="firebase",
+                is_active=True,
+                is_verified=firebase_data.get("email_verified", False)
+            )
+            db.add(new_user)
+            await db.commit()
+            await db.refresh(new_user)
+            logger.info(f"Created user id={new_user.id} for Firebase uid={firebase_uid}")
+            return UserRead.model_validate(new_user)
+            
+    except ValueError as e:
+        # Firebase token verification failed
+        import logging
+        logging.getLogger(__name__).warning(f"Firebase token verification failed (ValueError): {e}")
+    except Exception as e:
+        # Log but don't expose internal errors
+        import logging
+        import traceback
+        logging.getLogger(__name__).warning(f"Firebase token check failed: {e}")
+        logging.getLogger(__name__).warning(f"Traceback: {traceback.format_exc()}")
+    
+    # Both JWT and Firebase verification failed
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid authentication credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)

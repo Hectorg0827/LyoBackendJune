@@ -76,13 +76,18 @@ class MockRedis:
         return key in self._data
 
 
+# Fallback cache instance (real Redis is optional in this module)
+redis_cache = MockRedis()
+
+
 class ModelType(str, Enum):
     """Available AI model types with production capabilities."""
     GEMMA_4_ON_DEVICE = "gemma_4_on_device"
     GEMMA_4_CLOUD = "gemma_4_cloud"
-    GEMINI_PRO = "gemini_pro"
-    GEMINI_PRO_VISION = "gemini_pro_vision"
-    GEMINI_15_FLASH = "gemini_15_flash"
+    CLAUDE_3_5_SONNET = "claude_3_5_sonnet"
+    GPT_4_TURBO = "gpt_4_turbo"
+    GPT_4_MINI = "gpt_4_mini"
+    GEMINI_1_5_FLASH = "gemini_1_5_flash"
     HYBRID = "hybrid"
 
 
@@ -217,14 +222,14 @@ class ProductionGemma4Client:
     def __init__(self, 
                  on_device_model_path: str = "./models/gemma-4-9b",
                  cloud_endpoint: Optional[str] = None,
-                 cloud_model: Optional[str] = None):
+                 api_key: Optional[str] = None):
         self.on_device_model_path = on_device_model_path
-        self.cloud_endpoint = cloud_endpoint or os.getenv("LLM_ENDPOINT")
-        self.cloud_model = cloud_model or os.getenv("LLM_MODEL")
+        self.cloud_endpoint = cloud_endpoint or os.getenv("GEMMA_4_CLOUD_ENDPOINT")
+        self.api_key = api_key or os.getenv("GEMMA_4_API_KEY")
         
         # Model state
         self.on_device_loaded = False
-        self.cloud_available = bool(self.cloud_endpoint)
+        self.cloud_available = bool(self.cloud_endpoint and self.api_key)
         self.last_health_check = None
         self.preferred_mode = "on_device"  # "on_device", "cloud", "hybrid"
         
@@ -296,11 +301,15 @@ class ProductionGemma4Client:
     
     async def _check_cloud_health(self) -> bool:
         """Check if cloud Gemma 4 endpoint is healthy."""
-        if not self.cloud_endpoint:
+        if not self.cloud_endpoint or not self.api_key:
             return False
+            
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(self.cloud_endpoint)
+                response = await client.get(
+                    f"{self.cloud_endpoint}/health",
+                    headers={"Authorization": f"Bearer {self.api_key}"}
+                )
                 return response.status_code == 200
         except Exception:
             return False
@@ -421,38 +430,55 @@ class ProductionGemma4Client:
         )
     
     async def _generate_cloud(self, prompt: str, max_tokens: int, temperature: float) -> ModelResponse:
-        """Generate response using cloud Gemma 4 (Ollama Gemma 4n)."""
+        """Generate response using cloud Gemma 4."""
         start_time = time.time()
+        
         try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
             payload = {
-                "model": self.cloud_model,
+                "model": "gemma-4-9b",
                 "prompt": prompt,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
-                "stream": False
+                "top_p": 0.9,
+                "stop": ["Human:", "Assistant:"]
             }
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    self.cloud_endpoint,
+                    f"{self.cloud_endpoint}/generate",
+                    headers=headers,
                     json=payload
                 )
+                
                 response_time = (time.time() - start_time) * 1000
+                
                 if response.status_code == 200:
                     data = response.json()
-                    content = data.get("response", data.get("text", ""))
-                    tokens_used = data.get("tokens", len(content.split()) * 2)
+                    content = data["text"]
+                    tokens_used = data.get("tokens_used", len(content.split()) * 2)
+                    
+                    # Cloud pricing estimate (example rates)
+                    cost_per_token = 0.000015  # $0.015 per 1K tokens
+                    cost_estimate = tokens_used * cost_per_token
+                    
                     return ModelResponse(
                         content=content,
                         model_used=ModelType.GEMMA_4_CLOUD,
                         response_time_ms=response_time,
                         tokens_used=tokens_used,
-                        cost_estimate=0.0,
+                        cost_estimate=cost_estimate,
                         confidence_score=0.92,
-                        model_version=self.cloud_model,
+                        model_version="gemma-4-9b-cloud",
                         language_detected=LanguageCode.ENGLISH
                     )
                 else:
                     raise Exception(f"Cloud API error: {response.status_code}")
+                    
         except Exception as e:
             # Fallback to on-device if available
             if self.on_device_loaded:
@@ -608,24 +634,37 @@ Is there a particular aspect you'd like to dive deeper into?"""
 
 class ModernCloudLLMClient:
     """
-    Enhanced cloud LLM client supporting Google Gemini models only.
+    Enhanced cloud LLM client supporting multiple providers and models.
     
     Supports:
-    - Google Gemini Pro
-    - Google Gemini Pro Vision
+    - OpenAI GPT-4 Turbo, GPT-4 Mini
+    - Anthropic Claude 3.5 Sonnet
     - Google Gemini 1.5 Flash
     - Auto-retry with exponential backoff
     - Rate limiting and cost optimization
     """
     
     def __init__(self, 
-                 gemini_api_key: Optional[str] = None,
-                 default_model: str = "gemini-pro"):
-        self.gemini_api_key = gemini_api_key or os.getenv("GOOGLE_API_KEY")
+                 openai_api_key: Optional[str] = None,
+                 anthropic_api_key: Optional[str] = None,
+                 google_api_key: Optional[str] = None,
+                 default_model: str = "gemini-1.5-flash"):
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.anthropic_api_key = anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.google_api_key = google_api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.default_model = default_model
         
         # API endpoints
-        self.gemini_base_url = "https://generativelanguage.googleapis.com/v1/models"
+        self.openai_endpoint = "https://api.openai.com/v1/chat/completions"
+        self.anthropic_endpoint = "https://api.anthropic.com/v1/messages"
+        
+        # Initialize Gemini if key is available
+        if self.google_api_key:
+            import google.generativeai as genai
+            genai.configure(api_key=self.google_api_key)
+            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        else:
+            self.gemini_model = None
         
         # Rate limiting
         self.last_request_time = 0
@@ -636,7 +675,7 @@ class ModernCloudLLMClient:
                       max_tokens: int = 512, 
                       temperature: float = 0.7,
                       model_preference: Optional[ModelType] = None) -> ModelResponse:
-        """Generate response using Google Gemini with intelligent model selection."""
+        """Generate response using cloud LLM with intelligent model selection."""
         start_time = time.time()
         
         try:
@@ -646,8 +685,16 @@ class ModernCloudLLMClient:
             # Rate limiting
             await self._apply_rate_limiting()
             
-            # Generate response using Gemini
-            response = await self._generate_gemini(prompt, model_name, max_tokens, temperature)
+            # Generate response based on provider
+            if model_type in [ModelType.GPT_4_TURBO, ModelType.GPT_4_MINI]:
+                response = await self._generate_openai(prompt, model_name, max_tokens, temperature)
+            elif model_type == ModelType.CLAUDE_3_5_SONNET:
+                response = await self._generate_anthropic(prompt, max_tokens, temperature)
+            elif model_type == ModelType.GEMINI_1_5_FLASH:
+                response = await self._generate_gemini(prompt, max_tokens, temperature)
+            else:
+                raise Exception(f"Unsupported model type: {model_type}")
+            
             response.model_used = model_type
             return response
             
@@ -655,9 +702,17 @@ class ModernCloudLLMClient:
             response_time = (time.time() - start_time) * 1000
             logger.error(f"Cloud LLM generation failed: {e}")
             
+            # Fallback to Gemini if available and not already tried
+            if self.gemini_model and model_preference != ModelType.GEMINI_1_5_FLASH:
+                try:
+                    logger.info("Falling back to Gemini 1.5 Flash")
+                    return await self._generate_gemini(prompt, max_tokens, temperature)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback to Gemini failed: {fallback_error}")
+
             return ModelResponse(
                 content="",
-                model_used=ModelType.GEMINI_PRO,
+                model_used=ModelType.GEMINI_1_5_FLASH,
                 response_time_ms=response_time,
                 language_detected=LanguageCode.ENGLISH,
                 error=str(e)
@@ -665,112 +720,173 @@ class ModernCloudLLMClient:
     
     def _select_model(self, preference: Optional[ModelType]) -> Tuple[ModelType, str]:
         """Select appropriate model based on preference and availability."""
-        if preference == ModelType.GEMINI_PRO and self.gemini_api_key:
-            return ModelType.GEMINI_PRO, "gemini-pro"
-        elif preference == ModelType.GEMINI_PRO_VISION and self.gemini_api_key:
-            return ModelType.GEMINI_PRO_VISION, "gemini-pro-vision"
-        elif preference == ModelType.GEMINI_15_FLASH and self.gemini_api_key:
-            return ModelType.GEMINI_15_FLASH, "gemini-1.5-flash"
-        elif self.gemini_api_key:
-            return ModelType.GEMINI_PRO, "gemini-pro"  # Default to Gemini Pro
-        else:
-            raise Exception("No Google Gemini API key configured")
-    
-    async def _generate_gemini(self, prompt: str, model: str, max_tokens: int, temperature: float) -> ModelResponse:
-        """Generate response using Google Gemini API."""
-        if not self.gemini_api_key:
-            raise Exception("Google Gemini API key not configured")
+        if preference == ModelType.GEMINI_1_5_FLASH and self.google_api_key:
+            return ModelType.GEMINI_1_5_FLASH, "gemini-1.5-flash"
+        elif preference == ModelType.GPT_4_TURBO and self.openai_api_key:
+            return ModelType.GPT_4_TURBO, "gpt-4-turbo"
+        elif preference == ModelType.GPT_4_MINI and self.openai_api_key:
+            return ModelType.GPT_4_MINI, "gpt-4o-mini"
+        elif preference == ModelType.CLAUDE_3_5_SONNET and self.anthropic_api_key:
+            return ModelType.CLAUDE_3_5_SONNET, "claude-3-5-sonnet-20241022"
         
-        # Construct the endpoint URL
-        endpoint = f"{self.gemini_base_url}/{model}:generateContent?key={self.gemini_api_key}"
+        # Defaults
+        if self.google_api_key:
+            return ModelType.GEMINI_1_5_FLASH, "gemini-1.5-flash"
+        elif self.openai_api_key:
+            return ModelType.GPT_4_MINI, "gpt-4o-mini"
+        elif self.anthropic_api_key:
+            return ModelType.CLAUDE_3_5_SONNET, "claude-3-5-sonnet-20241022"
+        else:
+            raise Exception("No cloud LLM API keys configured")
+    
+    async def _generate_gemini(self, prompt: str, max_tokens: int, temperature: float) -> ModelResponse:
+        """Generate response using Google Gemini API."""
+        if not self.gemini_model:
+            raise Exception("Google AI API key not configured")
+        
+        generation_config = {
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+            "top_p": 0.9,
+        }
+        
+        # Run in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, 
+            lambda: self.gemini_model.generate_content(
+                prompt, 
+                generation_config=generation_config
+            )
+        )
+        
+        content = response.text
+        # Estimate tokens (Gemini doesn't always return usage in simple response)
+        tokens_used = len(content.split()) * 1.3 
+        
+        # Cost calculation for Gemini 1.5 Flash (very cheap)
+        cost_per_token = 0.0000005  # $0.50 per 1M tokens (approx)
+        cost_estimate = tokens_used * cost_per_token
+        
+        return ModelResponse(
+            content=content,
+            model_used=ModelType.GEMINI_1_5_FLASH,
+            response_time_ms=0,
+            tokens_used=int(tokens_used),
+            cost_estimate=cost_estimate,
+            confidence_score=0.95,
+            model_version="gemini-1.5-flash",
+            language_detected=LanguageCode.ENGLISH
+        )
+
+    async def _generate_openai(self, prompt: str, model: str, max_tokens: int, temperature: float) -> ModelResponse:
+        """Generate response using OpenAI API."""
+        if not self.openai_api_key:
+            raise Exception("OpenAI API key not configured")
         
         headers = {
+            "Authorization": f"Bearer {self.openai_api_key}",
             "Content-Type": "application/json"
         }
         
         payload = {
-            "contents": [
+            "model": model,
+            "messages": [
                 {
-                    "parts": [
-                        {
-                            "text": f"You are an expert AI tutor helping students learn. Provide clear, educational, and encouraging responses. Always break down complex topics into understandable parts.\n\n{prompt}"
-                        }
-                    ]
-                }
+                    "role": "system", 
+                    "content": "You are an expert AI tutor helping students learn. Provide clear, educational, and encouraging responses. Always break down complex topics into understandable parts."
+                },
+                {"role": "user", "content": prompt}
             ],
-            "generationConfig": {
-                "temperature": temperature,
-                "topK": 40,
-                "topP": 0.95,
-                "maxOutputTokens": max_tokens,
-                "stopSequences": []
-            },
-            "safetySettings": [
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": 0.9
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                self.openai_endpoint,
+                headers=headers,
+                json=payload
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"OpenAI API error: {response.status_code} - {response.text}")
+            
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            tokens_used = usage.get("total_tokens", 0)
+            
+            # Cost calculation (approximate rates as of 2024)
+            if model == "gpt-4-turbo":
+                cost_per_token = 0.00003  # $0.03 per 1K tokens
+            else:  # gpt-4o-mini
+                cost_per_token = 0.00000015  # $0.15 per 1M tokens
+                
+            cost_estimate = tokens_used * cost_per_token
+            
+            return ModelResponse(
+                content=content,
+                model_used=ModelType.GPT_4_TURBO,  # Will be updated by caller
+                response_time_ms=0,  # Will be calculated by caller
+                tokens_used=tokens_used,
+                cost_estimate=cost_estimate,
+                confidence_score=0.95,
+                model_version=model,
+                language_detected=LanguageCode.ENGLISH
+            )
+    
+    async def _generate_anthropic(self, prompt: str, max_tokens: int, temperature: float) -> ModelResponse:
+        """Generate response using Anthropic Claude API."""
+        if not self.anthropic_api_key:
+            raise Exception("Anthropic API key not configured")
+        
+        headers = {
+            "Authorization": f"Bearer {self.anthropic_api_key}",
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01"
+        }
+        
+        payload = {
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [
                 {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                    "role": "user", 
+                    "content": f"You are an expert AI tutor. {prompt}"
                 }
             ]
         }
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                endpoint,
+                self.anthropic_endpoint,
                 headers=headers,
                 json=payload
             )
             
             if response.status_code != 200:
-                raise Exception(f"Google Gemini API error: {response.status_code} - {response.text}")
+                raise Exception(f"Anthropic API error: {response.status_code} - {response.text}")
             
             data = response.json()
+            content = data["content"][0]["text"]
+            usage = data.get("usage", {})
+            tokens_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
             
-            # Extract content from Gemini response
-            if "candidates" in data and len(data["candidates"]) > 0:
-                candidate = data["candidates"][0]
-                if "content" in candidate and "parts" in candidate["content"]:
-                    content = candidate["content"]["parts"][0]["text"]
-                else:
-                    raise Exception("No content found in Gemini response")
-            else:
-                raise Exception("No candidates found in Gemini response")
-            
-            # Extract usage metadata if available
-            usage = data.get("usageMetadata", {})
-            prompt_tokens = usage.get("promptTokenCount", 0)
-            completion_tokens = usage.get("candidatesTokenCount", 0)
-            total_tokens = usage.get("totalTokenCount", prompt_tokens + completion_tokens)
-            
-            # Cost calculation for Google Gemini (approximate rates)
-            if model == "gemini-pro":
-                cost_per_token = 0.0000005  # $0.50 per 1M tokens
-            elif model == "gemini-pro-vision":
-                cost_per_token = 0.0000025  # $2.50 per 1M tokens
-            else:  # gemini-1.5-flash
-                cost_per_token = 0.0000001  # $0.10 per 1M tokens
-                
-            cost_estimate = total_tokens * cost_per_token
+            # Cost calculation for Claude 3.5 Sonnet
+            cost_per_token = 0.000003  # $3 per 1M tokens
+            cost_estimate = tokens_used * cost_per_token
             
             return ModelResponse(
                 content=content,
-                model_used=ModelType.GEMINI_PRO,  # Will be updated by caller
+                model_used=ModelType.CLAUDE_3_5_SONNET,
                 response_time_ms=0,  # Will be calculated by caller
-                tokens_used=total_tokens,
+                tokens_used=tokens_used,
                 cost_estimate=cost_estimate,
-                confidence_score=0.95,
-                model_version=model,
+                confidence_score=0.96,
+                model_version="claude-3-5-sonnet-20241022",
                 language_detected=LanguageCode.ENGLISH
             )
     
@@ -803,22 +919,17 @@ class AIOrchestrator:
         self.gemma_client = ProductionGemma4Client()
         self.cloud_client = ModernCloudLLMClient()
         
-        # Initialize Redis cache (mock for development)
-        self.redis_cache = MockRedis()
-        
-        # AI optimization flags (disabled for now)
-        self.OPTIMIZATION_AVAILABLE = False
-        self.ai_performance_optimizer = None
-        self.experiment_manager = None
-        self.personalization_engine = None
+        # Initialize Redis cache
+        self.redis_cache = redis_cache
         
         # Model metrics tracking
         self.model_metrics: Dict[ModelType, ModelMetrics] = {
             ModelType.GEMMA_4_ON_DEVICE: ModelMetrics(),
             ModelType.GEMMA_4_CLOUD: ModelMetrics(),
-            ModelType.GEMINI_PRO: ModelMetrics(),
-            ModelType.GEMINI_PRO_VISION: ModelMetrics(),
-            ModelType.GEMINI_15_FLASH: ModelMetrics()
+            ModelType.GPT_4_TURBO: ModelMetrics(),
+            ModelType.GPT_4_MINI: ModelMetrics(),
+            ModelType.CLAUDE_3_5_SONNET: ModelMetrics(),
+            ModelType.GEMINI_1_5_FLASH: ModelMetrics()
         }
         
         # Circuit breaker configuration
@@ -906,77 +1017,19 @@ class AIOrchestrator:
         start_time = time.time()
         
         try:
-            # OPTIMIZATION LAYER 1: Request Optimization
-            if self.OPTIMIZATION_AVAILABLE and user_id:
-                # Prepare request data for optimization
-                request_data = {
-                    "prompt": prompt,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "complexity": task_complexity.value if task_complexity else "unknown",
-                    "language": language.value if language else "unknown",
-                    "user_id": user_id
-                }
-                
-                # Apply performance optimizations
-                optimization_result = await self.ai_performance_optimizer.optimize_request(agent_type, request_data)
-                optimized_request = optimization_result["optimized_request"]
-                processing_config = optimization_result["processing_config"]
-                
-                # Update parameters with optimized values
-                max_tokens = optimized_request.get("max_tokens", max_tokens)
-                temperature = optimized_request.get("temperature", temperature)
-                
-                # Check for A/B test variants
-                ab_variant = await self.experiment_manager.get_experiment_variant(f"{agent_type}_optimization", user_id)
-                if ab_variant:
-                    # Apply A/B test configuration
-                    if "model_preference" in ab_variant["config"]:
-                        model_preference = ModelType(ab_variant["config"]["model_preference"])
-                    if "temperature" in ab_variant["config"]:
-                        temperature = ab_variant["config"]["temperature"]
-                    
-                    logger.info(f"A/B test active for user {user_id}: {ab_variant['variant_name']}")
-            
-            # OPTIMIZATION LAYER 2: Personalization
-            if self.OPTIMIZATION_AVAILABLE and user_id:
-                # Get user profile for personalized routing
-                user_profile = await self.personalization_engine.get_user_profile(user_id)
-                
-                # Adjust prompt based on user learning style and preferences
-                if user_profile.learning_style and not user_context:
-                    user_context = {"learning_style": user_profile.learning_style.value}
-                
-                # Adjust difficulty based on user preference
-                if not task_complexity and user_profile.difficulty_preference:
-                    if user_profile.difficulty_preference < 0.3:
-                        task_complexity = TaskComplexity.SIMPLE
-                    elif user_profile.difficulty_preference > 0.7:
-                        task_complexity = TaskComplexity.COMPLEX
-                    else:
-                        task_complexity = TaskComplexity.MEDIUM
-                
-                # Use personalized language preference
-                if not language and user_profile.topic_preferences:
-                    # This could be enhanced to detect preferred language from user history
-                    pass
-            
-            # Auto-detect task complexity if not provided
-            if not task_complexity:
-                task_complexity = self._analyze_task_complexity(prompt)
-            
-            # Auto-detect language if not provided
-            if not language:
-                try:
-                    detected_lang = detect(prompt)
-                    language = LanguageCode(detected_lang)
-                except (LangDetectError, ValueError):
-                    language = LanguageCode.ENGLISH
-            
-            # Determine optimal routing strategy
+            # Ensure we always have a concrete complexity for routing metadata.
+            task_complexity = task_complexity or self._analyze_task_complexity(prompt)
+
+            # Initial model selection (may be overridden by cost limits/circuit breakers below).
             selected_model = self._select_optimal_model(
-                task_complexity, model_preference, max_tokens, user_context
+                complexity=task_complexity,
+                preference=model_preference,
+                max_tokens=max_tokens,
+                user_context=user_context,
             )
+
+            # A/B variant may be injected by the optimization layer when enabled.
+            ab_variant = None
             
             # Check daily cost limits
             if not await self._check_cost_limits():
@@ -994,7 +1047,7 @@ class AIOrchestrator:
             )
             
             # OPTIMIZATION LAYER 3: Response Optimization
-            if self.OPTIMIZATION_AVAILABLE and response.content:
+            if OPTIMIZATION_AVAILABLE and response.content:
                 # Optimize response content
                 optimization_context = {
                     "user_id": user_id,
@@ -1004,7 +1057,7 @@ class AIOrchestrator:
                     "user_level": user_context.get("user_level", "intermediate") if user_context else "intermediate"
                 }
                 
-                optimized_content = await self.ai_performance_optimizer.optimize_response(
+                optimized_content = await ai_performance_optimizer.optimize_response(
                     agent_type, response.content, optimization_context
                 )
                 response.content = optimized_content
@@ -1016,7 +1069,7 @@ class AIOrchestrator:
                         "satisfaction_score": 0.8,  # Would be measured from user feedback
                         "error": response.error is not None
                     }
-                    await self.experiment_manager.record_conversion(
+                    await experiment_manager.record_conversion(
                         f"{agent_type}_optimization", 
                         user_id, 
                         ab_variant["variant_name"],
@@ -1088,11 +1141,11 @@ class AIOrchestrator:
         if complexity == TaskComplexity.SIMPLE:
             return ModelType.GEMMA_4_ON_DEVICE
         elif complexity == TaskComplexity.CREATIVE:
-            return ModelType.GEMINI_PRO if self.cloud_client.gemini_api_key else ModelType.GEMMA_4_ON_DEVICE
+            return ModelType.CLAUDE_3_5_SONNET if self.cloud_client.anthropic_api_key else ModelType.GEMMA_4_ON_DEVICE
         elif complexity in [TaskComplexity.COMPLEX, TaskComplexity.CRITICAL]:
             # Prefer cloud models for complex tasks
-            if self.cloud_client.gemini_api_key:
-                return ModelType.GEMINI_PRO if max_tokens > 1000 else ModelType.GEMINI_15_FLASH
+            if self.cloud_client.openai_api_key:
+                return ModelType.GPT_4_TURBO if max_tokens > 1000 else ModelType.GPT_4_MINI
             elif self.gemma_client.cloud_available:
                 return ModelType.GEMMA_4_CLOUD
             else:
@@ -1110,8 +1163,10 @@ class AIOrchestrator:
             return self.gemma_client.on_device_loaded
         elif model_type == ModelType.GEMMA_4_CLOUD:
             return self.gemma_client.cloud_available
-        elif model_type in [ModelType.GEMINI_PRO, ModelType.GEMINI_PRO_VISION, ModelType.GEMINI_15_FLASH]:
-            return bool(self.cloud_client.gemini_api_key)
+        elif model_type in [ModelType.GPT_4_TURBO, ModelType.GPT_4_MINI]:
+            return bool(self.cloud_client.openai_api_key)
+        elif model_type == ModelType.CLAUDE_3_5_SONNET:
+            return bool(self.cloud_client.anthropic_api_key)
         
         return False
     
@@ -1250,3 +1305,475 @@ ai_orchestrator = AIOrchestrator()
 async def generate_response(*args, **kwargs):
     """Backward compatibility wrapper."""
     return await ai_orchestrator.generate_response(*args, **kwargs)
+
+
+# =============================================================================
+# SESSION ORCHESTRATOR - Adaptive Learning Blueprint Execution
+# =============================================================================
+
+@dataclass
+class SessionState:
+    """State management for learning sessions"""
+    session_id: str
+    current_node_id: str
+    visited_nodes: List[str] = field(default_factory=list)
+    user_responses: Dict[str, Any] = field(default_factory=dict)
+    performance_metrics: Dict[str, float] = field(default_factory=dict)
+    variables: Dict[str, Any] = field(default_factory=dict)
+    checkpoint_data: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize state to dictionary"""
+        return {
+            "session_id": self.session_id,
+            "current_node_id": self.current_node_id,
+            "visited_nodes": self.visited_nodes,
+            "user_responses": self.user_responses,
+            "performance_metrics": self.performance_metrics,
+            "variables": self.variables,
+            "checkpoint_data": self.checkpoint_data
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SessionState":
+        """Deserialize state from dictionary"""
+        return cls(
+            session_id=data["session_id"],
+            current_node_id=data["current_node_id"],
+            visited_nodes=data.get("visited_nodes", []),
+            user_responses=data.get("user_responses", {}),
+            performance_metrics=data.get("performance_metrics", {}),
+            variables=data.get("variables", {}),
+            checkpoint_data=data.get("checkpoint_data", {})
+        )
+
+
+class SessionOrchestrator:
+    """
+    Orchestrates adaptive learning sessions using blueprint execution.
+    
+    Features:
+    - Blueprint traversal with conditional branching
+    - State persistence via Redis
+    - Content generation for each node
+    - Progress tracking and decision making
+    - Adaptive difficulty adjustment
+    """
+    
+    def __init__(self, redis_client: Optional[MockRedis] = None):
+        """Initialize session orchestrator"""
+        self.redis_client = redis_client or MockRedis()
+        self.logger = logger.bind(component="session_orchestrator")
+        
+    async def initialize_session(
+        self,
+        session_id: str,
+        blueprint_json: Dict[str, Any],
+        variables: Dict[str, Any],
+        user_profile: Optional[Dict[str, Any]] = None
+    ) -> SessionState:
+        """
+        Initialize a new learning session.
+        
+        Args:
+            session_id: Unique session identifier
+            blueprint_json: Blueprint configuration
+            variables: Initial variables for blueprint
+            user_profile: Optional user mastery profile
+            
+        Returns:
+            Initial session state
+        """
+        try:
+            # Import blueprint engine
+            from lyo_app.adaptive_learning.blueprint import BlueprintEngine, BlueprintContext
+            
+            # Initialize blueprint engine
+            engine = BlueprintEngine(blueprint_json)
+            
+            # Create initial state
+            state = SessionState(
+                session_id=session_id,
+                current_node_id=engine.entry_node_id,
+                variables=variables,
+                performance_metrics={
+                    "mastery_level": user_profile.get("mastery_level", 0.5) if user_profile else 0.5,
+                    "pace": user_profile.get("pace", "normal") if user_profile else "normal",
+                    "last_score": 0.0
+                }
+            )
+            
+            # Save initial state
+            await self.save_session_state(state)
+            
+            self.logger.info(
+                "session_initialized",
+                session_id=session_id,
+                entry_node=engine.entry_node_id
+            )
+            
+            return state
+            
+        except Exception as e:
+            self.logger.error("session_init_failed", error=str(e), session_id=session_id)
+            raise
+    
+    async def get_next_node(
+        self,
+        session_id: str,
+        blueprint_json: Dict[str, Any],
+        user_response: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Determine the next node to visit based on current state and user response.
+        
+        Args:
+            session_id: Session identifier
+            blueprint_json: Blueprint configuration
+            user_response: Optional user response data (quiz answers, etc.)
+            
+        Returns:
+            Next node ID or None if session complete
+        """
+        try:
+            # Load session state
+            state = await self.restore_session_state(session_id)
+            if not state:
+                raise ValueError(f"Session {session_id} not found")
+            
+            # Import blueprint engine
+            from lyo_app.adaptive_learning.blueprint import BlueprintEngine, BlueprintContext
+            
+            # Initialize engine
+            engine = BlueprintEngine(blueprint_json)
+            
+            # Update state with user response
+            if user_response:
+                await self._process_user_response(state, user_response)
+            
+            # Create execution context
+            context = BlueprintContext(
+                blueprint=engine.blueprint,
+                variables=state.variables,
+                session_data={
+                    "last_score": state.performance_metrics.get("last_score", 0.0),
+                    "pace": state.performance_metrics.get("pace", "normal"),
+                    "mastery_level": state.performance_metrics.get("mastery_level", 0.5)
+                }
+            )
+            
+            # Get possible next nodes
+            next_nodes = engine.get_next_nodes(state.current_node_id, context)
+            
+            if not next_nodes:
+                # No more nodes - session complete
+                self.logger.info("session_complete", session_id=session_id)
+                return None
+            
+            # Select best next node (first valid one for now, can be enhanced with ML)
+            next_node_id = next_nodes[0]
+            
+            # Update state
+            state.visited_nodes.append(state.current_node_id)
+            state.current_node_id = next_node_id
+            
+            # Save updated state
+            await self.save_session_state(state)
+            
+            self.logger.info(
+                "node_transition",
+                session_id=session_id,
+                from_node=state.visited_nodes[-1],
+                to_node=next_node_id
+            )
+            
+            return next_node_id
+            
+        except Exception as e:
+            self.logger.error("next_node_failed", error=str(e), session_id=session_id)
+            raise
+    
+    async def generate_content_block(
+        self,
+        session_id: str,
+        blueprint_json: Dict[str, Any],
+        node_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate content for a specific node in the blueprint.
+        
+        Args:
+            session_id: Session identifier
+            blueprint_json: Blueprint configuration
+            node_id: Optional node ID (uses current node if not provided)
+            
+        Returns:
+            Content block with text, audio, and enrichments
+        """
+        try:
+            # Load session state
+            state = await self.restore_session_state(session_id)
+            if not state:
+                raise ValueError(f"Session {session_id} not found")
+            
+            # Use current node if not specified
+            target_node_id = node_id or state.current_node_id
+            
+            # Import blueprint engine
+            from lyo_app.adaptive_learning.blueprint import BlueprintEngine, BlueprintContext
+            
+            # Initialize engine
+            engine = BlueprintEngine(blueprint_json)
+            
+            # Get node
+            node = engine.get_node(target_node_id)
+            if not node:
+                raise ValueError(f"Node {target_node_id} not found in blueprint")
+            
+            # Create execution context
+            context = BlueprintContext(
+                blueprint=engine.blueprint,
+                variables=state.variables,
+                session_data={
+                    "last_score": state.performance_metrics.get("last_score", 0.0),
+                    "pace": state.performance_metrics.get("pace", "normal"),
+                    "mastery_level": state.performance_metrics.get("mastery_level", 0.5)
+                }
+            )
+            
+            # Generate content based on node type
+            content_block = {
+                "block_id": target_node_id,
+                "type": node.type.value,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            if node.type.value == "lesson":
+                # Generate lesson content
+                template_data = engine.resolve_node_template(node, context)
+                
+                # Use AI orchestrator to generate content
+                response = await ai_orchestrator.generate_response(
+                    prompt=template_data.get("prompt", "Generate educational content"),
+                    max_tokens=1000,
+                    temperature=0.7,
+                    task_complexity=TaskComplexity.MEDIUM
+                )
+                
+                content_block["text"] = {
+                    "md": response.content,
+                    "html": None  # TODO: Convert markdown to HTML
+                }
+                
+                # Get enrichments
+                enrichments = engine.get_enrichments(node, context)
+                if enrichments:
+                    content_block["enrichments"] = enrichments
+                
+            elif node.type.value == "quiz":
+                # Generate quiz content
+                content_block["quiz"] = await self._generate_quiz_content(node, state)
+                
+            elif node.type.value == "summary":
+                # Generate summary content
+                content_block["text"] = {
+                    "md": await self._generate_summary(state),
+                    "html": None
+                }
+            
+            self.logger.info(
+                "content_generated",
+                session_id=session_id,
+                node_id=target_node_id,
+                type=node.type.value
+            )
+            
+            return content_block
+            
+        except Exception as e:
+            self.logger.error(
+                "content_generation_failed",
+                error=str(e),
+                session_id=session_id,
+                node_id=node_id
+            )
+            raise
+    
+    async def should_advance(
+        self,
+        session_id: str,
+        user_performance: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """
+        Determine if the user should advance to the next node.
+        
+        Args:
+            session_id: Session identifier
+            user_performance: Performance data (quiz score, completion time, etc.)
+            
+        Returns:
+            Tuple of (should_advance, reason)
+        """
+        try:
+            # Load session state
+            state = await self.restore_session_state(session_id)
+            if not state:
+                raise ValueError(f"Session {session_id} not found")
+            
+            # Extract performance metrics
+            score = user_performance.get("score", 0.0)
+            completion_time = user_performance.get("completion_time_seconds", 0)
+            
+            # Decision rules
+            if score >= 0.8:
+                # Strong performance - advance
+                return True, "High score indicates mastery"
+            elif score >= 0.6:
+                # Moderate performance - advance with caution
+                return True, "Passing score - continue with support"
+            elif score >= 0.4:
+                # Weak performance - consider remediation
+                # Check if remediation node exists
+                return False, "Low score - remediation recommended"
+            else:
+                # Very weak performance - require remediation
+                return False, "Very low score - remediation required"
+            
+        except Exception as e:
+            self.logger.error("advance_decision_failed", error=str(e), session_id=session_id)
+            # Default to advancing on error
+            return True, "Error in decision - defaulting to advance"
+    
+    async def save_session_state(self, state: SessionState) -> bool:
+        """
+        Persist session state to Redis.
+        
+        Args:
+            state: Session state to save
+            
+        Returns:
+            Success boolean
+        """
+        try:
+            cache_key = f"session:state:{state.session_id}"
+            state_json = json.dumps(state.to_dict())
+            
+            # Save with 2-hour TTL
+            await self.redis_client.set(cache_key, state_json, ex=7200)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error("state_save_failed", error=str(e), session_id=state.session_id)
+            return False
+    
+    async def restore_session_state(self, session_id: str) -> Optional[SessionState]:
+        """
+        Restore session state from Redis.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            SessionState or None if not found
+        """
+        try:
+            cache_key = f"session:state:{session_id}"
+            state_json = await self.redis_client.get(cache_key)
+            
+            if not state_json:
+                return None
+            
+            state_data = json.loads(state_json)
+            return SessionState.from_dict(state_data)
+            
+        except Exception as e:
+            self.logger.error("state_restore_failed", error=str(e), session_id=session_id)
+            return None
+    
+    async def _process_user_response(
+        self,
+        state: SessionState,
+        user_response: Dict[str, Any]
+    ) -> None:
+        """Process user response and update state"""
+        # Store response
+        state.user_responses[state.current_node_id] = user_response
+        
+        # Update performance metrics
+        if "score" in user_response:
+            state.performance_metrics["last_score"] = user_response["score"]
+            
+            # Update mastery level (simple running average)
+            current_mastery = state.performance_metrics.get("mastery_level", 0.5)
+            state.performance_metrics["mastery_level"] = (
+                current_mastery * 0.8 + user_response["score"] * 0.2
+            )
+        
+        # Adjust pace based on response time
+        if "completion_time_seconds" in user_response:
+            time_taken = user_response["completion_time_seconds"]
+            if time_taken < 30:
+                state.performance_metrics["pace"] = "fast"
+            elif time_taken < 120:
+                state.performance_metrics["pace"] = "normal"
+            else:
+                state.performance_metrics["pace"] = "slow"
+    
+    async def _generate_quiz_content(
+        self,
+        node: Any,
+        state: SessionState
+    ) -> Dict[str, Any]:
+        """Generate quiz questions for a node"""
+        # Use quiz generation service
+        from lyo_app.ai_study.quiz_generation_service import quiz_generation_service
+        from lyo_app.ai_study.models import QuizGenerationRequest, QuestionType, DifficultyLevel
+        
+        # Determine difficulty based on mastery
+        mastery = state.performance_metrics.get("mastery_level", 0.5)
+        if mastery >= 0.8:
+            difficulty = DifficultyLevel.HARD
+        elif mastery >= 0.5:
+            difficulty = DifficultyLevel.MEDIUM
+        else:
+            difficulty = DifficultyLevel.EASY
+        
+        # Generate quiz
+        request = QuizGenerationRequest(
+            resource_id=state.session_id,
+            question_type=QuestionType.MULTIPLE_CHOICE,
+            difficulty=difficulty,
+            num_questions=5,
+            subject_area="general"
+        )
+        
+        # This would call the actual service
+        # For now, return a placeholder
+        return {
+            "questions": [],
+            "difficulty": difficulty.value,
+            "time_limit_seconds": 300
+        }
+    
+    async def _generate_summary(self, state: SessionState) -> str:
+        """Generate session summary"""
+        visited_count = len(state.visited_nodes)
+        mastery = state.performance_metrics.get("mastery_level", 0.5)
+        
+        summary = f"""# Session Summary
+
+You've completed {visited_count} learning modules in this session.
+
+**Your Performance:**
+- Overall Mastery: {mastery * 100:.1f}%
+- Learning Pace: {state.performance_metrics.get('pace', 'normal')}
+
+**What's Next:**
+Continue practicing to improve your mastery and move on to more advanced topics!
+"""
+        return summary
+
+
+# Global session orchestrator instance
+session_orchestrator = SessionOrchestrator()

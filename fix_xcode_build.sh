@@ -49,7 +49,7 @@ xcodebuild \
     -project Lyo.xcodeproj \
     -scheme Lyo \
     -configuration Debug \
-    -destination 'platform=iOS Simulator,name=iPhone 15' \
+    -destination 'platform=iOS Simulator,name=iPhone 17' \
     clean build 2>&1 | tee /tmp/xcode_build_errors.log
 
 # Parse errors

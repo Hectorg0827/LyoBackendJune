@@ -13,10 +13,16 @@ Brings together:
 import asyncio
 import json
 import logging
-from typing import Optional, List, Dict, Any
+import re
+from datetime import datetime
+from typing import Optional, List, Dict, Any, AsyncGenerator
+
 from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .intent_detector import get_intent_detector, ChatIntent
 from .conversation_flow import (
@@ -26,6 +32,11 @@ from .conversation_flow import (
     ConversationState
 )
 from lyo_app.streaming import get_sse_manager, stream_response, EventType, StreamEvent
+
+from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.models import User
+from lyo_app.core.database import get_async_session
+from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +59,25 @@ class ChatResponse(BaseModel):
     content: str
     response_type: str
     state: str
+    generated_course_id: Optional[str] = None
     intent: Optional[Dict[str, Any]] = None
     audio_url: Optional[str] = None
     images: List[str] = Field(default_factory=list)
     actions: List[Dict[str, Any]] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphCourseItemRead(BaseModel):
+    """Lightweight graph course summary matching the iOS GraphCourseItem contract."""
+    id: str
+    title: str
+    description: str
+    subject: str
+    grade_band: str
+    entry_node_id: Optional[str] = None
+    estimated_minutes: int
+    total_nodes: int
+    created_at: Optional[datetime] = None
 
 
 class SessionRequest(BaseModel):
@@ -90,6 +115,165 @@ class IntentAnalysisResponse(BaseModel):
 
 # Routes
 
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Get database session."""
+    async for session in get_async_session():
+        yield session
+
+
+def _course_to_item(course: GraphCourse, total_nodes: int) -> GraphCourseItemRead:
+    return GraphCourseItemRead(
+        id=course.id,
+        title=course.title,
+        description=course.description or "",
+        subject=course.subject,
+        grade_band=course.grade_band or "general",
+        entry_node_id=course.entry_node_id,
+        estimated_minutes=course.estimated_minutes,
+        total_nodes=total_nodes,
+        created_at=course.created_at,
+    )
+
+
+async def _count_nodes(db: AsyncSession, course_id: str) -> int:
+    result = await db.execute(
+        select(func.count(LearningNode.id)).where(LearningNode.course_id == course_id)
+    )
+    return int(result.scalar() or 0)
+
+
+async def _create_minimal_graph_course(
+    db: AsyncSession,
+    *,
+    topic: str,
+    creator_id: str,
+    level: str = "beginner",
+) -> GraphCourse:
+    """Create a minimal playable graph course (linear graph) for iOS playback."""
+    course = GraphCourse(
+        title=f"{topic} ({level})",
+        description=f"An interactive course on {topic}.",
+        subject=topic,
+        grade_band="general",
+        estimated_minutes=20,
+        difficulty=level,
+        created_by=creator_id,
+        is_published=True,
+        is_template=False,
+    )
+    db.add(course)
+    await db.flush()  # ensure course.id exists
+
+    hook_node = LearningNode(
+        course_id=course.id,
+        node_type=NodeType.HOOK.value,
+        content={
+            "narration": f"Welcome! Today we’re going to learn {topic}. Ready to begin?",
+            "visual_prompt": f"A clean, modern educational title card about {topic}",
+            "keywords": [topic],
+            "audio_mood": "calm",
+            "duration_hint": 8.0,
+        },
+        sequence_order=0,
+        estimated_seconds=10,
+    )
+    lesson_node = LearningNode(
+        course_id=course.id,
+        node_type=NodeType.NARRATIVE.value,
+        content={
+            "narration": f"Let’s start with the basics of {topic}. Here’s the core idea, in simple terms...",
+            "visual_prompt": f"A concept diagram explaining the basics of {topic}",
+            "keywords": [topic, "basics"],
+            "audio_mood": "calm",
+            "duration_hint": 20.0,
+        },
+        sequence_order=1,
+        estimated_seconds=30,
+    )
+    interaction_node = LearningNode(
+        course_id=course.id,
+        node_type=NodeType.INTERACTION.value,
+        content={
+            "prompt": f"Quick check: which statement best matches the main idea of {topic}?",
+            "interaction_type": "multiple_choice",
+            "options": [
+                {
+                    "id": "a",
+                    "label": "It’s a random fact with no structure.",
+                    "is_correct": False,
+                    "feedback": "Not quite—there’s a core principle behind it.",
+                    "misconception_tag": "no_structure",
+                },
+                {
+                    "id": "b",
+                    "label": "It’s a structured concept that explains how something works.",
+                    "is_correct": True,
+                    "feedback": "Exactly—nice work.",
+                    "misconception_tag": None,
+                },
+                {
+                    "id": "c",
+                    "label": "It only applies in one narrow edge case.",
+                    "is_correct": False,
+                    "feedback": "Usually it’s broader than that.",
+                    "misconception_tag": "too_narrow",
+                },
+            ],
+            "explanation": f"{topic} is best understood as a structured concept you can apply.",
+            "visual_prompt": f"A simple quiz card about {topic}",
+        },
+        sequence_order=2,
+        estimated_seconds=20,
+    )
+    summary_node = LearningNode(
+        course_id=course.id,
+        node_type=NodeType.SUMMARY.value,
+        content={
+            "narration": f"Great job. You learned the basics of {topic}. Next we can go deeper or practice.",
+            "visual_prompt": f"A clean summary card with key points about {topic}",
+            "keywords": [topic, "summary"],
+            "audio_mood": "calm",
+            "duration_hint": 10.0,
+        },
+        sequence_order=3,
+        estimated_seconds=15,
+    )
+
+    db.add_all([hook_node, lesson_node, interaction_node, summary_node])
+    await db.flush()
+
+    course.entry_node_id = hook_node.id
+
+    edges = [
+        LearningEdge(
+            course_id=course.id,
+            from_node_id=hook_node.id,
+            to_node_id=lesson_node.id,
+            condition="always",
+            weight=1.0,
+        ),
+        LearningEdge(
+            course_id=course.id,
+            from_node_id=lesson_node.id,
+            to_node_id=interaction_node.id,
+            condition="always",
+            weight=1.0,
+        ),
+        LearningEdge(
+            course_id=course.id,
+            from_node_id=interaction_node.id,
+            to_node_id=summary_node.id,
+            condition="always",
+            weight=1.0,
+        ),
+    ]
+    db.add_all(edges)
+
+    await db.commit()
+    await db.refresh(course)
+    return course
+
 @router.get("/health")
 async def classroom_health():
     """Check AI Classroom health"""
@@ -108,7 +292,10 @@ async def classroom_health():
 
 
 @router.post("/session", response_model=SessionResponse)
-async def create_session(request: SessionRequest):
+async def create_session(
+    request: SessionRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Create a new classroom session
     
@@ -117,7 +304,7 @@ async def create_session(request: SessionRequest):
     """
     manager = get_conversation_manager()
     session = manager.create_session(
-        user_id=request.user_id,
+        user_id=str(current_user.id),
         preferences=request.preferences
     )
     
@@ -177,7 +364,11 @@ async def end_session(session_id: str):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def classroom_chat(request: ChatRequest):
+async def classroom_chat(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Main classroom chat endpoint
     
@@ -199,17 +390,83 @@ async def classroom_chat(request: ChatRequest):
     else:
         session = manager.create_session()
     
-    # Process message
-    response = await manager.process_message(
-        session.session_id,
-        request.message,
-        include_audio=request.include_audio
+    detector = get_intent_detector()
+    detected_intent: Optional[ChatIntent] = None
+    try:
+        detected_intent = detector.detect(request.message)
+    except Exception:
+        logger.exception("Intent detection failed; falling back to keyword heuristic")
+
+    message_lower = request.message.lower()
+    is_course_request = (
+        detector.should_trigger_course_generation(detected_intent)
+        if detected_intent is not None
+        else (("course" in message_lower) and ("create" in message_lower))
     )
+
+    generated_course_id: Optional[str] = None
+    if is_course_request:
+        # Create a minimal playable GraphCourse for the iOS Interactive Cinema flow.
+        # The iOS client expects `generated_course_id` at the top level.
+        topic = (
+            (detected_intent.topic if detected_intent is not None else None)
+            or session.current_topic
+            or ""
+        )
+
+        if not topic:
+            # Best-effort: many clients send the desired topic wrapped in quotes.
+            match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
+            topic = match.group(1) if match else request.message
+
+        topic = topic.strip().strip("'\"")
+        if len(topic) > 120:
+            topic = topic[:120]
+        course = await _create_minimal_graph_course(
+            db,
+            topic=topic,
+            creator_id=str(current_user.id),
+            level="beginner",
+        )
+        generated_course_id = course.id
+        session.current_course_id = generated_course_id
+        session.current_topic = topic
+
+        response = FlowResponse(
+            content=f"✅ Created interactive course: {course.title}",
+            response_type="course",
+            state=ConversationState.IN_LESSON,
+            metadata={
+                "course_id": generated_course_id,
+                "generated_course_id": generated_course_id,
+                "topic": topic,
+            },
+            actions=[
+                {
+                    "type": "course_created",
+                    "course_id": generated_course_id,
+                    "topic": topic,
+                }
+            ],
+        )
+    else:
+        # Default AI classroom behavior
+        response = await manager.process_message(
+            session.session_id,
+            request.message,
+            include_audio=request.include_audio
+        )
+
+        # Best-effort compatibility: surface any course_id from response/session.
+        generated_course_id = (
+            getattr(session, "current_course_id", None)
+            or response.metadata.get("course_id")
+            or response.metadata.get("current_course_id")
+        )
     
     # Get intent from latest message
-    intent_dict = None
-    if session.messages:
-        last_user_msg = None
+    intent_dict = detected_intent.to_dict() if detected_intent is not None else None
+    if intent_dict is None and session.messages:
         for msg in reversed(session.messages):
             if msg.role.value == "user" and msg.intent:
                 intent_dict = msg.intent.to_dict()
@@ -220,12 +477,58 @@ async def classroom_chat(request: ChatRequest):
         content=response.content,
         response_type=response.response_type,
         state=response.state.value,
+        generated_course_id=generated_course_id,
         intent=intent_dict,
         audio_url=response.audio_url,
         images=response.images,
         actions=response.actions,
         metadata=response.metadata
     )
+
+
+@router.get("/courses", response_model=List[GraphCourseItemRead])
+async def list_graph_courses(
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """List graph courses created by the authenticated user."""
+    result = await db.execute(
+        select(GraphCourse)
+        .where(GraphCourse.created_by == str(current_user.id))
+        .order_by(GraphCourse.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    courses = result.scalars().all()
+
+    items: List[GraphCourseItemRead] = []
+    for course in courses:
+        total_nodes = await _count_nodes(db, course.id)
+        items.append(_course_to_item(course, total_nodes))
+    return items
+
+
+@router.get("/courses/{course_id}", response_model=GraphCourseItemRead)
+async def get_graph_course(
+    course_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a specific graph course by id (must belong to current user)."""
+    result = await db.execute(
+        select(GraphCourse).where(
+            GraphCourse.id == course_id,
+            GraphCourse.created_by == str(current_user.id),
+        )
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    total_nodes = await _count_nodes(db, course.id)
+    return _course_to_item(course, total_nodes)
 
 
 @router.post("/chat/stream")

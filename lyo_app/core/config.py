@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     app_version: str = Field(default="1.0.0", description="Application version")
     debug: bool = Field(default=False, description="Debug mode")
     environment: str = Field(default="development", description="Environment")
+    base_url: str = Field(default="http://localhost:8000", description="Base URL for constructing links (verification, password reset, etc.)")
     
     # API settings
     api_prefix: str = Field(default="/api/v1", description="API prefix for versioning")
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
         description="Database URL"
     )
     database_echo: bool = Field(default=False, description="Echo SQL queries")
+    connection_pool_size: int = Field(default=20, description="Database connection pool size")
+    max_overflow: int = Field(default=30, description="Database max overflow connections")
     
     # Security settings
     secret_key: str = Field(
@@ -44,15 +47,29 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(
         default=30, description="Access token expiration time in minutes"
     )
+    refresh_token_expire_days: int = Field(
+        default=7, description="Refresh token expiration time in days"
+    )
     
     # Monitoring settings
     sentry_dsn: Optional[str] = Field(default=None, description="Sentry DSN for error tracking")
     
-    # Redis settings
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        description="Redis URL for caching and Celery"
-    )
+    # Redis settings - support REDIS_HOST/REDIS_PORT for Cloud Run
+    redis_host: str = Field(default="localhost", description="Redis host")
+    redis_port: str = Field(default="6379", description="Redis port")
+    redis_url: Optional[str] = Field(default=None, description="Redis URL for caching and Celery (optional, built from host/port if not set)")
+    
+    @property
+    def effective_redis_url(self) -> str:
+        """Get the effective Redis URL, building from host/port if REDIS_URL not set."""
+        import os
+        # Priority: REDIS_URL env var > REDIS_HOST:REDIS_PORT env vars > defaults
+        env_redis_url = os.getenv("REDIS_URL")
+        if env_redis_url:
+            return env_redis_url
+        host = os.getenv("REDIS_HOST", self.redis_host)
+        port = os.getenv("REDIS_PORT", self.redis_port)
+        return f"redis://{host}:{port}/0"
     
     # Celery settings
     celery_broker_url: str = Field(
@@ -86,9 +103,9 @@ class Settings(BaseSettings):
     # External API Keys
     youtube_api_key: Optional[str] = Field(default=None, description="YouTube Data API v3 key")
     gemini_api_key: Optional[str] = Field(default=None, description="Google Gemini API key")
-    # Removed: openai_api_key and anthropic_api_key - Using Google Gemini only
     
-    # Spotify API (for podcast content)
+    # OpenAI Configuration (for conversations and TTS)
+    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key for ChatGPT and TTS")
     spotify_client_id: Optional[str] = Field(default=None, description="Spotify Client ID")
     spotify_client_secret: Optional[str] = Field(default=None, description="Spotify Client Secret")
     # Note: At runtime, if these are None we attempt secret manager fallback where used.
@@ -115,17 +132,27 @@ class Settings(BaseSettings):
     listennotes_api_key: Optional[str] = Field(default=None, description="ListenNotes Podcast API key")
     open_library_api_key: Optional[str] = Field(default=None, description="Open Library API key (optional)")
     
+    # OpenAI Configuration (for conversations and TTS)
+    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key for ChatGPT and TTS")
+    
+    # Dual AI System Configuration
+    ai_brain_provider: str = Field(default="gemini", description="AI Brain provider for reasoning (gemini)")
+    ai_conversation_provider: str = Field(default="openai", description="AI Conversation provider (openai)")
+    ai_hybrid_mode: bool = Field(default=True, description="Enable hybrid AI mode")
+    
+    # Google Cloud Configuration
+    gcs_bucket: Optional[str] = Field(default=None, description="Google Cloud Storage bucket name")
+    gcs_project_id: Optional[str] = Field(default=None, description="Google Cloud Project ID")
+    google_application_credentials: Optional[str] = Field(default=None, description="Path to GCS service account JSON")
+    
     # Performance Settings
-    connection_pool_size: int = Field(default=20, description="Database connection pool size")
-    max_overflow: int = Field(default=10, description="Maximum overflow connections")
     request_timeout: int = Field(default=30, description="Request timeout in seconds")
     
     # Production Enhancement Settings
     # Storage Configuration
-    storage_provider: str = Field(default="local", description="Storage provider: local, aws_s3, cloudflare_r2")
+    storage_provider: str = Field(default="gcs", description="Storage provider: local, gcs, aws_s3, cloudflare_r2")
     storage_bucket: Optional[str] = Field(default=None, description="Storage bucket name")
     cdn_domain: Optional[str] = Field(default=None, description="CDN domain for faster file delivery")
-    CDN_BASE_URL: Optional[str] = Field(default=None, description="CDN base URL for file delivery")
     
     # AWS Configuration
     aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key")
@@ -136,6 +163,11 @@ class Settings(BaseSettings):
     r2_endpoint: Optional[str] = Field(default=None, description="Cloudflare R2 endpoint")
     r2_access_key: Optional[str] = Field(default=None, description="R2 Access Key")
     r2_secret_key: Optional[str] = Field(default=None, description="R2 Secret Key")
+    
+    # Cloudflare CDN Configuration
+    cloudflare_api_token: Optional[str] = Field(default=None, description="Cloudflare API token for CDN management")
+    cloudflare_zone_id: Optional[str] = Field(default=None, description="Cloudflare zone ID for CDN management")
+    cdn_base_url: Optional[str] = Field(default=None, description="CDN base URL for content delivery")
     
     # Database Optimization
     database_pool_size: int = Field(default=20, description="Database connection pool size")
@@ -199,7 +231,6 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="LyoApp Backend", description="Application name (legacy)")
     APP_VERSION: str = Field(default="1.0.0", description="Application version (legacy)")
     CLOUDFLARE_ZONE_ID: Optional[str] = Field(default=None, description="Cloudflare zone ID for CDN management")
-    CLOUDFLARE_API_TOKEN: Optional[str] = Field(default=None, description="Cloudflare API token for CDN management")
     
     @field_validator('youtube_api_key', 'gemini_api_key', 'podchaser_api_key')
     @classmethod
@@ -274,13 +305,11 @@ class Settings(BaseSettings):
         
         return self
     
-    # Pydantic V2 configuration
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "case_sensitive": False,
-        "extra": "ignore"  # Ignore extra fields to prevent validation errors
-    }
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+        extra = "ignore"  # Ignore extra fields to prevent validation errors
 
 
 @lru_cache()

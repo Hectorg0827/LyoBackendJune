@@ -61,6 +61,11 @@ class ContentTypesResponse(BaseModel):
     content_types: dict
 
 
+class ImageTypesResponse(BaseModel):
+    """Alias for available image types (legacy clients)"""
+    image_types: dict
+
+
 # Routes
 
 @router.get("/health")
@@ -91,6 +96,16 @@ async def get_content_types():
     """
     service = await get_image_service()
     return ContentTypesResponse(content_types=service.get_content_types())
+
+
+@router.get("/types", response_model=ImageTypesResponse)
+async def get_image_types():
+    """
+    Legacy alias for image types expected by older clients/tests.
+    Mirrors /content-types to avoid 404s.
+    """
+    service = await get_image_service()
+    return ImageTypesResponse(image_types=service.get_content_types())
 
 
 @router.post("/generate", response_model=ImageResponse)

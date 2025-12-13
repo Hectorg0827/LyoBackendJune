@@ -108,12 +108,28 @@ class FirebaseAuthService:
             # First, try standard verification
             decoded_token = firebase_auth.verify_id_token(id_token, check_revoked=True)
             return decoded_token
-        except firebase_auth.InvalidIdTokenError as e:
+        except firebase_auth.ExpiredIdTokenError:
+            raise ValueError("Token has expired")
+        except firebase_auth.RevokedIdTokenError:
+            raise ValueError("Token has been revoked")
+        except Exception as e:
             error_message = str(e)
             
-            # Check if this is an audience mismatch error
-            if "audience" in error_message.lower() or "aud" in error_message.lower():
-                logger.warning(f"🔄 Audience mismatch detected, attempting cross-project verification...")
+            # Check for audience mismatch OR permission issues (INSUFFICIENT_PERMISSION)
+            # Permission errors happen when checking revocation across projects without IAM roles
+            should_fallback = (
+                "audience" in error_message.lower() or 
+                "aud" in error_message.lower() or
+                "INSUFFICIENT_PERMISSION" in error_message or
+                "permission" in error_message.lower()
+            )
+            
+            if should_fallback:
+                if "permission" in error_message.lower():
+                    logger.warning(f"⚠️ Permission error checking revocation: {e}. Falling back to local verification.")
+                else:
+                    logger.warning(f"🔄 Audience mismatch detected, attempting cross-project verification...")
+                
                 logger.warning(f"   Expected audience: {expected_audience}")
                 
                 # Try verification without audience check using Google's public keys
@@ -129,20 +145,19 @@ class FirebaseAuthService:
                         audience=expected_audience  # Use iOS project ID as audience
                     )
                     
+                    # CRITICAL FIX: Ensure 'uid' is present (google.oauth2 returns 'sub')
+                    if 'uid' not in decoded_token and 'sub' in decoded_token:
+                        decoded_token['uid'] = decoded_token['sub']
+                    
                     logger.info(f"✅ Cross-project token verification successful for uid: {decoded_token.get('uid')}")
                     return decoded_token
                     
                 except Exception as cross_verify_error:
                     logger.error(f"❌ Cross-project verification also failed: {cross_verify_error}")
-                    raise ValueError(f"Invalid token: {str(e)}")
-            else:
-                raise ValueError(f"Invalid token: {str(e)}")
-                
-        except firebase_auth.ExpiredIdTokenError:
-            raise ValueError("Token has expired")
-        except firebase_auth.RevokedIdTokenError:
-            raise ValueError("Token has been revoked")
-        except Exception as e:
+                    # If it was originally a permission error, raise that, otherwise raise the invalid token error
+                    raise ValueError(f"Token verification failed: {str(e)}")
+            
+            # For other errors
             logger.error(f"Token verification failed: {e}")
             raise ValueError(f"Token verification failed: {str(e)}")
     

@@ -57,31 +57,20 @@ class RedisRateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.block_duration = block_duration
-        self._redis_client = None
-        self._initialized = False
-    
-    @property
-    def redis_client(self):
-        """Lazy initialization of Redis client."""
-        if self._initialized:
-            return self._redis_client
-            
-        self._initialized = True
         
         if not self.redis_url:
             logger.warning("No Redis URL configured - rate limiting will use in-memory fallback")
-            return None
+            self.redis_client = None
+            return
         
         try:
-            self._redis_client = redis.from_url(self.redis_url, decode_responses=True)
+            self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
             # Test connection
-            self._redis_client.ping()
+            self.redis_client.ping()
             logger.info("Redis rate limiter initialized successfully")
         except Exception as e:
             logger.error(f"Failed to connect to Redis for rate limiting: {e}")
-            self._redis_client = None
-        
-        return self._redis_client
+            self.redis_client = None
     
     def get_secure_client_id(self, request: Request) -> str:
         """

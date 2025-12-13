@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import MetaData, event
+from sqlalchemy import MetaData, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -147,24 +147,122 @@ async def init_db() -> None:
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
         from lyo_app.auth.rbac import Role, Permission, role_permissions, user_roles  # noqa: F401
-        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
+        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion, CourseItem, CourseStatus  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
-        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
+        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge, GamificationProfile  # noqa: F401
         from lyo_app.ai_study.models import StudySession, StudyMessage, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
+        from lyo_app.tasks.models import Task, TaskState  # noqa: F401
+        from lyo_app.notifications.models import PushDevice  # noqa: F401
         # Import new mentor chat models
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
         from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.classroom.models import ClassroomSession  # noqa: F401
-        # Import AI Classroom graph learning models
-        from lyo_app.ai_classroom.models import (  # noqa: F401
-            GraphCourse, LearningNode, LearningEdge, Concept, Misconception,
-            MasteryState, ReviewSchedule, InteractionAttempt, CourseProgress,
-            CelebrationConfig, AdPlacementConfig
-        )
         
         await conn.run_sync(Base.metadata.create_all)
+
+        # Best-effort schema reconciliation for legacy production DBs.
+        # create_all() does NOT add missing columns, so older tables can drift.
+        await _ensure_stack_items_schema(conn)
         logger.info("Database tables created successfully")
+
+
+async def _ensure_stack_items_schema(conn) -> None:
+    """Ensure stack_items table has required columns (Postgres-only, additive)."""
+
+    def _get_table_info(sync_conn):
+        dialect_name = sync_conn.dialect.name
+        inspector = inspect(sync_conn)
+        has_table = inspector.has_table("stack_items")
+        column_names = set()
+        if has_table:
+            column_names = {col["name"] for col in inspector.get_columns("stack_items")}
+        return dialect_name, has_table, column_names
+
+    try:
+        dialect_name, has_table, column_names = await conn.run_sync(_get_table_info)
+    except Exception as e:
+        logger.warning(f"⚠️ stack_items schema inspection failed: {e}")
+        return
+
+    if not has_table:
+        return
+
+    # Keep this tight: only run DDL on Postgres where we know the syntax.
+    if dialect_name != "postgresql":
+        return
+
+    ddl_statements: list[str] = []
+
+    # Required by API response model
+    if "title" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT 'Untitled'"
+        )
+
+    # Optional / commonly used columns (safe additions)
+    if "description" not in column_names:
+        ddl_statements.append("ALTER TABLE stack_items ADD COLUMN description TEXT")
+
+    if "item_type" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN item_type VARCHAR(50) NOT NULL DEFAULT 'topic'"
+        )
+
+    if "status" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN status VARCHAR(50) NOT NULL DEFAULT 'not_started'"
+        )
+
+    if "progress" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN progress DOUBLE PRECISION NOT NULL DEFAULT 0.0"
+        )
+
+    if "priority" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
+        )
+
+    if "content_id" not in column_names:
+        ddl_statements.append("ALTER TABLE stack_items ADD COLUMN content_id VARCHAR(255)")
+
+    if "content_type" not in column_names:
+        ddl_statements.append("ALTER TABLE stack_items ADD COLUMN content_type VARCHAR(50)")
+
+    if "extra_data" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN extra_data JSONB NOT NULL DEFAULT '{}'::jsonb"
+        )
+
+    if "created_at" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now()"
+        )
+
+    if "updated_at" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE stack_items ADD COLUMN updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now()"
+        )
+
+    if "started_at" not in column_names:
+        ddl_statements.append("ALTER TABLE stack_items ADD COLUMN started_at TIMESTAMP WITHOUT TIME ZONE")
+
+    if "completed_at" not in column_names:
+        ddl_statements.append("ALTER TABLE stack_items ADD COLUMN completed_at TIMESTAMP WITHOUT TIME ZONE")
+
+    if not ddl_statements:
+        return
+
+    try:
+        for stmt in ddl_statements:
+            await conn.execute(text(stmt))
+        logger.info(
+            "✅ Applied stack_items schema patch (added missing columns)"
+        )
+    except Exception as e:
+        # Don't fail startup if patch can't be applied; log and proceed.
+        logger.error(f"❌ Failed applying stack_items schema patch: {e}")
 
 
 async def close_db() -> None:

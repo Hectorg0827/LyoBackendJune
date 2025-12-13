@@ -56,6 +56,35 @@ class StreakType(str, Enum):
     COMMUNITY_ENGAGEMENT = "community_engagement"
 
 
+class BadgeType(str, Enum):
+    """Types of badges."""
+    MILESTONE = "milestone"
+    ACHIEVEMENT = "achievement"
+    SPECIAL = "special"
+    COMMUNITY = "community"
+    LEARNING = "learning"
+
+
+class XPSourceType(str, Enum):
+    """Sources of XP points."""
+    LESSON_COMPLETION = "lesson_completion"
+    QUIZ_COMPLETION = "quiz_completion"
+    COURSE_COMPLETION = "course_completion"
+    DAILY_LOGIN = "daily_login"
+    STREAK_BONUS = "streak_bonus"
+    ACHIEVEMENT_UNLOCK = "achievement_unlock"
+    COMMUNITY_ENGAGEMENT = "community_engagement"
+
+
+class LeaderboardType(str, Enum):
+    """Types of leaderboards."""
+    XP_WEEKLY = "xp_weekly"
+    XP_MONTHLY = "xp_monthly"
+    XP_ALL_TIME = "xp_all_time"
+    STREAK = "streak"
+    ACHIEVEMENTS = "achievements"
+
+
 class UserXP(Base):
     """
     User experience points tracking.

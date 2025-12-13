@@ -19,16 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
 from sqlalchemy.orm import selectinload
 
-from .schemas import (
-    MentorMessageRequest, MentorMessageResponse, ConversationHistoryResponse,
-    InteractionRatingRequest, UserActionRequest, UserActionAnalysisResponse,
-    EngagementSummaryResponse, AIHealthCheckResponse, AIPerformanceStatsResponse,
-    WebSocketResponse, AIErrorResponse, ResponseModeEnum, QuickExplainerData, CourseProposalData
-)
 from .models import MentorInteraction, UserEngagementState, UserEngagementStateEnum, AIConversationLog, AIModelTypeEnum
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
 from .websocket_manager import connection_manager
 from lyo_app.auth.models import User
+from lyo_app.stack.schemas import StackCardPayload, StackItemType
 
 logger = logging.getLogger(__name__)
 
@@ -228,48 +223,9 @@ class AIMentor:
             max_tokens=512
         )
 
-        # Parse response for modes
-        response_content = model_resp.content if hasattr(model_resp, 'content') else str(model_resp)
-        response_mode = ResponseModeEnum.CHAT
-        quick_explainer = None
-        course_proposal = None
-        
-        if "[MODE: EXPLAINER]" in response_content:
-            try:
-                parts = response_content.split("[MODE: EXPLAINER]")
-                json_str = parts[1].strip()
-                # Try to find the JSON block if there's extra text
-                if "{" in json_str:
-                    start = json_str.find("{")
-                    end = json_str.rfind("}") + 1
-                    json_str = json_str[start:end]
-                    
-                data = json.loads(json_str)
-                quick_explainer = QuickExplainerData(**data)
-                response_mode = ResponseModeEnum.EXPLAINER
-                response_content = quick_explainer.explanation # Use explanation as main text
-            except Exception as e:
-                logger.error(f"Failed to parse explainer mode: {e}")
-                
-        elif "[MODE: COURSE]" in response_content:
-            try:
-                parts = response_content.split("[MODE: COURSE]")
-                json_str = parts[1].strip()
-                if "{" in json_str:
-                    start = json_str.find("{")
-                    end = json_str.rfind("}") + 1
-                    json_str = json_str[start:end]
-                    
-                data = json.loads(json_str)
-                course_proposal = CourseProposalData(**data)
-                response_mode = ResponseModeEnum.COURSE
-                response_content = course_proposal.summary # Use summary as main text
-            except Exception as e:
-                logger.error(f"Failed to parse course mode: {e}")
-
         # Build response
         response = {
-            "response": response_content,
+            "response": model_resp.content if hasattr(model_resp, 'content') else model_resp,
             "interaction_id": None,
             "model_used": model_resp.model_used if hasattr(model_resp, 'model_used') else ModelType.GEMMA_ON_DEVICE,
             "response_time_ms": model_resp.response_time_ms if hasattr(model_resp, 'response_time_ms') else 0.0,
@@ -277,20 +233,21 @@ class AIMentor:
             "conversation_id": convo.session_id,
             "engagement_state": UserEngagementStateEnum.IDLE,
             "timestamp": datetime.utcnow(),
-            "response_mode": response_mode,
-            "quick_explainer": quick_explainer,
-            "course_proposal": course_proposal
+            "stack_card": None
         }
 
-        # Persist interaction
-        # Store structured data in context_metadata for history retrieval
-        interaction_context = context or {}
-        interaction_context.update({
-            "response_mode": response_mode.value,
-            "quick_explainer": quick_explainer.dict() if quick_explainer else None,
-            "course_proposal": course_proposal.dict() if course_proposal else None
-        })
+        # Demo heuristic: If user asks to save or mentions stack, provide a card
+        if "save" in message.lower() or "stack" in message.lower():
+            response["stack_card"] = StackCardPayload(
+                title="Conversation Summary",
+                description="Save this conversation point to your stack.",
+                type=StackItemType.SESSION,
+                ref_id=convo.session_id,
+                action_label="Save to Stack",
+                context_data={"summary": response["response"][:50] + "..."}
+            ).model_dump()
 
+        # Persist interaction
         interaction = MentorInteraction(
             user_id=user_id,
             session_id=convo.session_id,
@@ -300,7 +257,7 @@ class AIMentor:
             model_used=response["model_used"],
             response_time_ms=response["response_time_ms"],
             sentiment_detected=None,
-            context_metadata=interaction_context
+            context_metadata=context
         )
         db.add(interaction)
         await db.commit()
@@ -475,23 +432,6 @@ class AIMentor:
 {persona_prompt}
 
 Strategy for this response: {strategy_instruction}
-
-IMPORTANT: You can output in 3 modes.
-1. Normal Chat: Just text.
-2. Quick Explainer: If the user asks for a quick explanation, start with [MODE: EXPLAINER] followed by a JSON block:
-{{
-  "concept": "Concept Name",
-  "explanation": "Short 3-5 line explanation",
-  "chips": ["Action 1", "Action 2"]
-}}
-3. Course Proposal: If the user asks for a full course or comprehensive guide, start with [MODE: COURSE] followed by a JSON block:
-{{
-  "title": "Course Title",
-  "subtext": "Topics covered",
-  "summary": "Brief summary",
-  "modules": ["Module 1", "Module 2"],
-  "button_text": "Start Learning"
-}}
 
 Conversation context:
 {context_summary}
@@ -701,12 +641,6 @@ The student hasn't asked for help - you're reaching out because you care about t
             
             history = []
             for interaction in reversed(interactions):  # Reverse to get chronological order
-                # Extract structured data from context_metadata
-                context_data = interaction.context_metadata or {}
-                response_mode = context_data.get("response_mode", "chat")
-                quick_explainer = context_data.get("quick_explainer")
-                course_proposal = context_data.get("course_proposal")
-
                 history.append({
                     "id": interaction.id,
                     "user_message": interaction.user_message,
@@ -715,10 +649,7 @@ The student hasn't asked for help - you're reaching out because you care about t
                     "model_used": interaction.model_used.value,
                     "response_time_ms": interaction.response_time_ms,
                     "was_helpful": interaction.was_helpful,
-                    "timestamp": interaction.timestamp.isoformat(),
-                    "response_mode": response_mode,
-                    "quick_explainer": quick_explainer,
-                    "course_proposal": course_proposal
+                    "timestamp": interaction.timestamp.isoformat()
                 })
             
             return history
