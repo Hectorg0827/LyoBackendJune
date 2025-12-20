@@ -13,14 +13,29 @@ from lyo_app.learning.schemas import (
     LessonCreate, LessonRead, LessonUpdate,
     CourseEnrollmentCreate, CourseEnrollmentRead,
     LessonCompletionCreate, LessonCompletionRead,
-    UserProgressResponse
+    UserProgressResponse, ProofRead
 )
 from lyo_app.learning.service import LearningService
+from lyo_app.learning.proofs import ProofEngine
 from lyo_app.core.database import get_db
+from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.models import User
 
 
 router = APIRouter()
 learning_service = LearningService()
+proof_engine = ProofEngine()
+
+
+@router.get("/proofs", response_model=List[ProofRead])
+async def get_my_proofs(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+) -> List[ProofRead]:
+    """
+    Get all proofs of learning for the current user.
+    """
+    return await proof_engine.get_user_proofs(db, current_user.id)
 
 
 @router.post("/courses", response_model=CourseRead, status_code=status.HTTP_201_CREATED)

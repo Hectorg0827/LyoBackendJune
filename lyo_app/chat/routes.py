@@ -23,6 +23,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
+from lyo_app.auth.jwt_auth import get_optional_current_user
+from lyo_app.auth.models import User
 from lyo_app.chat.models import ChatMode, ChatMessage, ChatConversation
 from lyo_app.chat.schemas import (
     ChatRequest, ChatResponse, ConversationHistoryItem,
@@ -33,7 +35,8 @@ from lyo_app.chat.schemas import (
     CTAClickRequest, CTAItem, ChipActionItem,
     TelemetryStatsResponse,
     ChatCourseRead, ChatCourseCreate,
-    ChatNoteRead, ChatNoteCreate, ChatNoteUpdate
+    ChatNoteRead, ChatNoteCreate, ChatNoteUpdate,
+    GreetingResponse
 )
 from lyo_app.chat.router import chat_router, mode_transition_manager
 from lyo_app.chat.agents import agent_registry
@@ -43,10 +46,77 @@ from lyo_app.chat.stores import (
     response_cache, telemetry_store
 )
 from lyo_app.streaming import get_sse_manager, stream_response, EventType, StreamEvent
+from lyo_app.personalization.service import personalization_engine
+from lyo_app.core.ai_resilience import ai_resilience_manager
+from lyo_app.core.context_engine import context_engine
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+
+
+# =============================================================================
+# PROACTIVE GREETING ENDPOINT
+# =============================================================================
+
+@router.get("/greeting", response_model=GreetingResponse)
+async def get_proactive_greeting(
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user)
+):
+    """
+    Generate a proactive, personalized greeting for the user.
+    Uses the 'Smart Memory' context if available.
+    """
+    # 1. Build context
+    learner_context = ""
+    user_context_tag = "student" # Default
+    
+    if current_user:
+        try:
+            # Get Context Tag (Student vs Professional)
+            user_context_tag = await context_engine.get_user_context(db, current_user.id)
+            
+            # Get Detailed Learning Context
+            learner_context = await personalization_engine.build_prompt_context(db, str(current_user.id))
+        except Exception as e:
+            logger.warning(f"Failed to build context for greeting: {e}")
+
+    # 2. Construct prompt
+    system_prompt = (
+        "You are Lyo, a friendly, encouraging AI tutor. "
+        "Your goal is to welcome the user back. "
+        "Keep it short (max 2 sentences). "
+        "Be warm and proactive. "
+        f"Adapt your tone for a {user_context_tag} audience. "
+        "If context is provided, use it to make the greeting specific (e.g., mentioning a recent topic or struggle), "
+        "but do not be creepy or over-specific. Just a gentle nod to their journey."
+    )
+    
+    user_message = "Hi Lyo!"
+    if learner_context:
+        user_message += f"\n\n[Context]:\n{learner_context}"
+
+    # 3. Call AI (Fast model)
+    try:
+        response = await ai_resilience_manager.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=100,
+            provider_order=["gemini-flash", "gemini-pro", "openai"] # Prefer fast model
+        )
+        greeting_text = response.get("content", "Welcome back! Ready to learn something new?")
+    except Exception as e:
+        logger.error(f"Error generating greeting: {e}")
+        greeting_text = "Welcome back! Ready to learn something new?"
+
+    return GreetingResponse(
+        greeting=greeting_text,
+        context_used=bool(learner_context)
+    )
 
 
 # =============================================================================
@@ -56,7 +126,8 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 @router.post("", response_model=ChatResponse)
 async def chat_endpoint(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user)
 ):
     """
     Main chat endpoint with mode_hint and action support.
@@ -80,14 +151,31 @@ async def chat_endpoint(
             conversation = await conversation_store.get_conversation(db, conversation_id)
         else:
             conversation = await conversation_store.get_active_conversation(
-                db, session_id
+                db, session_id, user_id=str(current_user.id) if current_user else None
             )
         
         if not conversation:
             conversation = await conversation_store.create_conversation(
                 db, session_id,
+                user_id=str(current_user.id) if current_user else None,
                 initial_mode=request.mode_hint or ChatMode.GENERAL.value
             )
+
+        # Best-effort backfill user binding for continuity
+        if current_user and not conversation.user_id:
+            try:
+                conversation.user_id = str(current_user.id)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+        # Best-effort topic assignment (does not change client contract)
+        if request.context and not conversation.topic:
+            try:
+                conversation.topic = request.context[:200]
+                await db.commit()
+            except Exception:
+                await db.rollback()
         
         # 2. Route the message
         mode, confidence, reasoning = chat_router.route(
@@ -107,6 +195,20 @@ async def chat_endpoint(
             "course_id": request.course_id,
             "note_id": request.note_id,
         }
+
+        # Optional learner context (authenticated users only)
+        if current_user:
+            try:
+                learner_context = await personalization_engine.build_prompt_context(
+                    db,
+                    learner_id=str(current_user.id),
+                    current_skill=None
+                )
+                if learner_context:
+                    context["learner_context"] = learner_context
+                    context["learner_id"] = str(current_user.id)
+            except Exception as e:
+                logger.warning(f"Personalization context unavailable: {e}")
         
         # 4. Build conversation history
         history = []
@@ -315,7 +417,8 @@ async def chat_endpoint(
 @router.post("/stream")
 async def chat_stream_endpoint(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user)
 ):
     """
     Streaming chat endpoint for real-time responses.
@@ -341,13 +444,32 @@ async def chat_stream_endpoint(
             if conversation_id:
                 conversation = await conversation_store.get_conversation(db, conversation_id)
             else:
-                conversation = await conversation_store.get_active_conversation(db, session_id)
+                conversation = await conversation_store.get_active_conversation(
+                    db, session_id, user_id=str(current_user.id) if current_user else None
+                )
             
             if not conversation:
                 conversation = await conversation_store.create_conversation(
                     db, session_id,
+                    user_id=str(current_user.id) if current_user else None,
                     initial_mode=request.mode_hint or ChatMode.GENERAL.value
                 )
+
+            # Best-effort backfill user binding for continuity
+            if current_user and not conversation.user_id:
+                try:
+                    conversation.user_id = str(current_user.id)
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+
+            # Best-effort topic assignment
+            if request.context and not conversation.topic:
+                try:
+                    conversation.topic = request.context[:200]
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
             
             # 2. Route the message
             mode, confidence, reasoning = chat_router.route(
@@ -386,6 +508,20 @@ async def chat_stream_endpoint(
                 "course_id": request.course_id,
                 "note_id": request.note_id,
             }
+
+            # Optional learner context (authenticated users only)
+            if current_user:
+                try:
+                    learner_context = await personalization_engine.build_prompt_context(
+                        db,
+                        learner_id=str(current_user.id),
+                        current_skill=None
+                    )
+                    if learner_context:
+                        context["learner_context"] = learner_context
+                        context["learner_id"] = str(current_user.id)
+                except Exception as e:
+                    logger.warning(f"Personalization context unavailable: {e}")
             
             history = []
             if request.conversation_history:

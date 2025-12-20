@@ -75,7 +75,8 @@ class Course(Base):
     enrollments: Mapped[List["CourseEnrollment"]] = relationship(
         "CourseEnrollment", back_populates="course", cascade="all, delete-orphan"
     )
-    study_groups = relationship("StudyGroup", back_populates="course", lazy="select")
+    study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="course", lazy="select")
+    instructor: Mapped["User"] = relationship("lyo_app.auth.models.User")
     
     def __repr__(self) -> str:
         return f"<Course(id={self.id}, title='{self.title}', instructor_id={self.instructor_id})>"
@@ -158,6 +159,7 @@ class CourseEnrollment(Base):
     
     # Relationships
     course: Mapped["Course"] = relationship("Course", back_populates="enrollments")
+    user: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="course_enrollments")
     
     def __repr__(self) -> str:
         return f"<CourseEnrollment(user_id={self.user_id}, course_id={self.course_id})>"
@@ -187,6 +189,7 @@ class LessonCompletion(Base):
     
     # Relationships
     lesson: Mapped["Lesson"] = relationship("Lesson", back_populates="completions")
+    user: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="lesson_completions")
     
     def __repr__(self) -> str:
         return f"<LessonCompletion(user_id={self.user_id}, lesson_id={self.lesson_id})>"

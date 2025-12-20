@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
 
-from .models import LearnerState, LearnerMastery, AffectSample, SpacedRepetitionSchedule
+from .models import LearnerState, LearnerMastery, AffectSample, SpacedRepetitionSchedule, AffectState
 from .schemas import (
     PersonalizationStateUpdate, KnowledgeTraceRequest, 
     NextActionRequest, NextActionResponse, ActionType, MasteryProfile
@@ -169,13 +169,13 @@ class PersonalizationEngine:
             
             # Determine affect state
             if update.affect.valence < -0.3 and update.affect.arousal > 0.5:
-                state.current_affect = "frustrated"
+                state.current_affect = AffectState.FRUSTRATED
             elif update.affect.valence < 0 and update.affect.arousal < 0.3:
-                state.current_affect = "bored"
+                state.current_affect = AffectState.BORED
             elif update.affect.valence > 0.3 and update.affect.arousal > 0.6:
-                state.current_affect = "flow"
+                state.current_affect = AffectState.FLOW
             else:
-                state.current_affect = "engaged"
+                state.current_affect = AffectState.ENGAGED
             
             # Store aggregated sample
             sample = AffectSample(
@@ -185,7 +185,8 @@ class PersonalizationEngine:
                 confidence=update.affect.confidence,
                 source=update.affect.source,
                 lesson_id=int(update.context.lesson_id) if update.context and update.context.lesson_id else None,
-                skill_id=update.context.skill if update.context else None
+                skill_id=update.context.skill if update.context else None,
+                activity_type="unknown"
             )
             db.add(sample)
         
@@ -202,11 +203,113 @@ class PersonalizationEngine:
         
         return {
             "status": "updated",
-            "current_affect": state.current_affect,
+            "current_affect": state.current_affect.value,
             "fatigue": state.fatigue_level,
             "focus": state.focus_level,
             "recommendations": await self._get_recommendations(state)
         }
+
+    async def build_prompt_context(
+        self,
+        db: AsyncSession,
+        learner_id: str,
+        current_skill: Optional[str] = None
+    ) -> str:
+        """Build a compact, privacy-preserving learner context block for LLM prompts.
+
+        This reuses existing personalization tables (no parallel memory system).
+        Returns an empty string if no learner state exists yet.
+        """
+        user_id = int(learner_id)
+
+        state_result = await db.execute(
+            select(LearnerState).where(LearnerState.user_id == user_id)
+        )
+        state = state_result.scalar_one_or_none()
+
+        mastery_result = await db.execute(
+            select(LearnerMastery)
+            .where(LearnerMastery.user_id == user_id)
+            .order_by(desc(LearnerMastery.mastery_level))
+        )
+        masteries = mastery_result.scalars().all()
+
+        if not state and not masteries:
+            return ""
+
+        strengths = [m.skill_id for m in masteries if m.mastery_level >= 0.7][:5]
+        weaknesses = [m.skill_id for m in masteries if m.mastery_level < 0.3][:5]
+        in_progress = [m.skill_id for m in masteries if 0.3 <= m.mastery_level < 0.7][:5]
+
+        readiness_line = ""
+        if current_skill:
+            mastery, confidence = await self.dkt.get_skill_readiness(db, user_id, current_skill)
+            readiness_line = f"Current skill: {current_skill} (effective mastery {mastery:.2f}, confidence {confidence:.2f})"
+
+        parts: List[str] = []
+
+        if state:
+            parts.append(
+                "Learner preferences: "
+                f"pace={state.preferred_pace}, visual={bool(state.prefers_visual)}, audio={bool(state.prefers_audio)}, reading_level={state.reading_level}"
+            )
+            parts.append(
+                "Learner state: "
+                f"affect={state.current_affect.value}, fatigue={state.fatigue_level:.2f}, focus={state.focus_level:.2f}"
+            )
+        if strengths:
+            parts.append("Strengths (mastered): " + ", ".join(strengths))
+        if in_progress:
+            parts.append("In progress: " + ", ".join(in_progress))
+        if weaknesses:
+            parts.append("Struggling with: " + ", ".join(weaknesses))
+        if readiness_line:
+            parts.append(readiness_line)
+
+        # Layer 1 continuity: recent chat sessions (authenticated users)
+        try:
+            from lyo_app.chat.models import ChatConversation, ChatMessage
+
+            conv_result = await db.execute(
+                select(ChatConversation)
+                .where(ChatConversation.user_id == str(user_id))
+                .order_by(desc(ChatConversation.updated_at))
+                .limit(2)
+            )
+            conversations = conv_result.scalars().all()
+
+            session_lines: List[str] = []
+            for conv in conversations:
+                topic = conv.topic or (conv.context_data or {}).get("topic")
+                topic_prefix = f"Topic: {topic}" if topic else "Topic: (unspecified)"
+
+                # Pull last user+assistant turns (compact)
+                msg_result = await db.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.conversation_id == conv.id)
+                    .order_by(desc(ChatMessage.created_at))
+                    .limit(4)
+                )
+                msgs = list(reversed(msg_result.scalars().all()))
+
+                last_user = next((m.content for m in reversed(msgs) if m.role == "user"), "")
+                last_assistant = next((m.content for m in reversed(msgs) if m.role == "assistant"), "")
+
+                def _truncate(s: str, n: int) -> str:
+                    s = (s or "").strip().replace("\n", " ")
+                    return s if len(s) <= n else s[: n - 1] + "…"
+
+                if last_user or last_assistant:
+                    session_lines.append(
+                        f"- {topic_prefix}. Last time you asked: '{_truncate(last_user, 120)}'. We covered: '{_truncate(last_assistant, 160)}'"
+                    )
+            if session_lines:
+                parts.append("Recent sessions:")
+                parts.extend(session_lines)
+        except Exception as e:
+            logger.debug(f"Skipping chat continuity context: {e}")
+
+        return "\n".join(parts).strip()
     
     async def trace_knowledge(
         self,

@@ -93,7 +93,7 @@ class StudySession(Base):
     user_engagement_score = Column(Float, default=0.0)  # 0-1 scale
 
     # Relationships
-    user = relationship("User", back_populates="study_sessions")
+    user = relationship("lyo_app.auth.models.User", back_populates="study_sessions")
     messages = relationship("StudyMessage", back_populates="session", cascade="all, delete-orphan")
     quizzes = relationship("GeneratedQuiz", back_populates="session", cascade="all, delete-orphan")
 
@@ -205,7 +205,7 @@ class GeneratedQuiz(Base):
 
     # Relationships
     session = relationship("StudySession", back_populates="quizzes")
-    user = relationship("User", back_populates="generated_quizzes")
+    user = relationship("lyo_app.auth.models.User", back_populates="generated_quizzes")
     quiz_attempts = relationship("QuizAttempt", back_populates="quiz", cascade="all, delete-orphan")
 
     def to_dict(self) -> Dict[str, Any]:
@@ -268,7 +268,7 @@ class QuizAttempt(Base):
 
     # Relationships
     quiz = relationship("GeneratedQuiz", back_populates="quiz_attempts")
-    user = relationship("User", back_populates="quiz_attempts")
+    user = relationship("lyo_app.auth.models.User", back_populates="quiz_attempts")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -324,7 +324,7 @@ class StudySessionAnalytics(Base):
     average_quiz_score = Column(Float, default=0.0)
 
     # Relationships
-    user = relationship("User", back_populates="study_analytics")
+    user = relationship("lyo_app.auth.models.User", back_populates="study_analytics")
 
     def to_dict(self) -> Dict[str, Any]:
         return {

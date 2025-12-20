@@ -126,6 +126,7 @@ class Course(Base):
     owner = relationship("User", back_populates="courses")
     lessons = relationship("Lesson", back_populates="course", cascade="all, delete-orphan")
     content_items = relationship("ContentItem", back_populates="course", cascade="all, delete-orphan")
+    study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="course", lazy="select")
     
     __table_args__ = (
         Index("ix_courses_owner_created", "owner_user_id", "created_at"),

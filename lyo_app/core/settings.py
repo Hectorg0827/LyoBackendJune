@@ -2,7 +2,7 @@
 
 import os
 from typing import List, Optional, Literal
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,22 +17,24 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/v1"
     
     # Database
-    DATABASE_URL: str = Field(..., env="DATABASE_URL")
+    DATABASE_URL: str = Field(default="sqlite+aiosqlite:///./lyo_app.db", env="DATABASE_URL")
     DATABASE_ECHO: bool = Field(default=False, env="DATABASE_ECHO")
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 30
     
     # Redis & Caching  
-    REDIS_URL: str = Field(..., env="REDIS_URL")
+    REDIS_URL: Optional[str] = Field(default=None, env="REDIS_URL")
+    REDIS_HOST: str = Field(default="localhost", env="REDIS_HOST")
+    REDIS_PORT: int = Field(default=6379, env="REDIS_PORT")
     CACHE_DEFAULT_TTL: int = 300
     
     # Celery Configuration
-    CELERY_BROKER_URL: str = Field(..., env="CELERY_BROKER_URL")
-    CELERY_RESULT_BACKEND: str = Field(..., env="CELERY_RESULT_BACKEND")
+    CELERY_BROKER_URL: Optional[str] = Field(default=None, env="CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: Optional[str] = Field(default=None, env="CELERY_RESULT_BACKEND")
     CELERY_TASK_TIMEOUT: int = 1200  # 20 minutes
     
     # JWT Configuration
-    JWT_SECRET_KEY: str = Field(..., env="JWT_SECRET_KEY")
+    JWT_SECRET_KEY: str = Field(default="dev_jwt_secret_key", env="JWT_SECRET_KEY")
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_ALGORITHM: str = "HS256"
@@ -94,7 +96,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
     # Security
-    SECRET_KEY: str = Field(..., env="SECRET_KEY")
+    SECRET_KEY: str = Field(default="dev_secret_key", env="SECRET_KEY")
     PASSWORD_MIN_LENGTH: int = 8
     SESSION_TIMEOUT_MINUTES: int = 60
     MAX_LOGIN_ATTEMPTS: int = 5
@@ -116,6 +118,20 @@ class Settings(BaseSettings):
         extra='ignore'
     )
 
+    @model_validator(mode='after')
+    def build_urls(self) -> 'Settings':
+        """Build Redis and Celery URLs if not provided."""
+        if not self.REDIS_URL:
+            self.REDIS_URL = f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+        
+        if not self.CELERY_BROKER_URL:
+            self.CELERY_BROKER_URL = f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/1"
+            
+        if not self.CELERY_RESULT_BACKEND:
+            self.CELERY_RESULT_BACKEND = f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/2"
+            
+        return self
+
     @field_validator("CORS_ORIGINS", mode='before')
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
@@ -130,8 +146,8 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL")
     def validate_database_url(cls, v):
         """Validate database URL format."""
-        if not v.startswith(("postgresql://", "postgresql+asyncpg://")):
-            raise ValueError("DATABASE_URL must be a PostgreSQL URL")
+        if not v.startswith(("postgresql://", "postgresql+asyncpg://", "sqlite", "sqlite+aiosqlite://")):
+            raise ValueError("DATABASE_URL must be a PostgreSQL or SQLite URL")
         return v
 
 

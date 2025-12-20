@@ -4,30 +4,75 @@ Implements AI-powered post ranking based on user preferences and engagement.
 """
 
 from typing import List, Optional, Dict, Any
+from sqlalchemy.ext.asyncio import AsyncSession
+from lyo_app.core.context_engine import ContextEngine
 
+# Initialize engine once
+context_engine = ContextEngine()
 
 async def rank_posts_for_user(
     posts: List[Any], 
-    user: Optional[Any] = None, 
+    db: Optional[AsyncSession] = None,
+    user_id: Optional[int] = None,
     context: Optional[Dict[str, Any]] = None
 ) -> List[Any]:
     """
     Rank posts for a specific user based on relevance and engagement.
     
-    This is a stub implementation that can be enhanced with ML models later.
-    Currently returns posts in their original order.
+    Uses ContextEngine to boost posts relevant to the user's current mode (Student/Professional).
     
     Args:
         posts: List of Post objects to rank
-        user: Optional User object for personalization
+        db: Database session (required for context lookup)
+        user_id: ID of the user for personalization
         context: Optional context dict with course_id, lesson_id, etc.
         
     Returns:
         Ranked list of posts
     """
-    # TODO: Implement ML-based ranking
-    # For now, just return posts as-is
-    return posts
+    if not posts:
+        return []
+        
+    # If no user or DB, return default ranking (by date usually)
+    if not user_id or not db:
+        return posts
+
+    try:
+        # 1. Get User Context
+        user_context = await context_engine.get_user_context(db, user_id)
+        
+        # 2. Score posts based on context relevance
+        scored_posts = []
+        for post in posts:
+            score = calculate_engagement_score(post) + calculate_recency_score(post)
+            
+            # Context Boost
+            if user_context != "neutral":
+                # Check if post content matches context keywords
+                post_content = (getattr(post, 'content', '') or '').lower()
+                
+                # Get keywords for the active context
+                # Map specific contexts like 'student_emergency' to 'student' keys
+                base_context = "student" if "student" in user_context else \
+                               "professional" if "professional" in user_context else \
+                               "hobbyist" if "hobbyist" in user_context else None
+                               
+                if base_context and base_context in context_engine.context_keywords:
+                    keywords = context_engine.context_keywords[base_context]
+                    if any(k in post_content for k in keywords):
+                        score += 0.5  # Significant boost for context match
+            
+            scored_posts.append((score, post))
+            
+        # 3. Sort by score descending
+        scored_posts.sort(key=lambda x: x[0], reverse=True)
+        
+        return [p[1] for p in scored_posts]
+        
+    except Exception as e:
+        # Fallback to original order on error
+        print(f"Ranking error: {e}")
+        return posts
 
 
 def calculate_engagement_score(post: Any) -> float:

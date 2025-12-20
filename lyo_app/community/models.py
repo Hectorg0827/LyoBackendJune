@@ -91,10 +91,10 @@ class StudyGroup(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    #     creator = relationship("User", back_populates="created_study_groups")
-    #     course = relationship("Course", back_populates="study_groups")
-    #     memberships = relationship("GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
-    #     events = relationship("CommunityEvent", back_populates="study_group")
+    creator = relationship("lyo_app.auth.models.User", back_populates="created_study_groups")
+    course = relationship("lyo_app.learning.models.Course", back_populates="study_groups")
+    memberships = relationship("lyo_app.community.models.GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
+    events = relationship("lyo_app.community.models.CommunityEvent", back_populates="study_group")
 
 
 class GroupMembership(Base):
@@ -119,9 +119,9 @@ class GroupMembership(Base):
     approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # Relationships
-    #     user = relationship("User", foreign_keys=[user_id], back_populates="group_memberships")
-    #     study_group = relationship("StudyGroup", back_populates="memberships")
-    #     approved_by = relationship("User", foreign_keys=[approved_by_id])
+    user = relationship("lyo_app.auth.models.User", foreign_keys=[user_id], back_populates="group_memberships")
+    study_group = relationship("lyo_app.community.models.StudyGroup", back_populates="memberships")
+    approved_by = relationship("lyo_app.auth.models.User", foreign_keys=[approved_by_id])
     
     # Constraints
     __table_args__ = (
@@ -169,11 +169,11 @@ class CommunityEvent(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    #     organizer = relationship("User", back_populates="organized_events")
-    #     study_group = relationship("StudyGroup", back_populates="events")
-    #     course = relationship("Course", back_populates="community_events")
-    #     lesson = relationship("Lesson", back_populates="community_events")
-    #     attendances = relationship("EventAttendance", back_populates="event", cascade="all, delete-orphan")
+    organizer = relationship("lyo_app.auth.models.User", back_populates="organized_events")
+    study_group = relationship("lyo_app.community.models.StudyGroup", back_populates="events")
+    course = relationship("lyo_app.learning.models.Course")
+    lesson = relationship("lyo_app.learning.models.Lesson")
+    attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="event", cascade="all, delete-orphan")
 
 
 class EventAttendance(Base):
@@ -201,8 +201,8 @@ class EventAttendance(Base):
     feedback_at = Column(DateTime, nullable=True)
     
     # Relationships
-    #     user = relationship("User", back_populates="event_attendances")
-    #     event = relationship("CommunityEvent", back_populates="attendances")
+    user = relationship("lyo_app.auth.models.User", back_populates="event_attendances")
+    event = relationship("lyo_app.community.models.CommunityEvent", back_populates="attendances")
     
     # Constraints
     __table_args__ = (

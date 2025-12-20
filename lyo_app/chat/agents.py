@@ -75,9 +75,22 @@ class BaseAgent(ABC):
             logger.error(f"AI call failed in {self.mode.value}: {e}")
             raise
     
-    def get_system_prompt(self) -> str:
-        """Get the system prompt for this agent"""
-        return SYSTEM_PROMPTS.get(self.mode.value, SYSTEM_PROMPTS["general"])
+    def get_system_prompt(self, learner_context: Optional[str] = None) -> str:
+        """Get the system prompt for this agent, optionally augmented with learner context."""
+        base_prompt = SYSTEM_PROMPTS.get(self.mode.value, SYSTEM_PROMPTS["general"])
+        if not learner_context:
+            return base_prompt
+
+        learner_context = str(learner_context).strip()
+        if not learner_context:
+            return base_prompt
+
+        return (
+            base_prompt
+            + "\n\nLearner context (privacy-preserving, from prior in-app learning signals):\n"
+            + learner_context
+            + "\n\nUse this context to adapt explanations and difficulty. Do not mention internal scores unless the user asks."
+        )
     
     def get_chips(self) -> List[Dict]:
         """Get chip actions for this mode"""
@@ -115,7 +128,7 @@ class QuickExplainerAgent(BaseAgent):
         
         # Build messages
         messages = [
-            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
         ]
         
         # Add conversation history
@@ -214,7 +227,7 @@ class CoursePlannerAgent(BaseAgent):
         
         # Build messages
         messages = [
-            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
         ]
         
         if conversation_history:
@@ -313,7 +326,7 @@ class PracticeAgent(BaseAgent):
         
         # Build messages
         messages = [
-            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
         ]
         
         if conversation_history:
@@ -416,7 +429,7 @@ class NoteTakerAgent(BaseAgent):
         
         # Build messages
         messages = [
-            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
             {"role": "user", "content": prompt}
         ]
         
@@ -485,7 +498,7 @@ class GeneralAgent(BaseAgent):
         
         # Build messages
         messages = [
-            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
         ]
         
         # Add conversation history

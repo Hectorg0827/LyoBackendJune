@@ -49,6 +49,18 @@ class CourseUpdate(BaseModel):
     is_published: Optional[bool] = None
     is_featured: Optional[bool] = None
 
+class ProofRead(BaseModel):
+    """Schema for reading a Proof of Learning."""
+    id: int
+    course_id: Optional[str]
+    title: str
+    issued_at: datetime
+    proof_hash: str
+    skills_validated: List[str]
+    verification_url: Optional[str]
+    
+    model_config = ConfigDict(from_attributes=True)
+
 
 class CourseRead(CourseBase):
     """Schema for reading course data."""

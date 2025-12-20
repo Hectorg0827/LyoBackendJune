@@ -49,7 +49,7 @@ class UserEngagementState(Base):
     consecutive_struggles = Column(Integer, default=0, comment="Number of consecutive struggling incidents")
     
     # Relationships
-    user = relationship("User", back_populates="engagement_state")
+    user = relationship("lyo_app.auth.models.User", back_populates="engagement_state")
     
     def __repr__(self):
         return f"<UserEngagementState(user_id={self.user_id}, state={self.state}, score={self.sentiment_score})>"
@@ -73,7 +73,7 @@ class MentorInteraction(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     
     # Relationships
-    user = relationship("User", back_populates="mentor_interactions")
+    user = relationship("lyo_app.auth.models.User", back_populates="mentor_interactions")
     
     def __repr__(self):
         return f"<MentorInteraction(user_id={self.user_id}, type={self.interaction_type}, model={self.model_used})>"
