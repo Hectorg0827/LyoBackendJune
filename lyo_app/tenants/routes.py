@@ -16,7 +16,111 @@ from sqlalchemy.orm import selectinload
 from lyo_app.core.database import get_db
 from lyo_app.auth.jwt_auth import get_current_user, get_optional_current_user
 from lyo_app.auth.models import User
-from lyo_app.auth.api_key_auth import create_api_key, get_api_key_org
+from lyo_app.tenants.migrations import run_tenant_migrations
+from lyo_app.auth.api_key_auth import create_api_key, get_api_key_org, generate_api_key, hash_api_key
+
+
+class BootstrapResponse(BaseModel):
+    """Response for the bootstrap endpoint."""
+    message: str
+    tables_created: bool
+    organization_id: Optional[int] = None
+    organization_name: Optional[str] = None
+    api_key: Optional[str] = None  # Full key shown only once!
+
+
+# =============================================================================
+# ROUTES
+# =============================================================================
+
+@router.post("/bootstrap", response_model=BootstrapResponse)
+async def bootstrap_lyo_inc(
+    db: AsyncSession = Depends(get_db),
+    secret: str = "lyo-bootstrap-2024"  # Simple secret to prevent abuse
+):
+    """
+    Bootstrap endpoint to create multi-tenant tables and Lyo Inc organization.
+    
+    This is a one-time setup endpoint that:
+    1. Runs database migrations to create tenant tables
+    2. Creates the "Lyo Inc" organization  
+    3. Generates the first API key
+    
+    Call this ONCE after deploying the multi-tenant update.
+    
+    Query param: secret=lyo-bootstrap-2024
+    """
+    from sqlalchemy import text
+    
+    # Simple secret check
+    if secret != "lyo-bootstrap-2024":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid bootstrap secret"
+        )
+    
+    try:
+        # Step 1: Run migrations
+        tables_created = await run_tenant_migrations(db)
+        logger.info(f"Migration result: tables_created={tables_created}")
+        
+        # Step 2: Check if Lyo Inc already exists
+        result = await db.execute(
+            text("SELECT id, name FROM organizations WHERE slug = 'lyo-inc'")
+        )
+        existing = result.fetchone()
+        
+        if existing:
+            logger.info(f"Lyo Inc already exists (id={existing[0]})")
+            return BootstrapResponse(
+                message="Lyo Inc organization already exists. Use /api/v1/tenants/api-keys to generate new keys.",
+                tables_created=tables_created,
+                organization_id=existing[0],
+                organization_name=existing[1],
+                api_key=None
+            )
+        
+        # Step 3: Create Lyo Inc organization
+        result = await db.execute(
+            text("""
+                INSERT INTO organizations (name, slug, plan_tier, contact_email, is_active)
+                VALUES ('Lyo Inc', 'lyo-inc', 'enterprise', 'hector.garcia0827@gmail.com', TRUE)
+                RETURNING id
+            """)
+        )
+        org_id = result.fetchone()[0]
+        await db.commit()
+        logger.info(f"Created Lyo Inc organization (id={org_id})")
+        
+        # Step 4: Generate API key
+        full_key, key_prefix, key_hash = generate_api_key()
+        
+        await db.execute(
+            text("""
+                INSERT INTO api_keys (organization_id, key_prefix, key_hash, name, description, is_active)
+                VALUES (:org_id, :key_prefix, :key_hash, 'Lyo iOS App Key', 'Auto-generated for Lyo iOS app', TRUE)
+            """),
+            {"org_id": org_id, "key_prefix": key_prefix, "key_hash": key_hash}
+        )
+        await db.commit()
+        
+        logger.info(f"Created API key for Lyo Inc: {key_prefix}...")
+        
+        return BootstrapResponse(
+            message="🎉 Lyo Inc organization created successfully! Save the API key - it will not be shown again!",
+            tables_created=tables_created,
+            organization_id=org_id,
+            organization_name="Lyo Inc",
+            api_key=full_key
+        )
+        
+    except Exception as e:
+        logger.error(f"Bootstrap failed: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Bootstrap failed: {str(e)}"
+        )
 from lyo_app.tenants.models import Organization, APIKey, PlanTier
 from lyo_app.tenants.usage import UsageLog
 
