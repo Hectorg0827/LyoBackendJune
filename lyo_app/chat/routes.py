@@ -293,11 +293,10 @@ async def chat_endpoint(
                 cache_hit=cache_hit
             )
         
-        # Execute saves in parallel
-        _, assistant_message = await asyncio.gather(
-            save_user_message(),
-            save_assistant_message()
-        )
+        # Execute saves sequentially to avoid SQLAlchemy session conflicts
+        # (asyncio.gather with shared db session causes IllegalStateChangeError)
+        await save_user_message()
+        assistant_message = await save_assistant_message()
         
         # 11. Record telemetry (fire-and-forget pattern for non-critical operation)
         asyncio.create_task(
@@ -652,7 +651,9 @@ async def _save_stream_messages(
                 cache_hit=cache_hit
             )
         
-        _, assistant_message = await asyncio.gather(save_user(), save_assistant())
+        # Run sequentially to avoid SQLAlchemy session conflicts  
+        await save_user()
+        assistant_message = await save_assistant()
         
         await telemetry_store.record(
             db,
