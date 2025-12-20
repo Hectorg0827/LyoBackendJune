@@ -446,6 +446,14 @@ def create_app() -> FastAPI:
         logger.info("✅ AI Tutor & Exercise Validator integrated - Context-aware tutoring with code sandbox!")
     except ImportError as e:
         logger.warning(f"AI Tutor v2 routes not available: {e}")
+    
+    # Multi-Tenant SaaS API
+    try:
+        from lyo_app.tenants.routes import router as tenants_router
+        app.include_router(tenants_router, prefix="/api/v1")
+        logger.info("✅ Tenant routes integrated - Multi-tenant SaaS API active!")
+    except ImportError as e:
+        logger.warning(f"Tenant routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401

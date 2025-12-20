@@ -6,7 +6,7 @@ Defines the User model and related database tables.
 from datetime import datetime
 from typing import Optional, Set, TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String, Text, JSON
+from sqlalchemy import Boolean, DateTime, String, Text, JSON, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -62,6 +62,12 @@ class User(Base):
     # AI Personalization
     learning_profile: Mapped[Optional[dict]] = mapped_column(JSON)  # Inferred traits e.g. {"visual_score": 8}
     user_context_summary: Mapped[Optional[str]] = mapped_column(Text)  # AI summary of user context
+    
+    # Multi-Tenant SaaS support
+    organization_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=True, index=True
+    )
+    organization = relationship("lyo_app.tenants.models.Organization", back_populates="users", lazy="select")
     
     # Relationships - defined with string names to avoid circular imports
     # Community relationships
