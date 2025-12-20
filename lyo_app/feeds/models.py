@@ -97,6 +97,9 @@ class Post(Base):
     reactions: Mapped[List["PostReaction"]] = relationship(
         "PostReaction", back_populates="post", cascade="all, delete-orphan"
     )
+    author: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="posts")
+    course: Mapped[Optional["Course"]] = relationship("lyo_app.learning.models.Course")
+    lesson: Mapped[Optional["Lesson"]] = relationship("lyo_app.learning.models.Lesson")
     
     def __repr__(self) -> str:
         return f"<Post(id={self.id}, author_id={self.author_id}, type='{self.post_type}')>"
@@ -140,6 +143,7 @@ class Comment(Base):
     reactions: Mapped[List["CommentReaction"]] = relationship(
         "CommentReaction", back_populates="comment", cascade="all, delete-orphan"
     )
+    author: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="comments")
     
     def __repr__(self) -> str:
         return f"<Comment(id={self.id}, post_id={self.post_id}, author_id={self.author_id})>"
@@ -173,6 +177,7 @@ class PostReaction(Base):
     
     # Relationships
     post: Mapped["Post"] = relationship("Post", back_populates="reactions")
+    user: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="post_reactions")
     
     def __repr__(self) -> str:
         return f"<PostReaction(post_id={self.post_id}, user_id={self.user_id}, type='{self.reaction_type}')>"
@@ -206,6 +211,7 @@ class CommentReaction(Base):
     
     # Relationships
     comment: Mapped["Comment"] = relationship("Comment", back_populates="reactions")
+    user: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="comment_reactions")
     
     def __repr__(self) -> str:
         return f"<CommentReaction(comment_id={self.comment_id}, user_id={self.user_id}, type='{self.reaction_type}')>"
@@ -231,6 +237,9 @@ class UserFollow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
+
+    follower: Mapped["User"] = relationship("lyo_app.auth.models.User", foreign_keys=[follower_id], back_populates="following")
+    following: Mapped["User"] = relationship("lyo_app.auth.models.User", foreign_keys=[following_id], back_populates="followers")
     
     def __repr__(self) -> str:
         return f"<UserFollow(follower_id={self.follower_id}, following_id={self.following_id})>"

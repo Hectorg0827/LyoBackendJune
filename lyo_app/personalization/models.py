@@ -58,6 +58,10 @@ class LearnerState(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Context Awareness (New Fields)
+    current_active_context = Column(String, default="student")  # student, professional, hobbyist
+    detected_deadline = Column(DateTime, nullable=True)
+    
     # Relationships commented out due to missing FK between LearnerState and related tables
     # mastery_records = relationship("LearnerMastery", back_populates="learner", cascade="all, delete-orphan")
     # affect_samples = relationship("AffectSample", back_populates="learner", cascade="all, delete-orphan")
@@ -74,6 +78,10 @@ class LearnerMastery(Base):
     # Deep Knowledge Tracing parameters
     mastery_level = Column(Float, default=0.0)  # 0-1 probability of mastery
     uncertainty = Column(Float, default=0.5)  # Confidence in mastery estimate
+    
+    # Context & Source (New Fields)
+    context_tag = Column(String, default="academic")  # academic, professional, hobby
+    source_of_mastery = Column(String, default="course")  # course, chat, feed
     
     # Performance tracking
     attempts = Column(Integer, default=0)

@@ -154,6 +154,8 @@ async def init_db() -> None:
         from lyo_app.ai_study.models import StudySession, StudyMessage, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
         from lyo_app.tasks.models import Task, TaskState  # noqa: F401
         from lyo_app.notifications.models import PushDevice  # noqa: F401
+        # Chat module models (for session continuity + notes/courses)
+        from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
         # Import new mentor chat models
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
         from lyo_app.stack.models import StackItem  # noqa: F401

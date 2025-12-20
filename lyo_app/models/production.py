@@ -177,6 +177,7 @@ class Course(Base):
     user: Mapped["User"] = relationship("User", back_populates="courses")
     lessons: Mapped[List["Lesson"]] = relationship("Lesson", back_populates="course", cascade="all, delete-orphan", order_by="Lesson.order_index")
     items: Mapped[List["CourseItem"]] = relationship("CourseItem", back_populates="course", cascade="all, delete-orphan", order_by="CourseItem.order_index")
+    study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="course", lazy="select")
     
     # Indexes for performance
     __table_args__ = (

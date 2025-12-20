@@ -339,3 +339,9 @@ class ChatNoteUpdate(BaseModel):
     note_type: Optional[str] = None
     importance: Optional[int] = Field(None, ge=0, le=5)
     is_favorite: Optional[bool] = None
+
+
+class GreetingResponse(BaseModel):
+    """Response for proactive greeting"""
+    greeting: str = Field(..., description="The generated greeting message")
+    context_used: bool = Field(False, description="Whether personalized context was used")

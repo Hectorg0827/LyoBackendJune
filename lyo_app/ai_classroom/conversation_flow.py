@@ -217,7 +217,8 @@ class ConversationManager:
         self,
         session_id: str,
         user_message: str,
-        include_audio: bool = False
+        include_audio: bool = False,
+        user_context: str = "neutral"
     ) -> FlowResponse:
         """
         Process a user message and generate response
@@ -242,7 +243,7 @@ class ConversationManager:
         logger.info(f"Detected intent: {intent.intent_type.value} (confidence: {intent.confidence:.2f})")
         
         # Route based on intent
-        response = await self._route_intent(session, intent, user_message, include_audio)
+        response = await self._route_intent(session, intent, user_message, include_audio, user_context)
         
         # Add assistant response to history
         session.add_message(
@@ -258,7 +259,8 @@ class ConversationManager:
         session: ConversationSession,
         intent: ChatIntent,
         message: str,
-        include_audio: bool
+        include_audio: bool,
+        user_context: str = "neutral"
     ) -> FlowResponse:
         """Route intent to appropriate handler"""
         
@@ -283,14 +285,15 @@ class ConversationManager:
             return await self._handle_feedback(session, message)
             
         # Default: Standard chat response
-        return await self._handle_chat(session, intent, message, include_audio)
+        return await self._handle_chat(session, intent, message, include_audio, user_context)
         
     async def _handle_chat(
         self,
         session: ConversationSession,
         intent: ChatIntent,
         message: str,
-        include_audio: bool
+        include_audio: bool,
+        user_context: str = "neutral"
     ) -> FlowResponse:
         """Handle standard chat messages"""
         session.state = ConversationState.CHATTING
@@ -303,7 +306,8 @@ class ConversationManager:
         
         # Get AI response
         if self._chat_handler:
-            content = await self._chat_handler(message, context)
+            # Pass user_context to the handler
+            content = await self._chat_handler(message, context, user_context=user_context)
         else:
             content = self._get_fallback_response(intent)
             
@@ -692,20 +696,44 @@ What would you like to learn today?
 _conversation_manager: Optional[ConversationManager] = None
 
 
-async def _ai_chat_handler(message: str, context: List[Dict]) -> str:
+async def _ai_chat_handler(message: str, context: List[Dict], user_context: str = "neutral") -> str:
     """AI chat handler using the resilience manager"""
     try:
         from lyo_app.core.ai_resilience import ai_resilience_manager
         
+        # Dynamic System Prompt based on Context
+        base_prompt = "You are Lyo, an expert AI tutor. "
+        
+        if "student" in user_context:
+            system_content = (
+                base_prompt + 
+                "The user is a STUDENT. Focus on clear explanations, exam preparation, and academic concepts. "
+                "Break down complex topics into study-friendly chunks. Use analogies suitable for coursework."
+            )
+        elif "professional" in user_context:
+            system_content = (
+                base_prompt + 
+                "The user is a PROFESSIONAL. Focus on practical application, industry best practices, and efficiency. "
+                "Skip the basics unless asked. Relate concepts to real-world business scenarios."
+            )
+        elif "hobbyist" in user_context:
+            system_content = (
+                base_prompt + 
+                "The user is a HOBBYIST. Focus on fun, creativity, and exploration. "
+                "Encourage experimentation and 'learning by doing'. Keep the tone enthusiastic."
+            )
+        else:
+            system_content = (
+                base_prompt + 
+                "Be clear, encouraging, and helpful. Use markdown for formatting. "
+                "Include emojis sparingly for warmth. Explain concepts step-by-step when needed."
+            )
+
         # Build messages for AI
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are Lyo, an expert AI tutor. Be clear, encouraging, and helpful. "
-                    "Use markdown for formatting. Include emojis sparingly for warmth. "
-                    "Explain concepts step-by-step when needed."
-                )
+                "content": system_content
             }
         ]
         

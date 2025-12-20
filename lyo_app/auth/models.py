@@ -65,38 +65,38 @@ class User(Base):
     
     # Relationships - defined with string names to avoid circular imports
     # Community relationships
-    # created_study_groups = relationship("StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
-    # group_memberships = relationship("GroupMembership", foreign_keys="GroupMembership.user_id", back_populates="user", lazy="noload", viewonly=True)
-    # organized_events = relationship("CommunityEvent", back_populates="organizer", lazy="noload", viewonly=True)
-    # event_attendances = relationship("EventAttendance", back_populates="user", lazy="noload", viewonly=True)
+    created_study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
+    group_memberships = relationship("lyo_app.community.models.GroupMembership", foreign_keys="[lyo_app.community.models.GroupMembership.user_id]", back_populates="user", lazy="noload", viewonly=True)
+    organized_events = relationship("lyo_app.community.models.CommunityEvent", back_populates="organizer", lazy="noload", viewonly=True)
+    event_attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="user", lazy="noload", viewonly=True)
     
     # Learning relationships  
-    # course_enrollments = relationship("CourseEnrollment", back_populates="user", lazy="noload", viewonly=True)
-    # lesson_completions = relationship("LessonCompletion", back_populates="user", lazy="noload", viewonly=True)
+    course_enrollments = relationship("lyo_app.learning.models.CourseEnrollment", back_populates="user", lazy="noload", viewonly=True)
+    lesson_completions = relationship("lyo_app.learning.models.LessonCompletion", back_populates="user", lazy="noload", viewonly=True)
     
     # Feeds relationships
-    # posts = relationship("Post", back_populates="author", lazy="noload", viewonly=True)
-    # comments = relationship("Comment", back_populates="author", lazy="noload", viewonly=True)
-    # post_reactions = relationship("PostReaction", back_populates="user", lazy="noload", viewonly=True)
-    # comment_reactions = relationship("CommentReaction", back_populates="user", lazy="noload", viewonly=True)
-    # followers = relationship("UserFollow", foreign_keys="UserFollow.followed_id", back_populates="followed", lazy="noload", viewonly=True)
-    # following = relationship("UserFollow", foreign_keys="UserFollow.follower_id", back_populates="follower", lazy="noload", viewonly=True)
+    posts = relationship("lyo_app.feeds.models.Post", back_populates="author", lazy="noload", viewonly=True)
+    comments = relationship("lyo_app.feeds.models.Comment", back_populates="author", lazy="noload", viewonly=True)
+    post_reactions = relationship("lyo_app.feeds.models.PostReaction", back_populates="user", lazy="noload", viewonly=True)
+    comment_reactions = relationship("lyo_app.feeds.models.CommentReaction", back_populates="user", lazy="noload", viewonly=True)
+    followers = relationship("lyo_app.feeds.models.UserFollow", foreign_keys="[lyo_app.feeds.models.UserFollow.following_id]", back_populates="following", lazy="noload", viewonly=True)
+    following = relationship("lyo_app.feeds.models.UserFollow", foreign_keys="[lyo_app.feeds.models.UserFollow.follower_id]", back_populates="follower", lazy="noload", viewonly=True)
     
     # RBAC relationships
     #     roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="noload", viewonly=True)
     
     # AI Agents relationships
-    #     engagement_state = relationship("UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="noload", viewonly=True)
-    #     mentor_interactions = relationship("MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
+    engagement_state = relationship("lyo_app.ai_agents.models.UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="noload", viewonly=True)
+    mentor_interactions = relationship("lyo_app.ai_agents.models.MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
     
     # AI Study relationships
     # These relationships are commented out to avoid circular imports.
     # The relationship is defined on the other side (StudySession, GeneratedQuiz, etc.)
     # and can be accessed via backref if needed.
-    # study_sessions = relationship("StudySession", back_populates="user", lazy="noload", viewonly=True)
-    # generated_quizzes = relationship("GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
-    # quiz_attempts = relationship("QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
-    # study_analytics = relationship("StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
+    study_sessions = relationship("lyo_app.ai_study.models.StudySession", back_populates="user", lazy="noload", viewonly=True)
+    generated_quizzes = relationship("lyo_app.ai_study.models.GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
+    quiz_attempts = relationship("lyo_app.ai_study.models.QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
+    study_analytics = relationship("lyo_app.ai_study.models.StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
     
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"

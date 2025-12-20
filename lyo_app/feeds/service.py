@@ -161,11 +161,14 @@ class FeedsService:
         )
         posts = result.scalars().all()
         
-        # Apply AI ranking (stub)
-        # We need the user object for ranking, but we only have ID here.
-        # For the stub it's fine, but ideally we'd fetch the user.
-        # Let's skip fetching user for now as the stub doesn't use it yet.
-        posts = await rank_posts_for_user(list(posts), user=None, context={"course_id": course_id, "lesson_id": lesson_id})
+        # Apply AI ranking (Context-Aware)
+        # We pass the DB and user_id so the ranking service can look up the user's context
+        posts = await rank_posts_for_user(
+            list(posts), 
+            db=db, 
+            user_id=current_user_id, 
+            context={"course_id": course_id, "lesson_id": lesson_id}
+        )
         
         # Get total count
         count_query = select(func.count(Post.id)).where(Post.is_public == True)

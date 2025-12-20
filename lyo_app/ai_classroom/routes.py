@@ -17,7 +17,7 @@ import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query, Depends, Request
+from fastapi import APIRouter, HTTPException, Query, Depends, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -35,12 +35,40 @@ from lyo_app.streaming import get_sse_manager, stream_response, EventType, Strea
 
 from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
-from lyo_app.core.database import get_async_session
+from lyo_app.core.database import get_async_session, AsyncSessionLocal
 from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
+from lyo_app.core.context_engine import ContextEngine
+from lyo_app.personalization.soft_skills import SoftSkillsService, SoftSkillAnalyzer
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/classroom", tags=["AI Classroom"])
+
+# Initialize Context Engine
+context_engine = ContextEngine()
+
+async def analyze_soft_skills_task(user_id: int, message: str):
+    """Background task to analyze and record soft skills."""
+    try:
+        analyzer = SoftSkillAnalyzer()
+        service = SoftSkillsService()
+        
+        results = analyzer.analyze(message)
+        if not results:
+            return
+            
+        async with AsyncSessionLocal() as db:
+            for result in results:
+                await service.record_evidence(
+                    db, 
+                    user_id, 
+                    result["skill"], 
+                    result["delta"], 
+                    result["desc"]
+                )
+                logger.info(f"Recorded soft skill evidence: {result['skill']} for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error in soft skills analysis task: {e}")
 
 
 # Request/Response Models
@@ -366,6 +394,7 @@ async def end_session(session_id: str):
 @router.post("/chat", response_model=ChatResponse)
 async def classroom_chat(
     request: ChatRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -380,6 +409,9 @@ async def classroom_chat(
     
     Set stream=true for real-time streaming response.
     """
+    # Trigger Soft Skills Analysis in Background
+    background_tasks.add_task(analyze_soft_skills_task, current_user.id, request.message)
+
     manager = get_conversation_manager()
     
     # Get or create session
@@ -450,11 +482,19 @@ async def classroom_chat(
             ],
         )
     else:
+        # Get User Context
+        user_context = await context_engine.get_user_context(
+            db, 
+            current_user.id, 
+            current_input=request.message
+        )
+
         # Default AI classroom behavior
         response = await manager.process_message(
             session.session_id,
             request.message,
-            include_audio=request.include_audio
+            include_audio=request.include_audio,
+            user_context=user_context
         )
 
         # Best-effort compatibility: surface any course_id from response/session.
