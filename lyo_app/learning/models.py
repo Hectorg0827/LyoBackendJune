@@ -11,6 +11,7 @@ from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enu
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lyo_app.core.database import Base
+from lyo_app.tenants.mixins import TenantMixin
 
 
 class DifficultyLevel(str, Enum):
@@ -29,7 +30,7 @@ class ContentType(str, Enum):
     ASSIGNMENT = "assignment"
 
 
-class Course(Base):
+class Course(TenantMixin, Base):
     """Course model for educational content."""
     
     __tablename__ = "courses"
@@ -82,7 +83,7 @@ class Course(Base):
         return f"<Course(id={self.id}, title='{self.title}', instructor_id={self.instructor_id})>"
 
 
-class Lesson(Base):
+class Lesson(TenantMixin, Base):
     """Lesson model for individual learning units."""
     
     __tablename__ = "lessons"
@@ -131,7 +132,7 @@ class Lesson(Base):
         return f"<Lesson(id={self.id}, title='{self.title}', course_id={self.course_id})>"
 
 
-class CourseEnrollment(Base):
+class CourseEnrollment(TenantMixin, Base):
     """Model for tracking user course enrollments."""
     
     __tablename__ = "course_enrollments"
@@ -165,7 +166,7 @@ class CourseEnrollment(Base):
         return f"<CourseEnrollment(user_id={self.user_id}, course_id={self.course_id})>"
 
 
-class LessonCompletion(Base):
+class LessonCompletion(TenantMixin, Base):
     """Model for tracking individual lesson completions."""
     
     __tablename__ = "lesson_completions"

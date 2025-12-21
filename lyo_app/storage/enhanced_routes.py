@@ -76,6 +76,8 @@ class BatchUploadRequest(BaseModel):
 # UPLOAD ENDPOINTS
 # ============================================================================
 
+from lyo_app.storage.models import FileAsset
+
 @router.post("/upload", response_model=UploadResponse)
 @monitor_performance("file_upload")
 @handle_errors(ErrorCategory.STORAGE)
@@ -91,17 +93,15 @@ async def upload_file(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Upload file with intelligent processing and optimization
-    
-    Features:
-    - Automatic format detection and conversion
-    - Image optimization with multiple variants
-    - Video processing with thumbnail extraction
-    - CDN integration for global delivery
-    - Smart compression and quality optimization
+    Upload file with intelligent processing and optimization.
+    Enforces multi-tenant data isolation by prefixing paths with organization ID.
     """
     
     try:
+        # Validate tenant context (Critical for isolation)
+        if not current_user.organization_id:
+            raise HTTPException(status_code=400, detail="User must belong to an organization to upload files")
+
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
@@ -142,12 +142,17 @@ async def upload_file(
         except json.JSONDecodeError:
             logger.warning("Failed to parse tags or metadata JSON")
         
+        # Construct Tenant-Isolated Path
+        # Format: org_{org_id}/{folder}/{user_id}/...
+        # This ensures Organization A never overlaps with Organization B
+        tenant_folder = f"org_{current_user.organization_id}/{folder}/{current_user.id}"
+        
         # Upload and process file
         start_time = datetime.utcnow()
         
         upload_result = await enhanced_storage.upload_file(
             file=file,
-            folder=folder,
+            folder=tenant_folder,  # Use isolated folder
             user_id=current_user.id,
             optimize=optimize,
             generate_variants=generate_variants
@@ -162,6 +167,20 @@ async def upload_file(
         
         # Generate file ID
         file_id = f"{current_user.id}_{int(datetime.utcnow().timestamp())}_{file.filename.replace(' ', '_')}"
+        
+        # Save FileAsset to Database (Billing & tracking)
+        new_asset = FileAsset(
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            file_path=upload_result['storage_path'],
+            url=upload_result['urls'].get('original', ''),
+            filename=upload_result['original_filename'],
+            content_type=file.content_type,
+            size_bytes=upload_result['file_size'],
+            is_private=False # Default to public for now, can be parameterized later
+        )
+        db.add(new_asset)
+        await db.commit()
         
         # Background tasks
         background_tasks.add_task(
@@ -203,7 +222,9 @@ async def upload_file(
             f"File uploaded successfully",
             extra={
                 'user_id': current_user.id,
+                'org_id': current_user.organization_id,
                 'filename': file.filename,
+                'storage_path': upload_result['storage_path'],
                 'file_size': file_size,
                 'media_type': upload_result['media_type'],
                 'processing_time': processing_time
@@ -216,6 +237,7 @@ async def upload_file(
         raise
     except Exception as e:
         logger.error(f"File upload failed: {e}", exc_info=True)
+        await db.rollback() # Rollback DB on error
         raise HTTPException(
             status_code=500,
             detail="File upload failed. Please try again."
@@ -246,10 +268,14 @@ async def batch_upload_files(
     
     # Process files in parallel
     upload_tasks = []
+    
+    # Prefix folder with organization ID for isolation
+    tenant_folder = f"org_{current_user.organization_id}/{request.folder}/{current_user.id}"
+    
     for file in files:
         task = enhanced_storage.upload_file(
             file=file,
-            folder=request.folder,
+            folder=tenant_folder,
             user_id=current_user.id,
             optimize=request.optimize,
             generate_variants=request.generate_variants
@@ -278,6 +304,26 @@ async def batch_upload_files(
                 'storage_path': result['storage_path'],
                 'urls': result['urls']
             })
+            
+            # Save FileAsset for billing
+            # Note: In a real batch scenario, we might want to bulk insert
+            try:
+                new_asset = FileAsset(
+                    organization_id=current_user.organization_id,
+                    user_id=current_user.id,
+                    file_path=result['storage_path'],
+                    url=result['urls'].get('original', ''),
+                    filename=result['original_filename'],
+                    # content_type unavailable in batch result easily without refactoring upload_file return
+                    size_bytes=result['file_size'],
+                    is_private=False 
+                )
+                db.add(new_asset)
+            except Exception as e:
+                logger.error(f"Failed to log batch upload asset: {e}")
+                
+    # Commit all new assets
+    await db.commit()
     
     return {
         'success': len(failed_uploads) == 0,
@@ -311,9 +357,12 @@ async def get_file_url(
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Check if user has access (implement your access control logic)
-        # if metadata.get('user_id') != current_user.id:
-        #     raise HTTPException(status_code=403, detail="Access denied")
+        # Access Control: Ensure user belongs to the organization owning the file
+        expected_prefix = f"org_{current_user.organization_id}/"
+        if not storage_path.startswith(expected_prefix):
+             # Log potential security violation
+             logger.warning(f"Unauthorized access attempt: User {current_user.id} (org {current_user.organization_id}) tried to access {storage_path}")
+             raise HTTPException(status_code=403, detail="Access denied: File does not belong to your organization")
         
         # Get appropriate URL
         if variant and variant in metadata.get('urls', {}):
@@ -358,6 +407,11 @@ async def get_file_metadata(
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
         
+        # Access Control
+        expected_prefix = f"org_{current_user.organization_id}/"
+        if not storage_path.startswith(expected_prefix):
+             raise HTTPException(status_code=403, detail="Access denied")
+        
         return FileMetadataResponse(
             file_id=storage_path,
             filename=metadata['original_filename'],
@@ -394,9 +448,10 @@ async def delete_file(
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Check ownership (implement your access control)
-        # if metadata.get('user_id') != current_user.id:
-        #     raise HTTPException(status_code=403, detail="Access denied")
+        # Access Control
+        expected_prefix = f"org_{current_user.organization_id}/"
+        if not storage_path.startswith(expected_prefix):
+             raise HTTPException(status_code=403, detail="Access denied: Cannot delete file from another organization")
         
         # Delete file
         success = await enhanced_storage.delete_file(storage_path)

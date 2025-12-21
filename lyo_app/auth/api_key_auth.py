@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 from datetime import datetime
 
-from fastapi import Security, HTTPException, Depends, status
+from fastapi import Security, HTTPException, Depends, status, Request
 from fastapi.security import APIKeyHeader
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,6 +96,7 @@ async def validate_api_key(
 
 
 async def get_api_key_org(
+    request: Request,
     api_key: str = Security(API_KEY_HEADER),
     db: AsyncSession = Depends(get_db)
 ) -> Optional[Organization]:
@@ -130,6 +131,27 @@ async def get_api_key_org(
             detail="Invalid or expired API key"
         )
     
+    # Check rate limit
+    from lyo_app.core.rate_limiter import rate_limiter
+    
+    # Use Organization ID as client_id to enforce organization-wide limits
+    client_id = f"org:{api_key_obj.organization_id}"
+    limit = api_key_obj.organization.rate_limit_per_minute
+    
+    is_allowed, rate_info = rate_limiter.is_allowed(
+        client_id=client_id,
+        endpoint="api",  # Generic endpoint for API key usage
+        limit_override=limit
+    )
+    
+    if not is_allowed:
+        retry_after = int(rate_info.get("reset_time", 0) - datetime.utcnow().timestamp())
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Organization rate limit exceeded",
+            headers={"Retry-After": str(max(1, retry_after))}
+        )
+    
     # Update last_used timestamp (fire-and-forget)
     try:
         await db.execute(
@@ -144,6 +166,9 @@ async def get_api_key_org(
     except Exception as e:
         logger.warning(f"Failed to update API key last_used: {e}")
         await db.rollback()
+    
+    # Inject organization_id into request state for middleware
+    request.state.organization_id = api_key_obj.organization.id
     
     logger.info(f"API key authenticated for org: {api_key_obj.organization.name}")
     return api_key_obj.organization
