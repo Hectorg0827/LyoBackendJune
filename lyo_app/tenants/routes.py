@@ -18,6 +18,12 @@ from lyo_app.auth.jwt_auth import get_current_user, get_optional_current_user
 from lyo_app.auth.models import User
 from lyo_app.tenants.migrations import run_tenant_migrations
 from lyo_app.auth.api_key_auth import create_api_key, get_api_key_org, generate_api_key, hash_api_key
+from lyo_app.tenants.models import Organization, APIKey, PlanTier
+from lyo_app.tenants.usage import UsageLog
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/tenants", tags=["Tenants"])
 
 
 class BootstrapResponse(BaseModel):
@@ -121,12 +127,6 @@ async def bootstrap_lyo_inc(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Bootstrap failed: {str(e)}"
         )
-from lyo_app.tenants.models import Organization, APIKey, PlanTier
-from lyo_app.tenants.usage import UsageLog
-
-logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/tenants", tags=["Tenants"])
 
 
 # =============================================================================
