@@ -205,6 +205,7 @@ def create_app() -> FastAPI:
     )
     # Middleware - Security First
     from lyo_app.middleware.security_middleware import SecurityMiddleware
+    from lyo_app.middleware.usage_middleware import UsageMiddleware
     from lyo_app.core.structured_logging import setup_logging as setup_structured_logging
     
     # Setup structured logging
@@ -214,6 +215,9 @@ def create_app() -> FastAPI:
         log_level=log_level,
         json_logs=(settings.ENVIRONMENT in ("production", "staging"))
     )
+    
+    # Add usage middleware (inner layer, runs after security)
+    app.add_middleware(UsageMiddleware)
     
     # Add security middleware (rate limiting, audit logging, security headers)
     app.add_middleware(

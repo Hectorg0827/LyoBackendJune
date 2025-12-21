@@ -19,6 +19,7 @@ from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from lyo_app.core.database import Base
+from lyo_app.tenants.mixins import TenantMixin
 
 
 # =============================================================================
@@ -58,7 +59,7 @@ class CTAType(str, Enum):
 # COURSE STORE MODEL
 # =============================================================================
 
-class ChatCourse(Base):
+class ChatCourse(TenantMixin, Base):
     """Stores generated/referenced courses from chat interactions"""
     
     __tablename__ = "chat_courses"
@@ -107,7 +108,7 @@ class ChatCourse(Base):
 # NOTES STORE MODEL
 # =============================================================================
 
-class ChatNote(Base):
+class ChatNote(TenantMixin, Base):
     """Stores notes created during chat interactions"""
     
     __tablename__ = "chat_notes"
@@ -160,7 +161,7 @@ class ChatNote(Base):
 # CHAT CONVERSATION MODEL
 # =============================================================================
 
-class ChatConversation(Base):
+class ChatConversation(TenantMixin, Base):
     """Tracks chat conversations for context and analytics"""
     
     __tablename__ = "chat_conversations"
@@ -204,7 +205,7 @@ class ChatConversation(Base):
 # CHAT MESSAGE MODEL
 # =============================================================================
 
-class ChatMessage(Base):
+class ChatMessage(TenantMixin, Base):
     """Individual chat messages within a conversation"""
     
     __tablename__ = "chat_messages"
@@ -255,7 +256,7 @@ class ChatMessage(Base):
 # TELEMETRY MODEL
 # =============================================================================
 
-class ChatTelemetry(Base):
+class ChatTelemetry(TenantMixin, Base):
     """Telemetry events for chat interactions"""
     
     __tablename__ = "chat_telemetry"

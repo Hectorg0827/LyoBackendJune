@@ -93,21 +93,24 @@ class RedisRateLimiter:
         # Hash for privacy and consistency
         return hashlib.sha256(composite.encode()).hexdigest()[:16]
     
-    def is_allowed(self, client_id: str, endpoint: str = "global") -> tuple[bool, dict]:
+    def is_allowed(self, client_id: str, endpoint: str = "global", limit_override: Optional[int] = None) -> tuple[bool, dict]:
         """
         Check if request is allowed for client.
         
         Args:
             client_id: Client identifier
             endpoint: Specific endpoint (for per-endpoint limits)
+            limit_override: Optional custom limit for this check (for tenant plans)
             
         Returns:
             Tuple of (is_allowed, rate_limit_info)
         """
+        effective_max = limit_override if limit_override is not None else self.max_requests
+        
         if not self.redis_client:
             # Fail open if Redis is unavailable
             logger.warning("Redis unavailable, allowing request")
-            return True, {"remaining": self.max_requests, "reset_time": time.time() + self.window_seconds}
+            return True, {"remaining": effective_max, "reset_time": time.time() + self.window_seconds}
         
         try:
             current_time = int(time.time())
@@ -142,7 +145,7 @@ class RedisRateLimiter:
             results = pipe.execute()
             request_count = results[1]  # Count before adding current request
             
-            if request_count >= self.max_requests:
+            if request_count >= effective_max:
                 # Block the client for block_duration
                 self.redis_client.setex(block_key, self.block_duration, "blocked")
                 
@@ -152,7 +155,7 @@ class RedisRateLimiter:
                     "blocked_until": current_time + self.block_duration
                 }
             
-            remaining = max(0, self.max_requests - request_count - 1)
+            remaining = max(0, effective_max - request_count - 1)
             reset_time = current_time + self.window_seconds
             
             return True, {
@@ -163,7 +166,7 @@ class RedisRateLimiter:
         except Exception as e:
             logger.error(f"Rate limiter error: {e}")
             # Fail open - allow request if Redis operation fails
-            return True, {"remaining": self.max_requests, "reset_time": time.time() + self.window_seconds}
+            return True, {"remaining": effective_max, "reset_time": time.time() + self.window_seconds}
     
     def get_rate_limit_status(self, client_id: str, endpoint: str = "global") -> dict:
         """

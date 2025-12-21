@@ -12,6 +12,7 @@ from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enu
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lyo_app.core.database import Base
+from lyo_app.tenants.mixins import TenantMixin
 
 
 class PostType(str, Enum):
@@ -50,7 +51,7 @@ class InteractionType(str, Enum):
     CAPTURE = "capture"
 
 
-class Post(Base):
+class Post(TenantMixin, Base):
     """Post model for social feed content."""
     
     __tablename__ = "posts"
@@ -105,7 +106,7 @@ class Post(Base):
         return f"<Post(id={self.id}, author_id={self.author_id}, type='{self.post_type}')>"
 
 
-class Comment(Base):
+class Comment(TenantMixin, Base):
     """Comment model for post discussions."""
     
     __tablename__ = "comments"
@@ -217,7 +218,7 @@ class CommentReaction(Base):
         return f"<CommentReaction(comment_id={self.comment_id}, user_id={self.user_id}, type='{self.reaction_type}')>"
 
 
-class UserFollow(Base):
+class UserFollow(TenantMixin, Base):
     """Model for user following relationships."""
     
     __tablename__ = "user_follows"
