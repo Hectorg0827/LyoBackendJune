@@ -160,6 +160,7 @@ async def init_db() -> None:
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
         from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+        from lyo_app.storage.models import FileAsset  # noqa: F401
         
         await conn.run_sync(Base.metadata.create_all)
 

@@ -9,6 +9,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import tempfile
 from typing import Dict, List, Optional, Tuple, Union, Any
 from datetime import datetime, timedelta
@@ -42,6 +43,9 @@ except ImportError:
 import aiofiles
 import aiohttp
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from lyo_app.storage.models import FileAsset
 
 try:
     import redis.asyncio as redis
@@ -353,13 +357,42 @@ class EnhancedStorageSystem:
             await self._initialize_clients()
             self._initialized = True
     
+    def _sanitize_folder(self, folder: str) -> str:
+        """Normalize folder names to prevent traversal and enforce clean paths."""
+        parts = []
+        for part in folder.split('/'):
+            part = part.strip()
+            if not part or part in {'.', '..'}:
+                continue
+            safe = re.sub(r'[^a-zA-Z0-9._-]', '_', part)
+            if safe:
+                parts.append(safe)
+        return "/".join(parts) if parts else "uploads"
+    
+    def _build_storage_path(self, organization_id: int, folder: str, user_id: Optional[int], base_filename: str) -> str:
+        """Construct an org-scoped storage path for multi-tenant isolation."""
+        user_segment = f"user_{user_id}" if user_id is not None else "user_unknown"
+        return f"org_{organization_id}/{folder}/{user_segment}/{base_filename}"
+    
+    def _get_org_id_from_path(self, storage_path: str) -> Optional[int]:
+        """Extract organization id from a storage path if present."""
+        match = re.match(r"org_(\d+)/", storage_path)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
+    
     async def upload_file(
         self,
         file: UploadFile,
         folder: str = "uploads",
         user_id: Optional[int] = None,
+        organization_id: Optional[int] = None,
         optimize: bool = True,
-        generate_variants: bool = True
+        generate_variants: bool = True,
+        is_private: bool = False
     ) -> Dict[str, Any]:
         """
         Upload file with intelligent processing and optimization
@@ -371,6 +404,9 @@ class EnhancedStorageSystem:
         try:
             await self.ensure_initialized()
             
+            if organization_id is None:
+                raise HTTPException(status_code=400, detail="Organization is required for uploads")
+            
             # Read file data
             file_data = await file.read()
             file_size = len(file_data)
@@ -381,7 +417,13 @@ class EnhancedStorageSystem:
             file_ext = Path(file.filename).suffix.lower()
             
             base_filename = f"{timestamp}_{file_hash}{file_ext}"
-            storage_path = f"{folder}/{base_filename}"
+            sanitized_folder = self._sanitize_folder(folder)
+            storage_path = self._build_storage_path(
+                organization_id=organization_id,
+                folder=sanitized_folder,
+                user_id=user_id,
+                base_filename=base_filename
+            )
             
             # Detect media type
             media_type = MediaType.get_media_type(file.filename)
@@ -394,15 +436,17 @@ class EnhancedStorageSystem:
                 'file_size': file_size,
                 'upload_timestamp': datetime.utcnow().isoformat(),
                 'user_id': user_id,
+                'organization_id': organization_id,
                 'urls': {},
                 'variants': {},
-                'metadata': {}
+                'metadata': {},
+                'is_private': is_private
             }
             
             # Process based on media type
             if media_type == 'image' and optimize:
                 processed_files = await self._process_image_variants(
-                    file_data, storage_path, generate_variants
+                    file_data, storage_path, generate_variants, is_private
                 )
                 result.update(processed_files)
             
@@ -422,19 +466,28 @@ class EnhancedStorageSystem:
                         await self._upload_to_storage(
                             video_metadata['thumbnail_data'], thumbnail_path
                         )
-                        result['urls']['thumbnail'] = self.cdn_manager.get_cdn_url(thumbnail_path)
+                        if is_private:
+                            result['urls']['thumbnail'] = await self.generate_presigned_url(thumbnail_path)
+                        else:
+                            result['urls']['thumbnail'] = self.cdn_manager.get_cdn_url(thumbnail_path)
                 
                 finally:
                     os.unlink(temp_path)
                 
                 # Upload original video
                 await self._upload_to_storage(file_data, storage_path)
-                result['urls']['original'] = self.cdn_manager.get_cdn_url(storage_path)
+                if is_private:
+                    result['urls']['original'] = await self.generate_presigned_url(storage_path)
+                else:
+                    result['urls']['original'] = self.cdn_manager.get_cdn_url(storage_path)
             
             else:
                 # Upload without processing
                 await self._upload_to_storage(file_data, storage_path)
-                result['urls']['original'] = self.cdn_manager.get_cdn_url(storage_path)
+                if is_private:
+                    result['urls']['original'] = await self.generate_presigned_url(storage_path)
+                else:
+                    result['urls']['original'] = self.cdn_manager.get_cdn_url(storage_path)
             
             # Cache metadata
             await self._cache_file_metadata(storage_path, result)
@@ -450,7 +503,8 @@ class EnhancedStorageSystem:
         self, 
         image_data: bytes, 
         base_path: str, 
-        generate_variants: bool
+        generate_variants: bool,
+        is_private: bool
     ) -> Dict[str, Any]:
         """Process image variants for different use cases"""
         
@@ -467,7 +521,10 @@ class EnhancedStorageSystem:
         
         # Upload original
         await self._upload_to_storage(original_processed, base_path)
-        result['urls']['original'] = self.cdn_manager.get_cdn_url(base_path)
+        if is_private:
+            result['urls']['original'] = await self.generate_presigned_url(base_path)
+        else:
+            result['urls']['original'] = self.cdn_manager.get_cdn_url(base_path)
         result['metadata']['original'] = original_metadata
         
         if generate_variants:
@@ -489,7 +546,10 @@ class EnhancedStorageSystem:
                     await self._upload_to_storage(processed_data, variant_path)
                     
                     # Store URLs and metadata
-                    result['urls'][variant] = self.cdn_manager.get_cdn_url(variant_path)
+                    if is_private:
+                        result['urls'][variant] = await self.generate_presigned_url(variant_path)
+                    else:
+                        result['urls'][variant] = self.cdn_manager.get_cdn_url(variant_path)
                     result['variants'][variant] = {
                         'path': variant_path,
                         'size': len(processed_data),
@@ -500,6 +560,33 @@ class EnhancedStorageSystem:
                     logger.warning(f"Failed to generate {variant} variant: {e}")
         
         return result
+    
+    async def generate_presigned_url(self, storage_path: str, expires_in: int = 900) -> Optional[str]:
+        """Generate a temporary signed URL for private assets."""
+        await self.ensure_initialized()
+        
+        client = None
+        bucket = None
+        
+        if self.r2_client and settings.R2_BUCKET:
+            client = self.r2_client
+            bucket = settings.R2_BUCKET
+        elif self.s3_client and settings.AWS_S3_BUCKET:
+            client = self.s3_client
+            bucket = settings.AWS_S3_BUCKET
+        
+        if client and bucket:
+            try:
+                return client.generate_presigned_url(
+                    'get_object',
+                    Params={'Bucket': bucket, 'Key': storage_path},
+                    ExpiresIn=expires_in
+                )
+            except Exception as e:
+                logger.warning(f"Failed to generate presigned URL: {e}")
+        
+        # Fallback to CDN URL if signing is unavailable
+        return self.cdn_manager.get_cdn_url(storage_path)
     
     async def _upload_to_storage(
         self, 
@@ -589,8 +676,8 @@ class EnhancedStorageSystem:
             except Exception as e:
                 logger.warning(f"Failed to cache metadata: {e}")
     
-    async def get_file_metadata(self, storage_path: str) -> Optional[Dict[str, Any]]:
-        """Get file metadata from cache or storage"""
+    async def get_file_metadata(self, storage_path: str, db: Optional[AsyncSession] = None) -> Optional[Dict[str, Any]]:
+        """Get file metadata from cache or database."""
         
         # Try cache first
         if self.redis_client:
@@ -598,11 +685,37 @@ class EnhancedStorageSystem:
                 cache_key = f"file_metadata:{storage_path}"
                 cached_data = await self.redis_client.get(cache_key)
                 if cached_data:
-                    return json.loads(cached_data)
+                    metadata = json.loads(cached_data)
+                    if 'organization_id' not in metadata:
+                        org_id = self._get_org_id_from_path(storage_path)
+                        if org_id:
+                            metadata['organization_id'] = org_id
+                    return metadata
             except Exception as e:
                 logger.warning(f"Failed to get cached metadata: {e}")
         
-        # TODO: Fallback to storage metadata
+        # Fallback to DB-backed metadata
+        if db:
+            try:
+                result = await db.execute(select(FileAsset).where(FileAsset.file_path == storage_path))
+                asset = result.scalar_one_or_none()
+                if asset:
+                    return {
+                        'original_filename': asset.original_filename,
+                        'storage_path': asset.file_path,
+                        'media_type': asset.media_type,
+                        'file_size': asset.size_bytes,
+                        'upload_timestamp': asset.created_at.isoformat(),
+                        'user_id': asset.user_id,
+                        'organization_id': asset.organization_id,
+                        'urls': {'original': asset.url},
+                        'variants': {},
+                        'metadata': {},
+                        'is_private': asset.is_private
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to fetch metadata from database: {e}")
+        
         return None
     
     async def delete_file(self, storage_path: str) -> bool:

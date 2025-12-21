@@ -10,12 +10,14 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Query
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.dependencies import get_current_user
 from lyo_app.auth.models import User
+from lyo_app.storage.models import FileAsset
 from lyo_app.storage.enhanced_storage import enhanced_storage, MediaType
 from lyo_app.core.enhanced_monitoring import monitor_performance, handle_errors, ErrorCategory
 from lyo_app.core.logging import logger
@@ -32,6 +34,7 @@ class UploadResponse(BaseModel):
     file_id: str
     original_filename: str
     storage_path: str
+    organization_id: int
     media_type: str
     file_size: int
     urls: Dict[str, str]
@@ -39,6 +42,7 @@ class UploadResponse(BaseModel):
     metadata: Dict[str, Any]
     upload_timestamp: datetime
     processing_info: Dict[str, Any]
+    is_private: bool
 
 class FileMetadataResponse(BaseModel):
     """Response model for file metadata"""
@@ -46,6 +50,8 @@ class FileMetadataResponse(BaseModel):
     filename: str
     media_type: str
     file_size: int
+    organization_id: int
+    is_private: bool
     urls: Dict[str, str]
     variants: Dict[str, Any]
     metadata: Dict[str, Any]
@@ -69,6 +75,7 @@ class BatchUploadRequest(BaseModel):
     folder: str = Field("uploads", description="Upload folder")
     optimize: bool = Field(True, description="Enable optimization")
     generate_variants: bool = Field(True, description="Generate variants")
+    is_private: bool = Field(False, description="Store file as private (presigned access only)")
     tags: Optional[List[str]] = Field(None, description="File tags")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
 
@@ -86,6 +93,7 @@ async def upload_file(
     generate_variants: bool = Form(True),
     tags: Optional[str] = Form(None),  # JSON string of tags
     metadata: Optional[str] = Form(None),  # JSON string of metadata
+    is_private: bool = Form(False),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -105,6 +113,9 @@ async def upload_file(
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
+        
+        if not current_user.organization_id:
+            raise HTTPException(status_code=400, detail="User is not assigned to an organization")
         
         # Check file size
         file_size = 0
@@ -149,19 +160,41 @@ async def upload_file(
             file=file,
             folder=folder,
             user_id=current_user.id,
+            organization_id=current_user.organization_id,
             optimize=optimize,
-            generate_variants=generate_variants
+            generate_variants=generate_variants,
+            is_private=is_private
         )
         
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
         # Add user metadata
         upload_result['user_id'] = current_user.id
+        upload_result['organization_id'] = current_user.organization_id
         upload_result['tags'] = tags_list
         upload_result['custom_metadata'] = metadata_dict
         
         # Generate file ID
         file_id = f"{current_user.id}_{int(datetime.utcnow().timestamp())}_{file.filename.replace(' ', '_')}"
+        
+        # Persist file asset for auditing and quota tracking
+        try:
+            asset = FileAsset(
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                file_path=upload_result['storage_path'],
+                url=upload_result['urls'].get('original') or "",
+                original_filename=upload_result['original_filename'],
+                media_type=upload_result['media_type'],
+                size_bytes=upload_result['file_size'],
+                is_private=is_private,
+            )
+            db.add(asset)
+            await db.commit()
+        except Exception as db_error:
+            await db.rollback()
+            logger.error(f"Failed to record file asset: {db_error}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Upload record failed, please retry.")
         
         # Background tasks
         background_tasks.add_task(
@@ -185,6 +218,7 @@ async def upload_file(
             file_id=file_id,
             original_filename=upload_result['original_filename'],
             storage_path=upload_result['storage_path'],
+            organization_id=current_user.organization_id,
             media_type=upload_result['media_type'],
             file_size=upload_result['file_size'],
             urls=upload_result['urls'],
@@ -196,7 +230,8 @@ async def upload_file(
                 'optimization_enabled': optimize,
                 'variants_generated': generate_variants,
                 'cdn_enabled': bool(enhanced_storage.cdn_manager.cdn_base_url)
-            }
+            },
+            is_private=is_private
         )
         
         logger.info(
@@ -241,6 +276,9 @@ async def batch_upload_files(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid request data")
     
+    if not current_user.organization_id:
+        raise HTTPException(status_code=400, detail="User is not assigned to an organization")
+    
     if len(files) > 10:  # Limit batch size
         raise HTTPException(status_code=400, detail="Maximum 10 files per batch")
     
@@ -251,8 +289,10 @@ async def batch_upload_files(
             file=file,
             folder=request.folder,
             user_id=current_user.id,
+            organization_id=current_user.organization_id,
             optimize=request.optimize,
-            generate_variants=request.generate_variants
+            generate_variants=request.generate_variants,
+            is_private=request.is_private
         )
         upload_tasks.append(task)
     
@@ -278,6 +318,29 @@ async def batch_upload_files(
                 'storage_path': result['storage_path'],
                 'urls': result['urls']
             })
+
+            # Persist each successful asset
+            try:
+                asset = FileAsset(
+                    organization_id=current_user.organization_id,
+                    user_id=current_user.id,
+                    file_path=result['storage_path'],
+                    url=result['urls'].get('original') or "",
+                    original_filename=result['original_filename'],
+                    media_type=result['media_type'],
+                    size_bytes=result['file_size'],
+                    is_private=request.is_private,
+                )
+                db.add(asset)
+            except Exception as db_error:
+                logger.error(f"Failed to stage file asset record: {db_error}", exc_info=True)
+    
+    if successful_uploads:
+        try:
+            await db.commit()
+        except Exception as db_error:
+            await db.rollback()
+            logger.error(f"Failed to persist batch asset records: {db_error}", exc_info=True)
     
     return {
         'success': len(failed_uploads) == 0,
@@ -298,6 +361,7 @@ async def get_file_url(
     storage_path: str,
     variant: Optional[str] = Query(None, description="File variant (thumbnail, small, medium, large)"),
     download: bool = Query(False, description="Force download"),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -305,27 +369,40 @@ async def get_file_url(
     """
     
     try:
+        if not current_user.organization_id:
+            raise HTTPException(status_code=400, detail="User is not assigned to an organization")
+        
         # Get file metadata
-        metadata = await enhanced_storage.get_file_metadata(storage_path)
+        metadata = await enhanced_storage.get_file_metadata(storage_path, db=db)
         
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Check if user has access (implement your access control logic)
-        # if metadata.get('user_id') != current_user.id:
-        #     raise HTTPException(status_code=403, detail="Access denied")
+        if metadata.get("organization_id") != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied for this tenant")
+        
+        target_path = storage_path
+        if variant and variant in metadata.get('variants', {}):
+            target_path = metadata['variants'][variant]['path']
         
         # Get appropriate URL
-        if variant and variant in metadata.get('urls', {}):
-            file_url = metadata['urls'][variant]
+        if metadata.get("is_private"):
+            file_url = await enhanced_storage.generate_presigned_url(target_path)
+            cdn_url = None
         else:
-            file_url = metadata['urls'].get('original')
+            if variant and variant in metadata.get('urls', {}):
+                file_url = metadata['urls'][variant]
+            else:
+                file_url = metadata['urls'].get('original')
+        
+            if not file_url:
+                raise HTTPException(status_code=404, detail="File variant not found")
+            
+            # Add CDN URL if available
+            cdn_url = enhanced_storage.cdn_manager.get_cdn_url(target_path)
         
         if not file_url:
-            raise HTTPException(status_code=404, detail="File variant not found")
-        
-        # Add CDN URL if available
-        cdn_url = enhanced_storage.cdn_manager.get_cdn_url(storage_path)
+            raise HTTPException(status_code=404, detail="File not available")
         
         if download:
             # Return redirect to download URL
@@ -334,6 +411,8 @@ async def get_file_url(
             return {
                 'url': file_url,
                 'cdn_url': cdn_url,
+                'is_private': metadata.get("is_private", False),
+                'organization_id': metadata.get("organization_id"),
                 'variant': variant,
                 'metadata': metadata
             }
@@ -348,21 +427,30 @@ async def get_file_url(
 @monitor_performance("get_file_metadata")
 async def get_file_metadata(
     storage_path: str,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get detailed file metadata"""
     
     try:
-        metadata = await enhanced_storage.get_file_metadata(storage_path)
+        if not current_user.organization_id:
+            raise HTTPException(status_code=400, detail="User is not assigned to an organization")
+        
+        metadata = await enhanced_storage.get_file_metadata(storage_path, db=db)
         
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
+        
+        if metadata.get("organization_id") != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied for this tenant")
         
         return FileMetadataResponse(
             file_id=storage_path,
             filename=metadata['original_filename'],
             media_type=metadata['media_type'],
             file_size=metadata['file_size'],
+            organization_id=metadata.get("organization_id"),
+            is_private=metadata.get("is_private", False),
             urls=metadata['urls'],
             variants=metadata.get('variants', {}),
             metadata=metadata['metadata'],
@@ -383,26 +471,40 @@ async def get_file_metadata(
 async def delete_file(
     storage_path: str,
     permanent: bool = Query(False, description="Permanently delete (cannot be undone)"),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Delete file from storage"""
     
     try:
+        if not current_user.organization_id:
+            raise HTTPException(status_code=400, detail="User is not assigned to an organization")
+        
         # Get file metadata first
-        metadata = await enhanced_storage.get_file_metadata(storage_path)
+        metadata = await enhanced_storage.get_file_metadata(storage_path, db=db)
         
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Check ownership (implement your access control)
-        # if metadata.get('user_id') != current_user.id:
-        #     raise HTTPException(status_code=403, detail="Access denied")
+        if metadata.get("organization_id") != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied for this tenant")
         
         # Delete file
         success = await enhanced_storage.delete_file(storage_path)
         
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete file")
+        
+        # Remove DB record
+        asset_result = await db.execute(select(FileAsset).where(FileAsset.file_path == storage_path))
+        asset = asset_result.scalar_one_or_none()
+        if asset:
+            try:
+                await db.delete(asset)
+                await db.commit()
+            except Exception as db_error:
+                await db.rollback()
+                logger.warning(f"Failed to remove file asset record: {db_error}", exc_info=True)
         
         logger.info(
             f"File deleted",
@@ -437,6 +539,7 @@ async def optimize_existing_file(
     quality_preset: str = Query("medium", description="Quality preset (thumbnail, small, medium, large)"),
     generate_variants: bool = Query(True, description="Generate additional variants"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -444,11 +547,17 @@ async def optimize_existing_file(
     """
     
     try:
+        if not current_user.organization_id:
+            raise HTTPException(status_code=400, detail="User is not assigned to an organization")
+        
         # Get file metadata
-        metadata = await enhanced_storage.get_file_metadata(storage_path)
+        metadata = await enhanced_storage.get_file_metadata(storage_path, db=db)
         
         if not metadata:
             raise HTTPException(status_code=404, detail="File not found")
+        
+        if metadata.get("organization_id") != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied for this tenant")
         
         # Check if it's an image (optimization currently only supports images)
         if metadata['media_type'] != 'image':
