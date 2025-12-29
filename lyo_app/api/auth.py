@@ -72,6 +72,7 @@ async def login(
         access_token=access_token,
         refresh_token=refresh_token,
         expires_in=1800,  # 30 minutes
+        tenant_id=str(user.id),  # User's tenant for SaaS isolation
         user=UserProfile.from_orm(user)
     )
 
@@ -179,6 +180,7 @@ async def register(
             access_token=access_token,
             refresh_token=refresh_token,
             expires_in=1800,
+            tenant_id=str(user.id),  # User's tenant for SaaS isolation
             user=UserProfile.from_orm(user)
         )
         

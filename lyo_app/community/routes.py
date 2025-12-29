@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.routes import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.community.service import CommunityService
 from lyo_app.community.schemas import (
     StudyGroupCreate, StudyGroupUpdate, StudyGroupRead,
@@ -625,3 +625,15 @@ async def get_community_stats(
         return stats
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch community stats")
+
+
+@router.get("/marketplace", response_model=List[dict])
+async def get_marketplace_items(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get marketplace items (Placeholder)."""
+    # TODO: Implement full marketplace logic
+    return []

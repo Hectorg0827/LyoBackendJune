@@ -254,16 +254,22 @@ class FirebaseAuthService:
             await db.refresh(user)
             logger.info(f"Created new user from Firebase: {email}")
         
-        # Create access token
-        from lyo_app.core.config import settings
-        access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email}
-        )
+        # Create access and refresh tokens using jwt_auth module for consistency
+        # with the token verification used by chat endpoints (get_optional_current_user)
+        from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
+        
+        access_token = create_access_token(user_id=str(user.id))
+        refresh_token = create_refresh_token(user_id=str(user.id))
+        
+        # Get expiration time from settings
+        from lyo_app.core.settings import settings as jwt_settings
+        expires_in = jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
         
         token = Token(
             access_token=access_token,
+            refresh_token=refresh_token,
             token_type="bearer",
-            expires_in=settings.access_token_expire_minutes * 60
+            expires_in=expires_in
         )
         
         return user, token

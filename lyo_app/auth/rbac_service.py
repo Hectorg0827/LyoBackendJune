@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.rbac import (
     Role, Permission, RoleType, PermissionType, 
     DEFAULT_ROLE_PERMISSIONS, user_roles, role_permissions

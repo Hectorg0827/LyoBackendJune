@@ -28,7 +28,7 @@ except ImportError:
 from lyo_app.core.database import AsyncSession
 from lyo_app.feeds.models import FeedItem, UserInteraction
 from lyo_app.learning.models import ContentType
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 class EngagementType(str, Enum):
     VIEW = "view"

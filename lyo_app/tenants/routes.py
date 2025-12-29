@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.jwt_auth import get_current_user, get_optional_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.tenants.migrations import run_tenant_migrations
 from lyo_app.auth.api_key_auth import create_api_key, get_api_key_org, generate_api_key, hash_api_key
 from lyo_app.tenants.models import Organization, APIKey, PlanTier

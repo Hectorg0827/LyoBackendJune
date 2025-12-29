@@ -9,7 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 
 class TestStudyGroupRoutes:

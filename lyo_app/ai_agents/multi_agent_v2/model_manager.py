@@ -26,6 +26,14 @@ class ModelTier(str, Enum):
     ECONOMY = "economy"      # Gemini 1.5 Flash (lower temp) - simple tasks
 
 
+class QualityTier(str, Enum):
+    """User-selectable quality tiers for course generation"""
+    ULTRA = "ultra"       # All Gemini 2.5 Pro - Maximum quality, highest cost
+    BALANCED = "balanced" # Mixed Pro/Flash - Optimal cost-quality balance
+    FAST = "fast"         # All Gemini 1.5 Flash - Fastest, lowest cost
+    CUSTOM = "custom"     # User-defined per-agent configuration
+
+
 class TaskComplexity(str, Enum):
     """Task complexity levels"""
     HIGH = "high"        # Requires deep reasoning, creativity
@@ -247,6 +255,68 @@ class ModelManager:
             "summary_generation": ModelTier.ECONOMY
         }
         logger.info("Model mapping reset to defaults")
+    
+    @classmethod
+    def apply_quality_tier(cls, tier: QualityTier) -> None:
+        """
+        Apply quality tier to all agents.
+        
+        Args:
+            tier: QualityTier to apply system-wide
+        """
+        if tier == QualityTier.ULTRA:
+            cls.use_premium_for_all()
+            logger.info("Applied ULTRA quality tier (all Premium)")
+        elif tier == QualityTier.FAST:
+            cls.use_economy_for_all()
+            logger.info("Applied FAST quality tier (all Economy)")
+        elif tier == QualityTier.BALANCED:
+            cls.reset_to_defaults()
+            logger.info("Applied BALANCED quality tier (optimized mix)")
+        # CUSTOM handled via override_model() calls
+    
+    @classmethod
+    def get_tier_description(cls, tier: QualityTier) -> dict:
+        """
+        Get description and cost estimate for a quality tier.
+        
+        Args:
+            tier: QualityTier to describe
+            
+        Returns:
+            Dictionary with tier details
+        """
+        descriptions = {
+            QualityTier.ULTRA: {
+                "name": "Ultra Quality",
+                "description": "All agents use Gemini 2.5 Pro for maximum quality",
+                "estimated_cost_usd": 0.20,
+                "generation_time_estimate_sec": 45,
+                "best_for": "Professional courses, complex topics, maximum accuracy"
+            },
+            QualityTier.BALANCED: {
+                "name": "Balanced (Recommended)",
+                "description": "Mix of Gemini 2.5 Pro and 1.5 Flash for optimal cost-quality",
+                "estimated_cost_usd": 0.12,
+                "generation_time_estimate_sec": 35,
+                "best_for": "Most use cases, great quality at reasonable cost"
+            },
+            QualityTier.FAST: {
+                "name": "Fast & Economical",
+                "description": "All agents use Gemini 1.5 Flash for speed and low cost",
+                "estimated_cost_usd": 0.05,
+                "generation_time_estimate_sec": 25,
+                "best_for": "Quick courses, simple topics, budget-conscious users"
+            },
+            QualityTier.CUSTOM: {
+                "name": "Custom Configuration",
+                "description": "User-defined model selection per agent",
+                "estimated_cost_usd": 0.12,  # Default estimate
+                "generation_time_estimate_sec": 35,
+                "best_for": "Advanced users who want fine-grained control"
+            }
+        }
+        return descriptions.get(tier, descriptions[QualityTier.BALANCED])
 
 
 # Convenience functions

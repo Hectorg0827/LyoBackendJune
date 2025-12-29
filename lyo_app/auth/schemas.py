@@ -4,7 +4,8 @@ Defines request/response models for user registration, login, and profile manage
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
+from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
@@ -52,11 +53,11 @@ class UserRead(UserBase):
     
     model_config = ConfigDict(from_attributes=True)
     
-    id: int = Field(..., description="User's unique ID")
+    id: Union[int, UUID] = Field(..., description="User's unique ID (int or UUID depending on model)")
     is_active: bool = Field(..., description="Whether the user account is active")
     is_verified: bool = Field(..., description="Whether the user's email is verified")
     created_at: datetime = Field(..., description="User registration timestamp")
-    updated_at: datetime = Field(..., description="Last profile update timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Last profile update timestamp")
     last_login: Optional[datetime] = Field(None, description="Last login timestamp")
 
 
@@ -81,7 +82,7 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     """Schema for token payload data."""
     
-    user_id: Optional[int] = None
+    user_id: Optional[Union[int, UUID]] = None
     username: Optional[str] = None
 
 
@@ -101,7 +102,7 @@ class EmailVerificationResponse(BaseModel):
     """Schema for email verification response."""
     
     message: str = Field(..., description="Verification result message")
-    user_id: int = Field(..., description="User ID")
+    user_id: Union[int, UUID] = Field(..., description="User ID")
     is_verified: bool = Field(..., description="Email verification status")
 
 
@@ -150,9 +151,12 @@ class FirebaseAuthResponse(BaseModel):
     
     user: "UserRead" = Field(..., description="Authenticated user data")
     access_token: str = Field(..., description="Backend JWT access token")
+    refresh_token: Optional[str] = Field(None, description="JWT refresh token for token renewal")
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
     is_new_user: bool = Field(default=False, description="Whether this is a newly created user")
+    tenant_id: Optional[str] = Field(default=None, description="Tenant ID for SaaS multi-tenant isolation")
+
 
 
 class FirebaseLinkRequest(BaseModel):

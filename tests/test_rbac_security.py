@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import status
 
 from lyo_app.main import app
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.rbac import Role, Permission, RoleType, PermissionType
 from lyo_app.auth.rbac_service import RBACService
 from lyo_app.auth.service import AuthService

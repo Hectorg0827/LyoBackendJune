@@ -15,7 +15,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
-from lyo_app.models.production import User
+from lyo_app.auth.models import User
 from lyo_app.core.errors import AuthenticationError, AuthorizationError
 from lyo_app.core.config import settings
 

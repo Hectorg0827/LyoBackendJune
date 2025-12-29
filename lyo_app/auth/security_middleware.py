@@ -19,7 +19,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.rbac import PermissionType
 from lyo_app.auth.security import verify_access_token
 from lyo_app.core.database import get_db_session

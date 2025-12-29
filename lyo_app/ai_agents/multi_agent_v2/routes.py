@@ -31,7 +31,8 @@ from lyo_app.ai_agents.multi_agent_v2 import (
     CurriculumStructure,
     # Model Management
     ModelManager,
-    ModelTier
+    ModelTier,
+    QualityTier
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ _job_manager: Optional[JobManager] = None
 # ==================== REQUEST/RESPONSE MODELS ====================
 
 class CourseGenerationRequest(BaseModel):
-    """Request to generate a new course"""
+    """Enhanced request to generate a new course"""
     request: str = Field(
         ..., 
         min_length=10,
@@ -67,10 +68,79 @@ class CourseGenerationRequest(BaseModel):
             "goals": "Get a job as a Python developer"
         }]
     )
+    
+    # NEW: Quality & Feature Controls
+    quality_tier: str = Field(
+        default="balanced",
+        description="Quality tier: 'ultra', 'balanced', 'fast', 'custom'"
+    )
+    enable_code_examples: bool = Field(
+        default=True,
+        description="Include code examples in lessons"
+    )
+    enable_practice_exercises: bool = Field(
+        default=True,
+        description="Include practice exercises"
+    )
+    enable_final_quiz: bool = Field(
+        default=True,
+        description="Generate final assessment"
+    )
+    enable_multimedia_suggestions: bool = Field(
+        default=True,
+        description="Include multimedia suggestions"
+    )
+    
+    # NEW: QA & Budget
+    qa_strictness: str = Field(
+        default="standard",
+        description="QA strictness: 'lenient', 'standard', 'strict'"
+    )
+    max_budget_usd: Optional[float] = Field(
+        default=None,
+        description="Maximum budget in USD (optional hard cap)"
+    )
+    
+    # NEW: Language
+    target_language: str = Field(
+        default="en",
+        description="Target language code (ISO 639-1)"
+    )
+    
     config: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Optional pipeline configuration overrides"
+        description="Optional pipeline configuration overrides (advanced)"
     )
+
+
+class CostEstimateRequest(BaseModel):
+    """Request for cost estimation"""
+    topic: str = Field(
+        ...,
+        min_length=5,
+        max_length=500,
+        description="Course topic for estimation"
+    )
+    quality_tier: str = Field(
+        default="balanced",
+        description="Quality tier: 'ultra', 'balanced', 'fast'"
+    )
+    enable_code_examples: bool = True
+    enable_practice_exercises: bool = True
+    enable_final_quiz: bool = True
+    estimated_lesson_count: Optional[int] = Field(
+        default=None,
+        description="Estimated number of lessons (if known)"
+    )
+
+
+class CostEstimateResponse(BaseModel):
+    """Cost estimation response"""
+    estimated_cost_usd: float
+    estimated_generation_time_sec: int
+    quality_tier: str
+    breakdown: Dict[str, Any]
+    recommendations: List[str]
 
 
 class JobStatusResponse(BaseModel):
@@ -194,22 +264,55 @@ async def run_course_generation(
     "/generate",
     response_model=Dict[str, Any],
     summary="Start Course Generation",
-    description="Start an asynchronous course generation job. Returns a job_id for polling."
+    description="Start an asynchronous course generation job with quality and feature controls."
 )
 async def generate_course(
     request: CourseGenerationRequest,
     background_tasks: BackgroundTasks
 ):
     """
-    Start a new course generation job.
+    Start a new course generation job with enhanced controls.
     
     This endpoint initiates an async course generation process using the
-    multi-agent pipeline. The generation happens in the background.
+    multi-agent pipeline with user-specified quality tier, feature toggles,
+    and budget constraints.
     
     Returns a job_id that can be used to poll for status.
     """
     try:
-        pipeline = get_pipeline()
+        # Parse quality tier
+        try:
+            quality_tier = QualityTier(request.quality_tier)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid quality tier: {request.quality_tier}"
+            )
+        
+        # Build pipeline config from request
+        config = PipelineConfig(
+            quality_tier=quality_tier,
+            enable_code_examples=request.enable_code_examples,
+            enable_practice_exercises=request.enable_practice_exercises,
+            enable_final_quiz=request.enable_final_quiz,
+            enable_multimedia_suggestions=request.enable_multimedia_suggestions,
+            qa_strictness=request.qa_strictness,
+            max_budget_usd=request.max_budget_usd,
+            target_language=request.target_language
+        )
+        
+        # Check budget vs estimated cost
+        if request.max_budget_usd:
+            estimated_cost = config.get_estimated_cost()
+            if not config.validate_budget(estimated_cost):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Estimated cost (${estimated_cost:.4f}) exceeds budget (${request.max_budget_usd:.2f}). "
+                           f"Consider using 'fast' tier or disabling optional features."
+                )
+        
+        # Create pipeline with config
+        pipeline = CourseGenerationPipeline(config=config)
         
         # Create a job ID
         job_id = f"cg_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
@@ -223,15 +326,22 @@ async def generate_course(
             pipeline=pipeline
         )
         
-        logger.info(f"Course generation job created: {job_id}")
+        logger.info(
+            f"Course generation job created: {job_id} "
+            f"(tier={quality_tier.value}, budget=${request.max_budget_usd})"
+        )
         
         return {
             "job_id": job_id,
             "status": "accepted",
+            "quality_tier": quality_tier.value,
+            "estimated_cost_usd": config.get_estimated_cost(),
             "message": "Course generation started. Poll /status/{job_id} for updates.",
             "poll_url": f"/api/v2/courses/status/{job_id}"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start course generation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -267,6 +377,125 @@ async def get_job_status(job_id: str):
         
     except Exception as e:
         logger.error(f"Failed to get job status for {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== COST ESTIMATION ENDPOINT ====================
+
+@router.post(
+    "/estimate-cost",
+    response_model=CostEstimateResponse,
+    summary="Estimate Course Generation Cost",
+    description="Get detailed cost estimate for course generation with current settings."
+)
+async def estimate_course_cost(request: CostEstimateRequest):
+    """
+    Estimate the cost and time for generating a course.
+    
+    This helps users make informed decisions before starting generation.
+    Provides cost breakdown by agent and recommendations for cost optimization.
+    """
+    try:
+        # Parse quality tier
+        try:
+            tier = QualityTier(request.quality_tier)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid quality tier: {request.quality_tier}. Use 'ultra', 'balanced', or 'fast'"
+            )
+        
+        # Get base estimates from tier
+        tier_info = ModelManager.get_tier_description(tier)
+        base_cost = tier_info["estimated_cost_usd"]
+        base_time = tier_info["generation_time_estimate_sec"]
+        
+        # Adjust for feature toggles
+        cost_multiplier = 1.0
+        time_multiplier = 1.0
+        feature_adjustments = []
+        
+        if not request.enable_code_examples:
+            cost_multiplier *= 0.85
+            time_multiplier *= 0.90
+            feature_adjustments.append("code_examples_disabled_-15%")
+        
+        if not request.enable_practice_exercises:
+            cost_multiplier *= 0.90
+            time_multiplier *= 0.95
+            feature_adjustments.append("practice_exercises_disabled_-10%")
+        
+        if not request.enable_final_quiz:
+            cost_multiplier *= 0.95
+            time_multiplier *= 0.98
+            feature_adjustments.append("final_quiz_disabled_-5%")
+        
+        # Adjust for estimated lesson count
+        if request.estimated_lesson_count:
+            # Baseline is 8 lessons
+            lesson_factor = request.estimated_lesson_count / 8.0
+            cost_multiplier *= lesson_factor
+            # Time doesn't scale linearly due to parallel generation
+            time_multiplier *= (1 + (lesson_factor - 1) * 0.6)
+        
+        final_cost = base_cost * cost_multiplier
+        final_time = int(base_time * time_multiplier)
+        
+        # Generate recommendations
+        recommendations = []
+        
+        if tier == QualityTier.ULTRA:
+            savings = ((base_cost - ModelManager.get_tier_description(QualityTier.BALANCED)["estimated_cost_usd"]) / base_cost) * 100
+            recommendations.append(
+                f"💡 Consider 'balanced' tier for {savings:.0f}% cost savings with minimal quality trade-off"
+            )
+        
+        if request.enable_code_examples and "code" not in request.topic.lower() and "program" not in request.topic.lower():
+            recommendations.append(
+                "💡 This topic may not need code examples. Disable for 15% cost savings"
+            )
+        
+        if final_cost > 0.15:
+            recommendations.append(
+                "💡 This is a complex course. Consider breaking into multiple smaller courses for better cost control"
+            )
+        
+        if tier == QualityTier.FAST and "advanced" in request.topic.lower():
+            recommendations.append(
+                "⚠️ 'fast' tier may not provide sufficient quality for advanced topics. Consider 'balanced' or 'ultra'"
+            )
+        
+        # Build detailed breakdown
+        agent_breakdown = ModelManager.get_pipeline_cost_estimate(request.topic)["breakdown"]
+        
+        # Apply multipliers to breakdown
+        adjusted_breakdown = {}
+        for agent, data in agent_breakdown.items():
+            adjusted_breakdown[agent] = {
+                "model": data["model"],
+                "tokens": int(data["tokens"] * cost_multiplier),
+                "cost_usd": round(data["cost_usd"] * cost_multiplier, 6)
+            }
+        
+        breakdown = {
+            "tier_info": tier_info,
+            "feature_adjustments": feature_adjustments,
+            "lesson_count_factor": request.estimated_lesson_count / 8.0 if request.estimated_lesson_count else 1.0,
+            "agent_costs": adjusted_breakdown
+        }
+        
+        return CostEstimateResponse(
+            estimated_cost_usd=round(final_cost, 4),
+            estimated_generation_time_sec=final_time,
+            quality_tier=tier.value,
+            breakdown=breakdown,
+            recommendations=recommendations
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Cost estimation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

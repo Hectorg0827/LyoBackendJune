@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional, List
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Boolean, DateTime, String, Text, Integer, ForeignKey, Enum as SQLEnum, JSON, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lyo_app.core.database import Base
@@ -31,7 +31,7 @@ class ContentType(str, Enum):
 
 
 class Course(TenantMixin, Base):
-    """Course model for educational content."""
+    """Course model for educational content, including AI-generated courses."""
     
     __tablename__ = "courses"
     
@@ -41,25 +41,35 @@ class Course(TenantMixin, Base):
     # Course information
     title: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
+    summary: Mapped[Optional[str]] = mapped_column(Text)
     short_description: Mapped[Optional[str]] = mapped_column(String(500))
     thumbnail_url: Mapped[Optional[str]] = mapped_column(String(500))
+    topic: Mapped[Optional[str]] = mapped_column(String(200), index=True)
     
     # Course metadata
-    difficulty_level: Mapped[DifficultyLevel] = mapped_column(
-        SQLEnum(DifficultyLevel), nullable=False
-    )
-    estimated_duration_hours: Mapped[Optional[int]] = mapped_column(Integer)
+    difficulty_level: Mapped[str] = mapped_column(String(20), default="beginner", nullable=False)
     category: Mapped[Optional[str]] = mapped_column(String(100), index=True)
-    tags: Mapped[Optional[str]] = mapped_column(Text)  # JSON array as string
+    tags: Mapped[Optional[dict]] = mapped_column(JSON)
     
-    # Course status
+    # Generation parameters
+    interests: Mapped[Optional[dict]] = mapped_column(JSON)
+    target_duration_hours: Mapped[Optional[float]] = mapped_column(Float)
+    estimated_duration_hours: Mapped[Optional[float]] = mapped_column(Float)
+    
+    # Status tracking
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False, index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_featured: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    generation_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
     
     # Instructor (foreign key to User)
     instructor_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), nullable=False, index=True
     )
+    # Alias for owner_user_id used in enhanced models
+    @property
+    def owner_user_id(self):
+        return self.instructor_id
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -68,6 +78,7 @@ class Course(TenantMixin, Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     
     # Relationships
     lessons: Mapped[List["Lesson"]] = relationship(
@@ -76,15 +87,16 @@ class Course(TenantMixin, Base):
     enrollments: Mapped[List["CourseEnrollment"]] = relationship(
         "CourseEnrollment", back_populates="course", cascade="all, delete-orphan"
     )
-    study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="course", lazy="select")
-    instructor: Mapped["User"] = relationship("lyo_app.auth.models.User")
+    instructor: Mapped["User"] = relationship("lyo_app.auth.models.User", back_populates="courses")
+    # Added for content item compatibility
+    content_items: Mapped[List["lyo_app.models.enhanced.ContentItem"]] = relationship("lyo_app.models.enhanced.ContentItem", back_populates="course", cascade="all, delete-orphan")
     
     def __repr__(self) -> str:
         return f"<Course(id={self.id}, title='{self.title}', instructor_id={self.instructor_id})>"
 
 
 class Lesson(TenantMixin, Base):
-    """Lesson model for individual learning units."""
+    """Lesson model for individual learning units, including AI-generated lessons."""
     
     __tablename__ = "lessons"
     
@@ -92,12 +104,12 @@ class Lesson(TenantMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     
     # Lesson information
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
+    summary: Mapped[Optional[str]] = mapped_column(Text)
+    ai_summary: Mapped[Optional[str]] = mapped_column(Text)
     content: Mapped[Optional[str]] = mapped_column(Text)  # Main lesson content
-    content_type: Mapped[ContentType] = mapped_column(
-        SQLEnum(ContentType), nullable=False
-    )
+    content_type: Mapped[str] = mapped_column(String(50), default="text", nullable=False)
     
     # Lesson structure
     course_id: Mapped[int] = mapped_column(
@@ -107,8 +119,13 @@ class Lesson(TenantMixin, Base):
     
     # Lesson metadata
     duration_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    estimated_duration_minutes: Mapped[Optional[float]] = mapped_column(Float)
     video_url: Mapped[Optional[str]] = mapped_column(String(500))
     resources_url: Mapped[Optional[str]] = mapped_column(String(500))
+    topic: Mapped[Optional[str]] = mapped_column(String(200), index=True)
+    tags: Mapped[Optional[dict]] = mapped_column(JSON)
+    difficulty_score: Mapped[Optional[float]] = mapped_column(Float)
+    generation_prompt: Mapped[Optional[str]] = mapped_column(Text)
     
     # Lesson status
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -127,6 +144,8 @@ class Lesson(TenantMixin, Base):
     completions: Mapped[List["LessonCompletion"]] = relationship(
         "LessonCompletion", back_populates="lesson", cascade="all, delete-orphan"
     )
+    # Added for content item compatibility
+    content_items: Mapped[List["lyo_app.models.enhanced.ContentItem"]] = relationship("lyo_app.models.enhanced.ContentItem", back_populates="lesson", cascade="all, delete-orphan")
     
     def __repr__(self) -> str:
         return f"<Lesson(id={self.id}, title='{self.title}', course_id={self.course_id})>"

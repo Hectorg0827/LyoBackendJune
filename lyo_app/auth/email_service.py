@@ -13,7 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import select
 
 from lyo_app.core.database import Base
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 
 class EmailVerificationToken(Base):

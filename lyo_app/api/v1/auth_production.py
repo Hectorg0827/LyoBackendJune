@@ -14,7 +14,7 @@ from lyo_app.auth.production import (
     AuthService, get_auth_service, 
     get_current_user, require_user
 )
-from lyo_app.models.production import User
+from lyo_app.auth.models import User
 from lyo_app.core.errors import AuthenticationError, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    tenant_id: str = None  # For SaaS multi-tenant isolation
     user: Dict[str, Any]
 
 

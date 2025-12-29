@@ -55,6 +55,7 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int  # seconds
+    tenant_id: Optional[str] = None  # For SaaS multi-tenant isolation
     user: "UserProfile"
 
 
@@ -80,10 +81,13 @@ class RegisterRequest(BaseModel):
 
 class UserProfile(BaseModel):
     """User profile information."""
-    id: str
+    id: int  # Changed from str to int for iOS compatibility
     email: EmailStr
     username: Optional[str]
     full_name: str
+    name: Optional[str] = None  # Added for iOS compatibility (fallback to full_name)
+    first_name: Optional[str] = None  # Added for iOS compatibility
+    last_name: Optional[str] = None  # Added for iOS compatibility
     avatar_url: Optional[HttpUrl]
     bio: Optional[str]
     is_active: bool
@@ -93,6 +97,25 @@ class UserProfile(BaseModel):
     model_config = {
         "from_attributes": True
     }
+    
+    @classmethod
+    def from_orm(cls, obj):
+        """Custom from_orm to populate name from full_name."""
+        data = {
+            "id": obj.id,
+            "email": obj.email,
+            "username": getattr(obj, "username", None),
+            "full_name": getattr(obj, "full_name", None) or f"{getattr(obj, 'first_name', '') or ''} {getattr(obj, 'last_name', '') or ''}".strip() or "User",
+            "name": getattr(obj, "full_name", None) or f"{getattr(obj, 'first_name', '') or ''} {getattr(obj, 'last_name', '') or ''}".strip() or "User",
+            "first_name": getattr(obj, "first_name", None),
+            "last_name": getattr(obj, "last_name", None),
+            "avatar_url": getattr(obj, "avatar_url", None),
+            "bio": getattr(obj, "bio", None),
+            "is_active": getattr(obj, "is_active", True),
+            "is_verified": getattr(obj, "is_verified", False),
+            "created_at": getattr(obj, "created_at", datetime.utcnow()),
+        }
+        return cls(**data)
 
 
 # Course Generation Models

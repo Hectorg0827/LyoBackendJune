@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.auth.routes import router as auth_router
 from lyo_app.auth.schemas import UserCreate
 from lyo_app.core.database import get_db
+from unittest.mock import patch
 
 
 class TestAuthRoutes:
@@ -22,6 +23,12 @@ class TestAuthRoutes:
         app = FastAPI()
         app.include_router(auth_router, prefix="/auth")
         return app
+
+    @pytest.fixture(autouse=True)
+    def mock_rate_limiter(self):
+        """Mock rate limiter to avoid Redis connection."""
+        with patch("lyo_app.auth.routes.auth_rate_limiter.is_allowed", return_value=(True, {})):
+            yield
 
     @pytest.fixture
     def valid_user_data(self) -> dict:

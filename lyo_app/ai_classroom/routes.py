@@ -34,7 +34,7 @@ from .conversation_flow import (
 from lyo_app.streaming import get_sse_manager, stream_response, EventType, StreamEvent
 
 from lyo_app.auth.dependencies import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.core.database import get_async_session, AsyncSessionLocal
 from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
 from lyo_app.core.context_engine import ContextEngine

@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from .models import UserEngagementState, UserEngagementStateEnum, MentorInteraction, AIConversationLog
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 logger = logging.getLogger(__name__)
 

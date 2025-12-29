@@ -25,7 +25,7 @@ from .models import AIConversationLog, AIModelTypeEnum, UserEngagementState
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity, LanguageCode
 from lyo_app.learning.models import Course, Lesson, DifficultyLevel, ContentType
 from lyo_app.learning.models import CourseEnrollment, LessonCompletion
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 logger = logging.getLogger(__name__)
 

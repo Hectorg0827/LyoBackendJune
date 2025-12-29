@@ -21,10 +21,17 @@ class FirebaseClient:
         return cls._instance
 
     def __init__(self):
-        if getattr(self, "_initialized", False):  # already init
-            return
-        self._initialized = True
+        self._initialized_sdk = False
         self.enabled = False
+        self.db = None
+        self.bucket = None
+
+    def initialize_app(self):
+        """Perform blocked initialization logic here, not in __init__"""
+        if self._initialized_sdk:
+            return
+        self._initialized_sdk = True
+
         if not _FIREBASE_AVAILABLE:
             return
         try:
@@ -47,10 +54,15 @@ class FirebaseClient:
                 cred = credentials.ApplicationDefault()
             
             # Initialize with Firebase project ID for token verification
-            firebase_admin.initialize_app(cred, {
-                "projectId": firebase_project_id,
-                "storageBucket": f"{gcp_project_id}.appspot.com" if gcp_project_id else None
-            })
+            try:
+                # Check if already initialized separately
+                firebase_admin.get_app()
+            except ValueError:
+                firebase_admin.initialize_app(cred, {
+                    "projectId": firebase_project_id,
+                    "storageBucket": f"{gcp_project_id}.appspot.com" if gcp_project_id else None
+                })
+            
             self.db = firestore.client()
             try:
                 self.bucket = storage.bucket()

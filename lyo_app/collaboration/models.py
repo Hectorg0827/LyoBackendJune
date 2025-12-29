@@ -94,8 +94,8 @@ class CollaborativeStudyGroup(Base):
         return len([m for m in self.memberships if m.is_active])
 
 
-class GroupMembership(Base):
-    """Membership in study groups"""
+class CollaborativeGroupMembership(Base):
+    """Membership in collaborative study groups (renamed from GroupMembership to avoid conflict)"""
     __tablename__ = "collaborative_group_memberships"
     
     id = Column(Integer, primary_key=True, index=True)

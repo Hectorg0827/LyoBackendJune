@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from lyo_app.core.database import get_db
-from lyo_app.models.production import User, Course, Lesson, UserProfile, Task
+from lyo_app.auth.models import User
+from lyo_app.models.production import Course, Lesson, UserProfile, Task
 from lyo_app.auth.production import get_current_user, require_user
 from lyo_app.tasks.course_generation import generate_course_task
 from lyo_app.core.redis_production import RedisPubSub

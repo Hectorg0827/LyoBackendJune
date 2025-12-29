@@ -45,11 +45,17 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Profile & Preferences - DISABLED: columns don't exist in production DB
+    # locale: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
+    # timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
     
     # Firebase Auth fields
     firebase_uid: Mapped[Optional[str]] = mapped_column(String(128), unique=True, index=True, nullable=True)
     auth_provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # google, apple, email, phone
     
+    # Authentication tracking
+    last_login: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
@@ -57,24 +63,27 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
-    last_login: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
-    # AI Personalization
-    learning_profile: Mapped[Optional[dict]] = mapped_column(JSON)  # Inferred traits e.g. {"visual_score": 8}
-    user_context_summary: Mapped[Optional[str]] = mapped_column(Text)  # AI summary of user context
+    # AI Personalization - DISABLED: columns don't exist in production DB
+    # learning_profile: Mapped[Optional[dict]] = mapped_column(JSON)  # Inferred traits e.g. {"visual_score": 8}
+    # user_context_summary: Mapped[Optional[str]] = mapped_column(Text)  # AI summary of user context
     
     # Multi-Tenant SaaS support
     organization_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("organizations.id"), nullable=True, index=True
     )
     organization = relationship("lyo_app.tenants.models.Organization", back_populates="users", lazy="select")
+    # organization = relationship("lyo_app.tenants.models.Organization", back_populates="users", lazy="select")
+    
+    # RBAC relationships
+    roles = relationship("lyo_app.auth.rbac.Role", secondary="user_roles", back_populates="users", lazy="noload", viewonly=True)
     
     # Relationships - defined with string names to avoid circular imports
-    # Community relationships
-    created_study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
-    group_memberships = relationship("lyo_app.community.models.GroupMembership", foreign_keys="[lyo_app.community.models.GroupMembership.user_id]", back_populates="user", lazy="noload", viewonly=True)
-    organized_events = relationship("lyo_app.community.models.CommunityEvent", back_populates="organizer", lazy="noload", viewonly=True)
-    event_attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="user", lazy="noload", viewonly=True)
+    # created_study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
+    # group_memberships = relationship("lyo_app.community.models.GroupMembership", foreign_keys="[lyo_app.community.models.GroupMembership.user_id]", back_populates="user", lazy="noload", viewonly=True)
+    # organized_events = relationship("lyo_app.community.models.CommunityEvent", back_populates="organizer", lazy="noload", viewonly=True)
+    # event_attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="user", lazy="noload", viewonly=True)
     
     # Learning relationships  
     course_enrollments = relationship("lyo_app.learning.models.CourseEnrollment", back_populates="user", lazy="noload", viewonly=True)
@@ -88,9 +97,6 @@ class User(Base):
     followers = relationship("lyo_app.feeds.models.UserFollow", foreign_keys="[lyo_app.feeds.models.UserFollow.following_id]", back_populates="following", lazy="noload", viewonly=True)
     following = relationship("lyo_app.feeds.models.UserFollow", foreign_keys="[lyo_app.feeds.models.UserFollow.follower_id]", back_populates="follower", lazy="noload", viewonly=True)
     
-    # RBAC relationships
-    #     roles = relationship("Role", secondary="user_roles", back_populates="users", lazy="noload", viewonly=True)
-    
     # AI Agents relationships
     engagement_state = relationship("lyo_app.ai_agents.models.UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="noload", viewonly=True)
     mentor_interactions = relationship("lyo_app.ai_agents.models.MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
@@ -103,6 +109,12 @@ class User(Base):
     generated_quizzes = relationship("lyo_app.ai_study.models.GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
     quiz_attempts = relationship("lyo_app.ai_study.models.QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
     study_analytics = relationship("lyo_app.ai_study.models.StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
+    
+    # Enhanced models relationships
+    courses = relationship("lyo_app.learning.models.Course", back_populates="instructor", cascade="all, delete-orphan")
+    tasks = relationship("lyo_app.models.enhanced.Task", back_populates="user", cascade="all, delete-orphan")
+    push_devices = relationship("lyo_app.models.enhanced.PushDevice", back_populates="user", cascade="all, delete-orphan")
+    gamification_profile = relationship("lyo_app.models.enhanced.GamificationProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"

@@ -10,7 +10,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, Token, RefreshTokenRequest
 from lyo_app.auth.service import AuthService
 from lyo_app.auth.security import verify_token
@@ -101,7 +101,7 @@ async def get_current_user(
                 return UserRead.model_validate(user)
             
             # User not found - auto-create from Firebase data
-            from lyo_app.auth.models import User
+            from lyo_app.models.enhanced import User
             from lyo_app.auth.security import hash_password
             import secrets
             import logging
@@ -577,9 +577,11 @@ async def authenticate_with_firebase(
         return FirebaseAuthResponse(
             user=UserRead.model_validate(user),
             access_token=token.access_token,
+            refresh_token=token.refresh_token,
             token_type=token.token_type,
             expires_in=token.expires_in,
-            is_new_user=is_new_user
+            is_new_user=is_new_user,
+            tenant_id=str(user.id)  # User's tenant for SaaS isolation
         )
         
     except ValueError as e:

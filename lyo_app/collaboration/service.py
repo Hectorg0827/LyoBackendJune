@@ -11,7 +11,8 @@ from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
 
 from lyo_app.collaboration.models import (
-    CollaborativeStudyGroup as StudyGroup, GroupMembership, PeerInteraction, KnowledgeExchange,
+    CollaborativeStudyGroup as StudyGroup, CollaborativeGroupMembership as GroupMembership, 
+    PeerInteraction, KnowledgeExchange,
     PeerAssessment, CollaborativeLearningSession, SessionParticipation,
     PeerMentorship, CollaborationAnalytics,
     CollaborationType, GroupRole, InteractionType

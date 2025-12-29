@@ -25,7 +25,7 @@ from .models import UserEngagementState, UserEngagementStateEnum, AIModelTypeEnu
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
 from lyo_app.feeds.models import Post, PostReaction, FeedItem
 from lyo_app.learning.models import CourseEnrollment, LessonCompletion
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.feeds.schemas import PostCreate, CommentCreate, PostReactionCreate, UserFollowCreate
 from lyo_app.feeds.service import FeedsService
 from lyo_app.feeds.models import Post, Comment, PostType, ReactionType
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.service import AuthService
 from lyo_app.auth.schemas import UserCreate
 

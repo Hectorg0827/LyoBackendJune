@@ -14,11 +14,19 @@ except Exception:  # pragma: no cover
 class VertexAIClient:
     def __init__(self):
         self._enabled = False
+        self._initialized_sdk = False
+
+    def initialize_app(self):
+        if self._initialized_sdk:
+            return
+        self._initialized_sdk = True
+
         if not _VERTEX_AVAILABLE:
             return
         try:
             project = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
             location = os.getenv("VERTEX_AI_REGION", "us-central1")
+            # aiplatform.init can be blocking if it checks auth
             if project:
                 aiplatform.init(project=project, location=location)
                 self._enabled = True

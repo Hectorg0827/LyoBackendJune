@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.dependencies import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.storage.enhanced_storage import enhanced_storage, MediaType
 from lyo_app.core.enhanced_monitoring import monitor_performance, handle_errors, ErrorCategory
 from lyo_app.core.logging import logger

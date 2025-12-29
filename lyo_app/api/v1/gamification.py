@@ -13,7 +13,8 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from lyo_app.core.database import get_db
-from lyo_app.models.production import User, Badge, UserProfile
+from lyo_app.auth.models import User
+from lyo_app.models.production import Badge, UserProfile
 from lyo_app.auth.production import require_user
 from lyo_app.tasks.gamification import check_achievements
 

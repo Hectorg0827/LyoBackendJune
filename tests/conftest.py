@@ -11,7 +11,7 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from lyo_app.core.database import Base
+from lyo_app.models.enhanced import Base
 
 
 # Test database URL (in-memory SQLite for testing)
@@ -33,7 +33,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     Each test gets a fresh database.
     """
     # Import models to ensure they're registered (match database.py init_db)
-    from lyo_app.auth.models import User  # noqa: F401
+    from lyo_app.models.enhanced import User  # noqa: F401
     from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
     from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
     from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401

@@ -5,6 +5,7 @@ Provides database engine, session factory, and base model class.
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -89,7 +90,6 @@ def after_cursor_execute(conn, cursor, statement, parameters, context, executema
     if total > 0.5:  # Log queries taking longer than 500ms
         logger.warning(f"Slow Query: {total:.4f}s\n{statement}\nParameters: {parameters}")
 
-import time
 
 # Create async session factory with better configuration
 AsyncSessionLocal = async_sessionmaker(
@@ -146,27 +146,73 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
-        from lyo_app.auth.rbac import Role, Permission, role_permissions, user_roles  # noqa: F401
-        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion, CourseItem, CourseStatus  # noqa: F401
-        from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
-        from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
-        from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge, GamificationProfile  # noqa: F401
-        from lyo_app.ai_study.models import StudySession, StudyMessage, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
-        from lyo_app.tasks.models import Task, TaskState  # noqa: F401
-        from lyo_app.notifications.models import PushDevice  # noqa: F401
+        from lyo_app.auth.rbac import Role, Permission, UserRole, RolePermission  # noqa: F401
+        from lyo_app.models.enhanced import Task, PushDevice, GamificationProfile  # noqa: F401
+        from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
+        from lyo_app.community.models import StudyGroup, CollaborativeGroupMembership, CommunityEvent, EventAttendance, MarketplaceItem  # noqa: F401
+        from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
+        from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
+        from lyo_app.stack.models import StackItem  # noqa: F401
+        from lyo_app.ai_study.models import StudySession, AIInsight  # noqa: F401
+        from lyo_app.ai_agents.models import UserEngagementState, MentorInteraction  # noqa: F401
         # Chat module models (for session continuity + notes/courses)
         from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
         # Import new mentor chat models
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
-        from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.classroom.models import ClassroomSession  # noqa: F401
         
-        await conn.run_sync(Base.metadata.create_all)
+        # TEMPORARILY DISABLED automatic schema updates to prevent boot hang in production
+        # logger.info("Synchronizing database schema...")
+        # await conn.run_sync(Base.metadata.create_all)
+        # await _ensure_users_schema(conn)
+        # await _ensure_stack_items_schema(conn)
+        logger.info("Database models registered successfully (schema updates skipped)")
 
-        # Best-effort schema reconciliation for legacy production DBs.
-        # create_all() does NOT add missing columns, so older tables can drift.
-        await _ensure_stack_items_schema(conn)
-        logger.info("Database tables created successfully")
+
+async def _ensure_users_schema(conn) -> None:
+    """Ensure users table has required columns (Postgres-only, additive)."""
+
+    def _get_table_info(sync_conn):
+        dialect_name = sync_conn.dialect.name
+        inspector = inspect(sync_conn)
+        has_table = inspector.has_table("users")
+        column_names = set()
+        if has_table:
+            column_names = {col["name"] for col in inspector.get_columns("users")}
+        return dialect_name, has_table, column_names
+
+    try:
+        dialect_name, has_table, column_names = await conn.run_sync(_get_table_info)
+    except Exception as e:
+        logger.warning(f"⚠️ users schema inspection failed: {e}")
+        return
+
+    if not has_table:
+        return
+
+    if dialect_name != "postgresql":
+        return
+
+    ddl_statements: list[str] = []
+
+    # SaaS Organizational support
+    if "organization_id" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE users ADD COLUMN organization_id INTEGER"
+        )
+        # Note: Added without FK constraint first to minimize locking issues
+        # Can be added later with a separate command
+
+    for ddl in ddl_statements:
+        try:
+            logger.info(f"⏳ Applying schema update: {ddl}")
+            # Use a timeout for the DDL execution
+            await asyncio.wait_for(conn.execute(text(ddl)), timeout=30.0)
+            logger.info(f"✅ Schema update applied: {ddl}")
+        except asyncio.TimeoutError:
+            logger.warning(f"❌ Schema update timed out after 30s: {ddl}")
+        except Exception as e:
+            logger.warning(f"⚠️ Schema update failed ({ddl}): {e}")
 
 
 async def _ensure_stack_items_schema(conn) -> None:

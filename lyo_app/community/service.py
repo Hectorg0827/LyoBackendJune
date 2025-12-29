@@ -23,7 +23,7 @@ from lyo_app.community.schemas import (
     CommunityQuestionCreate, CommunityAnswerCreate,
     EventBeacon, QuestionBeacon, UserActivityBeacon
 )
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.stack.models import StackItem, StackItemType, StackItemStatus
 import uuid
 
@@ -1038,11 +1038,80 @@ class CommunityService:
         current_user: User
     ) -> List[UserActivityBeacon]:
         """
-        Get user activity beacons. (Stub implementation for now)
+        Get user activity beacons. Finds users who have recently interacted or posted
+        near the specified map area.
         """
-        # In a real implementation, we would query user locations or check-ins.
-        # For now, return an empty list or mock data if needed.
-        return []
+        delta = radius_km / 111.0
+        
+        # Find recent questions by any users in this area
+        question_query = (
+            select(CommunityQuestion)
+            .where(CommunityQuestion.latitude.between(lat - delta, lat + delta))
+            .where(CommunityQuestion.longitude.between(lng - delta, lng + delta))
+            .order_by(desc(CommunityQuestion.created_at))
+            .limit(50)
+        )
+        q_result = await db.execute(question_query)
+        questions = q_result.scalars().all()
+        
+        active_user_ids = {q.user_id for q in questions}
+        
+        # Find upcoming events organized in this area
+        event_query = (
+            select(CommunityEvent)
+            .where(CommunityEvent.latitude.between(lat - delta, lat + delta))
+            .where(CommunityEvent.longitude.between(lng - delta, lng + delta))
+            .order_by(desc(CommunityEvent.created_at))
+            .limit(50)
+        )
+        e_result = await db.execute(event_query)
+        events = e_result.scalars().all()
+        active_user_ids.update({e.organizer_id for e in events})
+        
+        if not active_user_ids:
+            return []
+            
+        # Get user details and their gamification profiles
+        user_query = (
+            select(User)
+            .options(selectinload(User.gamification_profile))
+            .where(User.id.in_(list(active_user_ids)))
+        )
+        u_result = await db.execute(user_query)
+        users = u_result.scalars().all()
+        
+        beacons = []
+        for u in users:
+            # Skip current user unless specified
+            if u.id == current_user.id:
+                continue
+                
+            # Find a representative location for this user in this area
+            # (Use their most recent question or event in the area)
+            user_lat, user_lng = None, None
+            for q in questions:
+                if q.user_id == u.id:
+                    user_lat, user_lng = q.latitude, q.longitude
+                    break
+            if not user_lat:
+                for e in events:
+                    if e.organizer_id == u.id:
+                        user_lat, user_lng = e.latitude, e.longitude
+                        break
+            
+            beacons.append(
+                UserActivityBeacon(
+                    user_id=u.id,
+                    display_name=f"{u.first_name or ''} {u.last_name or u.username}".strip(),
+                    latitude=user_lat,
+                    longitude=user_lng,
+                    level=u.gamification_profile.level if u.gamification_profile else 1,
+                    xp=u.gamification_profile.total_xp if u.gamification_profile else 0,
+                    recent_topics=[] # Could be populated from their recent posts/courses
+                )
+            )
+            
+        return beacons
 
     async def create_question(
         self, 

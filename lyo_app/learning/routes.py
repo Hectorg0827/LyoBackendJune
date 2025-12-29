@@ -19,7 +19,7 @@ from lyo_app.learning.service import LearningService
 from lyo_app.learning.proofs import ProofEngine
 from lyo_app.core.database import get_db
 from lyo_app.auth.dependencies import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 
 router = APIRouter()

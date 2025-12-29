@@ -3,10 +3,8 @@ Social and real-time models for stories and messenger/chat features.
 """
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Text, JSON
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timedelta
-
-Base = declarative_base()
+from lyo_app.core.database import Base
 
 class Story(Base):
     __tablename__ = "stories"

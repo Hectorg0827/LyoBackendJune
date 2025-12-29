@@ -11,7 +11,7 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Foreign
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 import uuid
 
-from lyo_app.core.database import Base
+from lyo_app.models.enhanced import Base
 
 
 class StudyGroupStatus(str, Enum):
@@ -91,10 +91,11 @@ class StudyGroup(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    creator = relationship("lyo_app.auth.models.User", back_populates="created_study_groups")
-    course = relationship("lyo_app.learning.models.Course", back_populates="study_groups")
+    # NOTE: back_populates disabled - User model doesn't have created_study_groups
+    creator = relationship("User", foreign_keys=[creator_id], lazy="noload")
+    course = relationship("Course")
     memberships = relationship("lyo_app.community.models.GroupMembership", back_populates="study_group", cascade="all, delete-orphan")
-    events = relationship("lyo_app.community.models.CommunityEvent", back_populates="study_group")
+    events = relationship("CommunityEvent", back_populates="study_group")
 
 
 class GroupMembership(Base):
@@ -119,9 +120,10 @@ class GroupMembership(Base):
     approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # Relationships
-    user = relationship("lyo_app.auth.models.User", foreign_keys=[user_id], back_populates="group_memberships")
-    study_group = relationship("lyo_app.community.models.StudyGroup", back_populates="memberships")
-    approved_by = relationship("lyo_app.auth.models.User", foreign_keys=[approved_by_id])
+    # NOTE: back_populates disabled - User model doesn't have group_memberships
+    user = relationship("User", foreign_keys=[user_id], lazy="noload")
+    study_group = relationship("StudyGroup", back_populates="memberships")
+    approved_by = relationship("User", foreign_keys=[approved_by_id], lazy="noload")
     
     # Constraints
     __table_args__ = (
@@ -169,11 +171,12 @@ class CommunityEvent(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # Relationships
-    organizer = relationship("lyo_app.auth.models.User", back_populates="organized_events")
-    study_group = relationship("lyo_app.community.models.StudyGroup", back_populates="events")
-    course = relationship("lyo_app.learning.models.Course")
-    lesson = relationship("lyo_app.learning.models.Lesson")
-    attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="event", cascade="all, delete-orphan")
+    # NOTE: back_populates disabled - User model doesn't have organized_events
+    organizer = relationship("User", foreign_keys=[organizer_id], lazy="noload")
+    study_group = relationship("StudyGroup", back_populates="events")
+    course = relationship("Course")
+    lesson = relationship("Lesson")
+    attendances = relationship("EventAttendance", back_populates="event", cascade="all, delete-orphan")
 
 
 class EventAttendance(Base):
@@ -200,9 +203,9 @@ class EventAttendance(Base):
     attended_at = Column(DateTime, nullable=True)  # When user actually attended
     feedback_at = Column(DateTime, nullable=True)
     
-    # Relationships
-    user = relationship("lyo_app.auth.models.User", back_populates="event_attendances")
-    event = relationship("lyo_app.community.models.CommunityEvent", back_populates="attendances")
+    # NOTE: back_populates disabled - User model doesn't have event_attendances
+    user = relationship("User", foreign_keys=[user_id], lazy="noload")
+    event = relationship("CommunityEvent", back_populates="attendances")
     
     # Constraints
     __table_args__ = (
