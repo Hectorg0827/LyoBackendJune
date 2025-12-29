@@ -14,7 +14,6 @@ from sqlalchemy import (
     Column, String, Text, Integer, Boolean, DateTime, JSON,
     ForeignKey, Index, Float
 )
-from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 

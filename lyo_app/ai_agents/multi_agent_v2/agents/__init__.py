@@ -40,6 +40,7 @@ from lyo_app.ai_agents.multi_agent_v2.model_manager import (
     ModelManager,
     ModelConfig,
     ModelTier,
+    QualityTier,
     TaskComplexity
 )
 
@@ -110,6 +111,7 @@ __all__ = [
     "ModelManager",
     "ModelConfig",
     "ModelTier",
+    "QualityTier",
     "TaskComplexity",
     
     # Tutor Agent

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.routes import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.gamification.service import GamificationService
 from lyo_app.gamification.schemas import (
     XPRecordCreate, XPRecordRead, XPSummaryRead,

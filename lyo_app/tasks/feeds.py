@@ -14,7 +14,8 @@ from sqlalchemy import desc
 
 from lyo_app.core.celery_app import celery_app
 from lyo_app.tasks.course_generation import get_sync_db
-from lyo_app.models.production import User, FeedItem, UserProfile, FeedItemType
+from lyo_app.auth.models import User
+from lyo_app.models.production import FeedItem, UserProfile, FeedItemType
 
 logger = logging.getLogger(__name__)
 

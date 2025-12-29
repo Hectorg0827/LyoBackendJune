@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.schemas import UserCreate, UserLogin
 from lyo_app.auth.service import AuthService
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 
 
 class TestAuthService:

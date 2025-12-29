@@ -38,8 +38,10 @@ from lyo_app.ai_agents.multi_agent_v2.agents import (
     ReviewFocus,
     QAContext
 )
+from lyo_app.ai_agents.multi_agent_v2.model_manager import ModelManager, QualityTier, ModelTier
 from lyo_app.ai_agents.multi_agent_v2.pipeline.gates import PipelineGates, GateResult
 from lyo_app.ai_agents.multi_agent_v2.pipeline.job_queue import JobManager, JobStatus
+from lyo_app.ai_agents.multi_agent_v2.pipeline.streaming import ProgressEvent, StreamingPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +70,97 @@ class StepResult:
 
 @dataclass
 class PipelineConfig:
-    """Configuration for the pipeline"""
+    """Extended configuration for the course generation pipeline"""
+    # EXISTING: Core pipeline settings
     max_retries_per_step: int = 3
     gate_failure_threshold: int = 2  # Max gate failures before abort
     parallel_lesson_batch_size: int = 3  # Concurrent lesson generations
     qa_min_score: int = 60  # Minimum QA score to pass
     save_intermediate_results: bool = True
     enable_auto_fix: bool = True  # Try to fix issues automatically
+    
+    # NEW: Quality & Model Selection
+    quality_tier: QualityTier = QualityTier.BALANCED
+    custom_agent_tiers: Optional[Dict[str, ModelTier]] = None  # For CUSTOM tier
+    
+    # NEW: Content Feature Toggles
+    enable_code_examples: bool = True           # Include code blocks in lessons  
+    enable_practice_exercises: bool = True      # Include hands-on exercises
+    enable_final_quiz: bool = True              # Generate final assessment
+    enable_multimedia_suggestions: bool = True  # Suggest images/videos
+    
+    # NEW: QA Controls
+    qa_strictness: str = "standard"  # "lenient", "standard", "strict"
+    qa_focus_areas: List[ReviewFocus] = field(
+        default_factory=lambda: [ReviewFocus.ACCURACY, ReviewFocus.PEDAGOGY]
+    )
+    
+    # NEW: Budget Controls
+    max_budget_usd: Optional[float] = None      # Hard cost cap
+    budget_alert_threshold: float = 0.80        # Alert at 80% of budget
+    enable_budget_auto_downgrade: bool = True   # Auto-switch to cheaper models if needed
+    
+    # NEW: Language Support
+    target_language: str = "en"  # ISO language code
+    
+    def apply_quality_tier(self) -> None:
+        """Apply the selected quality tier to ModelManager"""
+        if self.quality_tier == QualityTier.CUSTOM and self.custom_agent_tiers:
+            for agent_name, tier in self.custom_agent_tiers.items():
+                ModelManager.override_model(agent_name, tier)
+            logger.info(f"Applied CUSTOM quality tier with {len(self.custom_agent_tiers)} overrides")
+        else:
+            ModelManager.apply_quality_tier(self.quality_tier)
+    
+    def get_estimated_cost(self) -> float:
+        """
+        Get estimated cost based on current configuration.
+        
+        Returns:
+            Estimated cost in USD
+        """
+        tier_info = ModelManager.get_tier_description(self.quality_tier)
+        base_cost = tier_info["estimated_cost_usd"]
+        
+        # Adjust for disabled features
+        multiplier = 1.0
+        if not self.enable_code_examples:
+            multiplier *= 0.85  # 15% reduction
+        if not self.enable_practice_exercises:
+            multiplier *= 0.90  # 10% reduction
+        if not self.enable_final_quiz:
+            multiplier *= 0.95  # 5% reduction
+        
+        return base_cost * multiplier
+    
+    def validate_budget(self, estimated_cost: float) -> bool:
+        """
+        Check if estimated cost is within budget.
+        
+        Args:
+            estimated_cost: Estimated cost in USD
+            
+        Returns:
+            True if within budget or no budget set
+        """
+        if self.max_budget_usd is None:
+            return True
+        return estimated_cost <= self.max_budget_usd
+    
+    def should_alert_budget(self, current_cost: float) -> bool:
+        """
+        Check if current cost has reached alert threshold.
+        
+        Args:
+            current_cost: Current cost in USD
+            
+        Returns:
+            True if alert threshold reached
+        """
+        if self.max_budget_usd is None:
+            return False
+        threshold_cost = self.max_budget_usd * self.budget_alert_threshold
+        return current_cost >= threshold_cost
 
 
 @dataclass 
@@ -94,7 +180,7 @@ class PipelineState:
     total_duration_seconds: float = 0.0
 
 
-class CourseGenerationPipeline:
+class CourseGenerationPipeline(StreamingPipeline):
     """
     Main pipeline orchestrator for course generation.
     
@@ -110,6 +196,8 @@ class CourseGenerationPipeline:
     9. QA Agent → QualityReport
     10. Gate 5: Validate QA
     11. Finalize → GeneratedCourse
+    
+    Supports both standard and streaming generation modes.
     """
     
     def __init__(
@@ -119,6 +207,9 @@ class CourseGenerationPipeline:
     ):
         self.config = config or PipelineConfig()
         self.job_manager = job_manager
+        
+        # Apply quality tier to ModelManager
+        self.config.apply_quality_tier()
         
         # Initialize agents
         self.orchestrator = OrchestratorAgent()
@@ -130,7 +221,9 @@ class CourseGenerationPipeline:
         # Initialize gates
         self.gates = PipelineGates()
         
-        logger.info("CourseGenerationPipeline initialized")
+        logger.info(
+            f"CourseGenerationPipeline initialized with {self.config.quality_tier.value} quality tier"
+        )
     
     async def generate_course(
         self,

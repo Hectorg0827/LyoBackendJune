@@ -1,14 +1,19 @@
-"""Enhanced LyoBackend FastAPI Application (clean restored version)."""
-
 import asyncio
 import os
 import time
+import sys
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, List, Optional, Any, Callable
 
+# BOOTSTRAP HEARTBEAT - Monitors slow import performance on Cloud Run
+pid = os.getpid()
+print(f">>> [PID {pid}] BOOTSTRAP STARTING (enhanced_main.py)...", flush=True)
+
+print(f">>> [PID {pid}] BOOTSTRAP: Loading FastAPI...", flush=True)
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+print(f">>> [PID {pid}] BOOTSTRAP: FastAPI loaded", flush=True)
 
 try:  # Config import (enhanced first)
     from lyo_app.core.enhanced_config import settings
@@ -87,9 +92,12 @@ async def _init_ai_safe():
 
 
 async def _init_firebase_safe():
-    """Initialize Firebase with error handling"""
+    """Initialize Firebase with error handling (offloaded to thread)"""
     try:
         from lyo_app.integrations.firebase_client import firebase_client
+        # Run blocking initialization in a separate thread
+        await asyncio.to_thread(firebase_client.initialize_app)
+        
         if firebase_client.is_enabled():
             logger.info("✓ Firebase client initialized (Firestore/Storage available)")
         else:
@@ -101,9 +109,12 @@ async def _init_firebase_safe():
 
 
 async def _init_vertex_safe():
-    """Initialize Vertex AI with error handling"""
+    """Initialize Vertex AI with error handling (offloaded to thread)"""
     try:
         from lyo_app.integrations.vertex_ai_client import vertex_ai_client
+        # Run blocking initialization in a separate thread
+        await asyncio.to_thread(vertex_ai_client.initialize_app)
+
         if vertex_ai_client.is_enabled():
             logger.info("✓ Vertex AI client ready")
         else:
@@ -123,10 +134,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     # Database must init first (dependencies need it)
     try:
+        logger.info("⏳ Initializing database...")
         await init_db()
-        logger.info("✓ Database initialized")
+        logger.info("✅ Database initialized")
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+        logger.error(f"❌ Database initialization failed: {e}")
     
     # Sentry (synchronous, fast)
     if (
@@ -143,8 +155,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("✓ Sentry monitoring initialized")
     
     # PARALLEL INITIALIZATION - Major performance boost!
-    # These don't depend on each other, run them concurrently
-    logger.info("Initializing services in parallel...")
+    # Re-enabled after isolating boot performance to library import times
+    logger.info("Initializing services (AI/Firebase/Vertex)...")
     init_tasks = [
         _init_redis_safe(),
         _init_storage_safe(),
@@ -203,6 +215,7 @@ def create_app() -> FastAPI:
         docs_url=None if settings.is_production() else "/docs",
         redoc_url=None if settings.is_production() else "/redoc",
     )
+    logger.info("🛠️ FastAPI instance created")
     # Middleware - Security First
     from lyo_app.middleware.security_middleware import SecurityMiddleware
     from lyo_app.middleware.usage_middleware import UsageMiddleware
@@ -232,6 +245,7 @@ def create_app() -> FastAPI:
     
     # Add response compression for bandwidth optimization (60-80% reduction)
     app.add_middleware(GZipMiddleware, minimum_size=1000)
+    logger.info("🛡️ Middlewares added")
     
     # Performance and error monitoring
     app.middleware("http")(performance_monitoring_middleware)
@@ -239,14 +253,18 @@ def create_app() -> FastAPI:
     app.middleware("http")(request_size_middleware)
     setup_error_handlers(app)
     # Routers
+    print(">>> IMPORTING AUTH ROUTES...", flush=True)
     from lyo_app.auth.routes import router as auth_router
+    print(">>> AUTH ROUTES IMPORTED", flush=True)
     try:
+        print(">>> IMPORTING AI STUDY ROUTES...", flush=True)
         from lyo_app.ai_study.clean_routes import router as ai_study_router
+        print(">>> AI STUDY ROUTES IMPORTED", flush=True)
     except ImportError:
         from lyo_app.ai_study.routes import router as ai_study_router
         logger.warning("Using basic AI study routes (clean routes unavailable)")
     
-    # Include Vision routes
+    # Vision routes
     try:
         from lyo_app.ai_study.vision_routes import router as vision_router
         app.include_router(vision_router)
@@ -254,7 +272,7 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Could not import Vision routes: {e}")
 
-    # Include Recommendations and Embeddings routes
+    # Recommendations routes
     try:
         from lyo_app.ai_study.recommendations_routes import router as recommendations_router
         app.include_router(recommendations_router)
@@ -277,10 +295,11 @@ def create_app() -> FastAPI:
             logger.warning("Storage routes unavailable")
     from lyo_app.monetization.routes import router as ads_router
     try:
+        print(">>> IMPORTING API V1 ROUTES...", flush=True)
         from lyo_app.api.v1 import api_router
 
         app.include_router(api_router, prefix="/api/v1")
-        logger.info("✅ API v1 routes integrated - 10/10 backend achieved!")
+        print(">>> API V1 ROUTES INTEGRATED", flush=True)
     except ImportError as e:  # noqa: BLE001
         logger.warning(f"API v1 routes not available: {e}")
 
@@ -298,46 +317,40 @@ def create_app() -> FastAPI:
     if storage_router:
         app.include_router(storage_router)
     app.include_router(ads_router)
-    
-    # AI API Routes - Dual AI System
+    # AI API Routes
     try:
         from lyo_app.routers.ai_routes import router as ai_router
         app.include_router(ai_router)
-        logger.info("✅ AI API routes integrated - Dual AI system (Gemini + OpenAI) active!")
-    except ImportError as e:
-        logger.warning(f"AI API routes not available: {e}")
+    except ImportError:
+        pass
     
-    # AI Chat - Unified chat endpoint with OpenAI + Gemini
+    # AI Chat
     try:
         from lyo_app.ai_chat.routes import router as ai_chat_router
         app.include_router(ai_chat_router)
-        logger.info("✅ AI Chat routes integrated - Unified chat with TTS (OpenAI + Gemini)!")
-    except ImportError as e:
-        logger.warning(f"AI Chat routes not available: {e}")
+    except ImportError:
+        pass
     
-    # TTS (Text-to-Speech) - Audio Learning
+    # TTS
     try:
         from lyo_app.tts.routes import router as tts_router
         app.include_router(tts_router)
-        logger.info("✅ TTS routes integrated - Audio learning with OpenAI voices active!")
-    except ImportError as e:
-        logger.warning(f"TTS routes not available: {e}")
+    except ImportError:
+        pass
     
-    # Image Generation - DALL-E 3 for educational visuals
+    # Image Generation
     try:
         from lyo_app.image_gen.routes import router as image_gen_router
         app.include_router(image_gen_router)
-        logger.info("✅ Image Generation routes integrated - DALL-E 3 educational visuals active!")
-    except ImportError as e:
-        logger.warning(f"Image Generation routes not available: {e}")
+    except ImportError:
+        pass
     
-    # AI Classroom - Unified intelligent learning experience
+    # AI Classroom
     try:
         from lyo_app.ai_classroom.routes import router as ai_classroom_router
         app.include_router(ai_classroom_router)
-        logger.info("✅ AI Classroom routes integrated - Award-winning learning experience active!")
-    except ImportError as e:
-        logger.warning(f"AI Classroom routes not available: {e}")
+    except ImportError:
+        pass
 
     # AI Classroom Playback - Interactive Cinema API (separate router)
     try:
@@ -451,6 +464,22 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"AI Tutor v2 routes not available: {e}")
     
+    # Multi-Agent V2 - Streaming Support (NEW - Gemini Enhancements)
+    try:
+        from lyo_app.ai_agents.multi_agent_v2.routes_streaming import streaming_router
+        app.include_router(streaming_router)
+        logger.info("✅ Multi-agent v2 streaming routes loaded - Real-time progress updates!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Streaming routes not available: {e}")
+    
+    # Multi-Agent V2 - Analytics (NEW - Gemini Enhancements)
+    try:
+        from lyo_app.ai_agents.multi_agent_v2.routes_analytics import analytics_router
+        app.include_router(analytics_router)
+        logger.info("✅ Multi-agent v2 analytics routes loaded - Usage tracking active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Analytics routes not available: {e}")
+
     # Multi-Tenant SaaS API
     try:
         from lyo_app.tenants.routes import router as tenants_router

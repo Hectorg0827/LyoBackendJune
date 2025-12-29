@@ -7,7 +7,7 @@ from datetime import datetime
 
 from lyo_app.enhanced_main import app
 from lyo_app.core.database import Base, get_db
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.personalization.models import LearnerState, LearnerMastery, AffectState
 from lyo_app.chat.models import ChatConversation, ChatMessage, ChatMode
 from lyo_app.personalization.service import personalization_engine

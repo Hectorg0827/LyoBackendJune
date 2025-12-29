@@ -10,7 +10,7 @@ from datetime import datetime
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.routes import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.stack import crud
 from lyo_app.stack.models import StackItemType, StackItemStatus
 

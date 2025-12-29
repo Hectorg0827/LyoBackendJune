@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.jwt_auth import get_optional_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.chat.models import ChatMode, ChatMessage, ChatConversation
 from lyo_app.chat.schemas import (
     ChatRequest, ChatResponse, ConversationHistoryItem,

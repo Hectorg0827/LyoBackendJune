@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.dependencies import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.collaboration.service import CollaborativeLearningEngine
 from lyo_app.collaboration.schemas import (
     StudyGroupCreate,

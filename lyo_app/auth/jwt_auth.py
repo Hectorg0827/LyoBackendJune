@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from lyo_app.core.settings import settings
 from lyo_app.core.problems import AuthenticationProblem, AuthorizationProblem
 from lyo_app.core.database import get_db
-from lyo_app.models.enhanced import User
+from lyo_app.auth.models import User
 from lyo_app.auth.jwt_cache import JWTCache
 from lyo_app.core.logging import logger
 
@@ -230,7 +230,7 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> Opti
     if not user.is_active:
         return None
     
-    if not verify_password(password, user.password_hash):
+    if not verify_password(password, user.hashed_password):
         # Increment failed login attempts
         user.login_attempts += 1
         

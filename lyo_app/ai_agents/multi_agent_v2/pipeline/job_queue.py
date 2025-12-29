@@ -14,7 +14,7 @@ import logging
 
 from sqlalchemy import Column, String, Text, DateTime, Integer, Float, Boolean, ForeignKey, JSON
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Uuid
 # Use JSON instead of JSONB for SQLite compatibility; production uses PostgreSQL with JSONB benefits
 JSONB = JSON  # Alias for compatibility
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,7 +50,7 @@ class CourseGenerationJob(Base):
     __tablename__ = "course_generation_jobs"
     
     # Primary key
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(Uuid, primary_key=True, default=uuid4)
     
     # User association
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -73,7 +73,7 @@ class CourseGenerationJob(Base):
     
     # Final result
     final_course = Column(JSONB, nullable=True)
-    final_course_id = Column(PGUUID(as_uuid=True), nullable=True)
+    final_course_id = Column(Uuid, nullable=True)
     
     # Error handling
     error_message = Column(Text, nullable=True)
@@ -108,8 +108,8 @@ class GeneratedCourseModel(Base):
     
     __tablename__ = "generated_courses"
     
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    job_id = Column(PGUUID(as_uuid=True), ForeignKey("course_generation_jobs.id"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid4)
+    job_id = Column(Uuid, ForeignKey("course_generation_jobs.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     # Course metadata
@@ -143,7 +143,7 @@ class GeneratedCourseModel(Base):
     
     # Version control
     version = Column(Integer, default=1)
-    parent_course_id = Column(PGUUID(as_uuid=True), nullable=True)
+    parent_course_id = Column(Uuid, nullable=True)
     
     def __repr__(self):
         return f"<GeneratedCourse {self.id} title={self.title}>"

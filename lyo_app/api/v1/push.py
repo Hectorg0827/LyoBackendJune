@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from lyo_app.core.database import get_db
-from lyo_app.models.production import User, PushDevice
+from lyo_app.auth.models import User
+from lyo_app.models.production import PushDevice
 from lyo_app.auth.production import require_user
 from lyo_app.tasks.push_notifications import send_push_notification
 

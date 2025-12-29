@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.dependencies import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.core.monitoring import monitor_request
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from .comprehensive_service import comprehensive_study_service

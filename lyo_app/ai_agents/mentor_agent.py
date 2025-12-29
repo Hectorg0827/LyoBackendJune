@@ -22,7 +22,7 @@ from sqlalchemy.orm import selectinload
 from .models import MentorInteraction, UserEngagementState, UserEngagementStateEnum, AIConversationLog, AIModelTypeEnum
 from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
 from .websocket_manager import connection_manager
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.stack.schemas import StackCardPayload, StackItemType
 
 logger = logging.getLogger(__name__)

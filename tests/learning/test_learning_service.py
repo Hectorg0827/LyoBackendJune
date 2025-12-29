@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.learning.schemas import CourseCreate, LessonCreate, CourseEnrollmentCreate, LessonCompletionCreate
 from lyo_app.learning.service import LearningService
 from lyo_app.learning.models import Course, Lesson, DifficultyLevel, ContentType
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.service import AuthService
 from lyo_app.auth.schemas import UserCreate
 

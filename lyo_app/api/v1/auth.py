@@ -9,7 +9,7 @@ from typing import List
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.models import User
-from lyo_app.core.security import create_access_token, verify_password, get_password_hash
+from lyo_app.auth.security import create_access_token, verify_password, hash_password
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ async def register_user(
         )
     
     # Create new user
-    hashed_password = get_password_hash(password)
+    hashed_password = hash_password(password)
     user = User(
         email=email,
         hashed_password=hashed_password,

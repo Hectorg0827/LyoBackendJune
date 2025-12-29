@@ -14,10 +14,10 @@ bind = "0.0.0.0:8000"
 backlog = 2048
 
 # Worker processes
-workers = min(multiprocessing.cpu_count() * 2 + 1, 4)  # Reduced for Cloud Run
+workers = 1  # Single worker for memory-intensive startup
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_connections = 1000
-timeout = 120  # Increased for slow startup with AI model loading
+timeout = 600  # High timeout for slow AI dependency loading
 graceful_timeout = 60
 keepalive = 5
 

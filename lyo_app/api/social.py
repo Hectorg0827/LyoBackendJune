@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from lyo_app.models.social import Story, StoryView, Conversation, ConversationParticipant, Message, MessageReadReceipt
 from lyo_app.core.database import get_db
 from lyo_app.auth.routes import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.monetization.engine import get_ad_for_placement
 
 router = APIRouter(prefix="/social", tags=["Stories & Messenger"])

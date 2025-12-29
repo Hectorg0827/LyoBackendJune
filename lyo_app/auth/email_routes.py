@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from lyo_app.core.database import get_async_session
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.email_service import EmailService
 from lyo_app.auth.security import hash_password, verify_password
 from lyo_app.auth.schemas import (

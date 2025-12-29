@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from lyo_app.core.celery_app import celery_app
 from lyo_app.tasks.course_generation import get_sync_db
-from lyo_app.models.production import User, PushDevice, Course
+from lyo_app.models.production import PushDevice, Course
 
 logger = logging.getLogger(__name__)
 

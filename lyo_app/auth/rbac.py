@@ -11,7 +11,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Table, Co
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
-    from lyo_app.auth.models import User
+    from lyo_app.models.enhanced import User
 
 from lyo_app.core.database import Base
 
@@ -133,7 +133,7 @@ class Role(Base):
     
     # Relationships - only link to permissions, user linking handled separately
     permissions = relationship("Permission", secondary=role_permissions, back_populates="roles")
-    # Note: User relationship removed to avoid mapper conflicts with different User models
+    users = relationship("lyo_app.auth.models.User", secondary="user_roles", back_populates="roles", lazy="noload", viewonly=True)
     
     def __repr__(self) -> str:
         return f"<Role(id={self.id}, name='{self.name}')>"

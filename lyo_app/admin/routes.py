@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.auth.rbac import Role, Permission, RoleType, PermissionType
 from lyo_app.auth.rbac_service import RBACService
 from lyo_app.auth.service import AuthService

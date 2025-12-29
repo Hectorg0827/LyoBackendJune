@@ -7,14 +7,14 @@ from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, ForeignKey, 
     JSON, Index, UniqueConstraint, Float, Enum as SQLEnum
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Uuid, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
 
 
-Base = declarative_base()
+from lyo_app.core.database import Base
 
 
 class TaskState(str, enum.Enum):
@@ -50,135 +50,19 @@ class PushPlatform(str, enum.Enum):
     ANDROID = "android"
 
 
-class User(Base):
-    """Enhanced user model with authentication and profile data."""
-    __tablename__ = "users"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    username = Column(String(100), unique=True, index=True, nullable=True)
-    password_hash = Column(String(255), nullable=False)
-    full_name = Column(String(255), nullable=True)
-    
-    # Profile & preferences
-    avatar_url = Column(String(500), nullable=True)
-    bio = Column(Text, nullable=True)
-    locale = Column(String(10), default="en", nullable=False)
-    timezone = Column(String(50), default="UTC", nullable=False)
-    
-    # Account status
-    is_active = Column(Boolean, default=True, nullable=False)
-    is_verified = Column(Boolean, default=False, nullable=False)
-    email_verified_at = Column(DateTime(timezone=True), nullable=True)
-    
-    # Authentication tracking
-    last_login_at = Column(DateTime(timezone=True), nullable=True)
-    login_attempts = Column(Integer, default=0, nullable=False)
-    locked_until = Column(DateTime(timezone=True), nullable=True)
-    
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
-    
-    # Relationships
-    courses = relationship("Course", back_populates="owner", cascade="all, delete-orphan")
-    tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
-    push_devices = relationship("PushDevice", back_populates="user", cascade="all, delete-orphan")
-    gamification_profile = relationship("GamificationProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    
-    def __repr__(self):
-        return f"<User {self.email}>"
-
-
-class Course(Base):
-    """Course model with normalized content structure."""
-    __tablename__ = "courses"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    
-    # Course metadata
-    title = Column(String(500), nullable=False)
-    topic = Column(String(200), nullable=False, index=True)
-    summary = Column(Text, nullable=True)
-    description = Column(Text, nullable=True)
-    
-    # Generation parameters (preserved for reproducibility)
-    interests = Column(JSONB, nullable=True)  # List of interest keywords
-    difficulty_level = Column(String(20), nullable=True)  # beginner/intermediate/advanced
-    target_duration_hours = Column(Float, nullable=True)
-    
-    # Status tracking
-    status = Column(SQLEnum(CourseStatus), default=CourseStatus.DRAFT, nullable=False, index=True)
-    generation_metadata = Column(JSONB, nullable=True)  # Model version, prompts, etc.
-    
-    # SEO & Discovery
-    tags = Column(JSONB, nullable=True)  # List of tags
-    thumbnail_url = Column(String(500), nullable=True)
-    estimated_duration_hours = Column(Float, nullable=True)
-    
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
-    published_at = Column(DateTime(timezone=True), nullable=True)
-    
-    # Relationships
-    owner = relationship("User", back_populates="courses")
-    lessons = relationship("Lesson", back_populates="course", cascade="all, delete-orphan")
-    content_items = relationship("ContentItem", back_populates="course", cascade="all, delete-orphan")
-    study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="course", lazy="select")
-    
-    __table_args__ = (
-        Index("ix_courses_owner_created", "owner_user_id", "created_at"),
-        Index("ix_courses_topic_status", "topic", "status"),
-    )
-    
-    def __repr__(self):
-        return f"<Course {self.title}>"
-
-
-class Lesson(Base):
-    """Individual lessons within a course."""
-    __tablename__ = "lessons"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    
-    title = Column(String(500), nullable=False)
-    summary = Column(Text, nullable=True)
-    order = Column(Integer, nullable=False)  # Sequence within course
-    
-    # Learning objectives
-    objectives = Column(JSONB, nullable=True)  # List of learning objectives
-    prerequisites = Column(JSONB, nullable=True)  # List of prerequisite concepts
-    
-    # Estimated timing
-    estimated_duration_minutes = Column(Integer, nullable=True)
-    
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
-    
-    # Relationships
-    course = relationship("Course", back_populates="lessons")
-    content_items = relationship("ContentItem", back_populates="lesson")
-    
-    __table_args__ = (
-        Index("ix_lessons_course_order", "course_id", "order"),
-        UniqueConstraint("course_id", "order", name="uq_lesson_course_order"),
-    )
-    
-    def __repr__(self):
-        return f"<Lesson {self.title}>"
+# Note: User model moved to lyo_app.auth.models to avoid redundancy
+from lyo_app.auth.models import User
+# Note: Course and Lesson moved to lyo_app.learning.models to avoid redundancy
+from lyo_app.learning.models import Course, Lesson
 
 
 class ContentItem(Base):
     """Normalized content items with unified schema for one-screen UI."""
     __tablename__ = "content_items"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id"), nullable=True)  # Optional lesson grouping
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    lesson_id = Column(Integer, ForeignKey("lessons.id"), nullable=True)  # Optional lesson grouping
     
     # Content identification
     type = Column(SQLEnum(ContentType), nullable=False, index=True)
@@ -202,7 +86,7 @@ class ContentItem(Base):
     attribution = Column(String(500), nullable=True)  # Author/creator
     
     # Categorization & discovery
-    tags = Column(JSONB, nullable=True)  # List of tags
+    tags = Column(JSON, nullable=True)  # List of tags
     difficulty_level = Column(String(20), nullable=True)
     language = Column(String(10), default="en", nullable=False)
     
@@ -238,15 +122,15 @@ class Task(Base):
     """Async task tracking with WebSocket progress support."""
     __tablename__ = "tasks"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     # Idempotency & deduplication
     idempotency_key = Column(String(100), unique=True, index=True, nullable=False)
     
     # Task metadata
     task_type = Column(String(50), nullable=False, index=True)  # "course_generation", etc.
-    task_params = Column(JSONB, nullable=True)  # Original parameters
+    task_params = Column(JSON, nullable=True)  # Original parameters
     
     # Progress tracking
     state = Column(SQLEnum(TaskState), default=TaskState.QUEUED, nullable=False, index=True)
@@ -254,12 +138,12 @@ class Task(Base):
     message = Column(String(500), nullable=True)  # Current status message
     
     # Results
-    result_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
-    result_data = Column(JSONB, nullable=True)  # Additional result metadata
-    error_details = Column(JSONB, nullable=True)  # Error information
+    result_course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
+    result_data = Column(JSON, nullable=True)  # Additional result metadata
+    error_details = Column(JSON, nullable=True)  # Error information
     
     # For course generation specifically
-    provisional_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
+    provisional_course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -285,8 +169,8 @@ class PushDevice(Base):
     """Push notification device registration."""
     __tablename__ = "push_devices"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     device_token = Column(String(200), nullable=False, index=True)
     platform = Column(SQLEnum(PushPlatform), nullable=False)
@@ -321,8 +205,8 @@ class GamificationProfile(Base):
     """User gamification profile with XP, streaks, and badges."""
     __tablename__ = "gamification_profiles"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
     
     # Experience points
     total_xp = Column(Integer, default=0, nullable=False)
@@ -340,8 +224,8 @@ class GamificationProfile(Base):
     total_study_minutes = Column(Integer, default=0, nullable=False)
     
     # Badges and achievements (JSON array of badge IDs)
-    badges = Column(JSONB, default=list, nullable=False)
-    achievements = Column(JSONB, default=list, nullable=False)
+    badges = Column(JSON, default=list, nullable=False)
+    achievements = Column(JSON, default=list, nullable=False)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -354,12 +238,12 @@ class GamificationProfile(Base):
         return f"<GamificationProfile user={self.user_id} level={self.level}>"
 
 
-class FeedItem(Base):
-    """Feed items for community/discovery feed."""
-    __tablename__ = "feed_items"
+class DiscoveryFeedItem(Base):
+    """Feed items for community/discovery feed (AI generated)."""
+    __tablename__ = "discovery_feed_items"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     # Content
     item_type = Column(String(50), nullable=False, index=True)  # "course_shared", "achievement", etc.
@@ -367,14 +251,15 @@ class FeedItem(Base):
     content = Column(Text, nullable=True)
     
     # References
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
     
     # Metadata
-    item_metadata = Column("metadata", JSONB, nullable=True)
+    item_metadata = Column("metadata", JSON, nullable=True)
+    image_url = Column(String(500), nullable=True)
     
     # Engagement
-    likes_count = Column(Integer, default=0, nullable=False)
-    comments_count = Column(Integer, default=0, nullable=False)
+    like_count = Column(Integer, default=0)
+    comment_count = Column(Integer, default=0)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

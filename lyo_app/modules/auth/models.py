@@ -6,7 +6,6 @@ SQLAlchemy models for user management, authentication, and RBAC.
 """
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -44,8 +43,8 @@ class User(Base):
     avatar_url = Column(String, nullable=True)
     bio = Column(Text, nullable=True)
     
-    # RBAC - stored as array for multiple roles
-    roles = Column(ARRAY(String), default=["student"], nullable=False)
+    # RBAC - stored as JSON array for multiple roles (SQLite compatible)
+    roles = Column(JSON, default=["student"], nullable=False)
     
     # Privacy settings
     is_private = Column(Boolean, default=True)  # Default private for students

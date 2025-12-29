@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.core.database import get_async_session
 from lyo_app.core.file_upload import FileUploadService, FileUpload
 from lyo_app.auth.dependencies import get_current_user
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.core.logging import get_logger
 
 logger = get_logger(__name__)

@@ -7,7 +7,7 @@ import pytest
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lyo_app.auth.models import User
+from lyo_app.models.enhanced import User
 from lyo_app.learning.models import Course
 from lyo_app.community.models import (
     StudyGroup, GroupMembership, CommunityEvent, EventAttendance,
