@@ -41,12 +41,14 @@ celery_app.conf.update(
         "lyo_app.tasks.course_generation.*": {"queue": "course_generation"},
         "lyo_app.tasks.notifications.*": {"queue": "notifications"},
         "lyo_app.tasks.feeds.*": {"queue": "feeds"},
+        "lyo_app.tasks.memory_synthesis.*": {"queue": "memory"},
     },
     task_queues=(
         Queue("lyo_tasks", routing_key="lyo_tasks"),
         Queue("course_generation", routing_key="course_generation"),
         Queue("notifications", routing_key="notifications"),
         Queue("feeds", routing_key="feeds"),
+        Queue("memory", routing_key="memory"),
     ),
     # Retry configuration
     task_retry_jitter=True,
