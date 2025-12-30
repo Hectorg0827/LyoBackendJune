@@ -10,7 +10,8 @@ import logging
 # Import all routers
 from .routers import (
     auth, media, feed, stories, messaging, notifications,
-    tutor, planner, practice, resources, search, moderation, admin, performance
+    tutor, planner, practice, resources, search, moderation, admin, performance,
+    memory
 )
 
 # Global AI components for lifecycle management
@@ -241,7 +242,8 @@ def create_app() -> FastAPI:
         (search.router, "/api/v1", "AI-Powered Search"),
         (moderation.router, "/api/v1", "Content Moderation"),
         (admin.router, "/api/v1", "Admin & Analytics"),
-        (performance.router, "/api/v1", "Performance Monitoring")
+        (performance.router, "/api/v1", "Performance Monitoring"),
+        (memory.router, "/api/v1", "AI Memory & Personalization")
     ]
     
     for router, prefix, description in router_configs:
