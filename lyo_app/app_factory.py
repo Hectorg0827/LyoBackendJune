@@ -24,6 +24,14 @@ async def lifespan(app: FastAPI):
     # Startup
     logging.info("🚀 Starting Lyo Backend with NextGen AI...")
 
+    # Phase 1: Start proactive intervention scheduler
+    try:
+        from .proactive.scheduler import start_proactive_scheduler
+        asyncio.create_task(start_proactive_scheduler())
+        logging.info("✅ Phase 1: Proactive intervention scheduler started")
+    except Exception as e:
+        logging.warning(f"⚠️ Phase 1 scheduler not started: {e}")
+
     # Lightweight mode to skip heavy external dependencies during tests/smoke
     lightweight = os.getenv("LYO_LIGHTWEIGHT_STARTUP", "0") == "1"
     if lightweight:
@@ -226,6 +234,15 @@ def create_app() -> FastAPI:
             ]
         }
     
+    # Phase 1: Indispensable AI Companion - Import new routers
+    try:
+        from .ambient.routes import router as ambient_router
+        from .proactive.routes import router as proactive_router
+        phase1_enabled = True
+    except ImportError as e:
+        logging.warning(f"Phase 1 routers not available: {e}")
+        phase1_enabled = False
+
     # Include all v1 routers with enhanced error handling
     router_configs = [
         (auth.router, "/api/v1", "Authentication & Authorization"),
@@ -243,6 +260,14 @@ def create_app() -> FastAPI:
         (admin.router, "/api/v1", "Admin & Analytics"),
         (performance.router, "/api/v1", "Performance Monitoring")
     ]
+
+    # Phase 1: Add ambient presence and proactive interventions
+    if phase1_enabled:
+        router_configs.extend([
+            (ambient_router, "/api/v1", "Ambient Presence"),
+            (proactive_router, "/api/v1", "Proactive Interventions")
+        ])
+        logging.info("✅ Phase 1: Ambient Presence & Proactive Interventions enabled")
     
     for router, prefix, description in router_configs:
         try:
