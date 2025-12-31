@@ -243,6 +243,14 @@ def create_app() -> FastAPI:
         logging.warning(f"Phase 1 routers not available: {e}")
         phase1_enabled = False
 
+    # Phase 2: Predictive Intelligence - Import predictive routers
+    try:
+        from .predictive.routes import router as predictive_router
+        phase2_enabled = True
+    except ImportError as e:
+        logging.warning(f"Phase 2 routers not available: {e}")
+        phase2_enabled = False
+
     # Include all v1 routers with enhanced error handling
     router_configs = [
         (auth.router, "/api/v1", "Authentication & Authorization"),
@@ -268,7 +276,14 @@ def create_app() -> FastAPI:
             (proactive_router, "/api/v1", "Proactive Interventions")
         ])
         logging.info("✅ Phase 1: Ambient Presence & Proactive Interventions enabled")
-    
+
+    # Phase 2: Add predictive intelligence
+    if phase2_enabled:
+        router_configs.append(
+            (predictive_router, "/api/v1", "Predictive Intelligence")
+        )
+        logging.info("✅ Phase 2: Predictive Intelligence enabled")
+
     for router, prefix, description in router_configs:
         try:
             app.include_router(

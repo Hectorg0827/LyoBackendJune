@@ -30,6 +30,10 @@ class InterventionType(str, Enum):
     PLATEAU_INTERVENTION = "plateau_intervention"
     RETENTION_REFRESH = "retention_refresh"
     DIFFICULTY_ADJUSTMENT = "difficulty_adjustment"
+    GENTLE_NUDGE = "gentle_nudge"
+    ALTERNATIVE_APPROACH = "alternative_approach"
+    SKILL_REFRESH = "skill_refresh"
+    OPTIMAL_TIMING_NUDGE = "optimal_timing_nudge"
 
     # Emotional
     EMOTIONAL_SUPPORT = "emotional_support"
