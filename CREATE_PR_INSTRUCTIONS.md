@@ -1,4 +1,8 @@
-# 🚀 Create Pull Request - Instructions
+# 🚀 Create Pull Request - Instructions (Phase 2 Specific)
+
+> **Note:** These instructions are specific to the Phase 2 deployment PR.
+> For a detailed Phase 2 PR template, see `.github/PULL_REQUEST_TEMPLATE_PHASE2.md`
+> For general PRs, GitHub will use the standard template at `.github/PULL_REQUEST_TEMPLATE.md`
 
 Follow these steps to create the Pull Request for Phase 2 deployment documentation.
 

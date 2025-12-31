@@ -77,7 +77,7 @@ See DEPLOY_PHASE2_NOW.md for details.
 Then:
 - Review the PR
 - Merge to main
-- Tag will be created automatically or manually add the tag
+- The tag will be created automatically, or you can add it manually
 
 ---
 
