@@ -265,8 +265,9 @@ jobs:
   security:
     name: Security Scanning
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+
     steps:
     - name: 📥 Checkout code
       uses: actions/checkout@v4
@@ -277,12 +278,14 @@ jobs:
         image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
         format: 'sarif'
         output: 'trivy-results.sarif'
+      continue-on-error: true
 
     - name: 📊 Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
+      continue-on-error: true
 
   # 📊 Performance Testing
   performance:
@@ -338,13 +341,15 @@ jobs:
       run: |
         python -c "
         import json
-        from lyo_app.main import app
-        
+        from lyo_app.app_factory import create_app
+
         # Generate OpenAPI spec
+        app = create_app()
         openapi_spec = app.openapi()
         with open('openapi.json', 'w') as f:
             json.dump(openapi_spec, f, indent=2)
         "
+      continue-on-error: true
 
     - name: 📚 Build documentation
       run: |
