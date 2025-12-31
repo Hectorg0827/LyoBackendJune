@@ -70,10 +70,12 @@ jobs:
         echo "DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb" >> .env.test
         echo "REDIS_URL=redis://localhost:6379" >> .env.test
         echo "ENVIRONMENT=test" >> .env.test
+        echo "SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long" >> .env.test
 
     - name: 🗄️ Run database migrations
       run: |
         export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
+        export SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
         python setup_database.py
 
     - name: 🧪 Run tests with coverage
@@ -81,6 +83,7 @@ jobs:
         export ENVIRONMENT=test
         export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
         export REDIS_URL=redis://localhost:6379
+        export SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
         pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
 
     - name: 📊 Upload coverage to Codecov
