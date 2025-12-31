@@ -10,7 +10,8 @@ import logging
 # Import all routers
 from .routers import (
     auth, media, feed, stories, messaging, notifications,
-    tutor, planner, practice, resources, search, moderation, admin, performance
+    tutor, planner, practice, resources, search, moderation, admin, performance,
+    memory, engagement, calendar, hooks, sync
 )
 
 # Global AI components for lifecycle management
@@ -266,7 +267,12 @@ def create_app() -> FastAPI:
         (search.router, "/api/v1", "AI-Powered Search"),
         (moderation.router, "/api/v1", "Content Moderation"),
         (admin.router, "/api/v1", "Admin & Analytics"),
-        (performance.router, "/api/v1", "Performance Monitoring")
+        (performance.router, "/api/v1", "Performance Monitoring"),
+        (memory.router, "/api/v1", "AI Memory & Personalization"),
+        (engagement.router, "/api/v1", "Proactive Engagement"),
+        (calendar.router, "/api/v1", "Calendar Integration"),
+        (hooks.router, "/api/v1", "Behavioral Hooks"),
+        (sync.router, "/api/v1", "Multi-Device Sync")
     ]
 
     # Phase 1: Add ambient presence and proactive interventions
