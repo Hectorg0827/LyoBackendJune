@@ -454,7 +454,7 @@ async def get_weekly_summary(
             "avg_session_length_minutes": round(
                 interaction_count / session_count * 2, 1
             ) if session_count > 0 else 0,
-            "summary": self._generate_weekly_summary_message(
+            "summary": _generate_weekly_summary_message(
                 session_count, xp_earned, skills_improved
             )
         }

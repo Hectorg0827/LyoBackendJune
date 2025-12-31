@@ -11,7 +11,7 @@ import logging
 from .routers import (
     auth, media, feed, stories, messaging, notifications,
     tutor, planner, practice, resources, search, moderation, admin, performance,
-    memory, engagement
+    memory, engagement, calendar, hooks, sync
 )
 
 # Global AI components for lifecycle management
@@ -244,7 +244,10 @@ def create_app() -> FastAPI:
         (admin.router, "/api/v1", "Admin & Analytics"),
         (performance.router, "/api/v1", "Performance Monitoring"),
         (memory.router, "/api/v1", "AI Memory & Personalization"),
-        (engagement.router, "/api/v1", "Proactive Engagement")
+        (engagement.router, "/api/v1", "Proactive Engagement"),
+        (calendar.router, "/api/v1", "Calendar Integration"),
+        (hooks.router, "/api/v1", "Behavioral Hooks"),
+        (sync.router, "/api/v1", "Multi-Device Sync")
     ]
     
     for router, prefix, description in router_configs:

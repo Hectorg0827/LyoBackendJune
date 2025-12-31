@@ -45,6 +45,7 @@ celery_app.conf.update(
         "lyo_app.tasks.feeds.*": {"queue": "feeds"},
         "lyo_app.tasks.memory_synthesis.*": {"queue": "memory"},
         "lyo_app.tasks.proactive_engagement.*": {"queue": "engagement"},
+        "lyo_app.tasks.calendar_sync.*": {"queue": "calendar"},
     },
     task_queues=(
         Queue("lyo_tasks", routing_key="lyo_tasks"),
@@ -53,6 +54,7 @@ celery_app.conf.update(
         Queue("feeds", routing_key="feeds"),
         Queue("memory", routing_key="memory"),
         Queue("engagement", routing_key="engagement"),
+        Queue("calendar", routing_key="calendar"),
     ),
     # Retry configuration
     task_retry_jitter=True,
