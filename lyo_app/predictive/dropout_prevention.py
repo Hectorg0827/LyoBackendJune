@@ -8,9 +8,9 @@ Early intervention can save 60%+ of at-risk users.
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple, Optional
+import statistics
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, desc
-import numpy as np
 
 from .models import DropoutRiskScore, LearningPlateau, SkillRegression
 from lyo_app.personalization.models import LearnerState, LearnerMastery
@@ -172,10 +172,14 @@ class DropoutPredictor:
         # Calculate trend (simple linear regression slope)
         weeks = list(range(len(weekly_sessions)))
         if len(weeks) > 1:
-            slope = np.polyfit(weeks, weekly_sessions, 1)[0]
+            # Manual linear regression: slope = Σ((x-x̄)(y-ȳ)) / Σ((x-x̄)²)
+            mean_x = statistics.mean(weeks)
+            mean_y = statistics.mean(weekly_sessions)
+            numerator = sum((x - mean_x) * (y - mean_y) for x, y in zip(weeks, weekly_sessions))
+            denominator = sum((x - mean_x) ** 2 for x in weeks)
+            slope = numerator / denominator if denominator != 0 else 0.0
             # Normalize: divide by mean to get percentage change
-            mean_sessions = np.mean(weekly_sessions)
-            return slope / mean_sessions if mean_sessions > 0 else 0.0
+            return slope / mean_y if mean_y > 0 else 0.0
 
         return 0.0
 
@@ -202,7 +206,7 @@ class DropoutPredictor:
             gap = (session_dates[i] - session_dates[i+1]).days
             gaps.append(gap)
 
-        return np.mean(gaps) if gaps else 0.0
+        return statistics.mean(gaps) if gaps else 0.0
 
     async def _calculate_sentiment_trend(
         self,
@@ -262,7 +266,12 @@ class DropoutPredictor:
         time_points = list(range(len(mastery_levels)))
 
         if len(time_points) > 1:
-            slope = np.polyfit(time_points, mastery_levels, 1)[0]
+            # Manual linear regression
+            mean_x = statistics.mean(time_points)
+            mean_y = statistics.mean(mastery_levels)
+            numerator = sum((x - mean_x) * (y - mean_y) for x, y in zip(time_points, mastery_levels))
+            denominator = sum((x - mean_x) ** 2 for x in time_points)
+            slope = numerator / denominator if denominator != 0 else 0.0
             return slope
 
         return 0.0
