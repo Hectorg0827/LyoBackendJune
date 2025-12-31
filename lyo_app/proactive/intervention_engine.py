@@ -22,6 +22,16 @@ from lyo_app.gamification.models import Streak, UserLevel
 from lyo_app.learning.models import CourseEnrollment, LessonCompletion
 from lyo_app.personalization.models import LearnerMastery, LearnerState
 
+# Phase 2: Predictive Intelligence integration
+try:
+    from lyo_app.predictive.dropout_prevention import dropout_predictor
+    from lyo_app.predictive.optimal_timing import timing_optimizer
+    from lyo_app.predictive.models import LearningPlateau, SkillRegression
+    PREDICTIVE_ENABLED = True
+except ImportError:
+    logger.warning("Phase 2 predictive intelligence not available")
+    PREDICTIVE_ENABLED = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,10 +65,15 @@ class InterventionEngine:
         event_interventions = await self._check_event_triggers(user_state, db)
         interventions.extend(event_interventions)
 
-        # 3. Prioritize and filter
+        # 3. Phase 2: Check behavioral/predictive triggers
+        if PREDICTIVE_ENABLED:
+            behavioral_interventions = await self._check_behavioral_triggers(user_state, db)
+            interventions.extend(behavioral_interventions)
+
+        # 4. Prioritize and filter
         interventions = self._prioritize_interventions(interventions)
 
-        # 4. Respect user preferences and fatigue
+        # 5. Respect user preferences and fatigue
         interventions = await self._apply_fatigue_filter(interventions, user_id, db)
 
         return interventions
@@ -247,6 +262,145 @@ class InterventionEngine:
                     action="celebrate",
                     timing="immediate"
                 ))
+
+        return interventions
+
+    async def _check_behavioral_triggers(
+        self,
+        user_state: UserState,
+        db: AsyncSession
+    ) -> List[Intervention]:
+        """
+        Phase 2: Check behavioral/predictive triggers using AI-driven insights.
+
+        Uses dropout prediction, learning plateau detection, skill regression,
+        and optimal timing to generate proactive interventions.
+        """
+        interventions = []
+
+        # 1. Dropout risk assessment
+        try:
+            risk_score, risk_level, factors, metrics = await dropout_predictor.calculate_dropout_risk(
+                user_state.user_id,
+                db
+            )
+
+            # High dropout risk = immediate intervention
+            if risk_score > 0.7:
+                strategy = await dropout_predictor.generate_reengagement_strategy(
+                    user_state.user_id,
+                    risk_score,
+                    factors,
+                    db
+                )
+
+                if strategy and strategy.get('interventions'):
+                    # Take the first re-engagement intervention
+                    reeng = strategy['interventions'][0]
+                    interventions.append(Intervention(
+                        intervention_type=InterventionType.EMOTIONAL_SUPPORT,
+                        priority=10,  # Critical
+                        title=reeng.get('title', 'We miss you!'),
+                        message=reeng.get('message', 'How can I help?'),
+                        action=reeng.get('action', 'check_in'),
+                        timing="immediate",
+                        context={'dropout_risk': risk_score, 'factors': factors}
+                    ))
+
+            elif risk_score > 0.5:
+                # Medium risk = gentle nudge
+                interventions.append(Intervention(
+                    intervention_type=InterventionType.GENTLE_NUDGE,
+                    priority=6,
+                    title="Haven't seen you in a bit",
+                    message="Everything okay? I'm here if you need help.",
+                    action="check_in",
+                    timing="immediate",
+                    context={'dropout_risk': risk_score}
+                ))
+
+        except Exception as e:
+            logger.warning(f"Error checking dropout risk: {e}")
+
+        # 2. Learning plateau detection
+        try:
+            stmt = select(LearningPlateau).where(
+                and_(
+                    LearningPlateau.user_id == user_state.user_id,
+                    LearningPlateau.is_active == True,
+                    LearningPlateau.resolved == False,
+                    LearningPlateau.intervention_taken == False
+                )
+            ).order_by(LearningPlateau.days_on_topic.desc())
+
+            result = await db.execute(stmt)
+            plateaus = result.scalars().all()
+
+            for plateau in plateaus[:2]:  # Max 2 plateau interventions
+                if plateau.days_on_topic > 5:
+                    interventions.append(Intervention(
+                        intervention_type=InterventionType.ALTERNATIVE_APPROACH,
+                        priority=7,
+                        title=f"Stuck on {plateau.topic}?",
+                        message=plateau.intervention_suggested or "Let's try a different approach.",
+                        action="try_alternative",
+                        timing="immediate",
+                        context={'plateau_id': plateau.id, 'topic': plateau.topic}
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Error checking learning plateaus: {e}")
+
+        # 3. Skill regression detection
+        try:
+            stmt = select(SkillRegression).where(
+                and_(
+                    SkillRegression.user_id == user_state.user_id,
+                    SkillRegression.reminder_sent == False,
+                    SkillRegression.urgency.in_(['high', 'critical'])
+                )
+            ).order_by(SkillRegression.regression_amount.desc())
+
+            result = await db.execute(stmt)
+            regressions = result.scalars().all()
+
+            for regression in regressions[:1]:  # Max 1 regression reminder at a time
+                interventions.append(Intervention(
+                    intervention_type=InterventionType.SKILL_REFRESH,
+                    priority=7,
+                    title=f"Quick {regression.skill_name} refresh?",
+                    message=f"It's been {regression.days_since_practice} days. Let's keep it sharp!",
+                    action="review_skill",
+                    timing="immediate",
+                    context={'skill_id': regression.skill_id, 'regression_id': regression.id}
+                ))
+
+        except Exception as e:
+            logger.warning(f"Error checking skill regressions: {e}")
+
+        # 4. Optimal timing optimization
+        try:
+            # Check if this is a good time for intervention
+            is_good_time = await timing_optimizer.should_send_intervention_now(
+                user_state.user_id,
+                datetime.utcnow(),
+                db
+            )
+
+            # If it's a peak learning hour and user hasn't studied today, encourage session
+            if is_good_time and not user_state.studied_today:
+                interventions.append(Intervention(
+                    intervention_type=InterventionType.OPTIMAL_TIMING_NUDGE,
+                    priority=5,
+                    title="Perfect time to study!",
+                    message="This is one of your peak learning hours. Quick session?",
+                    action="start_session",
+                    timing="immediate",
+                    context={'timing_optimized': True}
+                ))
+
+        except Exception as e:
+            logger.warning(f"Error checking optimal timing: {e}")
 
         return interventions
 
