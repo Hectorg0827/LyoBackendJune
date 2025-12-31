@@ -24,6 +24,7 @@ from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
 from .websocket_manager import connection_manager
 from lyo_app.models.enhanced import User
 from lyo_app.stack.schemas import StackCardPayload, StackItemType
+from lyo_app.services.memory_synthesis import memory_synthesis_service
 
 logger = logging.getLogger(__name__)
 
@@ -202,38 +203,84 @@ class AIMentor:
         logger.info("AIMentor initialized with adaptive personality system")
     
     async def get_response(
-        self, 
-        user_id: int, 
-        message: str, 
+        self,
+        user_id: int,
+        message: str,
         db: AsyncSession,
         context: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """Handle incoming user message, generate AI response, log interaction, and return structured data."""
-        # Record user message
-        convo = ConversationContext(user_id)
-        convo.user_profile = {}  # In production, fetch user profile
+        """Handle incoming user message, generate AI response, log interaction, and return structured data.
+
+        This method now includes persistent memory to make the AI feel like it truly knows the user.
+        """
+        # Get or create conversation context
+        convo = self._get_conversation_context(user_id)
         convo.add_message("user", message)
 
-        # Send prompt to orchestrator
-        prompt = convo.get_context_summary() + "\nUser: " + message
+        # Fetch user profile for additional context
+        user_profile = await self._get_user_profile(user_id, db)
+        if user_profile:
+            convo.user_profile = user_profile
+
+        # Get persistent memory - THE KEY TO FEELING INDISPENSABLE
+        persistent_memory = await memory_synthesis_service.get_memory_for_prompt(user_id, db)
+
+        # Get user's engagement state for adaptive response
+        engagement_state = await self._get_engagement_state(user_id, db)
+        user_state = engagement_state.state.value if engagement_state else "neutral"
+
+        # Build memory-aware prompt
+        persona_prompt = self.personality.get_persona_prompt(user_state, {})
+        context_summary = convo.get_context_summary()
+
+        # Construct the full prompt with persistent memory
+        full_prompt = f"""
+{persona_prompt}
+
+{persistent_memory}
+
+## Current Session Context:
+{context_summary}
+
+## Student's Message:
+"{message}"
+
+## Instructions:
+Respond naturally as their AI mentor. Reference their history and preferences when relevant.
+Keep your response helpful, educational, and personalized to who they are.
+"""
+
+        # Generate response using orchestrator
         model_resp = await ai_orchestrator.generate_response(
-            prompt=prompt,
+            prompt=full_prompt,
             task_complexity=TaskComplexity.MEDIUM,
             model_preference=ModelType.GEMMA_4_ON_DEVICE,
-            max_tokens=512
+            max_tokens=512,
+            user_context={
+                "user_id": user_id,
+                "engagement_state": user_state,
+                "has_memory": bool(persistent_memory)
+            }
         )
+
+        # Extract response content
+        response_content = model_resp.content if hasattr(model_resp, 'content') else str(model_resp)
+
+        # Record AI response in conversation context
+        convo.add_message("assistant", response_content)
 
         # Build response
         response = {
-            "response": model_resp.content if hasattr(model_resp, 'content') else model_resp,
+            "response": response_content,
             "interaction_id": None,
             "model_used": model_resp.model_used if hasattr(model_resp, 'model_used') else ModelType.GEMMA_ON_DEVICE,
             "response_time_ms": model_resp.response_time_ms if hasattr(model_resp, 'response_time_ms') else 0.0,
-            "strategy_used": TaskComplexity.SIMPLE,
+            "strategy_used": TaskComplexity.MEDIUM,
             "conversation_id": convo.session_id,
             "engagement_state": UserEngagementStateEnum.IDLE,
             "timestamp": datetime.utcnow(),
-            "stack_card": None
+            "stack_card": None,
+            "memory_used": bool(persistent_memory)  # Flag to indicate memory was used
         }
 
         # Demo heuristic: If user asks to save or mentions stack, provide a card
@@ -263,11 +310,29 @@ class AIMentor:
         await db.commit()
         await db.refresh(interaction)
 
-        # Update response with DB id and user state
+        # Update response with DB id
         response["interaction_id"] = interaction.id
-        response["engagement_state"] = (await db.get(UserEngagementState, user_id)).state
+
+        # Get updated engagement state
+        eng_state = await db.get(UserEngagementState, user_id)
+        if eng_state:
+            response["engagement_state"] = eng_state.state
+
+        # Queue memory synthesis for this session (async, non-blocking)
+        # This happens in background after response is sent
+        self._queue_memory_synthesis(user_id, convo.session_id)
 
         return response
+
+    def _queue_memory_synthesis(self, user_id: int, session_id: str):
+        """Queue memory synthesis as a background task."""
+        try:
+            from lyo_app.tasks.memory_synthesis import trigger_session_memory_synthesis
+            # Delay synthesis by 30 seconds to allow session to accumulate more messages
+            trigger_session_memory_synthesis(user_id, session_id, delay_seconds=30)
+        except Exception as e:
+            # Don't fail the response if memory synthesis queueing fails
+            logger.warning(f"Failed to queue memory synthesis for user {user_id}: {e}")
 
     async def proactive_check_in(
         self, 
