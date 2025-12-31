@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from urllib.parse import urlencode
 import httpx
 
 from lyo_app.core.config import settings
@@ -165,7 +166,7 @@ class CalendarIntegrationService:
         }
 
         base_url = "https://accounts.google.com/o/oauth2/v2/auth"
-        query_string = "&".join(f"{k}={v}" for k, v in params.items())
+        query_string = urlencode(params)
         return f"{base_url}?{query_string}"
 
     async def exchange_google_code(

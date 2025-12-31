@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 import uuid
@@ -523,9 +523,6 @@ class ConversationSyncService:
         except asyncio.CancelledError:
             pass
 
-
-# Type hint for tuple
-from typing import Tuple
 
 # Global service instance
 conversation_sync_service = ConversationSyncService()
