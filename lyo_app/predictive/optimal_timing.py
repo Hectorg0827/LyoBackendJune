@@ -8,9 +8,9 @@ Personalizes notification timing based on historical performance patterns.
 import logging
 from datetime import datetime, time, timedelta
 from typing import Dict, Any, List, Optional, Tuple
+import statistics
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
-import numpy as np
 
 from .models import UserTimingProfile
 from lyo_app.learning.models import LessonCompletion
@@ -138,7 +138,7 @@ class TimingOptimizer:
         for hour in range(24):
             hour_sessions = [s for s in sessions if s['hour'] == hour]
             if hour_sessions:
-                avg_performance = np.mean([s['performance'] for s in hour_sessions])
+                avg_performance = statistics.mean([s['performance'] for s in hour_sessions])
                 performance_by_hour[hour] = float(avg_performance)
 
         return performance_by_hour
@@ -189,7 +189,7 @@ class TimingOptimizer:
         for day in range(7):  # 0=Monday, 6=Sunday
             day_sessions = [s for s in sessions if s['day_of_week'] == day]
             if day_sessions:
-                avg_performance = np.mean([s['performance'] for s in day_sessions])
+                avg_performance = statistics.mean([s['performance'] for s in day_sessions])
                 performance_by_day[day] = float(avg_performance)
 
         return performance_by_day
@@ -222,7 +222,7 @@ class TimingOptimizer:
         if not sessions:
             return 30.0  # Default
 
-        return float(np.mean([s['duration_minutes'] for s in sessions]))
+        return float(statistics.mean([s['duration_minutes'] for s in sessions]))
 
     def _infer_preferred_session_length(
         self,
@@ -285,7 +285,7 @@ class TimingOptimizer:
             day_counts[day] = day_counts.get(day, 0) + 1
 
         # Return days with above-average activity
-        avg_count = np.mean(list(day_counts.values()))
+        avg_count = statistics.mean(list(day_counts.values()))
         return sorted([day for day, count in day_counts.items() if count >= avg_count])
 
     def _calculate_confidence(self, num_sessions: int) -> float:
