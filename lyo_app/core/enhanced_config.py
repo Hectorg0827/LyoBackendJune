@@ -244,7 +244,7 @@ class EnhancedSettings(BaseSettings):
     
     @validator('ENVIRONMENT')
     def validate_environment(cls, v):
-        allowed_envs = ['development', 'staging', 'production', 'test']
+        allowed_envs = ['development', 'staging', 'production']
         if v not in allowed_envs:
             raise ValueError(f'Environment must be one of: {allowed_envs}')
         return v
