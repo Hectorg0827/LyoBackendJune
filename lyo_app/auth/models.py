@@ -55,7 +55,8 @@ class User(Base):
     
     # Authentication tracking
     last_login: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # DISABLED: column doesn't exist in production DB
+    # login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
@@ -63,17 +64,18 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
-    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # DISABLED: column doesn't exist in production DB
+    # locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     # AI Personalization - DISABLED: columns don't exist in production DB
     # learning_profile: Mapped[Optional[dict]] = mapped_column(JSON)  # Inferred traits e.g. {"visual_score": 8}
     # user_context_summary: Mapped[Optional[str]] = mapped_column(Text)  # AI summary of user context
     
-    # Multi-Tenant SaaS support
-    organization_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("organizations.id"), nullable=True, index=True
-    )
-    organization = relationship("lyo_app.tenants.models.Organization", back_populates="users", lazy="select")
+    # Multi-Tenant SaaS support - DISABLED: columns don't exist in production DB
+    # organization_id: Mapped[Optional[int]] = mapped_column(
+    #     Integer, ForeignKey("organizations.id"), nullable=True, index=True
+    # )
+    # organization = relationship("lyo_app.tenants.models.Organization", back_populates="users", lazy="select")
     # organization = relationship("lyo_app.tenants.models.Organization", back_populates="users", lazy="select")
     
     # RBAC relationships
