@@ -108,6 +108,24 @@ class AuthService:
         Raises:
             ValueError: If credentials are invalid
         """
+        user, token = await self.login_with_user(db, login_data)
+        return token
+
+    async def login_with_user(self, db: AsyncSession, login_data: UserLogin) -> tuple:
+        """
+        Authenticate user and return both user object and JWT token.
+        Used for iOS-compatible login responses that need user data.
+        
+        Args:
+            db: Database session
+            login_data: User login credentials
+            
+        Returns:
+            Tuple of (User, Token)
+            
+        Raises:
+            ValueError: If credentials are invalid
+        """
         # Get user by email
         user = await self.get_user_by_email(db, login_data.email)
         if not user:
@@ -132,12 +150,14 @@ class AuthService:
         # Create refresh token
         refresh_token = create_refresh_token(user_id=str(user.id))
         
-        return Token(
+        token = Token(
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
             expires_in=jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60  # Convert to seconds
         )
+        
+        return user, token
 
     async def refresh_token(self, db: AsyncSession, refresh_token: str) -> Token:
         """

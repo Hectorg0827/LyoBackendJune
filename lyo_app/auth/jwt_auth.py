@@ -231,33 +231,34 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> Opti
         return None
     
     if not verify_password(password, user.hashed_password):
-        # Increment failed login attempts
-        user.login_attempts += 1
+        # DISABLED: login_attempts column does not exist in production DB
+        # user.login_attempts += 1
         
-        # Lock account after max attempts
-        if user.login_attempts >= settings.MAX_LOGIN_ATTEMPTS:
-            user.locked_until = datetime.utcnow() + timedelta(minutes=30)
+        # DISABLED: locked_until column does not exist in production DB
+        # if user.login_attempts >= settings.MAX_LOGIN_ATTEMPTS:
+        #     user.locked_until = datetime.utcnow() + timedelta(minutes=30)
         
-        await db.commit()
+        # await db.commit()
         return None
     
-    # Reset login attempts on successful auth
-    if user.login_attempts > 0:
-        user.login_attempts = 0
-        user.locked_until = None
+    # DISABLED: Reset login attempts on successful auth
+    # if user.login_attempts > 0:
+    #     user.login_attempts = 0
+    #     user.locked_until = None
     
-    user.last_login_at = datetime.utcnow()
+    # Model field is 'last_login' in auth/models.py, but code used 'last_login_at'
+    user.last_login = datetime.utcnow()
     await db.commit()
     
     return user
 
 
 def check_account_locked(user: User) -> bool:
-    """Check if user account is locked due to failed login attempts."""
-    if not user.locked_until:
-        return False
-    
-    return datetime.utcnow() < user.locked_until
+    """Check if user account is locked (DISABLED: columns missing from DB)."""
+    # if not user.locked_until:
+    #     return False
+    # return datetime.utcnow() < user.locked_until
+    return False
 
 
 async def get_current_user(

@@ -49,6 +49,7 @@ from lyo_app.streaming import get_sse_manager, stream_response, EventType, Strea
 from lyo_app.personalization.service import personalization_engine
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.core.context_engine import context_engine
+from lyo_app.core.personality import LYO_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +84,17 @@ async def get_proactive_greeting(
             logger.warning(f"Failed to build context for greeting: {e}")
 
     # 2. Construct prompt
-    system_prompt = (
-        "You are Lyo, a friendly, encouraging AI tutor. "
-        "Your goal is to welcome the user back. "
-        "Keep it short (max 2 sentences). "
-        "Be warm and proactive. "
-        f"Adapt your tone for a {user_context_tag} audience. "
-        "If context is provided, use it to make the greeting specific (e.g., mentioning a recent topic or struggle), "
-        "but do not be creepy or over-specific. Just a gentle nod to their journey."
-    )
+    system_prompt = LYO_SYSTEM_PROMPT + """
+    
+---
+**GREETING SPECIFIC INSTRUCTIONS:**
+Your goal is to welcome the user back. 
+Keep it short (max 2 sentences). 
+Be warm and proactive. 
+Adapt your tone for a {user_context_tag} audience. 
+If context is provided, use it to make the greeting specific (e.g., mentioning a recent topic or struggle), 
+but do not be creepy or over-specific. Just a gentle nod to their journey.
+"""
     
     user_message = "Hi Lyo!"
     if learner_context:

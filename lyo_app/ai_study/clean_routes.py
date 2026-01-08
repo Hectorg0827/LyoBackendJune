@@ -19,6 +19,7 @@ from lyo_app.models.enhanced import User
 from lyo_app.core.monitoring import monitor_request
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from .comprehensive_service import comprehensive_study_service
+from lyo_app.core.personality import LYO_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -86,21 +87,23 @@ async def study_session_endpoint(
     
     try:
         # 1. Construct system prompt for the specific resourceId
-        system_prompt = f"""
-        You are an expert AI tutor specializing in the Socratic method of teaching.
-        You are helping a student learn about the topic: {request.resourceId}.
-        
-        Your role:
-        - Guide the student through discovery-based learning
-        - Ask probing questions that lead to insights
-        - Never give direct answers; guide students to find answers themselves
-        - Be encouraging and patient
-        - Break complex concepts into digestible parts
-        - Celebrate student progress and insights
-        
-        Focus on the learning material: {request.resourceId}
-        Use the Socratic method to facilitate deep understanding.
-        """
+        system_prompt = LYO_SYSTEM_PROMPT + f"""
+
+---
+**STUDY MODE SPECIFIC INSTRUCTIONS:**
+You are helping a student learn about the topic: {request.resourceId}.
+
+Your role in this Study Session:
+- Guide the student through discovery-based learning
+- Ask probing questions that lead to insights
+- Never give direct answers; guide students to find answers themselves
+- Be encouraging and patient
+- Break complex concepts into digestible parts
+- Celebrate student progress and insights
+
+Focus on the learning material: {request.resourceId}
+Use the Socratic method to facilitate deep understanding.
+"""
         
         # 2. Build complete conversation history
         messages = []
@@ -557,9 +560,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
             await ai_resilience_manager.initialize()
         
         # Build system prompt
-        system_prompt = """You are Lyo, a friendly and helpful educational AI assistant. 
-You help students learn by providing clear, accurate, and engaging explanations.
-Be concise but thorough. Use examples when helpful."""
+        system_prompt = LYO_SYSTEM_PROMPT + "\n\n**ADDITIONAL INSTRUCTIONS:**\nBe concise but thorough. Use examples when helpful."
 
         if request.context:
             system_prompt += f"\n\nContext: {request.context}"

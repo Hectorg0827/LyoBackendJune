@@ -60,7 +60,9 @@ class Organization(Base):
     )
     
     # Relationships
-    users = relationship("lyo_app.auth.models.User", back_populates="organization", lazy="select")
+    # DISABLED: User.organization_id foreign key is commented out in auth/models.py
+    # This relationship cannot work without the FK column, so it's disabled to prevent mapper errors
+    # users = relationship("lyo_app.auth.models.User", back_populates="organization", lazy="select")
     api_keys = relationship("lyo_app.tenants.models.APIKey", back_populates="organization", cascade="all, delete-orphan")
     
     def __repr__(self) -> str:

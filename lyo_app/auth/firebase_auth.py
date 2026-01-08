@@ -6,6 +6,7 @@ Handles Firebase token verification and user authentication/registration.
 import logging
 import os
 from typing import Optional, Tuple, Dict, Any
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -254,20 +255,33 @@ class FirebaseAuthService:
             await db.refresh(user)
             logger.info(f"Created new user from Firebase: {email}")
         
+        
         # Create access and refresh tokens using jwt_auth module for consistency
         # with the token verification used by chat endpoints (get_optional_current_user)
         from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
+        from lyo_app.modules.auth.models import RefreshToken as RefreshTokenModel
+        from lyo_app.core.settings import settings as jwt_settings
         
         access_token = create_access_token(user_id=str(user.id))
-        refresh_token = create_refresh_token(user_id=str(user.id))
+        refresh_token_str = create_refresh_token(user_id=str(user.id))
+        
+        # CRITICAL FIX: Store refresh token in database so /auth/refresh can validate it
+        refresh_token_record = RefreshTokenModel(
+            user_id=user.id,
+            token=refresh_token_str,
+            expires_at=datetime.utcnow() + timedelta(days=jwt_settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+            is_revoked=False
+        )
+        db.add(refresh_token_record)
+        await db.commit()
+        logger.info(f"Stored refresh token for user {user.id}")
         
         # Get expiration time from settings
-        from lyo_app.core.settings import settings as jwt_settings
         expires_in = jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
         
         token = Token(
             access_token=access_token,
-            refresh_token=refresh_token,
+            refresh_token=refresh_token_str,
             token_type="bearer",
             expires_in=expires_in
         )
