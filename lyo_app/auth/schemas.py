@@ -79,6 +79,20 @@ class Token(BaseModel):
     expires_in: int = Field(..., description="Token expiration time in seconds")
 
 
+class LoginResponse(BaseModel):
+    """Schema for login/register response with user data - iOS compatible."""
+    
+    model_config = ConfigDict(from_attributes=True)
+    
+    user: "UserRead" = Field(..., description="Authenticated user data")
+    access_token: str = Field(..., description="JWT access token")
+    refresh_token: Optional[str] = Field(None, description="JWT refresh token")
+    token_type: str = Field(default="bearer", description="Token type")
+    expires_in: int = Field(..., description="Token expiration time in seconds")
+    is_new_user: bool = Field(default=False, description="Whether this is a newly created user")
+    tenant_id: Optional[str] = Field(default=None, description="Tenant ID for SaaS multi-tenant isolation")
+
+
 class TokenData(BaseModel):
     """Schema for token payload data."""
     

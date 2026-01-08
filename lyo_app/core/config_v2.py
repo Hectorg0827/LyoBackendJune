@@ -13,8 +13,16 @@ from functools import lru_cache
 from pydantic import Field, field_validator
 try:
     from pydantic_settings import BaseSettings
+    from pydantic import PostgresDsn, RedisDsn, HttpUrl
 except ImportError:
     from pydantic import BaseSettings
+    try:
+        from pydantic import PostgresDsn, RedisDsn, HttpUrl
+    except ImportError:
+        # For older Pydantic versions, use str as fallback
+        PostgresDsn = str
+        RedisDsn = str
+        HttpUrl = str
 
 
 class Settings(BaseSettings):
@@ -172,6 +180,14 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [mime.strip() for mime in v.split(",")]
         return v or ["image/jpeg", "image/png", "application/pdf"]
+
+    @field_validator("SENTRY_DSN", "MEDIA_CDN_URL", mode="before")
+    @classmethod
+    def empty_string_to_none_for_urls(cls, v):
+        """Cloud envs sometimes set optional URLs as empty strings."""
+        if v == "":
+            return None
+        return v
     
     def is_production(self) -> bool:
         """Check if running in production environment."""
@@ -194,7 +210,10 @@ class Settings(BaseSettings):
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
-        "case_sensitive": True
+        "case_sensitive": True,
+        # Cloud Run / local shells often include many unrelated env vars.
+        # For settings, we want to ignore unknown keys rather than crash.
+        "extra": "ignore"
     }
 
 

@@ -293,7 +293,7 @@ def create_app() -> FastAPI:
         except ImportError:
             storage_router = None
             logger.warning("Storage routes unavailable")
-    from lyo_app.monetization.routes import router as ads_router
+    # from lyo_app.monetization.routes import router as ads_router  # TODO: stripe_service doesn't exist
     try:
         print(">>> IMPORTING API V1 ROUTES...", flush=True)
         from lyo_app.api.v1 import api_router
@@ -316,7 +316,7 @@ def create_app() -> FastAPI:
     app.include_router(feeds_router, prefix="/api/v1")
     if storage_router:
         app.include_router(storage_router)
-    app.include_router(ads_router)
+    # app.include_router(ads_router)  # TODO: Monetization module incomplete
     # AI API Routes
     try:
         from lyo_app.routers.ai_routes import router as ai_router

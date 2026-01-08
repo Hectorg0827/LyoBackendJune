@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.models.enhanced import User
-from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, Token, RefreshTokenRequest
+from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, Token, LoginResponse, RefreshTokenRequest
 from lyo_app.auth.service import AuthService
 from lyo_app.auth.security import verify_token
 from lyo_app.core.database import get_db
@@ -160,14 +160,14 @@ async def get_current_user(
     )
 
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_data: UserCreate,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)]
-) -> UserRead:
+) -> LoginResponse:
     """
-    Register a new user.
+    Register a new user and return JWT token with user data.
     
     Rate limited to 5 registrations per minute per IP to prevent abuse.
     
@@ -177,7 +177,7 @@ async def register_user(
         db: Database session
         
     Returns:
-        Created user data
+        JWT token response with user data (iOS compatible)
         
     Raises:
         HTTPException: If registration fails or rate limit exceeded
@@ -193,7 +193,23 @@ async def register_user(
     
     try:
         user = await auth_service.register_user(db, user_data)
-        return UserRead.model_validate(user)
+        
+        # Generate tokens for the new user
+        from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
+        from lyo_app.core.settings import settings as jwt_settings
+        
+        access_token = create_access_token(user_id=str(user.id))
+        refresh_token = create_refresh_token(user_id=str(user.id))
+        
+        return LoginResponse(
+            user=UserRead.model_validate(user),
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer",
+            expires_in=jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            is_new_user=True,
+            tenant_id=str(user.id)
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -209,14 +225,14 @@ async def register_user(
         )
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=LoginResponse)
 async def login_user(
     login_data: UserLogin,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)]
-) -> Token:
+) -> LoginResponse:
     """
-    Authenticate user and return JWT token.
+    Authenticate user and return JWT token with user data.
     
     Rate limited to 5 login attempts per minute per IP to prevent brute force attacks.
     
@@ -226,7 +242,7 @@ async def login_user(
         db: Database session
         
     Returns:
-        JWT token response
+        JWT token response with user data (iOS compatible)
         
     Raises:
         HTTPException: If authentication fails or rate limit exceeded
@@ -241,7 +257,16 @@ async def login_user(
         )
     
     try:
-        return await auth_service.login(db, login_data)
+        user, token = await auth_service.login_with_user(db, login_data)
+        return LoginResponse(
+            user=UserRead.model_validate(user),
+            access_token=token.access_token,
+            refresh_token=token.refresh_token,
+            token_type=token.token_type,
+            expires_in=token.expires_in,
+            is_new_user=False,
+            tenant_id=str(user.id)
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
