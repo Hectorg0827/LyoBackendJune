@@ -5,15 +5,22 @@ from typing import List, Optional, Dict, Any, Union
 from enum import Enum
 import uuid
 
-# Handle Pydantic v2 and v1 compatibility for HttpUrl
+# Handle Pydantic v2 and v1 compatibility
 try:
-    from pydantic import HttpUrl
+    from pydantic import field_validator, EmailStr, BaseModel, Field
+    # In Pydantic v2, HttpUrl moved to networks
+    try:
+        from pydantic.networks import HttpUrl
+    except ImportError:
+        from pydantic import HttpUrl
 except ImportError:
-    # Fallback for older Pydantic versions or missing HttpUrl
+    # Fallback for Pydantic v1
+    from pydantic import validator as field_validator
+    from pydantic import EmailStr, BaseModel, Field, HttpUrl
+
+# Additional fallback for HttpUrl if still not found
+if 'HttpUrl' not in locals() and 'HttpUrl' not in globals():
     HttpUrl = str
-
-from pydantic import BaseModel, Field, EmailStr, field_validator, validator
-
 
 class TaskState(str, Enum):
     """Task execution states for API responses."""

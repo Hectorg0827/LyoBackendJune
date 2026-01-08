@@ -5,7 +5,11 @@ Request and response models for study sessions and quiz generation
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
+try:
+    from pydantic import field_validator as validator
+except ImportError:
+    from pydantic import validator
 from enum import Enum
 
 from .models import StudySessionStatus, MessageRole, QuizType

@@ -10,16 +10,24 @@ import os
 from typing import List, Optional, Any, Dict
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field
+try:
+    from pydantic import field_validator
+except ImportError:
+    from pydantic import validator as field_validator
+
 try:
     from pydantic_settings import BaseSettings
-    from pydantic import PostgresDsn, RedisDsn, HttpUrl
 except ImportError:
     from pydantic import BaseSettings
+
+try:
+    from pydantic import PostgresDsn, RedisDsn, HttpUrl
+except ImportError:
     try:
-        from pydantic import PostgresDsn, RedisDsn, HttpUrl
+        from pydantic.networks import PostgresDsn, RedisDsn, HttpUrl
     except ImportError:
-        # For older Pydantic versions, use str as fallback
+        # Fallback for environments where these aren't available as specific types
         PostgresDsn = str
         RedisDsn = str
         HttpUrl = str
