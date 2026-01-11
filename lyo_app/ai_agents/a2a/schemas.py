@@ -475,6 +475,7 @@ class A2ACourseRequest(BaseModel):
     
     # User context
     user_id: Optional[str] = None
+    user_context: Optional[Dict[str, Any]] = Field(default=None, description="User preferences and context")
     language: str = Field(default="en")
     
     # Limits
