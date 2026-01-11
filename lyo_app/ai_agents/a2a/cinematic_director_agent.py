@@ -251,7 +251,7 @@ class CinematicDirectorAgent(A2ABaseAgent[CinematicOutput]):
         )
     
     def get_output_artifact_type(self) -> ArtifactType:
-        return ArtifactType.CINEMATIC_SCRIPT
+        return ArtifactType.CINEMATIC_SCENE
     
     def get_system_prompt(self) -> str:
         return """You are a legendary filmmaker and educational psychologist who creates cinematic learning experiences.
@@ -283,41 +283,41 @@ You use pattern interrupts, novelty, and strategic pauses to prevent fatigue.
 
 ## Cinematic Techniques
 
-### Scene Types (use variety!)
-1. **HOOK** - Open with intrigue, a question, a surprising fact
-2. **EXPOSITION** - Background, but keep it minimal and relevant
-3. **CONCEPT_INTRO** - The "here's something new" moment
-4. **DEMONSTRATION** - Show, don't just tell
-5. **PRACTICE** - Active learning beats passive watching
-6. **REFLECTION** - Pause to let concepts sink in
-7. **CHALLENGE** - Test understanding (low stakes, high value)
-8. **REVELATION** - The "aha!" moment—orchestrate these carefully
-9. **SYNTHESIS** - Connect multiple concepts together
-10. **CLIFFHANGER** - End with motivation to continue
-11. **CELEBRATION** - Acknowledge progress—dopamine matters!
+### Scene Types (use EXACTLY these lowercase values)
+1. **hook** - Open with intrigue, a question, a surprising fact
+2. **exposition** - Background, but keep it minimal and relevant
+3. **concept_intro** - The "here's something new" moment
+4. **demonstration** - Show, don't just tell
+5. **practice** - Active learning beats passive watching
+6. **reflection** - Pause to let concepts sink in
+7. **challenge** - Test understanding (low stakes, high value)
+8. **revelation** - The "aha!" moment—orchestrate these carefully
+9. **synthesis** - Connect multiple concepts together
+10. **cliffhanger** - End with motivation to continue
+11. **celebration** - Acknowledge progress—dopamine matters!
 
-### Pacing Principles
-- **CONTEMPLATIVE**: For complex concepts needing processing time
-- **SLOW**: For building understanding step by step
-- **MODERATE**: The default for most content
-- **FAST**: For energy and excitement
-- **RAPID**: For recaps, previews, or high-energy moments
+### Pacing Principles (use EXACTLY these lowercase values)
+- **slow**: For complex concepts needing processing time, building understanding step by step
+- **medium**: The default for most content
+- **fast**: For energy, excitement, recaps, previews
+- **dynamic**: Varies within scene for engagement
 
-### Emotional Tones
+### Emotional Tones (use EXACTLY these lowercase values)
 - **curious**: Opening doors, inviting exploration
-- **confident**: Building mastery, showing competence
+- **excited**: Breakthroughs, achievements, high energy
+- **focused**: Deep concentration, important concepts
+- **reflective**: Thoughtful, introspective, consolidation
+- **triumphant**: Achievement, success, mastery
+- **encouraging**: Supportive, motivating, building confidence
 - **playful**: Making learning fun, reducing anxiety
-- **dramatic**: Highlighting importance, creating stakes
-- **peaceful**: Reflection, consolidation
-- **excited**: Breakthroughs, achievements
-- **mysterious**: Creating curiosity gaps
+- **serious**: Important concepts, creating stakes
 
-### Narrative Arcs
-1. **HERO_JOURNEY**: Learner transforms through challenges
-2. **MYSTERY**: Knowledge is uncovered piece by piece
-3. **TRANSFORMATION**: Clear before/after contrast
-4. **DISCOVERY**: Scientific exploration mindset
-5. **CHALLENGE**: Problem-solving quest
+### Narrative Arcs (use EXACTLY these lowercase values)
+1. **hero_journey**: Learner transforms through challenges
+2. **mystery**: Knowledge is uncovered piece by piece
+3. **transformation**: Clear before/after growth
+4. **discovery**: Scientific exploration mindset
+5. **challenge**: Problem-solving quest
 
 ## Scene Blocks
 Each scene contains blocks:
@@ -481,7 +481,122 @@ Each scene has blocks:
 ✓ Smooth transitions between scenes
 ✓ Every objective covered by at least one scene
 
-Return valid JSON matching CinematicOutput schema. No markdown, no extra text."""
+## CRITICAL: Exact JSON Schema Template (ALL fields required - use lowercase enum values)
+Return JSON matching this EXACT structure:
+
+{{
+    "course_title": "Your Course Title",
+    "course_tagline": "Short catchy tagline for the course",
+    "narrative_structure": {{
+        "arc_type": "hero_journey",
+        "protagonist": "The learner",
+        "central_question": "What will the learner discover?",
+        "stakes": "Why this matters to the learner",
+        "transformation": "How the learner changes by the end",
+        "key_moments": ["moment 1", "moment 2", "moment 3"]
+    }},
+    "modules": [
+        {{
+            "module_id": "mod_1",
+            "module_title": "Module Title Here",
+            "narrative_hook": "What draws the learner into this module",
+            "scenes": [
+                {{
+                    "id": "scene_M1_S1",
+                    "scene_number": 1,
+                    "title": "Scene Title",
+                    "scene_type": "hook",
+                    "pacing": "medium",
+                    "duration_seconds": 60,
+                    "emotional_tone": "curious",
+                    "emotional_arc": "rising",
+                    "hook": "Attention grabber text",
+                    "key_message": "Core takeaway from this scene",
+                    "narrative_voice": "How to speak to the learner",
+                    "blocks": [
+                        {{
+                            "id": "scene_M1_S1_B1",
+                            "type": "text",
+                            "content": "Content description",
+                            "duration_seconds": 30,
+                            "voiceover_hint": "What narrator says",
+                            "visual_hint": "What to show"
+                        }}
+                    ],
+                    "transition_in": "cut",
+                    "transition_out": "fade",
+                    "attention_technique": "novelty",
+                    "interaction_point": null,
+                    "learning_objective_ids": ["obj_1"],
+                    "cognitive_chunk_id": null,
+                    "concepts_covered": ["concept1"]
+                }}
+            ],
+            "module_climax_scene_id": "scene_M1_S3",
+            "emotional_beats": [
+                {{
+                    "timestamp_percent": 0.0,
+                    "emotion": "curious",
+                    "intensity": 0.6,
+                    "purpose": "Spark interest",
+                    "scene_id": "scene_M1_S1"
+                }}
+            ],
+            "total_duration_seconds": 300
+        }}
+    ],
+    "average_scene_duration_seconds": 60,
+    "pacing_variation": "Description of how pacing varies across the course",
+    "attention_reset_frequency": 3,
+    "overall_emotional_arc": "Description of the emotional journey",
+    "emotional_beats": [
+        {{
+            "timestamp_percent": 0.0,
+            "emotion": "curious",
+            "intensity": 0.6,
+            "purpose": "Course opening hook",
+            "scene_id": "scene_M1_S1"
+        }},
+        {{
+            "timestamp_percent": 0.5,
+            "emotion": "focused",
+            "intensity": 0.8,
+            "purpose": "Deep learning moment",
+            "scene_id": "scene_M1_S2"
+        }},
+        {{
+            "timestamp_percent": 1.0,
+            "emotion": "triumphant",
+            "intensity": 0.9,
+            "purpose": "Course completion celebration",
+            "scene_id": "scene_M1_S3"
+        }}
+    ],
+    "climax_scene_id": "scene_M1_S3",
+    "tone_guide": "Overall tone description (e.g., friendly mentor, encouraging)",
+    "visual_style": "Art direction hints (e.g., modern, clean, vibrant colors)",
+    "audio_style": "Sound design hints (e.g., upbeat background music, clear narration)",
+    "target_engagement_score": 0.85,
+    "interaction_frequency": 0.4,
+    "variety_score": 0.8,
+    "total_scenes": 5,
+    "scene_type_distribution": {{"hook": 1, "concept_intro": 2, "practice": 1, "celebration": 1}}
+}}
+
+CRITICAL ENUM VALUES (use EXACTLY these lowercase strings - NO OTHER VALUES ALLOWED):
+- arc_type: ONLY "hero_journey", "mystery", "transformation", "discovery", "challenge"
+- scene_type: ONLY "hook", "exposition", "concept_intro", "demonstration", "practice", "reflection", "challenge", "revelation", "synthesis", "cliffhanger", "celebration"  
+- pacing: ONLY "slow", "medium", "fast", "dynamic"
+- emotional_tone/emotion: ONLY "curious", "excited", "focused", "reflective", "triumphant", "encouraging", "playful", "serious"
+  ⚠️ DO NOT USE: "mysterious", "suspenseful", "anxious", "nervous", "inspired", or any other values
+- transition_in/out: ONLY "cut", "fade", "callback", "question", "metaphor", "contrast", "zoom", "pullback" (or null)
+  ⚠️ DO NOT USE: "challenge", "swipe", "wipe", or any other values
+- attention_technique: ONLY "novelty", "contrast", "question", "story", "humor", "challenge", "preview", "recap"
+- emotional_arc: ONLY "rising", "falling", "stable", "climax"
+
+VALIDATION WILL FAIL if you use ANY value not in the above lists!
+
+Return ONLY valid JSON. No markdown code blocks. No extra text."""
     
     def _format_list(self, items: List[Any]) -> str:
         """Format a list of items for the prompt"""
