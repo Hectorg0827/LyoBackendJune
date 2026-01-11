@@ -48,6 +48,13 @@ class ArtifactType(str, Enum):
     IMAGE_URL = "image_url"
     AUDIO_URL = "audio_url"
     ASSESSMENT = "assessment"
+    # Additional types used by orchestrator
+    LEARNING_OBJECTIVES = "learning_objectives"
+    VISUAL_ASSETS = "visual_assets"
+    VOICE_SCRIPTS = "voice_scripts"
+    COURSE_MODULE = "course_module"
+    TEXT_CONTENT = "text_content"
+
 
 
 class EventType(str, Enum):

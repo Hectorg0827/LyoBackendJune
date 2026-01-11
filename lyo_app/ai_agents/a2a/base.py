@@ -408,21 +408,27 @@ class A2ABaseAgent(ABC, Generic[T]):
                 # Parse and validate
                 try:
                     data = json.loads(raw_text)
+                    logger.info(f"[{self.name}] Parsed JSON type: {type(data).__name__}, keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
                     
                     # Handle wrapped responses (e.g., {"pedagogy_output": {...}})
                     # Check if data is a single-key dict containing the actual output
                     if isinstance(data, dict) and len(data) == 1:
                         single_key = list(data.keys())[0]
                         inner_data = data[single_key]
+                        logger.info(f"[{self.name}] Unwrapping key '{single_key}', inner type: {type(inner_data).__name__}")
                         # If the inner data has required fields, use it
                         if isinstance(inner_data, dict):
                             try:
                                 result = self.output_schema.model_validate(inner_data)
                                 if hasattr(response, 'usage_metadata'):
                                     result._tokens_used = getattr(response.usage_metadata, 'total_token_count', 0)
+                                logger.info(f"[{self.name}] Successfully validated inner data from '{single_key}'")
                                 return result
-                            except ValidationError:
+                            except ValidationError as inner_e:
+                                logger.warning(f"[{self.name}] Inner validation failed for '{single_key}': {inner_e}")
                                 pass  # Fall through to try original data
+                        else:
+                            logger.warning(f"[{self.name}] Inner data is not a dict, it's: {type(inner_data).__name__}")
                     
                     result = self.output_schema.model_validate(data)
                     
@@ -433,28 +439,29 @@ class A2ABaseAgent(ABC, Generic[T]):
                     return result
                     
                 except json.JSONDecodeError as e:
-                    logger.warning(f"JSON decode error: {e}")
+                    logger.warning(f"[{self.name}] JSON decode error: {e}")
                     last_error = e
                     continue
                     
                 except ValidationError as e:
-                    logger.warning(f"Validation error: {e}")
+                    logger.warning(f"[{self.name}] Outer validation error: {e}")
                     last_error = e
                     continue
                     
             except asyncio.TimeoutError:
                 last_error = TimeoutError(f"Agent {self.name} timed out")
-                logger.warning(f"Timeout on attempt {attempt + 1}")
+                logger.warning(f"[{self.name}] Timeout on attempt {attempt + 1}")
                 
             except Exception as e:
                 last_error = e
-                logger.warning(f"Error on attempt {attempt + 1}: {e}")
+                logger.warning(f"[{self.name}] Error on attempt {attempt + 1}: {type(e).__name__}: {e}")
             
             # Exponential backoff
             if attempt < self.max_retries - 1:
                 delay = 2 ** attempt
                 await asyncio.sleep(delay)
         
+        logger.error(f"[{self.name}] All retries exhausted, raising: {type(last_error).__name__}: {last_error}")
         raise last_error or Exception("Max retries exceeded")
     
     # ============================================================

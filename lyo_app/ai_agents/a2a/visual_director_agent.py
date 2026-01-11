@@ -262,7 +262,7 @@ class VisualDirectorAgent(A2ABaseAgent[VisualDirectorOutput]):
         )
     
     def get_output_artifact_type(self) -> ArtifactType:
-        return ArtifactType.VISUAL_ASSETS
+        return ArtifactType.VISUAL_PROMPT
     
     def get_system_prompt(self) -> str:
         return """You are a world-class visual director and prompt engineer specializing in educational content.
@@ -403,7 +403,8 @@ CRITICAL: Return valid JSON matching the VisualDirectorOutput schema exactly."""
 - Accent: {brand_colors.get('accent', '#F59E0B')}
 """
         
-        return f"""## Visual Direction Task
+        # Build the dynamic part of the prompt
+        dynamic_section = f"""## Visual Direction Task
 
 Create comprehensive visual specifications for this educational course:
 
@@ -413,8 +414,10 @@ Create comprehensive visual specifications for this educational course:
 ### Content Structure
 {scenes_info or "No scene information provided - create general visual plan."}
 {color_section}
-
-## Your Task
+"""
+        
+        # Static instructions (no f-string needed - avoids brace escaping issues)
+        static_instructions = """## Your Task
 
 Create a complete visual plan including:
 
@@ -441,7 +444,7 @@ For each scene that needs a visual, create:
 - negative_prompt: What to avoid
 - alt_text: Accessible description
 - aria_description: Detailed description for screen readers
-- suggested_dimensions: {{"width": N, "height": N}}
+- suggested_dimensions: {"width": N, "height": N}
 - priority: critical, high, medium, low
 
 ### 3. Diagram Specifications
@@ -449,8 +452,8 @@ For technical concepts:
 - id: "diag_1", etc.
 - diagram_type: flowchart, sequence, class, er, state, pie, gantt
 - title: Diagram title
-- elements: Array of {{"id": "N", "label": "...", "type": "...", "style": {{}}}}
-- connections: Array of {{"from": "N", "to": "M", "label": "...", "type": "..."}}
+- elements: Array of {"id": "N", "label": "...", "type": "...", "style": {}}
+- connections: Array of {"from": "N", "to": "M", "label": "...", "type": "..."}
 - layout_direction: TB, LR, BT, RL
 - mermaid_code: Complete Mermaid.js code (important!)
 - notes: Any special rendering notes
@@ -461,7 +464,7 @@ For motion graphics:
 - title: Animation name
 - duration_seconds: Length
 - fps: Frames per second (typically 30 or 60)
-- keyframes: Array of {{"time": 0.0, "properties": {{}}}}
+- keyframes: Array of {"time": 0.0, "properties": {}}
 - motion_type: fade, slide, scale, morph, etc.
 - easing: linear, ease-in, ease-out, bounce, etc.
 - animation_description: What happens in the animation
@@ -471,7 +474,7 @@ For motion graphics:
 - style: Line, filled, duotone, etc.
 - stroke_width: In pixels
 - corner_radius: For rounded icons
-- icons: Array of {{"name": "...", "description": "..."}} for all needed icons
+- icons: Array of {"name": "...", "description": "..."} for all needed icons
 
 ### 6. Visual Hierarchy
 For each module:
@@ -483,9 +486,9 @@ For each module:
 - density: sparse, moderate, dense
 
 ### 7. Style Guide
-- typography_guide: {{"heading": "...", "body": "...", "code": "...", "caption": "..."}}
-- spacing_guide: {{"margin": "...", "padding": "...", "gap": "..."}}
-- component_styles: {{"button": {{}}, "card": {{}}, "alert": {{}}}}
+- typography_guide: {"heading": "...", "body": "...", "code": "...", "caption": "..."}
+- spacing_guide: {"margin": "...", "padding": "...", "gap": "..."}
+- component_styles: {"button": {}, "card": {}, "alert": {}}
 
 ### 8. Accessibility Compliance
 - color_contrast_ratio: Minimum contrast ratio
@@ -502,12 +505,117 @@ For each module:
 - brand_consistency_score: 0.0-1.0 (how consistent)
 
 ## Image Prompt Quality Checklist
-✓ Clear subject description
-✓ Appropriate style keywords
-✓ Mood/atmosphere specified
-✓ Technical specifications included
-✓ Negative prompts to avoid issues
-✓ Meaningful alt text (not generic)
-✓ WCAG-compliant color choices
+- Clear subject description
+- Appropriate style keywords
+- Mood/atmosphere specified
+- Technical specifications included
+- Negative prompts to avoid issues
+- Meaningful alt text (not generic)
+- WCAG-compliant color choices
 
-Return valid JSON matching VisualDirectorOutput schema. No markdown, no extra text."""
+## CRITICAL: Exact JSON Structure Required
+
+Return ONLY valid JSON matching this EXACT structure (all fields required):
+
+{
+  "course_visual_style": "flat",
+  "color_palette": {
+    "primary": "#3B82F6",
+    "secondary": "#10B981", 
+    "accent": "#F59E0B",
+    "background": "#FFFFFF",
+    "text": "#1F2937",
+    "semantic": {"success": "#22C55E", "error": "#EF4444", "warning": "#F59E0B", "info": "#3B82F6"}
+  },
+  "visual_identity": "Clean, modern educational design...",
+  "image_prompts": [
+    {
+      "id": "img_M1_S1",
+      "scene_id": "scene_M1_S1",
+      "block_id": "block_1",
+      "subject": "...",
+      "action": "...",
+      "setting": "...",
+      "mood": "...",
+      "style": "flat",
+      "aspect_ratio": "16:9",
+      "dall_e_prompt": "...",
+      "midjourney_prompt": "...",
+      "stable_diffusion_prompt": "...",
+      "negative_prompt": "...",
+      "alt_text": "...",
+      "aria_description": "...",
+      "suggested_dimensions": {"width": 1920, "height": 1080},
+      "priority": "high"
+    }
+  ],
+  "total_images_needed": 5,
+  "diagram_specs": [
+    {
+      "id": "diag_1",
+      "diagram_type": "flowchart",
+      "title": "...",
+      "elements": [{"id": "N1", "label": "...", "type": "rectangle"}],
+      "connections": [{"from": "N1", "to": "N2", "label": "..."}],
+      "layout_direction": "TB",
+      "mermaid_code": "flowchart TB; A[Start] --> B[End]",
+      "notes": null
+    }
+  ],
+  "total_diagrams": 2,
+  "animation_specs": [
+    {
+      "id": "anim_1",
+      "title": "...",
+      "duration_seconds": 3.0,
+      "fps": 30,
+      "keyframes": [{"time": 0.0, "properties": {"opacity": 0}}, {"time": 1.0, "properties": {"opacity": 1}}],
+      "motion_type": "fade",
+      "easing": "ease-in-out",
+      "animation_description": "...",
+      "reference_style": null
+    }
+  ],
+  "total_animations": 2,
+  "icon_set": {
+    "style": "line",
+    "stroke_width": 2.0,
+    "corner_radius": 4.0,
+    "icons": [{"name": "concept", "description": "..."}]
+  },
+  "module_hierarchies": [
+    {
+      "section_id": "mod_1",
+      "primary_visual": "img_M1_S1",
+      "secondary_visuals": ["img_M1_S2"],
+      "visual_flow": ["img_M1_S1", "img_M1_S2"],
+      "white_space_ratio": 0.3,
+      "density": "moderate"
+    }
+  ],
+  "color_contrast_ratio": 4.5,
+  "colorblind_safe": true,
+  "alt_text_coverage": 1.0,
+  "typography_guide": {"heading": "Inter Bold 24px", "body": "Inter Regular 16px", "code": "Fira Code 14px", "caption": "Inter Light 12px"},
+  "spacing_guide": {"margin": "24px", "padding": "16px", "gap": "12px"},
+  "component_styles": {"button": {"borderRadius": "8px"}, "card": {"shadow": "0 2px 8px rgba(0,0,0,0.1)"}},
+  "image_generation_priority": ["img_M1_S1", "img_M1_S2"],
+  "estimated_generation_time": "15 minutes",
+  "budget_estimate_images": 10,
+  "visual_complexity_score": 0.6,
+  "brand_consistency_score": 0.9
+}
+
+CRITICAL ENUM VALUES (use EXACTLY these lowercase strings):
+- course_visual_style: ONLY "flat", "isometric", "hand_drawn", "photorealistic", "minimalist", "cartoon", "technical", "watercolor", "pixel_art", "corporate", "playful", "dark_mode"
+- style (in image_prompts): same as above
+- priority: ONLY "critical", "high", "medium", "low"
+- density: ONLY "sparse", "moderate", "dense"
+- diagram_type: ONLY "flowchart", "sequence", "class", "er", "state", "pie", "gantt"
+- layout_direction: ONLY "TB", "LR", "BT", "RL"
+- motion_type: "fade", "slide", "scale", "morph", "rotate", "bounce"
+- easing: "linear", "ease-in", "ease-out", "ease-in-out", "bounce"
+
+Return ONLY valid JSON. No markdown code blocks. No explanation text."""
+
+        return dynamic_section + static_instructions
