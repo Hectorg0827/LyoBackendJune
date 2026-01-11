@@ -59,4 +59,4 @@ ENV PORT=8080
 EXPOSE 8080
 
 # Start application (dynamic port)
-CMD ["bash", "-c", "mkdir -p /tmp/prometheus_multiproc_dir && gunicorn lyo_app.enhanced_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${WORKERS:-4} --timeout 120"]
+CMD ["bash", "-c", "mkdir -p /tmp/prometheus_multiproc_dir && gunicorn lyo_app.enhanced_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${WORKERS:-2} --timeout 300"]

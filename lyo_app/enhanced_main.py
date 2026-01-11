@@ -83,8 +83,12 @@ async def _init_ai_safe():
     """Initialize AI with error handling"""
     try:
         from lyo_app.core.ai_resilience import ai_resilience_manager
+        from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer
+        
         await ai_resilience_manager.initialize()
-        logger.info("✓ AI resilience system initialized")
+        await ai_performance_optimizer.initialize()
+        
+        logger.info("✓ AI resilience & performance systems initialized")
         return True
     except Exception as e:
         logger.warning(f"AI system initialization failed: {e}")
@@ -128,16 +132,20 @@ async def _init_vertex_safe():
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup & shutdown lifecycle with parallel initialization."""
+    print(">>> [LIFESPAN] STARTING...", flush=True)
     start_time = time.time()
     logger.info("🚀 Starting LyoBackend with enhanced features...")
     setup_logging()
     
     # Database must init first (dependencies need it)
     try:
+        print(">>> [LIFESPAN] Initializing database...", flush=True)
         logger.info("⏳ Initializing database...")
         await init_db()
+        print(">>> [LIFESPAN] Database initialized", flush=True)
         logger.info("✅ Database initialized")
     except Exception as e:
+        print(f">>> [LIFESPAN] Database initialization FAILED: {e}", flush=True)
         logger.error(f"❌ Database initialization failed: {e}")
     
     # Sentry (synchronous, fast)
@@ -480,6 +488,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Analytics routes not available: {e}")
 
+    # A2A Protocol - Google Agent-to-Agent Course Generation (NEW)
+    try:
+        from lyo_app.ai_agents.a2a import include_a2a_routes
+        include_a2a_routes(app)
+        logger.info("✅ A2A Protocol routes integrated - Multi-agent pipeline with AgentCards, streaming, and discovery!")
+    except ImportError as e:
+        logger.warning(f"⚠️ A2A Protocol routes not available: {e}")
+
     # Multi-Tenant SaaS API
     try:
         from lyo_app.tenants.routes import router as tenants_router
@@ -654,6 +670,7 @@ def create_app() -> FastAPI:
 _app = None
 
 def get_app():
+    print(">>> CHECKING REVISION: SECURITY FIX APPLIED <<<")
     global _app
     if _app is None:
         _app = create_app()
@@ -694,6 +711,10 @@ async def root():  # noqa: D401
             "gen_curriculum": "/api/v1/gen-curriculum",
             "collaboration": "/api/v1/collaboration",
             "course_generation_v2": "/api/v2/courses",
+            "a2a_generation": "/api/v2/courses/generate-a2a",
+            "a2a_streaming": "/api/v2/courses/stream-a2a",
+            "a2a_agents": "/api/v2/agents",
+            "a2a_discovery": "/.well-known/agent.json",
             "tutor_v2": "/api/v2/tutor",
             "exercises_v2": "/api/v2/exercises",
             "media_v2": "/api/v2/media",
@@ -712,6 +733,8 @@ async def root():  # noqa: D401
             "collaborative_learning": True,
             "peer_assessment": True,
             "ai_tutoring": True,
+            "a2a_protocol": True,
+            "multi_agent_streaming": True,
         },
         "timestamp": time.time(),
     }

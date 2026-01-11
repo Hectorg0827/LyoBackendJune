@@ -49,35 +49,13 @@ class ContentCurator:
         self.openai_api_key = openai_api_key
         self.logger = logging.getLogger(__name__)
     
-    def _generate_with_gemma(self, prompt: str) -> str:
-        """Generate text using the local Gemma model."""
+    async def _generate_with_ai(self, prompt: str) -> str:
+        """Generate text using Gemini via ModelManager."""
         try:
-            model_instance = self.model_manager.get_model_instance()
-            if not model_instance or not model_instance.get("model"):
-                raise Exception("Gemma model not loaded")
-
-            model = model_instance["model"]
-            tokenizer = model_instance["tokenizer"]
-
-            inputs = tokenizer(prompt, return_tensors="pt", return_attention_mask=True)
-            outputs = model.generate(
-                **inputs, 
-                max_new_tokens=1024,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9
-            )
-            
-            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            # Clean up the prompt from the beginning of the generated text
-            if generated_text.startswith(prompt):
-                return generated_text[len(prompt):].strip()
-            return generated_text.strip()
-
+            return await self.model_manager.generate(prompt)
         except Exception as e:
-            self.logger.error(f"Error during Gemma generation: {e}")
-            # Fallback to a simple response if Gemma fails
-            return f"Error generating content. Could not process prompt: {prompt[:50]}..."
+            self.logger.error(f"Error during AI generation: {e}")
+            return f"Error generating content."
 
     async def curate_course(
         self,
@@ -92,14 +70,14 @@ class ContentCurator:
         Curate a complete course using local Gemma model.
         """
         try:
-            progress_callback(10, "Generating course outline with Gemma...")
+            progress_callback(10, "Generating course outline...")
 
-            # 1. Generate course outline using Gemma
+            # 1. Generate course outline
             outline_prompt = self._build_course_outline_prompt(
                 topic, interests, difficulty_level, target_duration_hours
             )
             
-            course_outline_str = self._generate_with_gemma(outline_prompt)
+            course_outline_str = await self._generate_with_ai(outline_prompt)
             
             progress_callback(40, "Parsing generated course structure...")
             
@@ -117,7 +95,7 @@ class ContentCurator:
                 "tags": parsed_outline.get("tags", [topic] + interests),
                 "lessons": parsed_outline.get("lessons", []),
                 "estimated_duration_hours": target_duration_hours,
-                "sources_summary": {"ai_model": "Gemma Local"},
+                "sources_summary": {"ai_model": "Gemini (Cloud)"},
                 "content_items": [] # Content items can be added later
             }
 

@@ -23,8 +23,8 @@ from lyo_app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Database setup for Celery tasks (sync connection)
-DATABASE_URL = getattr(settings, "DATABASE_URL", "postgresql+asyncpg://lyo_user:lyo_password@localhost:5432/lyo_db")
-SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "")
+DATABASE_URL = getattr(settings, "database_url", "sqlite+aiosqlite:///./lyo_app.db")
+SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("+aiosqlite", "")
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -42,48 +42,26 @@ class CourseGenerator:
     """AI-powered course content generator using local Gemma model."""
     
     def __init__(self):
-        self.model_ready = False
+        self.model_ready = True
     
     def ensure_model(self) -> bool:
-        """Ensure AI model is loaded and ready."""
-        if model_manager.is_loaded():
-            self.model_ready = True
-            return True
-        
-        try:
-            logger.info("Initializing Gemma model for course generation...")
-            # Note: In a Celery task, we need to handle async loading differently
-            # For now, we'll assume the model is loaded at startup
-            if not model_manager.is_loaded():
-                logger.warning("Model not loaded. Please initialize model at startup.")
-                return False
-            
-            self.model_ready = True
-            logger.info("✅ Gemma model ready for course generation")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to ensure AI model: {e}")
-            return False
+        """Compatibility shim for Gemini."""
+        return True
     
-    def generate_course_outline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate course outline using local Gemma model."""
+    async def generate_course_outline(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate course outline using Gemini."""
         topic = payload.get("topic", "General Learning")
         interests = payload.get("interests", [])
         level = payload.get("level", "beginner")
         locale = payload.get("locale", "en")
         
         try:
-            # Ensure model is ready
-            if not self.ensure_model():
-                return self._fallback_course_outline(topic, level)
-            
             # Create detailed prompt for course generation
             prompt = self._build_course_prompt(topic, interests, level, locale)
             
-            # Generate course outline using Gemma
+            # Generate course outline using Gemini
             logger.info(f"Generating course outline for topic: {topic}")
-            generated_content = generate_course_content(
+            generated_content = await generate_course_content(
                 prompt=prompt,
                 max_new_tokens=1024,
                 temperature=0.7,
@@ -255,7 +233,7 @@ Generate the course outline:"""
                 f"Apply {topic} concepts in practice",
                 f"Build confidence with {topic}"
             ],
-            "modules": [
+            "lessons": [
                 {
                     "title": f"Introduction to {topic.title()}",
                     "description": f"Get started with {topic}",
@@ -349,7 +327,7 @@ Generate the course outline:"""
         
         return outline
     
-    def create_course_content(
+    async def create_course_content(
         self, 
         db: Session, 
         user_id: str, 
@@ -362,25 +340,25 @@ Generate the course outline:"""
             progress_callback(10, "Generating course outline...")
         
         # Generate course outline
-        outline = self.generate_course_outline(payload)
+        outline = await self.generate_course_outline(payload)
         
         if progress_callback:
             progress_callback(25, "Creating course structure...")
         
         # Create course record
+        clean_user_id = user_id or 1
+
         course = Course(
-            user_id=uuid.UUID(user_id),
+            instructor_id=clean_user_id,
             title=outline["title"],
             description=outline["description"],
-            status=CourseStatus.GENERATING,
+            status=CourseStatus.READY if not outline.get("lessons") else CourseStatus.GENERATING,
             topic=payload.get("topic"),
-            interests=payload.get("interests", []),
-            level=payload.get("level"),
-            locale=payload.get("locale", "en"),
-            estimated_duration=outline.get("estimated_duration"),
-            generation_prompt=str(payload),
+            interests=payload.get("interests", {}),
+            difficulty_level=payload.get("level", "beginner"),
+            target_duration_hours=float(payload.get("duration_hours", 0)),
             generation_metadata={
-                "ai_model": "gemma-3",
+                "ai_model": "gemini-fallback",
                 "generation_time": datetime.utcnow().isoformat(),
                 "user_preferences": payload
             }
@@ -401,7 +379,9 @@ Generate the course outline:"""
                 title=lesson_data["title"],
                 description=lesson_data["description"],
                 order_index=lesson_idx,
-                objectives=lesson_data.get("objectives", [])
+                summary=", ".join(lesson_data.get("objectives", [])) if lesson_data.get("objectives") else None,
+                content_type=lesson_data.get("content_type", "text"),
+                duration_minutes=int(lesson_data.get("estimated_duration", 15))
             )
             
             db.add(lesson)
@@ -409,17 +389,16 @@ Generate the course outline:"""
             db.refresh(lesson)
             
             # Create course items for this lesson
-            for item_idx, item_data in enumerate(lesson_data["items"]):
+            for item_idx, item_data in enumerate(lesson_data.get("items", [])):
                 item = CourseItem(
                     course_id=course.id,
                     lesson_id=lesson.id,
-                    type=item_data["type"],
+                    type=item_data.get("type", "text"),
                     title=item_data["title"],
-                    content=item_data["content"],
+                    description=item_data.get("content"), # Map content to description
                     source=item_data.get("source"),
                     source_url=item_data.get("source_url"),
-                    duration=item_data.get("duration"),
-                    order_index=total_items
+                    duration_sec=int(item_data.get("duration", 0)),
                 )
                 
                 db.add(item)
@@ -433,8 +412,7 @@ Generate the course outline:"""
                 progress_callback(progress, f"Created lesson: {lesson_data['title']}")
         
         # Update course with final counts
-        course.total_items = total_items
-        course.status = CourseStatus.COMPLETED
+        course.status = CourseStatus.READY
         course.published_at = datetime.utcnow()
         
         db.commit()
@@ -460,8 +438,14 @@ def generate_course_task(self, task_id: str, user_id: str, payload: Dict[str, An
     db = get_sync_db()
     
     try:
-        # Get task record
-        task = db.query(Task).filter(Task.id == uuid.UUID(task_id)).first()
+        # Get task record - handle both int and UUID task_ids
+        try:
+            task_id_clean = int(task_id)
+            task = db.query(Task).filter(Task.id == task_id_clean).first()
+        except ValueError:
+            # Fallback if task_ids are UUID strings in some environments
+            task = db.query(Task).filter(Task.id == task_id).first()
+
         if not task:
             raise ValueError(f"Task {task_id} not found")
         
@@ -479,10 +463,6 @@ def generate_course_task(self, task_id: str, user_id: str, payload: Dict[str, An
             "message": "Starting course generation..."
         }))
         
-        # Ensure AI model is ready
-        if not course_generator.ensure_model():
-            raise RuntimeError("AI model not available")
-        
         # Progress callback
         def update_progress(pct: int, message: str):
             task.progress_pct = pct
@@ -496,19 +476,24 @@ def generate_course_task(self, task_id: str, user_id: str, payload: Dict[str, An
                 "message": message
             }))
         
-        # Generate course content
-        course_id = course_generator.create_course_content(
+        # Run async course generation
+        course_id = asyncio.run(course_generator.create_course_content(
             db=db,
             user_id=user_id,
             payload=payload,
             progress_callback=update_progress
-        )
+        ))
         
         # Update task to completed
         task.state = TaskState.DONE
         task.progress_pct = 100
         task.message = "Course generation completed"
-        task.result_course_id = uuid.UUID(course_id)
+        # Handle course_id as int if necessary
+        try:
+            task.result_course_id = int(course_id)
+        except (ValueError, TypeError):
+            task.result_course_id = course_id 
+            
         task.completed_at = datetime.utcnow()
         db.commit()
         

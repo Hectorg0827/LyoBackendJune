@@ -29,10 +29,14 @@ class ContentType(str, enum.Enum):
     """Content types for normalized content schema."""
     VIDEO = "video"
     ARTICLE = "article"
+    TEXT = "text"
     EBOOK = "ebook"
     PDF = "pdf"
     PODCAST = "podcast"
     COURSE = "course"
+    QUIZ = "quiz"
+    INTERACTIVE = "interactive"
+    ASSESSMENT = "assessment"
 
 
 class CourseStatus(str, enum.Enum):
@@ -273,3 +277,21 @@ class DiscoveryFeedItem(Base):
         Index("ix_feed_created", "created_at"),
         Index("ix_feed_type_created", "item_type", "created_at"),
     )
+
+
+class Badge(Base):
+    """Badge model for gamification."""
+    __tablename__ = "badges"
+    __table_args__ = {'extend_existing': True}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=False)
+    icon = Column(String(200), nullable=True)
+    category = Column(String(50), nullable=False)
+    requirements = Column(JSON, nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Many-to-many relationship with User through a secondary table
+    # This might require a secondary table definition

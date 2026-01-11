@@ -12,7 +12,8 @@ try:
 except Exception:  # pragma: no cover - import guarded
     _GCP_AVAILABLE = False
 
-SECRET_PROJECT_ENV = "GCP_PROJECT_ID"
+# Environment variable names for GCP Project ID
+SECRET_PROJECT_ENVS = ["GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"]
 
 class SecretManagerClient:
     def __init__(self, project_id: Optional[str]):
@@ -37,7 +38,13 @@ class SecretManagerClient:
 
 @lru_cache(maxsize=1)
 def get_secret_manager() -> SecretManagerClient:
-    return SecretManagerClient(os.getenv(SECRET_PROJECT_ENV))
+    project_id = None
+    for env_name in SECRET_PROJECT_ENVS:
+        project_id = os.getenv(env_name)
+        if project_id:
+            # print(f">>> [PID {os.getpid()}] SecretManager: Using project {project_id} from {env_name}", flush=True)
+            break
+    return SecretManagerClient(project_id)
 
 
 def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:

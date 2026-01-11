@@ -146,26 +146,27 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
-        from lyo_app.auth.rbac import Role, Permission, UserRole, RolePermission  # noqa: F401
+        from lyo_app.auth.rbac import Role, Permission, user_roles, role_permissions  # noqa: F401
         from lyo_app.models.enhanced import Task, PushDevice, GamificationProfile  # noqa: F401
         from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
-        from lyo_app.community.models import StudyGroup, CollaborativeGroupMembership, CommunityEvent, EventAttendance, MarketplaceItem  # noqa: F401
+        from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
-        from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
-        from lyo_app.stack.models import StackItem  # noqa: F401
-        from lyo_app.ai_study.models import StudySession, AIInsight  # noqa: F401
+        # from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
+        # from lyo_app.stack.models import StackItem  # noqa: F401
+        from lyo_app.ai_study.models import StudySession, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
         from lyo_app.ai_agents.models import UserEngagementState, MentorInteraction  # noqa: F401
         # Chat module models (for session continuity + notes/courses)
-        from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
+        # from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
         # Import new mentor chat models
-        from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
-        from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+        # from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
+        # from lyo_app.classroom.models import ClassroomSession  # noqa: F401
         
         # TEMPORARILY DISABLED automatic schema updates to prevent boot hang in production
         # logger.info("Synchronizing database schema...")
         # await conn.run_sync(Base.metadata.create_all)
         # await _ensure_users_schema(conn)
         # await _ensure_stack_items_schema(conn)
+        await _ensure_refresh_tokens_table(conn)
         logger.info("Database models registered successfully (schema updates skipped)")
 
 
@@ -311,6 +312,50 @@ async def _ensure_stack_items_schema(conn) -> None:
     except Exception as e:
         # Don't fail startup if patch can't be applied; log and proceed.
         logger.error(f"❌ Failed applying stack_items schema patch: {e}")
+
+
+async def _ensure_refresh_tokens_table(conn) -> None:
+    """Ensure refresh_tokens table exists (manual creation since create_all is disabled)."""
+    
+    def _check_table_exists(sync_conn):
+        inspector = inspect(sync_conn)
+        return inspector.has_table("refresh_tokens")
+
+    try:
+        exists = await conn.run_sync(_check_table_exists)
+        if exists:
+            return
+    except Exception as e:
+        logger.warning(f"⚠️ refresh_tokens table check failed: {e}")
+        return
+
+    # Table definition matching lyo_app.auth.models.RefreshToken
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id SERIAL PRIMARY KEY,
+            token VARCHAR(255) NOT NULL,
+            user_id INTEGER NOT NULL,
+            is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            device_info JSON,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_refresh_tokens_token ON refresh_tokens (token)",
+        "CREATE INDEX IF NOT EXISTS ix_refresh_tokens_id ON refresh_tokens (id)",
+        "CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_id ON refresh_tokens (user_id)"
+    ]
+
+    for ddl in ddl_statements:
+        try:
+            logger.info(f"⏳ Creating refresh_tokens table: {ddl[:50]}...")
+            await conn.execute(text(ddl))
+            logger.info("✅ Table/Index created successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to create refresh_tokens table: {e}")
+
 
 
 async def close_db() -> None:
