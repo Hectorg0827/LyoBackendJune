@@ -11,8 +11,8 @@ A2A-compliant agent responsible for:
 The Voice of Learning - Making content speak.
 """
 
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List, Union
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
 from .base import A2ABaseAgent
@@ -76,43 +76,70 @@ class BreakStrength(str, Enum):
 
 class VoicePersona(BaseModel):
     """Voice character definition"""
-    persona_id: str
-    name: str
-    description: str
+    persona_id: str = ""
+    name: str = "Default Narrator"
+    description: str = ""
     
-    # Voice characteristics
-    voice_id: str                  # ElevenLabs/Azure/GCP voice ID
-    gender: str                    # male, female, neutral
-    age_range: str                 # child, young_adult, adult, senior
-    accent: str                    # american, british, australian, etc.
+    # Voice characteristics - all with defaults
+    voice_id: str = "alloy"
+    gender: str = "neutral"
+    age_range: str = "adult"
+    accent: str = "american"
     
-    # Personality
-    primary_emotion: VoiceEmotion
-    energy_level: str              # low, medium, high
-    formality: str                 # casual, conversational, formal
+    # Personality - all with defaults
+    primary_emotion: VoiceEmotion = VoiceEmotion.NEUTRAL
+    energy_level: str = "medium"
+    formality: str = "conversational"
     
-    # Technical settings
-    default_rate: SpeechRate
-    default_pitch: VoicePitch
-    stability: float               # 0.0-1.0 (ElevenLabs)
-    similarity_boost: float        # 0.0-1.0 (ElevenLabs)
-    style_exaggeration: float      # 0.0-1.0 (ElevenLabs)
+    # Technical settings - sensible defaults
+    default_rate: SpeechRate = SpeechRate.MEDIUM
+    default_pitch: VoicePitch = VoicePitch.MEDIUM
+    stability: float = 0.75
+    similarity_boost: float = 0.75
+    style_exaggeration: float = 0.5
+    
+    @field_validator('primary_emotion', mode='before')
+    @classmethod
+    def normalize_emotion(cls, v):
+        if isinstance(v, str):
+            return v.lower()
+        return v
+    
+    @field_validator('default_rate', mode='before')
+    @classmethod
+    def normalize_rate(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower()
+            rate_map = {"x-slow": "x-slow", "xslow": "x-slow", "very_slow": "x-slow",
+                       "x-fast": "x-fast", "xfast": "x-fast", "very_fast": "x-fast"}
+            return rate_map.get(v_lower, v_lower)
+        return v
+    
+    @field_validator('default_pitch', mode='before')
+    @classmethod
+    def normalize_pitch(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower()
+            pitch_map = {"x-low": "x-low", "xlow": "x-low", "very_low": "x-low",
+                        "x-high": "x-high", "xhigh": "x-high", "very_high": "x-high"}
+            return pitch_map.get(v_lower, v_lower)
+        return v
 
 
 class SSMLSegment(BaseModel):
     """SSML-formatted text segment"""
-    id: str
-    text: str
-    ssml: str                      # Full SSML markup
+    id: str = ""
+    text: str = ""
+    ssml: str = ""
     
-    # Prosody
-    rate: SpeechRate
-    pitch: VoicePitch
-    volume: str                    # silent, x-soft, soft, medium, loud, x-loud
+    # Prosody - defaults
+    rate: SpeechRate = SpeechRate.MEDIUM
+    pitch: VoicePitch = VoicePitch.MEDIUM
+    volume: str = "medium"
     
-    # Emotion
-    emotion: VoiceEmotion
-    emotion_intensity: float       # 0.0-1.0
+    # Emotion - defaults
+    emotion: VoiceEmotion = VoiceEmotion.NEUTRAL
+    emotion_intensity: float = 0.5
     
     # Pauses
     break_before: Optional[BreakStrength] = None
@@ -122,131 +149,170 @@ class SSMLSegment(BaseModel):
     emphasized_words: List[str] = Field(default_factory=list)
     
     # Timing
-    estimated_duration_ms: int
+    estimated_duration_ms: int = 0
     
     # Context
-    visual_sync_id: Optional[str] = None  # Sync with visual
+    visual_sync_id: Optional[str] = None
+    
+    @field_validator('emotion', mode='before')
+    @classmethod
+    def normalize_emotion(cls, v):
+        if isinstance(v, str):
+            return v.lower()
+        return v
+    
+    @field_validator('rate', mode='before')
+    @classmethod
+    def normalize_rate(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower()
+            # Map common variations
+            rate_map = {"x-slow": "x-slow", "xslow": "x-slow", "very_slow": "x-slow",
+                       "x-fast": "x-fast", "xfast": "x-fast", "very_fast": "x-fast"}
+            return rate_map.get(v_lower, v_lower)
+        return v
+    
+    @field_validator('pitch', mode='before')
+    @classmethod
+    def normalize_pitch(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower()
+            pitch_map = {"x-low": "x-low", "xlow": "x-low", "very_low": "x-low",
+                        "x-high": "x-high", "xhigh": "x-high", "very_high": "x-high"}
+            return pitch_map.get(v_lower, v_lower)
+        return v
+    
+    @field_validator('break_before', 'break_after', mode='before')
+    @classmethod
+    def normalize_break(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower().replace("_", "-")
+            return v_lower
+        return v
 
 
 class NarrationBlock(BaseModel):
     """Complete narration for a scene block"""
-    id: str
-    block_id: str
-    scene_id: str
-    module_id: str
+    id: str = ""
+    block_id: str = ""
+    scene_id: str = ""
+    module_id: str = ""
     
-    # Content
-    plain_text: str                # Raw text (no markup)
-    segments: List[SSMLSegment]    # SSML segments
+    # Content - accept object or string (model first for proper parsing)
+    plain_text: str = ""
+    segments: List[Union[SSMLSegment, str]] = Field(default_factory=list)
     
     # Voice assignment
-    voice_persona: str             # Persona ID
+    voice_persona: str = "default"
     
     # Audio specification
     background_music: Optional[str] = None
-    sound_effects: List[Dict[str, Any]] = Field(default_factory=list)
+    sound_effects: List[Union[Dict[str, Any], str]] = Field(default_factory=list)
     
     # Timing
-    total_duration_ms: int
-    words_per_minute: float
+    total_duration_ms: int = 0
+    words_per_minute: float = 150.0
     
     # Accessibility
-    transcript: str                # Plain transcript
+    transcript: str = ""
     caption_segments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class SoundEffect(BaseModel):
     """Sound effect specification"""
-    id: str
-    name: str
-    description: str
-    trigger: str                   # on_enter, on_exit, on_action, timed
+    id: str = ""
+    name: str = ""
+    description: str = ""
+    trigger: str = "on_action"
     timing_ms: Optional[int] = None
-    volume: float                  # 0.0-1.0
-    duration_ms: int
-    category: str                  # notification, ambient, transition, feedback
+    volume: float = 0.5
+    duration_ms: int = 1000
+    category: str = "notification"
     
 
 class MusicSpec(BaseModel):
     """Background music specification"""
-    id: str
-    name: str
-    mood: str
-    tempo_bpm: int
-    genre: str
-    instruments: List[str]
-    use_for: List[str]             # intro, section, quiz, outro
-    fade_in_ms: int
-    fade_out_ms: int
-    loop: bool
-    volume_level: float            # 0.0-1.0 (often 0.1-0.3 for background)
+    id: str = ""
+    name: str = ""
+    mood: str = "neutral"
+    tempo_bpm: int = 120
+    genre: str = "ambient"
+    instruments: List[str] = Field(default_factory=list)
+    use_for: List[str] = Field(default_factory=list)
+    fade_in_ms: int = 1000
+    fade_out_ms: int = 1000
+    loop: bool = True
+    volume_level: float = 0.2
 
 
 class VoiceOverSession(BaseModel):
     """Complete voice session for a module"""
-    module_id: str
-    module_title: str
+    module_id: str = ""
+    module_title: str = ""
     
-    # Narration
-    narration_blocks: List[NarrationBlock]
-    total_narration_time_ms: int
+    # Narration - accept objects first, strings as fallback
+    narration_blocks: List[Union[NarrationBlock, str]] = Field(default_factory=list)
+    total_narration_time_ms: int = 0
     
     # Voice personas used
-    personas_used: List[str]
+    personas_used: List[str] = Field(default_factory=list)
     
     # Audio design
     background_music_id: Optional[str] = None
-    sound_effects: List[SoundEffect]
+    sound_effects: List[Union[SoundEffect, str]] = Field(default_factory=list)
     
     # Production notes
-    pronunciation_guide: Dict[str, str]  # word -> phonetic
+    pronunciation_guide: Dict[str, str] = Field(default_factory=dict)
     
     # Quality metrics
-    avg_words_per_minute: float
-    emotion_variety_score: float   # 0.0-1.0
+    avg_words_per_minute: float = 150.0
+    emotion_variety_score: float = 0.8
 
 
 class VoiceAgentOutput(BaseModel):
     """Output from the Voice Agent"""
-    # Voice personas
-    primary_persona: VoicePersona
-    secondary_personas: List[VoicePersona] = Field(default_factory=list)
+    # Voice personas - use alias to accept both field names from AI
+    primary_persona: Optional[Union[VoicePersona, str]] = Field(default=None, alias="primary_voice_persona")
+    secondary_personas: List[Union[VoicePersona, str]] = Field(default_factory=list, alias="secondary_voice_personas")
     
-    # Complete narration
-    voice_sessions: List[VoiceOverSession]
-    total_audio_duration_ms: int
-    total_word_count: int
+    class Config:
+        populate_by_name = True  # Accept both alias and actual field name
     
-    # Audio design
-    music_specs: List[MusicSpec]
-    sound_effect_library: List[SoundEffect]
+    # Complete narration - accept object first, string as fallback
+    voice_sessions: List[Union[VoiceOverSession, str]] = Field(default_factory=list)
+    total_audio_duration_ms: int = 0
+    total_word_count: int = 0
     
-    # Global settings
-    master_volume_narration: float
-    master_volume_music: float
-    master_volume_sfx: float
+    # Audio design - accept object first, string as fallback
+    music_specs: List[Union[MusicSpec, str]] = Field(default_factory=list)
+    sound_effect_library: List[Union[SoundEffect, str]] = Field(default_factory=list)
     
-    # Technical specs
-    output_format: str             # mp3, wav, etc.
-    sample_rate: int               # 44100, 48000, etc.
-    bitrate: str                   # 128kbps, 320kbps, etc.
+    # Global settings - sensible defaults
+    master_volume_narration: float = 1.0
+    master_volume_music: float = 0.3
+    master_volume_sfx: float = 0.5
     
-    # Accessibility
-    full_transcript: str           # Complete course transcript
-    caption_file_format: str       # srt, vtt
-    caption_segments: List[Dict[str, Any]]
+    # Technical specs - sensible defaults
+    output_format: str = "mp3"
+    sample_rate: int = 44100
+    bitrate: str = "128kbps"
+    
+    # Accessibility - optional with defaults
+    full_transcript: str = ""
+    caption_file_format: str = "srt"
+    caption_segments: List[Dict[str, Any]] = Field(default_factory=list)
     
     # Pronunciation guide
-    pronunciation_dictionary: Dict[str, str]
+    pronunciation_dictionary: Dict[str, str] = Field(default_factory=dict)
     
-    # Production metrics
-    estimated_tts_api_calls: int
-    estimated_audio_generation_time: str
+    # Production metrics - defaults
+    estimated_tts_api_calls: int = 0
+    estimated_audio_generation_time: str = "TBD"
     
-    # Quality scores
-    pacing_consistency_score: float    # 0.0-1.0
-    emotion_appropriateness_score: float  # 0.0-1.0
-    accessibility_compliance: float    # 0.0-1.0
+    # Quality scores - perfect defaults
+    pacing_consistency_score: float = 1.0
+    emotion_appropriateness_score: float = 1.0
+    accessibility_compliance: float = 1.0
 
 
 # ============================================================
@@ -304,7 +370,7 @@ class VoiceAgent(A2ABaseAgent[VoiceAgentOutput]):
         )
     
     def get_output_artifact_type(self) -> ArtifactType:
-        return ArtifactType.VOICE_SCRIPTS
+        return ArtifactType.VOICE_SCRIPT
     
     def get_system_prompt(self) -> str:
         return """You are a world-class voice director and audio designer for educational content.
