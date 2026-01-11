@@ -644,7 +644,7 @@ class A2AOrchestrator:
         self._record_handoff(
             from_agent="pedagogy",
             to_agent="cinematic_director",
-            artifact_type=ArtifactType.CINEMATIC_SCRIPT
+            artifact_type=ArtifactType.CINEMATIC_SCENE
         )
         
         return output.dict() if hasattr(output, 'dict') else output
@@ -873,7 +873,7 @@ class A2AOrchestrator:
         """Map pipeline phase to artifact type."""
         mapping = {
             PipelinePhase.PEDAGOGY: ArtifactType.LEARNING_OBJECTIVES,
-            PipelinePhase.CINEMATIC: ArtifactType.CINEMATIC_SCRIPT,
+            PipelinePhase.CINEMATIC: ArtifactType.CINEMATIC_SCENE,
             PipelinePhase.VISUAL: ArtifactType.VISUAL_ASSETS,
             PipelinePhase.VOICE: ArtifactType.VOICE_SCRIPTS,
             PipelinePhase.QA_CHECK: ArtifactType.QA_REPORT,
