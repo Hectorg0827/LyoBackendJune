@@ -355,8 +355,78 @@ Aim for higher-order thinking:
 - Advanced: Less lower levels (20%), more analyze/evaluate/create (80%)
 
 ## Output Format
-Return a valid JSON object matching the PedagogyOutput schema.
-Do NOT include markdown code blocks or extra text."""
+Return a valid JSON object with EXACTLY this structure (fill in the values):
+
+```json
+{{
+  "topic": "string - the course topic",
+  "difficulty_level": "beginner|intermediate|advanced",
+  "estimated_total_hours": 0.0,
+  "learning_objectives": [
+    {{
+      "id": "obj_1",
+      "description": "string",
+      "bloom_level": "remember|understand|apply|analyze|evaluate|create",
+      "measurable_outcome": "string",
+      "assessment_criteria": ["criterion 1", "criterion 2"],
+      "estimated_time_minutes": 30
+    }}
+  ],
+  "bloom_distribution": {{"remember": 0, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}},
+  "prerequisites": [
+    {{
+      "id": "prereq_1",
+      "title": "string",
+      "description": "string",
+      "required_for": ["obj_1"],
+      "bloom_level": "remember|understand|apply|analyze|evaluate|create",
+      "is_optional": false
+    }}
+  ],
+  "prerequisite_dag": {{"prereq_1": ["prereq_2"]}},
+  "cognitive_chunks": [
+    {{
+      "id": "chunk_1",
+      "title": "string",
+      "concepts": ["concept1", "concept2", "concept3"],
+      "bloom_level": "remember|understand|apply|analyze|evaluate|create",
+      "cognitive_load": "low|medium|high|peak",
+      "duration_minutes": 15,
+      "practice_activities": ["activity 1"],
+      "rest_after": false
+    }}
+  ],
+  "recommended_session_length_minutes": 45,
+  "total_chunks": 5,
+  "scaffolding_steps": [
+    {{
+      "step_number": 1,
+      "title": "string",
+      "description": "string",
+      "support_level": "full|partial|minimal|independent",
+      "example_count": 3,
+      "practice_type": "guided|semi-guided|independent",
+      "feedback_frequency": "immediate|delayed|self-check"
+    }}
+  ],
+  "visual_learner_suggestions": ["suggestion 1"],
+  "auditory_learner_suggestions": ["suggestion 1"],
+  "kinesthetic_learner_suggestions": ["suggestion 1"],
+  "formative_assessment_points": ["after chunk 1"],
+  "summative_assessment_strategy": "string",
+  "mastery_threshold": 0.8,
+  "key_misconceptions": ["misconception 1"],
+  "difficulty_spikes": ["topic X"],
+  "engagement_risks": ["risk 1"]
+}}
+```
+
+CRITICAL RULES:
+1. Return ONLY the JSON object, no markdown code blocks, no extra text
+2. Use the EXACT field names shown above - do not rename or wrap in another object
+3. All fields are required - provide values for every field
+4. bloom_level values must be lowercase: remember, understand, apply, analyze, evaluate, create
+5. cognitive_load values must be lowercase: low, medium, high, peak"""
     
     def extract_intent_from_artifacts(
         self,

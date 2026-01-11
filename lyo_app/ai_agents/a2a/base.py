@@ -408,6 +408,22 @@ class A2ABaseAgent(ABC, Generic[T]):
                 # Parse and validate
                 try:
                     data = json.loads(raw_text)
+                    
+                    # Handle wrapped responses (e.g., {"pedagogy_output": {...}})
+                    # Check if data is a single-key dict containing the actual output
+                    if isinstance(data, dict) and len(data) == 1:
+                        single_key = list(data.keys())[0]
+                        inner_data = data[single_key]
+                        # If the inner data has required fields, use it
+                        if isinstance(inner_data, dict):
+                            try:
+                                result = self.output_schema.model_validate(inner_data)
+                                if hasattr(response, 'usage_metadata'):
+                                    result._tokens_used = getattr(response.usage_metadata, 'total_token_count', 0)
+                                return result
+                            except ValidationError:
+                                pass  # Fall through to try original data
+                    
                     result = self.output_schema.model_validate(data)
                     
                     # Store token count if available
