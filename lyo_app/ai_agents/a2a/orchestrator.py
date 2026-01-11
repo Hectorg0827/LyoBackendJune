@@ -630,8 +630,10 @@ class A2AOrchestrator:
             },
             input_artifacts=[
                 Artifact(
-                    artifact_type=ArtifactType.LEARNING_OBJECTIVES,
-                    content=pedagogy_output
+                    type=ArtifactType.LEARNING_OBJECTIVES,
+                    name="pedagogy_output",
+                    data=pedagogy_output,
+                    created_by="pedagogy"
                 )
             ] if pedagogy_output else None
         )
@@ -855,17 +857,21 @@ class A2AOrchestrator:
             if result.output:
                 artifact_type = self._phase_to_artifact_type(PipelinePhase(phase))
                 artifacts.append(Artifact(
-                    artifact_type=artifact_type,
-                    content=result.output
+                    type=artifact_type,
+                    name=f"{phase}_output",
+                    data=result.output,
+                    created_by=self._get_phase_agent(PipelinePhase(phase))
                 ))
         
         return A2ACourseResponse(
-            course_id=state.final_output.get("course_id", state.pipeline_id) if state.final_output else state.pipeline_id,
-            topic=state.request.topic,
+            task_id=state.pipeline_id,
             status=state.final_status,
+            course_id=state.final_output.get("course_id", state.pipeline_id) if state.final_output else state.pipeline_id,
+            course_title=state.request.topic,
             artifacts=artifacts,
-            agents_used=[self._get_phase_agent(PipelinePhase(p)) for p in state.phase_results],
-            total_generation_time_ms=self._calculate_total_duration(),
+            stages_completed=[phase for phase, result in state.phase_results.items() if result.status.value == "completed"],
+            progress_percent=int(state.overall_progress * 100),
+            total_duration_seconds=self._calculate_total_duration() / 1000.0,
             quality_score=self._get_qa_score()
         )
     
