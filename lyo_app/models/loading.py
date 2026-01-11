@@ -1,33 +1,19 @@
-"""Unified Tutor Model Loader & Generation Utilities
+"""Unified AI Model Access Layer
 
-Provides:
- - Lazy loading of base Gemma (or other) model with optional LoRA adapter
- - 4-bit (QLoRA) quantization support (fallback to full precision if unavailable)
- - Structured tutor prompt construction for: explanations, hints, reflection
- - Safe fallback mock model when heavy deps missing
-
-Environment Variables (override defaults):
- - MODEL_ID (default: google/gemma-2b-it)
- - MODEL_DIR (default: ./models)
- - LORA_ADAPTER_PATH (optional path to PEFT adapter)
- - MAX_NEW_TOKENS (optional int)
+Provides direct integration with the AI Resilience Manager (Gemini) 
+for all tutoring and course generation tasks. Local model loading is disabled.
 """
 
 from __future__ import annotations
 
-import os
 import json
-import time
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-from pathlib import Path
+
+from lyo_app.core.ai_resilience import ai_resilience_manager
 
 logger = logging.getLogger(__name__)
-
-
-def _env(name: str, default: Optional[str] = None) -> Optional[str]:
-    return os.getenv(name, default)
 
 
 @dataclass
@@ -40,110 +26,20 @@ class TutorGenerationResult:
     meta: Dict[str, Any] = None
 
 
-class _MockPipe:
-    def __call__(self, prompt: str, **kwargs):  # type: ignore
-        # Produce minimal structured JSON content for dev.
-        content = {
-            "reason": "Mock reasoning path demonstrating scaffold.",
-            "response": "Let's break this down. First, identify the loop bounds...",
-            "next_hint": "What variable changes each iteration?"
-        }
-        return [{"generated_text": prompt + json.dumps(content)}]
-
-
-class TutorModel:
-    """Encapsulates model + tokenizer + generation pipeline for tutoring tasks."""
+class ModelManager:
+    """Encapsulates AI generation logic using Gemini via AIResilienceManager."""
 
     def __init__(self):
-        self.base_id: str = _env("MODEL_ID", "google/gemma-2b-it")
-        self.cache_dir = Path(_env("MODEL_DIR", "./models"))
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.adapter_path = _env("LORA_ADAPTER_PATH")
-        self.tokenizer = None
-        self.model = None
-        self.pipe = None
-        self.loaded = False
-        self.adapter_loaded = False
-        self.max_new_tokens_default = int(_env("MAX_NEW_TOKENS", "512"))
+        self.loaded = True # Always "loaded" because we use a remote API
+        self.max_new_tokens_default = 512
 
     def load(self):
-        if self.loaded:
-            return
-        t0 = time.time()
-        try:
-            from transformers import (
-                AutoTokenizer,
-                AutoModelForCausalLM,
-                BitsAndBytesConfig,
-                pipeline,
-            )
-            import torch
-        except Exception as e:  # dependencies missing
-            logger.warning(f"Transformers/torch unavailable, using mock pipeline: {e}")
-            self.pipe = _MockPipe()
-            self.loaded = True
-            return
+        """No-op for compatibility."""
+        pass
 
-        quant_cfg = None
-        try:
-            from transformers import BitsAndBytesConfig  # noqa
-            quant_cfg = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16,
-            )
-        except Exception as e:  # bitsandbytes not installed or CPU only
-            logger.warning(f"4-bit quantization unavailable, falling back to full precision: {e}")
+    def is_loaded(self) -> bool:
+        return True
 
-        logger.info(f"Loading base model {self.base_id} (quantized={quant_cfg is not None})")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.base_id,
-            cache_dir=str(self.cache_dir),
-            trust_remote_code=True,
-        )
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        model_kwargs: Dict[str, Any] = {
-            "cache_dir": str(self.cache_dir),
-            "trust_remote_code": True,
-            "device_map": "auto",
-        }
-        if quant_cfg is not None:
-            model_kwargs["quantization_config"] = quant_cfg
-
-        self.model = AutoModelForCausalLM.from_pretrained(self.base_id, **model_kwargs)
-
-        # Attempt LoRA adapter load lazily
-        if self.adapter_path and Path(self.adapter_path).exists():
-            try:
-                from peft import PeftModel
-                self.model = PeftModel.from_pretrained(self.model, self.adapter_path)
-                self.adapter_loaded = True
-                logger.info(f"Loaded LoRA adapter: {self.adapter_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load LoRA adapter ({self.adapter_path}): {e}")
-
-        try:
-            from transformers import pipeline as hf_pipeline
-            self.pipe = hf_pipeline(
-                "text-generation",
-                model=self.model,
-                tokenizer=self.tokenizer,
-                device_map="auto",
-                torch_dtype=getattr(self.model, "dtype", None),
-            )
-        except Exception as e:
-            logger.warning(f"Falling back to mock pipeline: {e}")
-            self.pipe = _MockPipe()
-
-        self.loaded = True
-        logger.info(
-            f"Tutor model ready in {time.time()-t0:.1f}s adapter={self.adapter_loaded} quant={quant_cfg is not None}"
-        )
-
-    # -------------------- Prompt & Generation -------------------- #
     @staticmethod
     def build_prompt(
         system_goal: str,
@@ -171,31 +67,57 @@ class TutorModel:
         )
         return prompt
 
-    def generate(
+    async def generate(
         self,
         prompt: str,
         max_new_tokens: Optional[int] = None,
         temperature: float = 0.7,
         top_p: float = 0.9,
     ) -> str:
-        if not self.loaded:
-            raise RuntimeError("Model not loaded - call load() first")
-        max_new_tokens = max_new_tokens or self.max_new_tokens_default
-        out = self.pipe(
-            prompt,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            do_sample=True,
-            pad_token_id=self.tokenizer.eos_token_id if self.tokenizer else None,
-            eos_token_id=self.tokenizer.eos_token_id if self.tokenizer else None,
-        )[0]["generated_text"]
-        return out[len(prompt):].strip()
+        """Generate content using Gemini."""
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            max_tokens = max_new_tokens or self.max_new_tokens_default
+            
+            response = await ai_resilience_manager.chat_completion(
+                messages, 
+                temperature=temperature, 
+                max_tokens=max_tokens
+            )
+            return response.get("content", "")
+        except Exception as e:
+            logger.error(f"Gemini generation failed: {e}")
+            return "I'm sorry, I'm having trouble connecting to my AI core right now."
 
-    # -------------------- Parsing -------------------- #
+    async def structured_generate(
+        self,
+        system_goal: str,
+        student_input: str,
+        level: str = "beginner",
+        mode: str = "explanation",
+        hint_level: Optional[int] = None,
+        **gen_kwargs,
+    ) -> TutorGenerationResult:
+        prompt = self.build_prompt(system_goal, student_input, level, mode, hint_level)
+        raw = await self.generate(prompt, **gen_kwargs)
+        data = self._extract_json(raw) or {}
+        return TutorGenerationResult(
+            raw=raw,
+            response=data.get("response", raw.strip()),
+            reasoning=data.get("reason"),
+            next_hint=data.get("next_hint"),
+            meta={"parsed": bool(data), "mode": mode, "level": level},
+        )
+
     @staticmethod
     def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         """Attempt to locate and parse first JSON object in text."""
+        # Remove markdown code blocks if present
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+            
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
@@ -206,45 +128,43 @@ class TutorModel:
         except Exception:
             return None
 
-    def structured_generate(
-        self,
-        system_goal: str,
-        student_input: str,
-        level: str = "beginner",
-        mode: str = "explanation",
-        hint_level: Optional[int] = None,
-        **gen_kwargs,
-    ) -> TutorGenerationResult:
-        prompt = self.build_prompt(system_goal, student_input, level, mode, hint_level)
-        raw = self.generate(prompt, **gen_kwargs)
-        data = self._extract_json(raw) or {}
-        return TutorGenerationResult(
-            raw=raw,
-            response=data.get("response", raw.strip()),
-            reasoning=data.get("reason"),
-            next_hint=data.get("next_hint"),
-            meta={"parsed": bool(data), "mode": mode, "level": level},
-        )
+    async def get_model(self):
+        """Compatibility shim for ContentCurator."""
+        return self
 
-    # -------------------- Info -------------------- #
+    async def analyze_content(self, prompt: str) -> Dict[str, Any]:
+        """Analyze content quality and characteristics using Gemini."""
+        raw = await self.generate(prompt)
+        data = self._extract_json(raw) or {}
+        return data
+
+    async def generate_learning_path(self, prompt: str) -> Dict[str, Any]:
+        """Generate a learning path using Gemini."""
+        raw = await self.generate(prompt)
+        data = self._extract_json(raw) or {}
+        return data
+
+    async def score_content_relevance(self, prompt: str) -> Dict[str, Any]:
+        """Score content relevance using Gemini."""
+        raw = await self.generate(prompt)
+        data = self._extract_json(raw) or {}
+        return data
+
     def info(self) -> Dict[str, Any]:
         return {
-            "base_model": self.base_id,
-            "adapter_loaded": self.adapter_loaded,
-            "adapter_path": self.adapter_path if self.adapter_loaded else None,
-            "loaded": self.loaded,
+            "engine": "Gemini (via AIResilienceManager)",
+            "loaded": True,
         }
 
 
 # Global instance
-tutor_model = TutorModel()
-
+model_manager = ModelManager()
 
 def ensure_model():
-    tutor_model.load()
+    """Compatibility shim."""
+    pass
 
-
-def generate_tutor_response(
+async def generate_tutor_response(
     system_goal: str,
     student_input: str,
     level: str = "beginner",
@@ -252,8 +172,7 @@ def generate_tutor_response(
     hint_level: Optional[int] = None,
     **gen_kwargs,
 ) -> TutorGenerationResult:
-    ensure_model()
-    return tutor_model.structured_generate(
+    return await model_manager.structured_generate(
         system_goal=system_goal,
         student_input=student_input,
         level=level,
@@ -262,14 +181,11 @@ def generate_tutor_response(
         **gen_kwargs,
     )
 
+# Backwards compatibility shims
+tutor_model = model_manager
 
-"""Backwards compatibility shim (legacy API names used elsewhere maybe)"""
-model_manager = tutor_model  # type: ignore
-
-def generate_course_content(prompt: str, **kwargs) -> str:
+async def generate_course_content(prompt: str, **kwargs) -> str:
     """
-    Generate course content using the loaded model.
-    Shim for compatibility with ai_model_manager.generate_course_content interface.
+    Generate course content using Gemini.
     """
-    ensure_model()
-    return tutor_model.generate(prompt, **kwargs)
+    return await model_manager.generate(prompt, **kwargs)

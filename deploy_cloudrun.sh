@@ -24,7 +24,7 @@ SERVICE=${SERVICE:-lyo-backend}
 SERVICE_ACCOUNT_NAME=${SERVICE_ACCOUNT_NAME:-${SERVICE}-sa}
 PORT=${PORT:-8080}
 CPU=${CPU:-1}
-MEMORY=${MEMORY:-1Gi}
+MEMORY=${MEMORY:-2Gi}
 CONCURRENCY=${CONCURRENCY:-80}
 TIMEOUT=${TIMEOUT:-600}
 MIN_INSTANCES=${MIN_INSTANCES:-0}
@@ -66,8 +66,16 @@ log_info "Starting deployment of '${SERVICE}' to project '${PROJECT_ID}' region 
 gcloud config set project "${PROJECT_ID}" --quiet
 
 # Verify service account exists
-if ! gcloud iam service-accounts describe "${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --quiet >/dev/null 2>&1; then
-    log_error "Service account ${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com not found. Please create it first."
+# Verify service account exists
+SA_EMAIL=""
+if [[ "${SERVICE_ACCOUNT_NAME}" == *"@"* ]]; then
+    SA_EMAIL="${SERVICE_ACCOUNT_NAME}"
+else
+    SA_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+fi
+
+if ! gcloud iam service-accounts describe "${SA_EMAIL}" --quiet >/dev/null 2>&1; then
+    log_error "Service account ${SA_EMAIL} not found. Please create it first."
 fi
 
 # Get Cloud SQL connection name (if exists)
@@ -102,7 +110,11 @@ DEPLOY_CMD+=" --concurrency ${CONCURRENCY}"
 DEPLOY_CMD+=" --timeout ${TIMEOUT}"
 DEPLOY_CMD+=" --min-instances ${MIN_INSTANCES}"
 DEPLOY_CMD+=" --max-instances ${MAX_INSTANCES}"
-DEPLOY_CMD+=" --service-account ${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+if [[ "${SERVICE_ACCOUNT_NAME}" == *"@"* ]]; then
+    DEPLOY_CMD+=" --service-account ${SERVICE_ACCOUNT_NAME}"
+else
+    DEPLOY_CMD+=" --service-account ${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+fi
 
 # Environment variables
 DEPLOY_CMD+=" --set-env-vars ENVIRONMENT=production"

@@ -17,7 +17,7 @@ import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query, Depends, Request, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, Depends, Request, BackgroundTasks, Security
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -35,12 +35,72 @@ from lyo_app.streaming import get_sse_manager, stream_response, EventType, Strea
 
 from lyo_app.auth.dependencies import get_current_user
 from lyo_app.models.enhanced import User
-from lyo_app.core.database import get_async_session, AsyncSessionLocal
+from lyo_app.core.database import get_async_session as get_db, AsyncSessionLocal
 from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
 from lyo_app.core.context_engine import ContextEngine
 from lyo_app.personalization.soft_skills import SoftSkillsService, SoftSkillAnalyzer
 
 logger = logging.getLogger(__name__)
+
+# Authentication dependencies
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
+from lyo_app.auth.routes import api_key_header
+
+# Optional security checks (auto_error=False allows us to handle missing creds manually)
+optional_bearer = HTTPBearer(auto_error=False)
+optional_api_key = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def get_current_user_or_guest(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    bearer: Optional[HTTPAuthorizationCredentials] = Security(optional_bearer),
+    api_key: Optional[str] = Security(optional_api_key)
+) -> User:
+    """
+    Get current user (JWT) OR create a temporary guest user context (API Key).
+    Allows 'Beginner' flow to generate courses before signup.
+    """
+    # 1. Try Bearer Token (Authenticated User)
+    if bearer:
+        try:
+            # Re-use the standard dependency logic manually?
+            # It's cleaner to use the dependency if we could, but we can't conditionally depend.
+            # So we import the verifier.
+            from lyo_app.auth.jwt_auth import verify_token_async
+            from lyo_app.auth.service import AuthService
+            
+            token_data = await verify_token_async(bearer.credentials, expected_type="access")
+            if token_data.user_id:
+                user_id = int(token_data.user_id)
+                auth_service = AuthService()
+                user = await auth_service.get_user_by_id(db, user_id)
+                if user:
+                    return user
+        except Exception as e:
+            logger.warning(f"Bearer token validation failed in guest-optimistic auth: {e}")
+            # Fallthrough to guest check
+    
+    # 2. Try API Key (Guest)
+    if api_key:
+        # We assume presence of valid API key header (validated by gateway or implicit trust for now)
+        # In future, validate against DB/Env.
+        logger.info("Allowing Guest access via API Key for Course Generation")
+        
+        # Create a transient Guest User object (not saved to DB)
+        # We use a special ID format for guests
+        return User(
+            id="guest_session", 
+            username="Guest Learner", 
+            email="guest@lyo.app",
+            is_active=True
+        )
+
+    # 3. Fail
+    raise HTTPException(
+        status_code=401, 
+        detail="Not authenticated (Bearer Token or API Key required)"
+    )
+
 
 router = APIRouter(prefix="/api/v1/classroom", tags=["AI Classroom"])
 
@@ -395,7 +455,7 @@ async def end_session(session_id: str):
 async def classroom_chat(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """

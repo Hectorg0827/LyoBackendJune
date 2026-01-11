@@ -6,16 +6,16 @@ Handles user registration, login, and user management operations with RBAC integ
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from lyo_app.models.enhanced import User
 from lyo_app.auth.rbac import Role, RoleType
+from lyo_app.auth.models import RefreshToken as RefreshTokenModel
 from lyo_app.auth.schemas import UserCreate, UserLogin, Token
-from lyo_app.auth.security import hash_password, verify_password
-from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
+from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token, verify_token_async, get_password_hash, verify_password
 from lyo_app.auth.rbac_service import RBACService
 from lyo_app.auth.security_middleware import InputValidator
 from lyo_app.core.config import settings
@@ -61,7 +61,7 @@ class AuthService:
             raise ValueError("Username already taken")
         
         # Hash the password
-        hashed_password = hash_password(password)
+        hashed_password = get_password_hash(password)
         
         # Create user with validated data
         user = User(
@@ -141,18 +141,27 @@ class AuthService:
         
         # Update last login
         user.last_login = datetime.utcnow()
-        await db.commit()
         
         # Create access token using jwt_auth for consistent format with chat endpoints
         from lyo_app.core.settings import settings as jwt_settings
         access_token = create_access_token(user_id=str(user.id))
         
         # Create refresh token
-        refresh_token = create_refresh_token(user_id=str(user.id))
+        refresh_token_str = create_refresh_token(user_id=str(user.id))
+        
+        # Store refresh token in database for validation
+        refresh_token_record = RefreshTokenModel(
+            user_id=user.id,
+            token=refresh_token_str,
+            expires_at=datetime.utcnow() + timedelta(days=jwt_settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+            is_revoked=False
+        )
+        db.add(refresh_token_record)
+        await db.commit()
         
         token = Token(
             access_token=access_token,
-            refresh_token=refresh_token,
+            refresh_token=refresh_token_str,
             token_type="bearer",
             expires_in=jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60  # Convert to seconds
         )
@@ -173,15 +182,32 @@ class AuthService:
         Raises:
             ValueError: If token is invalid
         """
-        # Verify token
-        from lyo_app.auth.security import verify_token
-        payload = verify_token(refresh_token)
-        if not payload or payload.get("type") != "refresh":
-            raise ValueError("Invalid refresh token")
+        # Verify token using jwt_auth for consistency
+        from lyo_app.auth.jwt_auth import verify_token_async
+        from lyo_app.core.settings import settings as jwt_settings
+        
+        try:
+            token_data = await verify_token_async(refresh_token, expected_type="refresh")
+        except Exception as e:
+            raise ValueError(f"Invalid refresh token: {str(e)}")
             
-        user_id = payload.get("sub")
+        user_id = token_data.user_id
         if not user_id:
             raise ValueError("Invalid refresh token payload")
+            
+        # Check if token exists in database and is not revoked
+        result = await db.execute(
+            select(RefreshTokenModel).where(
+                and_(
+                    RefreshTokenModel.token == refresh_token,
+                    RefreshTokenModel.is_revoked == False,
+                    RefreshTokenModel.expires_at > datetime.utcnow()
+                )
+            )
+        )
+        token_record = result.scalar_one_or_none()
+        if not token_record:
+            raise ValueError("Refresh token revoked or expired")
             
         # Get user
         user = await self.get_user_by_id(db, int(user_id))
@@ -191,16 +217,28 @@ class AuthService:
         if not user.is_active:
             raise ValueError("Account is disabled")
             
-        # Create new access token using jwt_auth for consistent format with chat endpoints
-        from lyo_app.core.settings import settings as jwt_settings
+        # Create new access token
         access_token = create_access_token(user_id=str(user.id))
         
-        # Create new refresh token
-        new_refresh_token = create_refresh_token(user_id=str(user.id))
+        # Rotate refresh token: Create new one and revoke old one
+        new_refresh_token_str = create_refresh_token(user_id=str(user.id))
+        
+        # Revoke old token
+        token_record.is_revoked = True
+        
+        # Store new token
+        new_token_record = RefreshTokenModel(
+            user_id=user.id,
+            token=new_refresh_token_str,
+            expires_at=datetime.utcnow() + timedelta(days=jwt_settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+            is_revoked=False
+        )
+        db.add(new_token_record)
+        await db.commit()
         
         return Token(
             access_token=access_token,
-            refresh_token=new_refresh_token,
+            refresh_token=new_refresh_token_str,
             token_type="bearer",
             expires_in=jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )

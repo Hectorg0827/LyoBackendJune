@@ -4,6 +4,7 @@ Implementing the exact endpoints specified in the requirements
 """
 
 import json
+import os
 import time
 import logging
 from typing import Dict, List, Optional, Any
@@ -537,13 +538,19 @@ def _generate_fallback_quiz(question_count: int, quiz_type: str) -> List[QuizQue
 class ChatRequest(BaseModel):
     """Simple chat request"""
     message: str = Field(..., description="User's message")
-    conversationHistory: Optional[List[ConversationMessage]] = Field(default=None, description="Optional chat history")
+    conversationHistory: Optional[List[ConversationMessage]] = Field(default=None, alias="conversation_history", description="Optional chat history")
     context: Optional[str] = Field(default=None, description="Optional context like course topic")
+
+    class Config:
+        populate_by_name = True
 
 class ChatResponse(BaseModel):
     """Simple chat response"""
     response: str = Field(..., description="AI response")
     conversationHistory: List[ConversationMessage] = Field(..., description="Updated conversation history")
+
+    class Config:
+        populate_by_name = True
 
 @router.post("/chat")
 async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
@@ -703,7 +710,7 @@ Include practical examples and clear explanations."""
             messages=[{"role": "user", "content": course_prompt}],
             temperature=0.7,
             max_tokens=4000,
-            provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "openai"]
+            provider_order=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"]
         )
         
         # Check for fallback response (AI service unavailable)
@@ -720,6 +727,12 @@ Include practical examples and clear explanations."""
                     json_content = json_content.replace("```json", "").replace("```", "").strip()
                 elif json_content.startswith("```"):
                     json_content = json_content.replace("```", "").strip()
+                
+                # Clean common JSON issues
+                import re
+                # Fix unescaped backslashes (e.g. LaTeX) by doubling them if not followed by valid escape char
+                # This is a heuristic
+                json_content = re.sub(r'\\(?![/u"bfnrt\\])', r'\\\\', json_content)
                 
                 course_data = json.loads(json_content)
             except json.JSONDecodeError as e:

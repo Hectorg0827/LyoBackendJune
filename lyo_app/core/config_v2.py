@@ -21,15 +21,34 @@ try:
 except ImportError:
     from pydantic import BaseSettings
 
+# Robust Pydantic imports to handle V1/V2 differences
 try:
-    from pydantic import PostgresDsn, RedisDsn, HttpUrl
+    from pydantic import KeyValuePairs
+except ImportError:
+    pass
+
+try:
+    from pydantic import PostgresDsn
 except ImportError:
     try:
-        from pydantic.networks import PostgresDsn, RedisDsn, HttpUrl
+        from pydantic.networks import PostgresDsn
     except ImportError:
-        # Fallback for environments where these aren't available as specific types
         PostgresDsn = str
+
+try:
+    from pydantic import RedisDsn
+except ImportError:
+    try:
+        from pydantic.networks import RedisDsn
+    except ImportError:
         RedisDsn = str
+
+try:
+    from pydantic import HttpUrl
+except ImportError:
+    try:
+        from pydantic.networks import HttpUrl
+    except ImportError:
         HttpUrl = str
 
 

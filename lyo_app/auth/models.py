@@ -81,10 +81,10 @@ class User(Base):
     roles = relationship("lyo_app.auth.rbac.Role", secondary="user_roles", back_populates="users", lazy="noload", viewonly=True)
     
     # Relationships - defined with string names to avoid circular imports
-    # created_study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
-    # group_memberships = relationship("lyo_app.community.models.GroupMembership", foreign_keys="[lyo_app.community.models.GroupMembership.user_id]", back_populates="user", lazy="noload", viewonly=True)
-    # organized_events = relationship("lyo_app.community.models.CommunityEvent", back_populates="organizer", lazy="noload", viewonly=True)
-    # event_attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="user", lazy="noload", viewonly=True)
+    created_study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
+    group_memberships = relationship("lyo_app.community.models.GroupMembership", foreign_keys="[lyo_app.community.models.GroupMembership.user_id]", back_populates="user", lazy="noload", viewonly=True)
+    organized_events = relationship("lyo_app.community.models.CommunityEvent", back_populates="organizer", lazy="noload", viewonly=True)
+    event_attendances = relationship("lyo_app.community.models.EventAttendance", back_populates="user", lazy="noload", viewonly=True)
     
     # Learning relationships  
     course_enrollments = relationship("lyo_app.learning.models.CourseEnrollment", back_populates="user", lazy="noload", viewonly=True)
@@ -103,9 +103,6 @@ class User(Base):
     mentor_interactions = relationship("lyo_app.ai_agents.models.MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
     
     # AI Study relationships
-    # These relationships are commented out to avoid circular imports.
-    # The relationship is defined on the other side (StudySession, GeneratedQuiz, etc.)
-    # and can be accessed via backref if needed.
     study_sessions = relationship("lyo_app.ai_study.models.StudySession", back_populates="user", lazy="noload", viewonly=True)
     generated_quizzes = relationship("lyo_app.ai_study.models.GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
     quiz_attempts = relationship("lyo_app.ai_study.models.QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
@@ -117,27 +114,35 @@ class User(Base):
     push_devices = relationship("lyo_app.models.enhanced.PushDevice", back_populates="user", cascade="all, delete-orphan")
     gamification_profile = relationship("lyo_app.models.enhanced.GamificationProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     
+    # Refresh Tokens
+    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
+
+
+class RefreshToken(Base):
+    """Refresh token for JWT authentication."""
     
-    #     def has_permission(self, permission_name: str) -> bool:
-    #         """Check if user has a specific permission through their roles."""
-    #         for role in self.roles:
-    #             if role.has_permission(permission_name):
-    #                 return True
-    #         return False
+    __tablename__ = "refresh_tokens"
     
-    #     def get_permissions(self) -> Set[str]:
-    #         """Get all permissions for this user through their roles."""
-    #         permissions = set()
-    #         for role in self.roles:
-    #             permissions.update(role.get_permission_names())
-    #         return permissions
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     
-    #     def has_role(self, role_name: str) -> bool:
-    #         """Check if user has a specific role."""
-    #         return any(role.name == role_name for role in self.roles)
+    is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     
-    #     def get_role_names(self) -> Set[str]:
-    #         """Get all role names for this user."""
-    #         return {role.name for role in self.roles}
+    # Device/session information
+    device_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # User agent, IP, etc.
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    
+    # Relationship to user
+    user = relationship("User", back_populates="refresh_tokens")
+    
+    def __repr__(self) -> str:
+        return f"<RefreshToken(id={self.id}, user_id={self.user_id})>"

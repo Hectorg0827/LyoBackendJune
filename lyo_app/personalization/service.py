@@ -152,13 +152,13 @@ class PersonalizationEngine:
         # Get or create learner state
         result = await db.execute(
             select(LearnerState).where(
-                LearnerState.user_id == int(update.learner_id)
+                LearnerState.user_id == update.learner_id
             )
         )
         state = result.scalar_one_or_none()
         
         if not state:
-            state = LearnerState(user_id=int(update.learner_id))
+            state = LearnerState(user_id=update.learner_id)
             db.add(state)
         
         # Update affect if provided
@@ -179,7 +179,7 @@ class PersonalizationEngine:
             
             # Store aggregated sample
             sample = AffectSample(
-                user_id=int(update.learner_id),
+                user_id=update.learner_id,
                 valence=update.affect.valence,
                 arousal=update.affect.arousal,
                 confidence=update.affect.confidence,
@@ -220,7 +220,7 @@ class PersonalizationEngine:
         This reuses existing personalization tables (no parallel memory system).
         Returns an empty string if no learner state exists yet.
         """
-        user_id = int(learner_id)
+        user_id = learner_id
 
         state_result = await db.execute(
             select(LearnerState).where(LearnerState.user_id == user_id)
@@ -322,7 +322,7 @@ class PersonalizationEngine:
         # Update mastery
         new_mastery = await self.dkt.update_mastery(
             db,
-            int(request.learner_id),
+            request.learner_id,
             request.skill_id,
             request.correct,
             request.time_taken_seconds,
@@ -332,7 +332,7 @@ class PersonalizationEngine:
         # Update spaced repetition schedule
         await self._update_repetition_schedule(
             db,
-            int(request.learner_id),
+            request.learner_id,
             request.skill_id,
             request.item_id,
             request.correct
@@ -356,7 +356,7 @@ class PersonalizationEngine:
         # Get learner state
         result = await db.execute(
             select(LearnerState).where(
-                LearnerState.user_id == int(request.learner_id)
+                LearnerState.user_id == request.learner_id
             )
         )
         state = result.scalar_one_or_none()
@@ -407,7 +407,7 @@ class PersonalizationEngine:
             )
         
         # Check for spaced repetition
-        due_items = await self._get_due_repetitions(db, int(request.learner_id))
+        due_items = await self._get_due_repetitions(db, request.learner_id)
         if due_items:
             return NextActionResponse(
                 action=ActionType.REVIEW,
@@ -420,7 +420,7 @@ class PersonalizationEngine:
         # Default: practice at optimal difficulty
         if request.current_skill:
             mastery, confidence = await self.dkt.get_skill_readiness(
-                db, int(request.learner_id), request.current_skill
+                db, request.learner_id, request.current_skill
             )
             
             if mastery < 0.3:
@@ -449,7 +449,7 @@ class PersonalizationEngine:
         """
         result = await db.execute(
             select(LearnerMastery).where(
-                LearnerMastery.user_id == int(learner_id)
+                LearnerMastery.user_id == learner_id
             ).order_by(desc(LearnerMastery.mastery_level))
         )
         masteries = result.scalars().all()
@@ -461,7 +461,7 @@ class PersonalizationEngine:
         # Get learner state
         result = await db.execute(
             select(LearnerState).where(
-                LearnerState.user_id == int(learner_id)
+                LearnerState.user_id == learner_id
             )
         )
         state = result.scalar_one_or_none()

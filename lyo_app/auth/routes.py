@@ -5,8 +5,8 @@ Provides FastAPI endpoints for the authentication module.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,17 @@ from lyo_app.auth.security import verify_token
 from lyo_app.core.database import get_db
 from lyo_app.core.rate_limiter import RedisRateLimiter
 
+# Security scheme for API Key
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def get_api_key(api_key: str = Security(api_key_header)):
+    """Simple API key dependency."""
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API Key required"
+        )
+    return api_key
 
 router = APIRouter()
 auth_service = AuthService()
@@ -49,18 +60,19 @@ async def get_current_user(
     """
     token = credentials.credentials
     
-    # First try to verify as backend JWT token
-    payload = verify_token(token)
-    if payload:
-        # Extract user ID from JWT token
-        user_id = payload.get("sub")
+    # First try to verify as backend JWT token using jwt_auth
+    try:
+        from lyo_app.auth.jwt_auth import verify_token_async
+        token_data = await verify_token_async(token, expected_type="access")
+        user_id = token_data.user_id
+        
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload",
+                detail="Invalid token payload: missing user_id",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
+            
         # Get user from database
         try:
             user_id = int(user_id)
@@ -78,6 +90,13 @@ async def get_current_user(
                 detail="Invalid user ID in token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    except Exception as e:
+        # If it's an HTTPException from above, re-raise it
+        if isinstance(e, HTTPException):
+            raise e
+        # Otherwise log and continue to Firebase check
+        import logging
+        logging.getLogger(__name__).warning(f"Backend JWT verification failed: {str(e)}")
     
     # If JWT verification fails, try Firebase token
     try:
@@ -720,3 +739,21 @@ async def get_firebase_status():
         "supported_providers": ["google.com", "apple.com", "password", "phone"] if firebase_auth_service.is_available() else []
     }
 
+@router.post("/fix-db-schema")
+async def fix_db_schema(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    api_key: str = Security(get_api_key) 
+):
+    """
+    Emergency endpoint to manually trigger database schema repair.
+    Fixes missing refresh_tokens table.
+    """
+    from lyo_app.core.database import _ensure_refresh_tokens_table, engine
+    try:
+        # Use engine.begin() for direct connection without session transaction wrapping
+        async with engine.begin() as conn:
+            await _ensure_refresh_tokens_table(conn)
+        return {"status": "success", "message": "Schema fix executed successfully"}
+    except Exception as e:
+        logger.error(f"Schema fix failed: {e}")
+        return {"status": "error", "message": str(e)}

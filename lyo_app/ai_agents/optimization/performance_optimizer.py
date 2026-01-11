@@ -20,19 +20,13 @@ except ImportError:
     PSUTIL_AVAILABLE = False
     psutil = None
 
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    torch = None
 
-try:
-    from transformers import pipeline
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    pipeline = None
+# Torch and Transformers disabled to save memory on Cloud Run
+TORCH_AVAILABLE = False
+torch = None
+
+TRANSFORMERS_AVAILABLE = False
+pipeline = None
 
 import structlog
 
@@ -376,12 +370,22 @@ class ResourceOptimizer:
         self.memory_threshold = 0.8  # 80% memory usage threshold
         self.cpu_threshold = 0.9     # 90% CPU usage threshold
         
-        # Start resource monitoring if psutil is available
+        # Resource monitoring is now started explicitly via start() method
+        # to prevent side effects during module import
+        self._monitoring_active = False
+
+    
+    def start(self):
+        """Start background resource monitoring explicitly."""
+        if self._monitoring_active:
+            return
+
         if PSUTIL_AVAILABLE:
             self._start_monitoring()
+            self._monitoring_active = True
         else:
             logger.warning("psutil not available - resource monitoring disabled")
-    
+
     def _start_monitoring(self):
         """Start background resource monitoring."""
         if not PSUTIL_AVAILABLE:
@@ -531,6 +535,10 @@ class AIPerformanceOptimizer:
         """Initialize the performance optimizer."""
         if not self._initialized:
             await self.cache_manager.initialize()
+            
+            # Start resource monitoring thread
+            self.resource_optimizer.start()
+            
             self._initialized = True
             logger.info("AI Performance Optimizer fully initialized")
     

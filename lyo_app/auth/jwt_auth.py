@@ -35,8 +35,8 @@ def _get_redis_manager():
     return _redis_manager
 
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - Using pbkdf2_sha256 for better platform compatibility
+pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
 
 # JWT bearer token extraction
 security = HTTPBearer(auto_error=False)
@@ -61,17 +61,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Generate password hash."""
-    # Bcrypt has a 72-byte limit, truncate if necessary
-    password_bytes = password.encode('utf-8')[:72]
-    return pwd_context.hash(password_bytes.decode('utf-8'))
+    return pwd_context.hash(password)
 
 
 def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]] = None) -> str:
     """Create JWT access token."""
     expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    import secrets
     
     to_encode = {
+        "jti": secrets.token_hex(8),
         "user_id": user_id,
+        "sub": user_id,
         "token_type": "access",
         "exp": expire,
         "iat": datetime.utcnow(),
@@ -92,9 +93,12 @@ def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]
 def create_refresh_token(user_id: str) -> str:
     """Create JWT refresh token."""
     expire = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+    import secrets
     
     to_encode = {
+        "jti": secrets.token_hex(8),
         "user_id": user_id,
+        "sub": user_id,
         "token_type": "refresh",
         "exp": expire,
         "iat": datetime.utcnow(),
@@ -125,7 +129,7 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
     """
     # Try cache first for access tokens
     if expected_type == "access":
-        cached_payload = await jwt_cache.get_cached_payload(token)
+        cached_payload = jwt_cache.get(token)
         if cached_payload:
             # Reconstruct TokenData from cache
             exp_timestamp = cached_payload.get("exp")
@@ -159,7 +163,7 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
         
         # Cache successful validation for access tokens
         if expected_type == "access":
-            await jwt_cache.cache_payload(token, payload)
+            jwt_cache.set(token, payload)
         
         return TokenData(
             user_id=user_id,

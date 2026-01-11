@@ -259,7 +259,7 @@ class FirebaseAuthService:
         # Create access and refresh tokens using jwt_auth module for consistency
         # with the token verification used by chat endpoints (get_optional_current_user)
         from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
-        from lyo_app.modules.auth.models import RefreshToken as RefreshTokenModel
+        from lyo_app.auth.models import RefreshToken as RefreshTokenModel
         from lyo_app.core.settings import settings as jwt_settings
         
         access_token = create_access_token(user_id=str(user.id))
