@@ -153,6 +153,7 @@ class ChatResponse(BaseModel):
     images: List[str] = Field(default_factory=list)
     actions: List[Dict[str, Any]] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    openClassroomPayload: Optional[Dict[str, Any]] = None
 
 
 class GraphCourseItemRead(BaseModel):
@@ -469,8 +470,9 @@ async def classroom_chat(
     
     Set stream=true for real-time streaming response.
     """
-    # Trigger Soft Skills Analysis in Background
-    background_tasks.add_task(analyze_soft_skills_task, current_user.id, request.message)
+    # Trigger Soft Skills Analysis in Background (skip for guest users)
+    if current_user.id != "guest_session" and isinstance(current_user.id, int):
+        background_tasks.add_task(analyze_soft_skills_task, current_user.id, request.message)
 
     manager = get_conversation_manager()
     
@@ -498,49 +500,72 @@ async def classroom_chat(
 
     generated_course_id: Optional[str] = None
     if is_course_request:
-        # Create a minimal playable GraphCourse for the iOS Interactive Cinema flow.
-        # The iOS client expects `generated_course_id` at the top level.
-        topic = (
-            (detected_intent.topic if detected_intent is not None else None)
-            or session.current_topic
-            or ""
-        )
+        try:
+            # Create a minimal playable GraphCourse for the iOS Interactive Cinema flow.
+            # The iOS client expects `generated_course_id` at the top level.
+            topic = (
+                (detected_intent.topic if detected_intent is not None else None)
+                or session.current_topic
+                or ""
+            )
 
-        if not topic:
-            # Best-effort: many clients send the desired topic wrapped in quotes.
-            match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
-            topic = match.group(1) if match else request.message
+            if not topic:
+                # Best-effort: many clients send the desired topic wrapped in quotes.
+                match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
+                topic = match.group(1) if match else request.message
 
-        topic = topic.strip().strip("'\"")
-        if len(topic) > 120:
-            topic = topic[:120]
-        course = await _create_minimal_graph_course(
-            db,
-            topic=topic,
-            creator_id=str(current_user.id),
-            level="beginner",
-        )
-        generated_course_id = course.id
-        session.current_course_id = generated_course_id
-        session.current_topic = topic
+            topic = topic.strip().strip("'\"")
+            if len(topic) > 90:
+                topic = topic[:87] + "..."
+            
+            level = "beginner"
+            course = await _create_minimal_graph_course(
+                db,
+                topic=topic,
+                creator_id=str(current_user.id),
+                level=level,
+            )
+            generated_course_id = course.id
+            session.current_course_id = generated_course_id
+            session.current_topic = topic
 
-        response = FlowResponse(
-            content=f"✅ Created interactive course: {course.title}",
-            response_type="course",
-            state=ConversationState.IN_LESSON,
-            metadata={
-                "course_id": generated_course_id,
-                "generated_course_id": generated_course_id,
-                "topic": topic,
-            },
-            actions=[
-                {
-                    "type": "course_created",
-                    "course_id": generated_course_id,
+            # Construct the OpenClassroom payload for iOS
+            payload = {
+                "course": {
+                    "id": course.id,
+                    "title": course.title,
                     "topic": topic,
+                    "level": level
                 }
-            ],
-        )
+            }
+
+            response = FlowResponse(
+                content=f"✅ Created interactive course: {course.title}",
+                response_type="OPEN_CLASSROOM",
+                state=ConversationState.IN_LESSON,
+                metadata={
+                    "course_id": generated_course_id,
+                    "generated_course_id": generated_course_id,
+                    "topic": topic,
+                    "openClassroomPayload": payload
+                },
+                actions=[
+                    {
+                        "type": "course_created",
+                        "course_id": generated_course_id,
+                        "topic": topic,
+                    }
+                ],
+            )
+        except Exception as e:
+            logger.exception(f"Failed to create minimal graph course: {e}")
+            # Fallback to chat response instead of 500
+            response = FlowResponse(
+                content=f"I tried to create a course on '{topic}', but ran into a technical issue. Let's discuss it in chat instead! What would you like to know about {topic}?",
+                response_type="text",
+                state=session.state,
+                metadata={"error": str(e)}
+            )
     else:
         # Get User Context
         user_context = await context_engine.get_user_context(
@@ -582,7 +607,8 @@ async def classroom_chat(
         audio_url=response.audio_url,
         images=response.images,
         actions=response.actions,
-        metadata=response.metadata
+        metadata=response.metadata,
+        openClassroomPayload=response.metadata.get("openClassroomPayload")
     )
 
 

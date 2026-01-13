@@ -279,19 +279,4 @@ class DiscoveryFeedItem(Base):
     )
 
 
-class Badge(Base):
-    """Badge model for gamification."""
-    __tablename__ = "badges"
-    __table_args__ = {'extend_existing': True}
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)
-    description = Column(String(500), nullable=False)
-    icon = Column(String(200), nullable=True)
-    category = Column(String(50), nullable=False)
-    requirements = Column(JSON, nullable=True)
-    
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
-    # Many-to-many relationship with User through a secondary table
-    # This might require a secondary table definition
+

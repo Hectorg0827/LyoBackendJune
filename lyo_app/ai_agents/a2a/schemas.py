@@ -329,7 +329,8 @@ class StreamingEvent(BaseModel):
     def to_sse_data(self) -> str:
         """Format for Server-Sent Events"""
         import json
-        return json.dumps(self.model_dump(mode='json', exclude_none=True))
+        data_str = json.dumps(self.model_dump(mode='json', exclude_none=True))
+        return f"data: {data_str}\n\n"
 
 
 # ============================================================

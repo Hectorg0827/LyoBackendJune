@@ -102,11 +102,11 @@ class User(Base):
     engagement_state = relationship("lyo_app.ai_agents.models.UserEngagementState", back_populates="user", uselist=False, cascade="all, delete-orphan", lazy="noload", viewonly=True)
     mentor_interactions = relationship("lyo_app.ai_agents.models.MentorInteraction", back_populates="user", cascade="all, delete-orphan", lazy="noload", viewonly=True)
     
-    # AI Study relationships
-    study_sessions = relationship("lyo_app.ai_study.models.StudySession", back_populates="user", lazy="noload", viewonly=True)
-    generated_quizzes = relationship("lyo_app.ai_study.models.GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
-    quiz_attempts = relationship("lyo_app.ai_study.models.QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
-    study_analytics = relationship("lyo_app.ai_study.models.StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
+    # AI Study relationships - TEMPORARILY DISABLED: causing mapper initialization errors
+    # study_sessions = relationship("lyo_app.ai_study.models.StudySession", back_populates="user", lazy="noload", viewonly=True)
+    # generated_quizzes = relationship("lyo_app.ai_study.models.GeneratedQuiz", back_populates="user", lazy="noload", viewonly=True)
+    # quiz_attempts = relationship("lyo_app.ai_study.models.QuizAttempt", back_populates="user", lazy="noload", viewonly=True)
+    # study_analytics = relationship("lyo_app.ai_study.models.StudySessionAnalytics", back_populates="user", lazy="noload", viewonly=True)
     
     # Enhanced models relationships
     courses = relationship("lyo_app.learning.models.Course", back_populates="instructor", cascade="all, delete-orphan")
