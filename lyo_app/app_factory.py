@@ -106,6 +106,14 @@ async def lifespan(app: FastAPI):
         ai_components['ai_orchestrator'] = None
     
     logging.info("🎯 Lyo Backend ready - Performance optimized to beat TikTok!")
+
+    # Initialize database
+    try:
+        from .core.database import init_db
+        await init_db()
+        logging.info("✅ Database initialized successfully")
+    except Exception as e:
+        logging.error(f"❌ Database initialization failed: {e}")
     
     yield
     

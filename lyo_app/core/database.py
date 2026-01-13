@@ -151,23 +151,26 @@ async def init_db() -> None:
         from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
-        # from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
-        # from lyo_app.stack.models import StackItem  # noqa: F401
+        from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
+        from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.ai_study.models import StudySession, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
         from lyo_app.ai_agents.models import UserEngagementState, MentorInteraction  # noqa: F401
+        from lyo_app.personalization.models import LearnerState, LearnerMastery, AffectSample, SpacedRepetitionSchedule  # noqa: F401
         # Chat module models (for session continuity + notes/courses)
-        # from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
+        from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
         # Import new mentor chat models
-        # from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
-        # from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+        from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
+        from lyo_app.classroom.models import ClassroomSession  # noqa: F401
         
-        # TEMPORARILY DISABLED automatic schema updates to prevent boot hang in production
-        # logger.info("Synchronizing database schema...")
-        # await conn.run_sync(Base.metadata.create_all)
-        # await _ensure_users_schema(conn)
-        # await _ensure_stack_items_schema(conn)
+        # Enable automatic schema updates to ensure all tables exist
+        logger.info("Synchronizing database schema...")
+        await conn.run_sync(Base.metadata.create_all)
+        
+        # Legacy schema patches
+        await _ensure_users_schema(conn)
+        await _ensure_stack_items_schema(conn)
         await _ensure_refresh_tokens_table(conn)
-        logger.info("Database models registered successfully (schema updates skipped)")
+        logger.info("Database models registered successfully")
 
 
 async def _ensure_users_schema(conn) -> None:
@@ -214,6 +217,8 @@ async def _ensure_users_schema(conn) -> None:
             logger.warning(f"❌ Schema update timed out after 30s: {ddl}")
         except Exception as e:
             logger.warning(f"⚠️ Schema update failed ({ddl}): {e}")
+
+
 
 
 async def _ensure_stack_items_schema(conn) -> None:
