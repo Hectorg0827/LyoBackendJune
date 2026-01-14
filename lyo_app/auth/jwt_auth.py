@@ -71,8 +71,8 @@ def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]
     
     to_encode = {
         "jti": secrets.token_hex(8),
-        "user_id": user_id,
-        "sub": user_id,
+        "user_id": str(user_id),  # Ensure it's a string in JWT
+        "sub": str(user_id),
         "token_type": "access",
         "exp": expire,
         "iat": datetime.utcnow(),
@@ -97,8 +97,8 @@ def create_refresh_token(user_id: str) -> str:
     
     to_encode = {
         "jti": secrets.token_hex(8),
-        "user_id": user_id,
-        "sub": user_id,
+        "user_id": str(user_id),  # Ensure it's a string in JWT
+        "sub": str(user_id),
         "token_type": "refresh",
         "exp": expire,
         "iat": datetime.utcnow(),
@@ -286,7 +286,9 @@ async def get_current_user(
     # Use async verification with cache
     token_data = await verify_token_async(token, "access")
     
-    result = await db.execute(select(User).where(User.id == token_data.user_id))
+    # Convert user_id from string (JWT) to int (database)
+    user_id_int = int(token_data.user_id)
+    result = await db.execute(select(User).where(User.id == user_id_int))
     user = result.scalars().first()
     
     if not user:
