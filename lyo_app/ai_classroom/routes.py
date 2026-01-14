@@ -567,12 +567,18 @@ async def classroom_chat(
                 metadata={"error": str(e)}
             )
     else:
-        # Get User Context
-        user_context = await context_engine.get_user_context(
-            db, 
-            current_user.id, 
-            current_input=request.message
-        )
+        # Get User Context (skip for guest users)
+        user_context = "student"  # Default context
+        if current_user.id != "guest_session" and isinstance(current_user.id, int):
+            try:
+                user_context = await context_engine.get_user_context(
+                    db, 
+                    current_user.id, 
+                    current_input=request.message
+                )
+            except Exception as e:
+                logger.warning(f"Context engine failed for user {current_user.id}: {e}")
+                user_context = "student"
 
         # Default AI classroom behavior
         response = await manager.process_message(
