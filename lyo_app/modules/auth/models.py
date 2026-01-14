@@ -78,6 +78,12 @@ class User(Base):
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     profiles = relationship("Profile", back_populates="user", cascade="all, delete-orphan")
     
+    # AI Study relationships
+    study_sessions = relationship("lyo_app.ai_study.models.StudySession", back_populates="user", cascade="all, delete-orphan")
+    generated_quizzes = relationship("lyo_app.ai_study.models.GeneratedQuiz", back_populates="user", cascade="all, delete-orphan")
+    quiz_attempts = relationship("lyo_app.ai_study.models.QuizAttempt", back_populates="user", cascade="all, delete-orphan")
+    study_analytics = relationship("lyo_app.ai_study.models.StudySessionAnalytics", back_populates="user", cascade="all, delete-orphan")
+    
     # Indexes for performance
     __table_args__ = (
         Index("idx_users_email_active", "email", "is_active"),
