@@ -532,6 +532,227 @@ def _generate_fallback_quiz(question_count: int, quiz_type: str) -> List[QuizQue
 
 
 # ============================================================================
+# A2UI WIDGET DETECTION LOGIC
+# ============================================================================
+
+def _detect_a2ui_widgets(message: str, context: str, ai_response: str) -> List["ContentTypePayload"]:
+    """
+    Detect which A2UI widgets to render based on message context, intent, AND AI response.
+    
+    This function analyzes:
+    1. User's message for intent keywords
+    2. Context mode (course, quiz, study)
+    3. AI response content for structured output indicators
+    
+    Returns a list of widgets to render alongside the text response.
+    """
+    widgets = []
+    message_lower = message.lower()
+    context_lower = context.lower() if context else ""
+    response_lower = ai_response.lower() if ai_response else ""
+    
+    # Track if we added any interactive widgets
+    added_interactive_widget = False
+    
+    # ============================================================================
+    # TOPIC SELECTION Widget
+    # Triggered when user asks for recommendations OR AI suggests topics
+    # ============================================================================
+    topic_triggers = [
+        "what should i learn",
+        "recommend",
+        "suggest",
+        "help me choose",
+        "what topic",
+        "where should i start",
+        "learning path"
+    ]
+    
+    # Check both message AND AI response for topic selection indicators
+    topic_in_message = any(trigger in message_lower for trigger in topic_triggers)
+    topic_in_response = any(phrase in response_lower for phrase in ["choose from", "pick a topic", "select a subject", "you might enjoy"])
+    
+    if topic_in_message or topic_in_response:
+        widgets.append(ContentTypePayload(
+            type="topic_selection",  # snake_case for iOS
+            title="Choose Your Path",
+            topics=[
+                TopicOptionPayload(title="Mathematics", icon="x.squareroot", gradientColors=["#FF512F", "#DD2476"]),
+                TopicOptionPayload(title="Programming", icon="chevron.left.slash.chevron.right", gradientColors=["#4CB8C4", "#3CD3AD"]),
+                TopicOptionPayload(title="Science", icon="atom", gradientColors=["#1FA2FF", "#12D8FA"]),
+                TopicOptionPayload(title="Languages", icon="textformat", gradientColors=["#F857A6", "#FF5858"]),
+                TopicOptionPayload(title="History", icon="book.fill", gradientColors=["#6366F1", "#8B5CF6"])
+            ]
+        ))
+        added_interactive_widget = True
+    
+    # ============================================================================
+    # COURSE ROADMAP Widget  
+    # Triggered when in course mode, discussing structure, OR AI outputs course content
+    # ============================================================================
+    course_triggers = ["course", "module", "lesson", "curriculum", "syllabus", "learn", "teach me", "create a course"]
+    course_response_indicators = ["module 1:", "lesson 1:", "here's the course", "course outline", "we'll cover"]
+    
+    course_in_message = any(trigger in message_lower for trigger in course_triggers)
+    course_in_response = any(indicator in response_lower for indicator in course_response_indicators)
+    course_mode = "mode=course" in context_lower
+    
+    if course_mode or course_in_message or course_in_response:
+        # Build nested structure for iOS A2UIContent
+        roadmap = A2UICourseRoadmapPayload(
+            title="Course Roadmap",
+            topic=message[:50] if message else "Learning",  # Extract topic from message
+            level="beginner",
+            modules=[
+                A2UIModulePayload(
+                    title="Introduction",
+                    description="Getting started with the basics",
+                    lessons=[A2UILessonPayload(title="Welcome", duration="5 min")]
+                ),
+                A2UIModulePayload(
+                    title="Core Concepts",
+                    description="Understanding the fundamentals",
+                    lessons=[A2UILessonPayload(title="Key Ideas", duration="15 min")]
+                ),
+                A2UIModulePayload(
+                    title="Practice",
+                    description="Apply what you've learned",
+                    lessons=[A2UILessonPayload(title="Exercises", duration="20 min")]
+                ),
+                A2UIModulePayload(
+                    title="Assessment",
+                    description="Test your knowledge",
+                    lessons=[A2UILessonPayload(title="Quiz", duration="10 min")]
+                )
+            ]
+        )
+        
+        widgets.append(ContentTypePayload(
+            type="course_roadmap",  # snake_case for iOS
+            title="Course Roadmap",
+            course_roadmap=roadmap,  # Nested structure for iOS
+            # Also include flat format for backwards compatibility
+            modules=[
+                CourseModulePayload(title="Introduction", duration="5 min", isCompleted=True),
+                CourseModulePayload(title="Core Concepts", duration="15 min", isCompleted=False),
+                CourseModulePayload(title="Practice", duration="20 min", isLocked=True),
+                CourseModulePayload(title="Assessment", duration="10 min", isLocked=True)
+            ],
+            totalModules=4,
+            completedModules=1
+        ))
+        added_interactive_widget = True
+    
+    # ============================================================================
+    # FLASHCARDS Widget
+    # Triggered in study mode, when user wants to memorize/review, OR AI explains concepts
+    # ============================================================================
+    flashcard_triggers = ["flashcard", "memorize", "review", "study card", "vocabulary", "key terms", "define"]
+    flashcard_response_indicators = ["definition:", "key term:", "remember that", "important concept"]
+    
+    flashcard_in_message = any(trigger in message_lower for trigger in flashcard_triggers)
+    flashcard_in_response = any(indicator in response_lower for indicator in flashcard_response_indicators)
+    study_mode = "mode=study" in context_lower
+    
+    if study_mode or flashcard_in_message or flashcard_in_response:
+        widgets.append(ContentTypePayload(
+            type="flashcards",
+            title="Study Flashcards",
+            cards=[
+                FlashcardPayload(front="What is a variable?", back="A named storage location that holds a value", hint="Think of it as a container"),
+                FlashcardPayload(front="What is a function?", back="A reusable block of code that performs a specific task", hint="Called by name"),
+                FlashcardPayload(front="What is a loop?", back="A control structure that repeats code while a condition is true", hint="for, while, etc.")
+            ]
+        ))
+        added_interactive_widget = True
+    
+    # ============================================================================
+    # QUIZ Widget
+    # Triggered in quiz/test mode, when user wants to test, OR AI asks questions
+    # ============================================================================
+    quiz_triggers = ["quiz", "test me", "check my", "assessment", "practice question", "test yourself"]
+    quiz_response_indicators = ["question:", "which of the following", "true or false", "what is the answer"]
+    
+    quiz_in_message = any(trigger in message_lower for trigger in quiz_triggers)
+    quiz_in_response = any(indicator in response_lower for indicator in quiz_response_indicators)
+    quiz_mode = "mode=quiz" in context_lower or "mode=test" in context_lower
+    
+    if quiz_mode or quiz_in_message or quiz_in_response:
+        # Build nested quiz structure for iOS
+        quiz_payload = A2UIQuizPayload(
+            title="Quick Quiz",
+            questions=[
+                A2UIQuizQuestionPayload(
+                    question="What is the primary benefit of using variables in programming?",
+                    options=[
+                        "A) They make code run faster",
+                        "B) They allow you to store and reuse values",
+                        "C) They are required by all programming languages",
+                        "D) They reduce file size"
+                    ],
+                    correct_answer="B) They allow you to store and reuse values"
+                )
+            ]
+        )
+        
+        widgets.append(ContentTypePayload(
+            type="quiz",
+            title="Quick Quiz",
+            quiz=quiz_payload,  # Nested structure for iOS
+            # Also keep flat format for backwards compatibility
+            question="What is the primary benefit of using variables in programming?",
+            options=[
+                "A) They make code run faster",
+                "B) They allow you to store and reuse values",
+                "C) They are required by all programming languages",
+                "D) They reduce file size"
+            ],
+            correctIndex=1,
+            explanation="Variables allow you to store data that can be used and modified throughout your program."
+        ))
+        added_interactive_widget = True
+    
+    # ============================================================================
+    # SUGGESTIONS Widget (FALLBACK)
+    # Always add smart suggestions if no other interactive widget was added
+    # This ensures every response has an A2UI component for engagement
+    # ============================================================================
+    if not added_interactive_widget:
+        # Generate contextual suggestions based on message
+        suggestions = _generate_contextual_suggestions(message_lower, response_lower)
+        widgets.append(ContentTypePayload(
+            type="suggestions",
+            title="What's next?",
+            suggestions=suggestions
+        ))
+    
+    return widgets
+
+
+def _generate_contextual_suggestions(message: str, response: str) -> List[str]:
+    """Generate smart follow-up suggestions based on context."""
+    # Default suggestions
+    suggestions = [
+        "Tell me more",
+        "Create a course",
+        "Quiz me",
+        "Give examples"
+    ]
+    
+    # Contextual overrides
+    if "python" in message or "python" in response:
+        suggestions = ["Python basics course", "Practice coding", "Show syntax examples", "Quiz on Python"]
+    elif "math" in message or "math" in response:
+        suggestions = ["Math course", "Practice problems", "Step-by-step solution", "Visual explanation"]
+    elif "history" in message or "history" in response:
+        suggestions = ["Timeline view", "Key events quiz", "Deep dive", "Related topics"]
+    elif any(word in message for word in ["explain", "what is", "how does"]):
+        suggestions = ["More details", "Simple analogy", "Real-world example", "Quiz me"]
+    
+    return suggestions
+
+
+# ============================================================================
 # PUBLIC AI CHAT ENDPOINT (NO AUTH REQUIRED)
 # ============================================================================
 
@@ -544,9 +765,118 @@ class ChatRequest(BaseModel):
     class Config:
         populate_by_name = True
 
+
+# ============================================================================
+# A2UI CONTENT TYPE MODELS (iOS Compatible)
+# ============================================================================
+
+class TopicOptionPayload(BaseModel):
+    """Topic option for topic selection widget"""
+    title: str
+    icon: Optional[str] = "book.fill"
+    gradientColors: Optional[List[str]] = ["#6366F1", "#8B5CF6"]
+    
+    class Config:
+        populate_by_name = True
+
+class CourseModulePayload(BaseModel):
+    """Module for course roadmap widget - flat format for iOS CourseModule"""
+    id: str = Field(default_factory=lambda: str(__import__('uuid').uuid4()))
+    title: str
+    duration: Optional[str] = None
+    isCompleted: bool = False
+    isLocked: bool = False
+    
+    class Config:
+        populate_by_name = True
+
+# Nested structures for iOS A2UI compatibility
+class A2UILessonPayload(BaseModel):
+    """Lesson for nested course roadmap"""
+    title: str
+    duration: str = "10 min"
+
+class A2UIModulePayload(BaseModel):
+    """Module with lessons for nested course roadmap"""
+    title: str
+    description: str = ""
+    lessons: List[A2UILessonPayload] = []
+
+class A2UICourseRoadmapPayload(BaseModel):
+    """Nested course roadmap structure for iOS"""
+    title: str
+    topic: str
+    level: str = "beginner"
+    modules: List[A2UIModulePayload] = []
+
+class A2UIQuizQuestionPayload(BaseModel):
+    """Quiz question for iOS"""
+    question: str
+    options: List[str]
+    correct_answer: str
+    
+    class Config:
+        populate_by_name = True
+
+class A2UIQuizPayload(BaseModel):
+    """Nested quiz structure for iOS"""
+    title: str
+    questions: List[A2UIQuizQuestionPayload] = []
+
+class FlashcardPayload(BaseModel):
+    """Flashcard for flashcard widget"""
+    front: str
+    back: str
+    hint: Optional[str] = None
+
+class ContentTypePayload(BaseModel):
+    """
+    A2UI content type union - iOS Compatible
+    
+    Type values use snake_case for iOS compatibility:
+    - text, processing, topic_selection, course_roadmap, flashcards, quiz, suggestions
+    
+    For course_roadmap and quiz, use nested structure with course_roadmap/quiz fields
+    """
+    type: str  # text, processing, topic_selection, course_roadmap, flashcards, quiz, suggestions
+    
+    # Processing widget
+    step: Optional[str] = None
+    progress: Optional[float] = None
+    
+    # Topic selection widget
+    title: Optional[str] = None
+    topics: Optional[List[TopicOptionPayload]] = None
+    
+    # Course roadmap widget - NESTED structure for iOS
+    course_roadmap: Optional[A2UICourseRoadmapPayload] = None
+    # Also keep flat format for backwards compatibility
+    modules: Optional[List[CourseModulePayload]] = None
+    totalModules: Optional[int] = None
+    completedModules: Optional[int] = None
+    
+    # Flashcards widget
+    cards: Optional[List[FlashcardPayload]] = None
+    
+    # Quiz widget - NESTED structure for iOS
+    quiz: Optional[A2UIQuizPayload] = None
+    # Also keep flat format for backwards compatibility
+    question: Optional[str] = None
+    options: Optional[List[str]] = None
+    correctIndex: Optional[int] = None
+    explanation: Optional[str] = None
+    
+    # Suggestions widget (fallback for engagement)
+    suggestions: Optional[List[str]] = None
+    
+    class Config:
+        populate_by_name = True
+
+
 class ChatResponse(BaseModel):
-    """Simple chat response"""
-    response: str = Field(..., description="AI response")
+    """Enhanced chat response with A2UI content types"""
+    response: str = Field(..., description="AI response text")
+    contentTypes: List[ContentTypePayload] = Field(default_factory=list, description="A2UI widget payloads")
     conversationHistory: List[ConversationMessage] = Field(..., description="Updated conversation history")
 
     class Config:
@@ -560,6 +890,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
     
     Simple chat interface for quick AI interactions.
     Used by iOS app for course generation and general AI chat.
+    Now with A2UI widget support!
     """
     try:
         # Ensure AI manager is initialized
@@ -571,6 +902,9 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
 
         if request.context:
             system_prompt += f"\n\nContext: {request.context}"
+            # Force structured output for course mode to trigger client-side widgets
+            if "mode=course" in request.context.lower():
+                system_prompt += "\n\nIMPORTANT: The user is in COURSE MODE. You MUST structure your response as a course outline.\nFormat your response to include:\n\"Course Title: [Title]\"\n\"Module 1: [Title]\" - [Description]\n\"Module 2: [Title]\" - [Description]\netc.\n\nKeep the intro brief and focus on the roadmap."
 
         # Build messages
         messages = [{"role": "system", "content": system_prompt}]
@@ -594,6 +928,15 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
         # Extract content with fallback
         response_content = ai_response.get("content", ai_response.get("response", "I apologize, but I couldn't generate a response. Please try again."))
         
+        # ============================================================================
+        # A2UI WIDGET DETECTION
+        # ============================================================================
+        content_types = _detect_a2ui_widgets(
+            message=request.message,
+            context=request.context or "",
+            ai_response=response_content
+        )
+        
         # Build updated history
         updated_history = []
         if request.conversationHistory:
@@ -603,10 +946,11 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
         updated_history.append(ConversationMessage(role="user", content=request.message))
         updated_history.append(ConversationMessage(role="assistant", content=response_content))
         
-        logger.info(f"Public chat completed successfully")
+        logger.info(f"Public chat completed with {len(content_types)} A2UI widgets")
         
         return ChatResponse(
             response=response_content,
+            contentTypes=content_types,
             conversationHistory=updated_history
         )
         
