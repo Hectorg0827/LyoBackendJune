@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum, Float, Uuid
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum, Float, Uuid, JSON
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 import uuid
 
@@ -44,6 +44,7 @@ class EventType(str, Enum):
     DISCUSSION = "discussion"
     PROJECT_SHOWCASE = "project_showcase"
     NETWORKING = "networking"
+    OFFICE_HOURS = "office_hours"
     OTHER = "other"
 
 
@@ -165,6 +166,8 @@ class CommunityEvent(Base):
     study_group_id = Column(Integer, ForeignKey("study_groups.id"), nullable=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=True, index=True)
     lesson_id = Column(Integer, ForeignKey("lessons.id"), nullable=True, index=True)
+    room_id = Column(String(100), nullable=True)
+    image_url = Column(String(500), nullable=True)
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -268,6 +271,41 @@ class CommunityAnswer(Base):
     question = relationship("CommunityQuestion", back_populates="answers")
 
 
+class MarketplaceItem(Base):
+    """
+    Marketplace listing model for Peer-to-Peer resource exchange.
+    """
+    __tablename__ = "marketplace_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    price = Column(Float, nullable=False, default=0.0)
+    currency = Column(String(10), nullable=False, default="USD")
+    
+    # Media
+    image_urls = Column(JSON, nullable=True)  # List of strings
+    
+    # Location
+    latitude = Column(Float, nullable=True, index=True)
+    longitude = Column(Float, nullable=True, index=True)
+    location_name = Column(String(300), nullable=True)
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    is_sold = Column(Boolean, default=False)
+
+    # Associations
+    seller_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    # Metadata
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    seller = relationship("User", foreign_keys=[seller_id], lazy="noload")
+
+
 # Add reverse relationships to existing models (these would be added to the respective model files)
 """
 Additional relationships to add to existing models:
@@ -277,6 +315,7 @@ User model additions:
     #     group_memberships = relationship("GroupMembership", back_populates="user", foreign_keys=[GroupMembership.user_id])
     #     organized_events = relationship("CommunityEvent", back_populates="organizer")
     #     event_attendances = relationship("EventAttendance", back_populates="user")
+    #     marketplace_listings = relationship("MarketplaceItem", back_populates="seller")
 
 Course model additions:
     #     study_groups = relationship("StudyGroup", back_populates="course")

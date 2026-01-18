@@ -19,7 +19,8 @@ from lyo_app.community.schemas import (
     CommunityEventCreate, CommunityEventUpdate, CommunityEventRead,
     EventAttendanceCreate, EventAttendanceUpdate, EventAttendanceRead,
     BeaconBase, CommunityQuestionCreate, CommunityQuestionRead,
-    CommunityAnswerCreate, CommunityAnswerRead
+    CommunityAnswerCreate, CommunityAnswerRead,
+    MarketplaceItemCreate, MarketplaceItemUpdate, MarketplaceItemRead
 )
 from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
 from lyo_app.stack import crud as stack_crud
@@ -462,6 +463,7 @@ async def get_beacons(
     include_events: bool = True,
     include_users: bool = True,
     include_questions: bool = True,
+    include_marketplace: bool = True,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -470,7 +472,7 @@ async def get_beacons(
 
     # Distribute limit across types roughly equally if multiple are selected
     # This is a simple heuristic; in a real app we might want more sophisticated paging
-    types_count = sum([include_events, include_users, include_questions])
+    types_count = sum([include_events, include_users, include_questions, include_marketplace])
     if types_count == 0:
         return []
     
@@ -487,6 +489,10 @@ async def get_beacons(
     if include_questions:
         question_beacons = await community_service.get_question_beacons(db, lat, lng, radius_km, limit=per_type_limit)
         beacons.extend(question_beacons)
+
+    if include_marketplace:
+        marketplace_beacons = await community_service.get_marketplace_beacons(db, lat, lng, radius_km, limit=per_type_limit)
+        beacons.extend(marketplace_beacons)
 
     return beacons
 
@@ -627,13 +633,83 @@ async def get_community_stats(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch community stats")
 
 
-@router.get("/marketplace", response_model=List[dict])
-async def get_marketplace_items(
+@router.get("/marketplace", response_model=List[MarketplaceItemRead])
+async def list_marketplace_items(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get marketplace items (Placeholder)."""
-    # TODO: Implement full marketplace logic
-    return []
+    """List marketplace items."""
+    try:
+        items = await community_service.get_marketplace_items(
+            db=db,
+            skip=skip,
+            limit=limit
+        )
+        return items
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch marketplace items")
+
+
+@router.post("/marketplace", response_model=MarketplaceItemRead, status_code=status.HTTP_201_CREATED)
+async def create_marketplace_item(
+    item_data: MarketplaceItemCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new marketplace listing."""
+    try:
+        item = await community_service.create_marketplace_item(
+            db=db,
+            seller_id=current_user.id,
+            item_data=item_data
+        )
+        return item
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create marketplace item")
+
+
+@router.get("/marketplace/{item_id}", response_model=MarketplaceItemRead)
+async def get_marketplace_item(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get a specific marketplace item."""
+    item = await community_service.get_marketplace_item_by_id(db, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
+
+@router.put("/marketplace/{item_id}", response_model=MarketplaceItemRead)
+async def update_marketplace_item(
+    item_id: int,
+    item_data: MarketplaceItemUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a marketplace listing."""
+    item = await community_service.update_marketplace_item(
+        db, 
+        item_id=item_id, 
+        seller_id=current_user.id, 
+        item_data=item_data
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found or unauthorized")
+    return item
+
+
+@router.delete("/marketplace/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_marketplace_item(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a marketplace listing."""
+    success = await community_service.delete_marketplace_item(db, item_id, current_user.id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Item not found or unauthorized")
+    return None

@@ -295,7 +295,7 @@ User message: "{message}"
 
 Modes available:
 - quick_explainer: For "what is", "explain", "define", simple concept questions
-- course_planner: For "create course", "learning path", "teach me", structured learning requests
+    - course_planner: For "create course", "start class", "learning path", "teach me", "help me learn", structured learning requests
 - practice: For "quiz me", "test", "practice", "exercise" requests
 - note_taker: For "save this", "note", "remember", "summarize" requests
 - general: For conversation, questions, or when unclear
@@ -363,7 +363,7 @@ class CTATemplates:
             {
                 "type": "start_course",
                 "label": "Start Learning",
-                "action": "start_course",
+                "action": "open_classroom",
                 "priority": 1
             },
             {

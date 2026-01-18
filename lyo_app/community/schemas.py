@@ -15,6 +15,14 @@ from lyo_app.community.models import (
 )
 
 
+class UserPreview(BaseModel):
+    """Lite user profile for community views."""
+    
+    id: int
+    name: str
+    avatar: Optional[str] = None
+
+
 # Study Group Schemas
 class StudyGroupBase(BaseModel):
     """Base study group schema with common fields."""
@@ -58,6 +66,7 @@ class StudyGroupRead(StudyGroupBase):
     member_count: Optional[int] = Field(None, description="Number of members")
     is_member: Optional[bool] = Field(None, description="Whether current user is a member")
     user_role: Optional[MembershipRole] = Field(None, description="Current user's role in group")
+    host: Optional[UserPreview] = None
 
 
 # Group Membership Schemas
@@ -105,6 +114,10 @@ class CommunityEventBase(BaseModel):
     study_group_id: Optional[int] = Field(None, description="Associated study group ID")
     course_id: Optional[int] = Field(None, description="Associated course ID")
     lesson_id: Optional[int] = Field(None, description="Associated lesson ID")
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    room_id: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class CommunityEventCreate(CommunityEventBase):
@@ -135,6 +148,10 @@ class CommunityEventRead(CommunityEventBase):
     id: int = Field(..., description="Event ID")
     status: EventStatus = Field(..., description="Event status")
     organizer_id: int = Field(..., description="Organizer user ID")
+    latitude: Optional[float] = Field(None, description="Event latitude")
+    longitude: Optional[float] = Field(None, description="Event longitude")
+    room_id: Optional[str] = Field(None, description="Specific room or area ID")
+    image_url: Optional[str] = Field(None, description="Event image URL")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     
@@ -142,6 +159,7 @@ class CommunityEventRead(CommunityEventBase):
     attendee_count: Optional[int] = Field(None, description="Number of attendees")
     user_attendance_status: Optional[AttendanceStatus] = Field(None, description="Current user's attendance status")
     is_full: Optional[bool] = Field(None, description="Whether event is at capacity")
+    organizer_profile: Optional[UserPreview] = None
 
 
 # Event Attendance Schemas
@@ -241,7 +259,51 @@ class QuestionBeacon(BaseModel):
     location_name: Optional[str]
     is_resolved: bool
 
-BeaconBase = Union[EventBeacon, UserActivityBeacon, QuestionBeacon]
+class MarketplaceBeacon(BaseModel):
+    type: Literal["marketplace"] = "marketplace"
+    id: int
+    title: str
+    latitude: float
+    longitude: float
+    price: float
+    currency: str
+
+BeaconBase = Union[EventBeacon, UserActivityBeacon, QuestionBeacon, MarketplaceBeacon]
+
+
+# Marketplace Schemas
+
+class MarketplaceItemBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    price: float = Field(default=0.0, ge=0.0)
+    currency: str = Field(default="USD", max_length=10)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_name: Optional[str] = None
+    image_urls: Optional[List[str]] = None
+
+class MarketplaceItemCreate(MarketplaceItemBase):
+    pass
+
+class MarketplaceItemUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    currency: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_sold: Optional[bool] = None
+
+class MarketplaceItemRead(MarketplaceItemBase):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    seller_id: int
+    seller_avatar: Optional[str] = None
+    is_active: bool
+    is_sold: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 # Response Schemas
