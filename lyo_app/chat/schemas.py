@@ -167,6 +167,9 @@ class ChatResponse(BaseModel):
     course_proposal: Optional[CourseProposalData] = Field(
         None, serialization_alias="courseProposal", description="Course proposal data when mode is 'course_plan'"
     )
+    content_types: Optional[List[Dict[str, Any]]] = Field(
+        None, serialization_alias="contentTypes", description="A2UI content widgets"
+    )
     
     # Updated history
     conversation_history: List[ConversationHistoryItem] = Field(

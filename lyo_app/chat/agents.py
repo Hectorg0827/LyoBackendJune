@@ -60,7 +60,7 @@ class BaseAgent(ABC):
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                provider_order=provider_order or ["gemini-pro", "gemini-flash", "openai"]
+                provider_order=provider_order or ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"]
             )
             
             latency_ms = int((time.time() - start_time) * 1000)

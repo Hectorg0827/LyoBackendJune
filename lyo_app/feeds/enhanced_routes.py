@@ -19,7 +19,7 @@ from lyo_app.core.enhanced_monitoring import monitor_performance, handle_errors,
 from lyo_app.core.logging import logger
 from lyo_app.monetization.engine import interleave_ads
 
-router = APIRouter(prefix="/api/v1/feeds", tags=["Enhanced Feeds"])
+router = APIRouter(prefix="/feeds", tags=["Enhanced Feeds"])
 
 # ============================================================================
 # PYDANTIC MODELS

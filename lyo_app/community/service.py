@@ -13,7 +13,8 @@ from sqlalchemy.orm import selectinload
 from lyo_app.community.models import (
     StudyGroup, GroupMembership, CommunityEvent, EventAttendance,
     StudyGroupStatus, StudyGroupPrivacy, MembershipRole,
-    EventStatus, AttendanceStatus, CommunityQuestion, CommunityAnswer
+    EventStatus, AttendanceStatus, CommunityQuestion, CommunityAnswer,
+    MarketplaceItem
 )
 from lyo_app.community.schemas import (
     StudyGroupCreate, StudyGroupUpdate,
@@ -21,7 +22,8 @@ from lyo_app.community.schemas import (
     CommunityEventCreate, CommunityEventUpdate,
     EventAttendanceCreate, EventAttendanceUpdate,
     CommunityQuestionCreate, CommunityAnswerCreate,
-    EventBeacon, QuestionBeacon, UserActivityBeacon
+    EventBeacon, QuestionBeacon, UserActivityBeacon, MarketplaceBeacon,
+    MarketplaceItemCreate, MarketplaceItemUpdate
 )
 from lyo_app.models.enhanced import User
 from lyo_app.stack.models import StackItem, StackItemType, StackItemStatus
@@ -328,9 +330,9 @@ class CommunityService:
         course_id: Optional[int] = None,
         privacy: Optional[StudyGroupPrivacy] = None,
         status: Optional[StudyGroupStatus] = StudyGroupStatus.ACTIVE,
-        page: int = 1, 
-        per_page: int = 20
-    ) -> Dict[str, Any]:
+        skip: int = 0, 
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
         """
         Get study groups with filtering and pagination.
         
@@ -346,10 +348,8 @@ class CommunityService:
         Returns:
             Paginated groups response
         """
-        offset = (page - 1) * per_page
-        
         # Build query
-        query = select(StudyGroup)
+        query = select(StudyGroup).options(selectinload(StudyGroup.creator))
         conditions = []
         
         if status:
@@ -369,8 +369,8 @@ class CommunityService:
         # Get groups
         result = await db.execute(
             query.order_by(desc(StudyGroup.created_at))
-            .offset(offset)
-            .limit(per_page)
+            .offset(skip)
+            .limit(limit)
         )
         groups = result.scalars().all()
         
@@ -406,16 +406,15 @@ class CommunityService:
                 "member_count": member_count,
                 "is_member": user_membership is not None,
                 "user_role": user_membership.role if user_membership else None,
+                "host": {
+                    "id": group.creator.id,
+                    "name": f"{group.creator.first_name or ''} {group.creator.last_name or group.creator.username}".strip(),
+                    "avatar": group.creator.avatar_url
+                } if group.creator else None
             }
             groups_data.append(group_data)
         
-        return {
-            "groups": groups_data,
-            "total": total or 0,
-            "page": page,
-            "per_page": per_page,
-            "has_next": total > page * per_page,
-        }
+        return groups_data
 
     # Community Event Operations
     async def create_community_event(
@@ -777,9 +776,9 @@ class CommunityService:
         event_type: Optional[str] = None,
         status: Optional[EventStatus] = None,
         upcoming_only: bool = False,
-        page: int = 1, 
-        per_page: int = 20
-    ) -> Dict[str, Any]:
+        skip: int = 0, 
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
         """
         Get community events with filtering and pagination.
         
@@ -797,10 +796,8 @@ class CommunityService:
         Returns:
             Paginated events response
         """
-        offset = (page - 1) * per_page
-        
         # Build query
-        query = select(CommunityEvent)
+        query = select(CommunityEvent).options(selectinload(CommunityEvent.organizer))
         conditions = []
         
         if status:
@@ -820,18 +817,10 @@ class CommunityService:
         # Get events
         result = await db.execute(
             query.order_by(asc(CommunityEvent.start_time))
-            .offset(offset)
-            .limit(per_page)
+            .offset(skip)
+            .limit(limit)
         )
         events = result.scalars().all()
-        
-        # Get total count
-        count_query = select(func.count(CommunityEvent.id))
-        if conditions:
-            count_query = count_query.where(and_(*conditions))
-        
-        count_result = await db.execute(count_query)
-        total = count_result.scalar()
         
         # Add attendee count and user context
         events_data = []
@@ -860,19 +849,22 @@ class CommunityService:
                 "lesson_id": event.lesson_id,
                 "created_at": event.created_at,
                 "updated_at": event.updated_at,
+                "latitude": event.latitude,
+                "longitude": event.longitude,
+                "room_id": event.room_id,
+                "image_url": event.image_url,
                 "attendee_count": attendee_count,
                 "user_attendance_status": user_attendance.status if user_attendance else None,
                 "is_full": event.max_attendees and attendee_count >= event.max_attendees,
+                "organizer_profile": {
+                    "id": event.organizer.id,
+                    "name": f"{event.organizer.first_name or ''} {event.organizer.last_name or event.organizer.username}".strip(),
+                    "avatar": event.organizer.avatar_url
+                } if event.organizer else None
             }
             events_data.append(event_data)
         
-        return {
-            "events": events_data,
-            "total": total or 0,
-            "page": page,
-            "per_page": per_page,
-            "has_next": total > page * per_page,
-        }
+        return events_data
 
     async def get_community_stats(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
         """
@@ -1167,6 +1159,137 @@ class CommunityService:
     async def get_event(self, db: AsyncSession, event_id: int) -> Optional[CommunityEvent]:
         result = await db.execute(select(CommunityEvent).where(CommunityEvent.id == event_id))
         return result.scalar_one_or_none()
+
+    # Marketplace Operations
+
+    async def create_marketplace_item(
+        self, 
+        db: AsyncSession, 
+        seller_id: int, 
+        item_data: MarketplaceItemCreate
+    ) -> MarketplaceItem:
+        """Create a new marketplace listing."""
+        db_item = MarketplaceItem(
+            title=item_data.title,
+            description=item_data.description,
+            price=item_data.price,
+            currency=item_data.currency,
+            latitude=item_data.latitude,
+            longitude=item_data.longitude,
+            location_name=item_data.location_name,
+            image_urls=item_data.image_urls,
+            seller_id=seller_id,
+            is_active=True,
+            is_sold=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        
+        db.add(db_item)
+        await db.commit()
+        await db.refresh(db_item)
+        return db_item
+
+    async def get_marketplace_item_by_id(self, db: AsyncSession, item_id: int) -> Optional[MarketplaceItem]:
+        result = await db.execute(select(MarketplaceItem).where(MarketplaceItem.id == item_id))
+        return result.scalar_one_or_none()
+
+    async def get_marketplace_items(
+        self, 
+        db: AsyncSession, 
+        skip: int = 0, 
+        limit: int = 20,
+        is_active: bool = True,
+        is_sold: bool = False
+    ) -> List[MarketplaceItem]:
+        query = select(MarketplaceItem).options(selectinload(MarketplaceItem.seller)).where(
+            and_(
+                MarketplaceItem.is_active == is_active,
+                MarketplaceItem.is_sold == is_sold
+            )
+        ).offset(skip).limit(limit).order_by(desc(MarketplaceItem.created_at))
+        
+        result = await db.execute(query)
+        items = result.scalars().all()
+        
+        # Populate seller_avatar in the model instance for the schema to pick up
+        for item in items:
+            if item.seller:
+                item.seller_avatar = item.seller.avatar_url
+        
+        return items
+
+    async def update_marketplace_item(
+        self, 
+        db: AsyncSession, 
+        item_id: int, 
+        seller_id: int, 
+        item_data: MarketplaceItemUpdate
+    ) -> Optional[MarketplaceItem]:
+        item = await self.get_marketplace_item_by_id(db, item_id)
+        if not item or item.seller_id != seller_id:
+            return None
+            
+        if item_data.title is not None:
+            item.title = item_data.title
+        if item_data.description is not None:
+            item.description = item_data.description
+        if item_data.price is not None:
+            item.price = item_data.price
+        if item_data.currency is not None:
+            item.currency = item_data.currency
+        if item_data.is_active is not None:
+            item.is_active = item_data.is_active
+        if item_data.is_sold is not None:
+            item.is_sold = item_data.is_sold
+            
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(item)
+        return item
+
+    async def delete_marketplace_item(self, db: AsyncSession, item_id: int, seller_id: int) -> bool:
+        item = await self.get_marketplace_item_by_id(db, item_id)
+        if not item or item.seller_id != seller_id:
+            return False
+            
+        await db.delete(item)
+        await db.commit()
+        return True
+
+    async def get_marketplace_beacons(
+        self, 
+        db: AsyncSession, 
+        lat: float, 
+        lng: float, 
+        radius_km: float,
+        limit: int = 100
+    ) -> List[MarketplaceBeacon]:
+        delta = radius_km / 111.0
+        query = (
+            select(MarketplaceItem)
+            .where(MarketplaceItem.latitude.is_not(None))
+            .where(MarketplaceItem.longitude.is_not(None))
+            .where(MarketplaceItem.latitude.between(lat - delta, lat + delta))
+            .where(MarketplaceItem.longitude.between(lng - delta, lng + delta))
+            .where(MarketplaceItem.is_active == True)
+            .where(MarketplaceItem.is_sold == False)
+            .limit(limit)
+        )
+        result = await db.execute(query)
+        items = result.scalars().all()
+        
+        return [
+            MarketplaceBeacon(
+                id=i.id,
+                title=i.title,
+                latitude=i.latitude,
+                longitude=i.longitude,
+                price=i.price,
+                currency=i.currency
+            )
+            for i in items
+        ]
 
     # Helper Methods
     async def _has_group_permission(

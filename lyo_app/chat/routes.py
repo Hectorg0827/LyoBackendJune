@@ -109,7 +109,7 @@ but do not be creepy or over-specific. Just a gentle nod to their journey.
             ],
             temperature=0.7,
             max_tokens=100,
-            provider_order=["gemini-flash", "gemini-pro", "openai"] # Prefer fast model
+            provider_order=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"] # Prefer fast model
         )
         greeting_text = response.get("content", "Welcome back! Ready to learn something new?")
     except Exception as e:
@@ -212,6 +212,7 @@ async def chat_endpoint(
                     context["learner_id"] = str(current_user.id)
             except Exception as e:
                 logger.warning(f"Personalization context unavailable: {e}")
+                await db.rollback()
         
         # 4. Build conversation history
         history = []
@@ -359,6 +360,7 @@ async def chat_endpoint(
         # 14. Build iOS-compatible embedded payloads
         quick_explainer_data = None
         course_proposal_data = None
+        content_types = []
         
         if mode == ChatMode.QUICK_EXPLAINER:
             # Extract key points from response (simple heuristic)
@@ -374,6 +376,11 @@ async def chat_endpoint(
                 "key_points": key_points or agent_result.get("key_points", []),
                 "related_topics": agent_result.get("related_topics", [])
             }
+            content_types.append({
+                "type": "quick_explainer",
+                "id": str(uuid4()),
+                "data": quick_explainer_data
+            })
         
         if mode == ChatMode.COURSE_PLANNER and agent_result.get("course_data"):
             course_data = agent_result["course_data"]
@@ -385,6 +392,11 @@ async def chat_endpoint(
                 "module_count": len(course_data.get("modules", [])),
                 "learning_objectives": course_data.get("learning_objectives", [])
             }
+            content_types.append({
+                "type": "course_proposal",
+                "id": course_proposal_data["course_id"],
+                "data": course_proposal_data
+            })
         
         return ChatResponse(
             response=assembled["response"],
@@ -394,6 +406,7 @@ async def chat_endpoint(
             mode_confidence=confidence,
             quick_explainer=quick_explainer_data,
             course_proposal=course_proposal_data,
+            content_types=content_types,
             conversation_history=updated_history,
             ctas=assembled["ctas"],
             chip_actions=assembled["chip_actions"],
