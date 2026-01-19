@@ -143,6 +143,25 @@ class CourseProposalData(BaseModel):
     learning_objectives: List[str] = Field(default_factory=list)
 
 
+# =============================================================================
+# A2UI OPEN_CLASSROOM SCHEMAS
+# =============================================================================
+
+class OpenClassroomCourse(BaseModel):
+    """Course data for OPEN_CLASSROOM A2UI payload"""
+    id: Optional[str] = Field(None, description="Course ID")
+    title: str = Field(..., description="Course title")
+    topic: str = Field(..., description="Course topic")
+    level: str = Field("intermediate", description="Difficulty level")
+    duration: Optional[str] = Field("~45 min", description="Estimated duration")
+    objectives: List[str] = Field(default_factory=list, description="Learning objectives")
+
+
+class OpenClassroomPayload(BaseModel):
+    """Payload for OPEN_CLASSROOM A2UI command - triggers classroom navigation in iOS"""
+    course: OpenClassroomCourse
+
+
 class ChatResponse(BaseModel):
     """Main chat response schema - iOS compatible"""
     model_config = ConfigDict(
@@ -170,6 +189,10 @@ class ChatResponse(BaseModel):
     content_types: Optional[List[Dict[str, Any]]] = Field(
         None, serialization_alias="contentTypes", description="A2UI content widgets"
     )
+    
+    # A2UI Command fields (for OPEN_CLASSROOM, etc.)
+    type: Optional[str] = Field(None, description="A2UI action type (e.g., 'OPEN_CLASSROOM')")
+    payload: Optional[OpenClassroomPayload] = Field(None, description="A2UI payload for classroom navigation")
     
     # Updated history
     conversation_history: List[ConversationHistoryItem] = Field(

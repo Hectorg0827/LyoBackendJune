@@ -11,7 +11,7 @@ import logging
 from .routers import (
     auth, media, feed, stories, messaging, notifications,
     tutor, planner, practice, resources, search, moderation, admin, performance,
-    memory, engagement, calendar, hooks, sync
+    memory, engagement, calendar, hooks, sync, clips
 )
 
 # Global AI components for lifecycle management
@@ -280,7 +280,8 @@ def create_app() -> FastAPI:
         (engagement.router, "/api/v1", "Proactive Engagement"),
         (calendar.router, "/api/v1", "Calendar Integration"),
         (hooks.router, "/api/v1", "Behavioral Hooks"),
-        (sync.router, "/api/v1", "Multi-Device Sync")
+        (sync.router, "/api/v1", "Multi-Device Sync"),
+        (clips.router, "/api/v1", "Educational Clips"),  # NEW: Clips router
     ]
 
     # Phase 1: Add ambient presence and proactive interventions

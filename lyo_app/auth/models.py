@@ -114,6 +114,12 @@ class User(Base):
     push_devices = relationship("lyo_app.models.enhanced.PushDevice", back_populates="user", cascade="all, delete-orphan")
     gamification_profile = relationship("lyo_app.models.enhanced.GamificationProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     
+    # Clips relationship
+    clips = relationship("lyo_app.models.clips.Clip", back_populates="user", cascade="all, delete-orphan", lazy="noload")
+    
+    # Stories relationship (for social features)
+    stories = relationship("lyo_app.models.social.Story", back_populates="user", cascade="all, delete-orphan", lazy="noload")
+    
     # Refresh Tokens
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
 

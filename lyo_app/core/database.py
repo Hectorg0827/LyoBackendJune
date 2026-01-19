@@ -148,6 +148,7 @@ async def init_db() -> None:
         from lyo_app.auth.models import User  # noqa: F401
         from lyo_app.auth.rbac import Role, Permission, user_roles, role_permissions  # noqa: F401
         from lyo_app.models.enhanced import Task, PushDevice, GamificationProfile  # noqa: F401
+        from lyo_app.models.clips import Clip, ClipLike, ClipView  # noqa: F401
         from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
