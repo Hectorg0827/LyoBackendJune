@@ -293,11 +293,14 @@ def create_app() -> FastAPI:
     except ImportError:
         from lyo_app.feeds.routes import router as feeds_router
         logger.warning("Using basic feeds routes (enhanced routes unavailable)")
+    # Use storage_routes which includes both enhanced_routes AND iOS-compatible uploads alias
     try:
-        from lyo_app.storage.enhanced_routes import router as storage_router
+        from lyo_app.storage_routes import router as storage_router
+        logger.info("✅ Storage routes loaded (with iOS uploads alias)")
     except ImportError:
         try:
-            from lyo_app.storage_routes import router as storage_router
+            from lyo_app.storage.enhanced_routes import router as storage_router
+            logger.warning("Using storage.enhanced_routes (iOS alias unavailable)")
         except ImportError:
             storage_router = None
             logger.warning("Storage routes unavailable")
@@ -415,6 +418,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Health check routes not available: {e}")
     
+    # Clips Router - Educational video clips with AI course generation
+    try:
+        from lyo_app.routers.clips import router as clips_router
+        app.include_router(clips_router, prefix="/api/v1", tags=["clips"])
+        logger.info("✅ Clips routes integrated - Video clips with AI course generation active!")
+    except ImportError as e:
+        logger.warning(f"Clips routes not available: {e}")
+    
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router
@@ -448,6 +459,14 @@ def create_app() -> FastAPI:
         logger.info("✅ Stack routes integrated at /stack and /api/v1/stack - Personal knowledge stack active!")
     except ImportError as e:
         logger.warning(f"Stack routes not available: {e}")
+
+    # Stories Router - Instagram-style 24h expiring stories
+    try:
+        from lyo_app.routers.stories import router as stories_router
+        app.include_router(stories_router, prefix="/api/v1")
+        logger.info("✅ Stories routes integrated at /api/v1/stories - Ephemeral content active!")
+    except ImportError as e:
+        logger.warning(f"Stories routes not available: {e}")
 
     try:
         from lyo_app.classroom.routes import router as classroom_router

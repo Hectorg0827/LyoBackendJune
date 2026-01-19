@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.ai_resilience import ai_resilience_manager
+from lyo_app.core.config import settings
 from lyo_app.auth.dependencies import get_current_user, get_db
 from lyo_app.auth.models import User
 from lyo_app.personalization.service import PersonalizationEngine

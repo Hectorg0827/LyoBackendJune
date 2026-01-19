@@ -30,13 +30,24 @@ from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent
 from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
 # from lyo_app.resources.models import EducationalResource, ResourceTag, CourseResource, ResourceCollection  # noqa: F401
 from lyo_app.ai_agents.models import *  # noqa: F401
-from lyo_app.adaptive_learning.models import *  # noqa: F401
-from lyo_app.ai_study.models import *  # noqa: F401
-from lyo_app.collaboration.models import *  # noqa: F401
-from lyo_app.affect.models import *  # noqa: F401
-from lyo_app.gen_curriculum.models import *  # noqa: F401
+# from lyo_app.adaptive_learning.models import *  # noqa: F401 (empty module)
+try:
+    from lyo_app.ai_study.models import *  # noqa: F401
+except ImportError:
+    pass
+try:
+    from lyo_app.collaboration.models import *  # noqa: F401
+except ImportError:
+    pass
+# from lyo_app.affect.models import *  # noqa: F401 (empty module)
+# from lyo_app.gen_curriculum.models import *  # noqa: F401 (table conflict)
 from lyo_app.stack.models import StackItem  # noqa: F401
 from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+# Clips models
+try:
+    from lyo_app.models.clips import Clip, ClipLike, ClipView  # noqa: F401
+except ImportError:
+    pass
 
 target_metadata = Base.metadata
 

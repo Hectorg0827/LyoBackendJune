@@ -5,6 +5,7 @@ Production-ready file upload and management with intelligent processing
 
 import asyncio
 import mimetypes
+import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -71,6 +72,170 @@ class BatchUploadRequest(BaseModel):
     generate_variants: bool = Field(True, description="Generate variants")
     tags: Optional[List[str]] = Field(None, description="File tags")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+class PresignedURLRequest(BaseModel):
+    """Request model for presigned URL"""
+    filename: str = Field(..., description="Filename to upload")
+    content_type: str = Field(..., description="MIME type of the file")
+    folder: str = Field("uploads", description="Destination folder")
+
+class PresignedURLResponse(BaseModel):
+    """Response model for presigned URL"""
+    success: bool
+    upload_url: Optional[str] = Field(None, description="Presigned URL for upload")
+    public_url: Optional[str] = Field(None, description="Public URL after upload")
+    blob_name: Optional[str] = Field(None, description="Storage blob name")
+    headers: Optional[Dict[str, str]] = Field(None, description="Headers to include in upload request")
+    expires_in: int = Field(3600, description="URL expiration time in seconds")
+    error: Optional[str] = None
+
+# ============================================================================
+# PRESIGNED URL ENDPOINT (For iOS Direct Upload)
+# ============================================================================
+
+@router.post("/presigned-url", response_model=PresignedURLResponse)
+async def get_presigned_url(
+    request: PresignedURLRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate a presigned URL for direct client upload to cloud storage.
+    
+    This allows iOS/Android clients to upload files directly to R2/S3
+    without passing through the backend, improving performance for large files.
+    """
+    from lyo_app.core.config import settings
+    import uuid
+    from datetime import timedelta
+    
+    try:
+        # Validate tenant context - use getattr for compatibility with UserRead schema
+        org_id = getattr(current_user, 'organization_id', None) or "default"
+        
+        # Generate unique filename with tenant isolation
+        file_ext = request.filename.split('.')[-1] if '.' in request.filename else ''
+        unique_id = uuid.uuid4().hex[:12]
+        timestamp = int(datetime.utcnow().timestamp())
+        
+        # Construct tenant-isolated path
+        blob_name = f"org_{org_id}/{request.folder}/{current_user.id}/{timestamp}_{unique_id}.{file_ext}"
+        
+        # Try R2 first (preferred), then S3
+        await enhanced_storage.ensure_initialized()
+        
+        if enhanced_storage.r2_client:
+            # Generate presigned URL for Cloudflare R2
+            try:
+                presigned_url = enhanced_storage.r2_client.generate_presigned_url(
+                    'put_object',
+                    Params={
+                        'Bucket': settings.R2_BUCKET,
+                        'Key': blob_name,
+                        'ContentType': request.content_type
+                    },
+                    ExpiresIn=3600
+                )
+                
+                # Public URL (via CDN or direct R2 URL)
+                cdn_base = getattr(settings, 'CDN_BASE_URL', None)
+                if cdn_base:
+                    public_url = f"{cdn_base.rstrip('/')}/{blob_name}"
+                else:
+                    public_url = f"{settings.R2_ENDPOINT_URL}/{settings.R2_BUCKET}/{blob_name}"
+                
+                logger.info(f"Generated R2 presigned URL for user {current_user.id}: {blob_name}")
+                
+                return PresignedURLResponse(
+                    success=True,
+                    upload_url=presigned_url,
+                    public_url=public_url,
+                    blob_name=blob_name,
+                    headers={"Content-Type": request.content_type},
+                    expires_in=3600
+                )
+            except Exception as e:
+                logger.warning(f"R2 presigned URL failed: {e}, trying S3...")
+        
+        if enhanced_storage.s3_client:
+            # Generate presigned URL for AWS S3
+            try:
+                presigned_url = enhanced_storage.s3_client.generate_presigned_url(
+                    'put_object',
+                    Params={
+                        'Bucket': settings.AWS_S3_BUCKET,
+                        'Key': blob_name,
+                        'ContentType': request.content_type
+                    },
+                    ExpiresIn=3600
+                )
+                
+                # Public URL
+                region = settings.AWS_REGION or 'us-east-1'
+                public_url = f"https://{settings.AWS_S3_BUCKET}.s3.{region}.amazonaws.com/{blob_name}"
+                
+                logger.info(f"Generated S3 presigned URL for user {current_user.id}: {blob_name}")
+                
+                return PresignedURLResponse(
+                    success=True,
+                    upload_url=presigned_url,
+                    public_url=public_url,
+                    blob_name=blob_name,
+                    headers={"Content-Type": request.content_type},
+                    expires_in=3600
+                )
+            except Exception as e:
+                logger.error(f"S3 presigned URL failed: {e}")
+        
+        # Try Google Cloud Storage as fallback
+        gcs_bucket = getattr(settings, 'GCS_BUCKET_NAME', None) or os.environ.get('GCS_BUCKET_NAME')
+        if gcs_bucket:
+            try:
+                from google.cloud import storage as gcs_storage
+                from datetime import timedelta
+                
+                gcs_client = gcs_storage.Client()
+                bucket = gcs_client.bucket(gcs_bucket)
+                blob = bucket.blob(blob_name)
+                
+                # Generate signed URL for upload (PUT)
+                presigned_url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(hours=1),
+                    method="PUT",
+                    content_type=request.content_type,
+                )
+                
+                # Public URL
+                public_url = f"https://storage.googleapis.com/{gcs_bucket}/{blob_name}"
+                
+                logger.info(f"Generated GCS presigned URL for user {current_user.id}: {blob_name}")
+                
+                return PresignedURLResponse(
+                    success=True,
+                    upload_url=presigned_url,
+                    public_url=public_url,
+                    blob_name=blob_name,
+                    headers={"Content-Type": request.content_type},
+                    expires_in=3600
+                )
+            except ImportError:
+                logger.warning("google-cloud-storage not installed")
+            except Exception as e:
+                logger.error(f"GCS presigned URL failed: {e}")
+        
+        # No cloud storage configured
+        return PresignedURLResponse(
+            success=False,
+            error="No cloud storage configured. Please use direct upload endpoint."
+        )
+        
+    except Exception as e:
+        logger.error(f"Presigned URL generation failed: {e}")
+        return PresignedURLResponse(
+            success=False,
+            error=str(e)
+        )
 
 # ============================================================================
 # UPLOAD ENDPOINTS

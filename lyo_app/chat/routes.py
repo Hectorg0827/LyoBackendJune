@@ -36,7 +36,8 @@ from lyo_app.chat.schemas import (
     TelemetryStatsResponse,
     ChatCourseRead, ChatCourseCreate,
     ChatNoteRead, ChatNoteCreate, ChatNoteUpdate,
-    GreetingResponse
+    GreetingResponse,
+    OpenClassroomCourse, OpenClassroomPayload
 )
 from lyo_app.chat.router import chat_router, mode_transition_manager
 from lyo_app.chat.agents import agent_registry
@@ -382,6 +383,10 @@ async def chat_endpoint(
                 "data": quick_explainer_data
             })
         
+        # A2UI variables for OPEN_CLASSROOM
+        open_classroom_type = None
+        open_classroom_payload = None
+        
         if mode == ChatMode.COURSE_PLANNER and agent_result.get("course_data"):
             course_data = agent_result["course_data"]
             course_proposal_data = {
@@ -397,6 +402,19 @@ async def chat_endpoint(
                 "id": course_proposal_data["course_id"],
                 "data": course_proposal_data
             })
+            
+            # Build A2UI OPEN_CLASSROOM payload for iOS
+            open_classroom_type = "OPEN_CLASSROOM"
+            open_classroom_payload = OpenClassroomPayload(
+                course=OpenClassroomCourse(
+                    id=generated_course_id or str(uuid4()),
+                    title=course_data.get("title", "Generated Course"),
+                    topic=request.message,  # Use original message as topic
+                    level=course_data.get("difficulty", "intermediate"),
+                    duration=f"~{int(course_data.get('estimated_hours', 1) * 60)} min",
+                    objectives=course_data.get("learning_objectives", [])
+                )
+            )
         
         return ChatResponse(
             response=assembled["response"],
@@ -407,6 +425,8 @@ async def chat_endpoint(
             quick_explainer=quick_explainer_data,
             course_proposal=course_proposal_data,
             content_types=content_types,
+            type=open_classroom_type,
+            payload=open_classroom_payload,
             conversation_history=updated_history,
             ctas=assembled["ctas"],
             chip_actions=assembled["chip_actions"],
