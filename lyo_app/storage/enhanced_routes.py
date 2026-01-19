@@ -121,8 +121,52 @@ async def get_presigned_url(
         # Construct tenant-isolated path
         blob_name = f"org_{org_id}/{request.folder}/{current_user.id}/{timestamp}_{unique_id}.{file_ext}"
         
-        # Try R2 first (preferred), then S3
-        await enhanced_storage.ensure_initialized()
+        logger.info(f"Generating presigned URL for blob: {blob_name}")
+        
+        # Check GCS first (most common in production)
+        gcs_bucket = getattr(settings, 'GCS_BUCKET_NAME', None) or os.environ.get('GCS_BUCKET_NAME')
+        logger.info(f"GCS bucket from settings/env: {gcs_bucket}")
+        
+        if gcs_bucket:
+            try:
+                from google.cloud import storage as gcs_storage
+                from datetime import timedelta as td
+                
+                gcs_client = gcs_storage.Client()
+                bucket = gcs_client.bucket(gcs_bucket)
+                blob = bucket.blob(blob_name)
+                
+                # Generate signed URL for upload (PUT)
+                presigned_url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=td(hours=1),
+                    method="PUT",
+                    content_type=request.content_type,
+                )
+                
+                # Public URL
+                public_url = f"https://storage.googleapis.com/{gcs_bucket}/{blob_name}"
+                
+                logger.info(f"Generated GCS presigned URL for user {current_user.id}: {blob_name}")
+                
+                return PresignedURLResponse(
+                    success=True,
+                    upload_url=presigned_url,
+                    public_url=public_url,
+                    blob_name=blob_name,
+                    headers={"Content-Type": request.content_type},
+                    expires_in=3600
+                )
+            except ImportError as ie:
+                logger.warning(f"google-cloud-storage not installed: {ie}")
+            except Exception as e:
+                logger.error(f"GCS presigned URL failed: {e}", exc_info=True)
+        
+        # Try R2 and S3 as fallbacks
+        try:
+            await enhanced_storage.ensure_initialized()
+        except Exception as init_error:
+            logger.warning(f"Enhanced storage initialization failed: {init_error}")
         
         if enhanced_storage.r2_client:
             # Generate presigned URL for Cloudflare R2
@@ -186,43 +230,6 @@ async def get_presigned_url(
                 )
             except Exception as e:
                 logger.error(f"S3 presigned URL failed: {e}")
-        
-        # Try Google Cloud Storage as fallback
-        gcs_bucket = getattr(settings, 'GCS_BUCKET_NAME', None) or os.environ.get('GCS_BUCKET_NAME')
-        if gcs_bucket:
-            try:
-                from google.cloud import storage as gcs_storage
-                from datetime import timedelta
-                
-                gcs_client = gcs_storage.Client()
-                bucket = gcs_client.bucket(gcs_bucket)
-                blob = bucket.blob(blob_name)
-                
-                # Generate signed URL for upload (PUT)
-                presigned_url = blob.generate_signed_url(
-                    version="v4",
-                    expiration=timedelta(hours=1),
-                    method="PUT",
-                    content_type=request.content_type,
-                )
-                
-                # Public URL
-                public_url = f"https://storage.googleapis.com/{gcs_bucket}/{blob_name}"
-                
-                logger.info(f"Generated GCS presigned URL for user {current_user.id}: {blob_name}")
-                
-                return PresignedURLResponse(
-                    success=True,
-                    upload_url=presigned_url,
-                    public_url=public_url,
-                    blob_name=blob_name,
-                    headers={"Content-Type": request.content_type},
-                    expires_in=3600
-                )
-            except ImportError:
-                logger.warning("google-cloud-storage not installed")
-            except Exception as e:
-                logger.error(f"GCS presigned URL failed: {e}")
         
         # No cloud storage configured
         return PresignedURLResponse(
