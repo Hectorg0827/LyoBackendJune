@@ -633,29 +633,15 @@ class CourseGenerationPipeline(StreamingPipeline):
         step_name: str
     ) -> Any:
         """Execute agent with retry logic"""
-        last_error = None
-        
-        for attempt in range(self.config.max_retries_per_step):
-            try:
-                prompt = agent.build_prompt(**prompt_args)
-                result = await agent.execute(prompt)
-                return result
-            except Exception as e:
-                last_error = e
-                logger.warning(
-                    f"Step {step_name} attempt {attempt + 1} failed: {e}"
-                )
-                if attempt < self.config.max_retries_per_step - 1:
-                    # Try fallback prompt on retry
-                    try:
-                        fallback_prompt = agent.get_fallback_prompt(**prompt_args)
-                        result = await agent.execute(fallback_prompt)
-                        return result
-                    except Exception as e2:
-                        last_error = e2
-                        continue
-        
-        raise PipelineError(f"Step {step_name} failed after {self.config.max_retries_per_step} attempts: {last_error}")
+        # BaseAgent.execute handles retries and prompt building internally
+        try:
+            result = await agent.execute(**prompt_args)
+            if not result.success:
+                raise PipelineError(f"Step {step_name} failed: {result.error}")
+            return result.data
+        except Exception as e:
+            logger.error(f"Step {step_name} failed with exception: {e}")
+            raise PipelineError(f"Step {step_name} failed: {e}")
     
     def _build_lesson_contexts(
         self,

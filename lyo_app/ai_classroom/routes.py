@@ -465,7 +465,7 @@ async def classroom_chat(
     Intelligently handles:
     - Quick explanations (instant response)
     - Deep dives (with images)
-    - Course requests (triggers generation)
+    - Course requests (triggers multi-agent generation)
     - Quizzes (interactive testing)
     
     Set stream=true for real-time streaming response.
@@ -499,10 +499,13 @@ async def classroom_chat(
     )
 
     generated_course_id: Optional[str] = None
+    
+    # NEW: Handle Course Generation with Real Pipeline
     if is_course_request:
         try:
-            # Create a minimal playable GraphCourse for the iOS Interactive Cinema flow.
-            # The iOS client expects `generated_course_id` at the top level.
+            logger.info(f"Triggering REAL course generation for: {request.message}")
+            
+            # 1. Determine Topic
             topic = (
                 (detected_intent.topic if detected_intent is not None else None)
                 or session.current_topic
@@ -510,7 +513,6 @@ async def classroom_chat(
             )
 
             if not topic:
-                # Best-effort: many clients send the desired topic wrapped in quotes.
                 match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
                 topic = match.group(1) if match else request.message
 
@@ -518,36 +520,72 @@ async def classroom_chat(
             if len(topic) > 90:
                 topic = topic[:87] + "..."
             
-            level = "beginner"
-            course = await _create_minimal_graph_course(
-                db,
-                topic=topic,
-                creator_id=str(current_user.id),
-                level=level,
+            # 2. Initialize Pipeline via Helper
+            from lyo_app.ai_agents.multi_agent_v2.routes import get_pipeline
+            from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator, GraphGenerationConfig
+            
+            pipeline = get_pipeline()
+            
+            # 3. Define Context (Guest vs User)
+            user_context_dict = {
+                "source": "classroom_chat",
+                "request_time": datetime.utcnow().isoformat()
+            }
+            creator_id = str(current_user.id)
+            
+            if creator_id != "guest_session":
+                 user_context_dict["user_id"] = creator_id
+            
+            # 4. Run Generation (This usually takes 30-60s)
+            # In a prod environment, we might push this to background & stream updates.
+            # For now, we await it to block and return the full result.
+            generated_course = await pipeline.generate_course(
+                user_request=f"Create a course about {topic}",
+                user_context=user_context_dict,
+                job_id=f"chatgen_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{str(session.session_id)[:8]}"
             )
-            generated_course_id = course.id
+            
+            # 5. Persist as Graph Course
+            graph_generator = GraphCourseGenerator(
+                config=GraphGenerationConfig(
+                    add_hook_nodes=True,
+                    add_interaction_checkpoints=True,
+                    target_node_duration_minutes=1.5
+                )
+            )
+            
+            graph_course, result = await graph_generator.generate_graph_course(
+                db=db,
+                curriculum=generated_course.curriculum,
+                lessons=generated_course.lessons,
+                assessments=generated_course.assessments,
+                creator_id=creator_id
+            )
+            
+            generated_course_id = graph_course.id
             session.current_course_id = generated_course_id
             session.current_topic = topic
 
-            # Construct the OpenClassroom payload for iOS
+            # 6. Construct Response Payload
             payload = {
                 "course": {
-                    "id": course.id,
-                    "title": course.title,
+                    "id": graph_course.id,
+                    "title": graph_course.title,
                     "topic": topic,
-                    "level": level
+                    "level": graph_course.difficulty_level or "beginner"
                 }
             }
 
             response = FlowResponse(
-                content=f"✅ Created interactive course: {course.title}",
+                content=f"✅ I've created a new interactive course for you: **{graph_course.title}**.\n\nIt includes {result.nodes_created} scenes and interactive quizzes. Ready to start?",
                 response_type="OPEN_CLASSROOM",
                 state=ConversationState.IN_LESSON,
                 metadata={
                     "course_id": generated_course_id,
                     "generated_course_id": generated_course_id,
                     "topic": topic,
-                    "openClassroomPayload": payload
+                    "openClassroomPayload": payload,
+                    "nodes_created": result.nodes_created
                 },
                 actions=[
                     {
@@ -558,14 +596,30 @@ async def classroom_chat(
                 ],
             )
         except Exception as e:
-            logger.exception(f"Failed to create minimal graph course: {e}")
+            logger.exception(f"Failed to create REAL graph course: {e}")
             # Fallback to chat response instead of 500
             response = FlowResponse(
-                content=f"I tried to create a course on '{topic}', but ran into a technical issue. Let's discuss it in chat instead! What would you like to know about {topic}?",
+                content=f"I tried to create a comprehensive course on '{topic}', but hit a snag during the deep research phase. Let's start simpler - check out this summary instead.",
                 response_type="text",
                 state=session.state,
                 metadata={"error": str(e)}
             )
+            
+            # Minimal fallback if real generation fails
+            try:
+                fallback_course = await _create_minimal_graph_course(
+                    db,
+                    topic=topic,
+                    creator_id=str(current_user.id),
+                    level="beginner"
+                )
+                generated_course_id = fallback_course.id
+                response.metadata["course_id"] = generated_course_id
+                response.metadata["generated_course_id"] = generated_course_id
+                response.response_type = "OPEN_CLASSROOM"
+            except Exception:
+                pass
+
     else:
         # Get User Context (skip for guest users)
         user_context = "student"  # Default context
