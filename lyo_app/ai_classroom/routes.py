@@ -595,11 +595,25 @@ async def classroom_chat(
         logger.exception("Intent detection failed; falling back to keyword heuristic")
 
     message_lower = request.message.lower()
-    is_course_request = (
-        detector.should_trigger_course_generation(detected_intent)
-        if detected_intent is not None
-        else (("course" in message_lower) and ("create" in message_lower))
-    )
+    
+    # Enhanced course detection to handle multiple formats:
+    # 1. Direct: "Create a course on Python"
+    # 2. iOS System Prompt: "SYSTEM:\n...Create a structured learning course for: Python"
+    is_course_request = False
+    
+    if detected_intent is not None:
+        is_course_request = detector.should_trigger_course_generation(detected_intent)
+    else:
+        # Fallback keyword detection with multiple patterns
+        is_course_request = (
+            # Standard format
+            (("course" in message_lower) and ("create" in message_lower))
+            # iOS system prompt format
+            or ("curriculum designer" in message_lower)
+            or ("structured learning course" in message_lower)
+            or ("create a structured learning course for:" in message_lower)
+        )
+
 
     generated_course_id: Optional[str] = None
     
@@ -613,12 +627,19 @@ async def classroom_chat(
         )
 
         if not topic:
-            match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
-            topic = match.group(1) if match else request.message
+            # Try iOS system prompt format first: "...course for: Python\nLevel: beginner"
+            ios_match = re.search(r"course for:\s*([^\n]{1,100})", request.message, re.IGNORECASE)
+            if ios_match:
+                topic = ios_match.group(1).strip()
+            else:
+                # Fallback to quoted topic
+                match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
+                topic = match.group(1) if match else request.message
 
         topic = topic.strip().strip("'\"")
         if len(topic) > 90:
             topic = topic[:87] + "..."
+
         
         # INSTANT RESPONSE PATTERN: Return minimal course immediately, upgrade in background
         logger.info(f"⚡ INSTANT MODE: Creating starter course for: {topic}")
