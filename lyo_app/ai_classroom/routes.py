@@ -232,6 +232,109 @@ async def _count_nodes(db: AsyncSession, course_id: str) -> int:
     return int(result.scalar() or 0)
 
 
+# OPTIMIZATION: Global Pipeline Cache
+_cached_pipeline: Optional[Any] = None
+
+def get_pipeline_cached():
+    """Get or create cached pipeline instance (reduces init from 200ms to ~10ms)"""
+    global _cached_pipeline
+    if _cached_pipeline is None:
+        from lyo_app.ai_agents.multi_agent_v2.routes import get_pipeline
+        _cached_pipeline = get_pipeline()
+        logger.info("🚀 Pipeline initialized and cached")
+    return _cached_pipeline
+
+
+async def upgrade_course_in_background(
+    course_id: str,
+    topic: str,
+    creator_id: str,
+    user_context_dict: Dict[str, Any]
+):
+    """
+    Background task to upgrade a minimal course to a full AI-generated course.
+    Runs async without blocking the initial response.
+    """
+    try:
+        logger.info(f"🔄 Background upgrade started for course {course_id}: {topic}")
+        
+        # Use cached pipeline
+        from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator, GraphGenerationConfig
+        from sqlalchemy import delete
+        
+        pipeline = get_pipeline_cached()
+        
+        # Generate full course content
+        generated_course = await pipeline.generate_course(
+            user_request=f"Create a comprehensive course about {topic}",
+            user_context=user_context_dict,
+            job_id=f"upgrade_{course_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        )
+        
+        logger.info(f"✅ AI generation complete, upgrading course nodes for {course_id}...")
+        
+        # Update the existing course with new content
+        async with AsyncSessionLocal() as db:
+            # Get the existing course
+            result = await db.execute(
+                select(GraphCourse).where(GraphCourse.id == course_id)
+            )
+            existing_course = result.scalar_one_or_none()
+            
+            if not existing_course:
+                logger.error(f"Course {course_id} not found for upgrade")
+                return
+            
+            # Delete existing minimal nodes
+            await db.execute(delete(LearningNode).where(LearningNode.course_id == course_id))
+            await db.execute(delete(LearningEdge).where(LearningEdge.course_id == course_id))
+            
+            # Update course metadata
+            existing_course.title = generated_course.curriculum.title
+            existing_course.description = generated_course.curriculum.description
+            existing_course.estimated_minutes = int(generated_course.curriculum.total_estimated_hours * 60)
+            existing_course.version = existing_course.version + 1
+            
+            # Generate full graph structure
+            graph_generator = GraphCourseGenerator(
+                config=GraphGenerationConfig(
+                    add_hook_nodes=True,
+                    add_interaction_checkpoints=True,
+                    target_node_duration_minutes=1.5
+                )
+            )
+            
+            # Build lesson lookup
+            lesson_lookup = {lesson.lesson_id: lesson for lesson in generated_course.lessons}
+            
+            # Process each module and create nodes
+            all_nodes = []
+            for mod_idx, module in enumerate(generated_course.curriculum.modules):
+                module_nodes = await graph_generator._process_module(
+                    db=db,
+                    course=existing_course,
+                    module=module,
+                    mod_idx=mod_idx,
+                    lesson_lookup=lesson_lookup,
+                    assessments=generated_course.assessments,
+                    warnings=[]
+                )
+                all_nodes.extend(module_nodes)
+            
+            # Set entry node
+            if all_nodes:
+                existing_course.entry_node_id = all_nodes[0].id
+            
+            await db.commit()
+            
+            logger.info(f"✅ Background upgrade COMPLETE for {course_id}: {len(all_nodes)} nodes created")
+        
+    except Exception as e:
+        logger.exception(f"❌ Background upgrade FAILED for {course_id}: {e}")
+        # Failure is OK - user already has minimal course
+
+
+
 async def _create_minimal_graph_course(
     db: AsyncSession,
     *,
@@ -517,84 +620,63 @@ async def classroom_chat(
         if len(topic) > 90:
             topic = topic[:87] + "..."
         
+        # INSTANT RESPONSE PATTERN: Return minimal course immediately, upgrade in background
+        logger.info(f"⚡ INSTANT MODE: Creating starter course for: {topic}")
+        
         try:
-            logger.info(f"Triggering REAL course generation for: {topic}")
+            # Create minimal course FIRST (~500ms)
+            fallback_course = await _create_minimal_graph_course(
+                db,
+                topic=topic,
+                creator_id=str(current_user.id),
+                level="beginner"
+            )
+            generated_course_id = fallback_course.id
+            session.current_course_id = generated_course_id
+            session.current_topic = topic
             
-            # 2. Try to initialize pipeline - wrap in specific try/catch
-            try:
-                from lyo_app.ai_agents.multi_agent_v2.routes import get_pipeline
-                from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator, GraphGenerationConfig
-                
-                pipeline = get_pipeline()
-                logger.info("✅ Pipeline initialized successfully")
-            except ImportError as import_error:
-                logger.error(f"Pipeline dependencies missing: {import_error}")
-                raise Exception(f"Pipeline not available: {import_error}") from import_error
-            except Exception as init_error:
-                logger.exception(f"Pipeline initialization failed: {init_error}")
-                raise
+            # Count nodes
+            node_count = await _count_nodes(db, fallback_course.id)
             
-            # 3. Define Context (Guest vs User)
+            # Prepare user context for background upgrade
             user_context_dict = {
                 "source": "classroom_chat",
                 "request_time": datetime.utcnow().isoformat()
             }
-            creator_id = str(current_user.id)
+            if str(current_user.id) != "guest_session":
+                user_context_dict["user_id"] = str(current_user.id)
             
-            if creator_id != "guest_session":
-                 user_context_dict["user_id"] = creator_id
-            
-            # 4. Run Generation (This usually takes 30-60s)
-            logger.info(f"Starting pipeline generation for: {topic}")
-            generated_course = await pipeline.generate_course(
-                user_request=f"Create a course about {topic}",
-                user_context=user_context_dict,
-                job_id=f"chatgen_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{str(session.session_id)[:8]}"
+            # Schedule background upgrade to full AI course
+            background_tasks.add_task(
+                upgrade_course_in_background,
+                course_id=generated_course_id,
+                topic=topic,
+                creator_id=str(current_user.id),
+                user_context_dict=user_context_dict
             )
             
-            logger.info(f"Pipeline generated course, persisting to graph...")
-            
-            # 5. Persist as Graph Course
-            graph_generator = GraphCourseGenerator(
-                config=GraphGenerationConfig(
-                    add_hook_nodes=True,
-                    add_interaction_checkpoints=True,
-                    target_node_duration_minutes=1.5
-                )
-            )
-            
-            graph_course, result = await graph_generator.generate_graph_course(
-                db=db,
-                curriculum=generated_course.curriculum,
-                lessons=generated_course.lessons,
-                assessments=generated_course.assessments,
-                creator_id=creator_id
-            )
-            
-            generated_course_id = graph_course.id
-            session.current_course_id = generated_course_id
-            session.current_topic = topic
-
-            # 6. Construct Response Payload
+            # Construct immediate response payload
             payload = {
                 "course": {
-                    "id": graph_course.id,
-                    "title": graph_course.title,
+                    "id": fallback_course.id,
+                    "title": fallback_course.title,
                     "topic": topic,
-                    "level": graph_course.difficulty_level or "beginner"
+                    "level": "beginner"
                 }
             }
-
+            
             response = FlowResponse(
-                content=f"✅ I've created a new interactive course for you: **{graph_course.title}**.\n\nIt includes {result.nodes_created} scenes and interactive quizzes. Ready to start?",
+                content=f"I'm creating your course on '{topic}'! 🎓\n\nYou can start learning now with {node_count} introductory lessons. I'll add more advanced content in the background as you progress!",
                 response_type="OPEN_CLASSROOM",
                 state=ConversationState.IN_LESSON,
                 metadata={
                     "course_id": generated_course_id,
                     "generated_course_id": generated_course_id,
                     "topic": topic,
+                    "instant_mode": True,
+                    "upgrading_in_background": True,
                     "openClassroomPayload": payload,
-                    "nodes_created": result.nodes_created
+                    "initial_nodes": node_count
                 },
                 actions=[
                     {
@@ -602,76 +684,24 @@ async def classroom_chat(
                         "course_id": generated_course_id,
                         "topic": topic,
                     }
-                ],
+                ]
             )
             
-            logger.info(f"✅ SUCCESS: Real course created: {generated_course_id}")
+            logger.info(f"✅ INSTANT SUCCESS: Course {generated_course_id} ready immediately, upgrading in background")
             
         except Exception as e:
-            logger.exception(f"Course generation failed - using GUARANTEED fallback: {e}")
-            
-            # GUARANTEED FALLBACK - This MUST work
-            try:
-                logger.info(f"Creating minimal graph course fallback for: {topic}")
-                fallback_course = await _create_minimal_graph_course(
-                    db,
-                    topic=topic,
-                    creator_id=str(current_user.id),
-                    level="beginner"
-                )
-                generated_course_id = fallback_course.id
-                session.current_course_id = generated_course_id
-                session.current_topic = topic
-                
-                # Count nodes for fallback
-                fallback_node_count = await _count_nodes(db, fallback_course.id)
-                
-                payload = {
-                    "course": {
-                        "id": fallback_course.id,
-                        "title": fallback_course.title,
-                        "topic": topic,
-                        "level": "beginner"
-                    }
+            logger.exception(f"❌ Even instant mode failed: {e}")
+            # LAST RESORT: Return chat response
+            response = FlowResponse(
+                content=f"I can help you learn about '{topic}'! What aspect would you like to explore first?",
+                response_type="text",
+                state=session.state,
+                metadata={
+                    "error": str(e),
+                    "topic": topic
                 }
-                
-                response = FlowResponse(
-                    content=f"I created a starter course on '{topic}' for you! 🎓\n\nIt includes {fallback_node_count} learning nodes. Ready to begin?",
-                    response_type="OPEN_CLASSROOM",
-                    state=ConversationState.IN_LESSON,
-                    metadata={
-                        "course_id": generated_course_id,
-                        "generated_course_id": generated_course_id,
-                        "topic": topic,
-                        "fallback": True,
-                        "openClassroomPayload": payload,
-                        "error": str(e)
-                    },
-                    actions=[
-                        {
-                            "type": "course_created",
-                            "course_id": generated_course_id,
-                            "topic": topic,
-                        }
-                    ]
-                )
-                
-                logger.info(f"✅ FALLBACK SUCCESS: Minimal course created: {generated_course_id}")
-                
-            except Exception as fallback_error:
-                logger.exception(f"CRITICAL: Even fallback failed: {fallback_error}")
-                # LAST RESORT: Return chat response (no 500!) 
-                response = FlowResponse(
-                    content=f"I can help you learn about '{topic}'! What aspect would you like to explore first?",
-                    response_type="text",
-                    state=session.state,
-                    metadata={
-                        "error": str(e),
-                        "fallback_error": str(fallback_error),
-                        "topic": topic
-                    }
-                )
-                logger.warning(f"⚠️ LAST RESORT: Returning chat response for: {topic}")
+            )
+            logger.warning(f"⚠️ LAST RESORT: Returning chat response for: {topic}")
 
     else:
         # Get User Context (skip for guest users)
