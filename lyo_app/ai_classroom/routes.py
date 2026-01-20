@@ -502,29 +502,37 @@ async def classroom_chat(
     
     # NEW: Handle Course Generation with Real Pipeline
     if is_course_request:
+        # 1. Determine Topic FIRST (outside try/catch so fallback can use it)
+        topic = (
+            (detected_intent.topic if detected_intent is not None else None)
+            or session.current_topic
+            or ""
+        )
+
+        if not topic:
+            match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
+            topic = match.group(1) if match else request.message
+
+        topic = topic.strip().strip("'\"")
+        if len(topic) > 90:
+            topic = topic[:87] + "..."
+        
         try:
-            logger.info(f"Triggering REAL course generation for: {request.message}")
+            logger.info(f"Triggering REAL course generation for: {topic}")
             
-            # 1. Determine Topic
-            topic = (
-                (detected_intent.topic if detected_intent is not None else None)
-                or session.current_topic
-                or ""
-            )
-
-            if not topic:
-                match = re.search(r"['\"]([^'\"]{1,200})['\"]", request.message)
-                topic = match.group(1) if match else request.message
-
-            topic = topic.strip().strip("'\"")
-            if len(topic) > 90:
-                topic = topic[:87] + "..."
-            
-            # 2. Initialize Pipeline via Helper
-            from lyo_app.ai_agents.multi_agent_v2.routes import get_pipeline
-            from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator, GraphGenerationConfig
-            
-            pipeline = get_pipeline()
+            # 2. Try to initialize pipeline - wrap in specific try/catch
+            try:
+                from lyo_app.ai_agents.multi_agent_v2.routes import get_pipeline
+                from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator, GraphGenerationConfig
+                
+                pipeline = get_pipeline()
+                logger.info("✅ Pipeline initialized successfully")
+            except ImportError as import_error:
+                logger.error(f"Pipeline dependencies missing: {import_error}")
+                raise Exception(f"Pipeline not available: {import_error}") from import_error
+            except Exception as init_error:
+                logger.exception(f"Pipeline initialization failed: {init_error}")
+                raise
             
             # 3. Define Context (Guest vs User)
             user_context_dict = {
@@ -537,13 +545,14 @@ async def classroom_chat(
                  user_context_dict["user_id"] = creator_id
             
             # 4. Run Generation (This usually takes 30-60s)
-            # In a prod environment, we might push this to background & stream updates.
-            # For now, we await it to block and return the full result.
+            logger.info(f"Starting pipeline generation for: {topic}")
             generated_course = await pipeline.generate_course(
                 user_request=f"Create a course about {topic}",
                 user_context=user_context_dict,
                 job_id=f"chatgen_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{str(session.session_id)[:8]}"
             )
+            
+            logger.info(f"Pipeline generated course, persisting to graph...")
             
             # 5. Persist as Graph Course
             graph_generator = GraphCourseGenerator(
@@ -577,7 +586,7 @@ async def classroom_chat(
             }
 
             response = FlowResponse(
-                content=f"✅ I've created a new interactive course for you: **{graph_course.title}**.\n\nIt includes {result.nodes_created} scenes and interactive quizzes. Ready to start?",
+                content=f"✅ I've created a new interactive course for you: **{graph_course.title}**.\\n\\nIt includes {result.nodes_created} scenes and interactive quizzes. Ready to start?",
                 response_type="OPEN_CLASSROOM",
                 state=ConversationState.IN_LESSON,
                 metadata={
@@ -595,18 +604,15 @@ async def classroom_chat(
                     }
                 ],
             )
-        except Exception as e:
-            logger.exception(f"Failed to create REAL graph course: {e}")
-            # Fallback to chat response instead of 500
-            response = FlowResponse(
-                content=f"I tried to create a comprehensive course on '{topic}', but hit a snag during the deep research phase. Let's start simpler - check out this summary instead.",
-                response_type="text",
-                state=session.state,
-                metadata={"error": str(e)}
-            )
             
-            # Minimal fallback if real generation fails
+            logger.info(f"✅ SUCCESS: Real course created: {generated_course_id}")
+            
+        except Exception as e:
+            logger.exception(f"Course generation failed - using GUARANTEED fallback: {e}")
+            
+            # GUARANTEED FALLBACK - This MUST work
             try:
+                logger.info(f"Creating minimal graph course fallback for: {topic}")
                 fallback_course = await _create_minimal_graph_course(
                     db,
                     topic=topic,
@@ -614,11 +620,58 @@ async def classroom_chat(
                     level="beginner"
                 )
                 generated_course_id = fallback_course.id
-                response.metadata["course_id"] = generated_course_id
-                response.metadata["generated_course_id"] = generated_course_id
-                response.response_type = "OPEN_CLASSROOM"
-            except Exception:
-                pass
+                session.current_course_id = generated_course_id
+                session.current_topic = topic
+                
+                # Count nodes for fallback
+                fallback_node_count = await _count_nodes(db, fallback_course.id)
+                
+                payload = {
+                    "course": {
+                        "id": fallback_course.id,
+                        "title": fallback_course.title,
+                        "topic": topic,
+                        "level": "beginner"
+                    }
+                }
+                
+                response = FlowResponse(
+                    content=f"I created a starter course on '{topic}' for you! 🎓\\n\\nIt includes {fallback_node_count} learning nodes. Ready to begin?",
+                    response_type="OPEN_CLASSROOM",
+                    state=ConversationState.IN_LESSON,
+                    metadata={
+                        "course_id": generated_course_id,
+                        "generated_course_id": generated_course_id,
+                        "topic": topic,
+                        "fallback": True,
+                        "openClassroomPayload": payload,
+                        "error": str(e)
+                    },
+                    actions=[
+                        {
+                            "type": "course_created",
+                            "course_id": generated_course_id,
+                            "topic": topic,
+                        }
+                    ]
+                )
+                
+                logger.info(f"✅ FALLBACK SUCCESS: Minimal course created: {generated_course_id}")
+                
+            except Exception as fallback_error:
+                logger.exception(f"CRITICAL: Even fallback failed: {fallback_error}")
+                # LAST RESORT: Return chat response (no 500!) 
+                response = FlowResponse(
+                    content=f"I can help you learn about '{topic}'! What aspect would you like to explore first?",
+                    response_type="text",
+                    state=session.state,
+                    metadata={
+                        "error": str(e),
+                        "fallback_error": str(fallback_error),
+                        "topic": topic
+                    }
+                )
+                logger.warning(f"⚠️ LAST RESORT: Returning chat response for: {topic}")
 
     else:
         # Get User Context (skip for guest users)
