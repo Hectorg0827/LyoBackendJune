@@ -586,7 +586,7 @@ async def classroom_chat(
             }
 
             response = FlowResponse(
-                content=f"✅ I've created a new interactive course for you: **{graph_course.title}**.\\n\\nIt includes {result.nodes_created} scenes and interactive quizzes. Ready to start?",
+                content=f"✅ I've created a new interactive course for you: **{graph_course.title}**.\n\nIt includes {result.nodes_created} scenes and interactive quizzes. Ready to start?",
                 response_type="OPEN_CLASSROOM",
                 state=ConversationState.IN_LESSON,
                 metadata={
@@ -636,7 +636,7 @@ async def classroom_chat(
                 }
                 
                 response = FlowResponse(
-                    content=f"I created a starter course on '{topic}' for you! 🎓\\n\\nIt includes {fallback_node_count} learning nodes. Ready to begin?",
+                    content=f"I created a starter course on '{topic}' for you! 🎓\n\nIt includes {fallback_node_count} learning nodes. Ready to begin?",
                     response_type="OPEN_CLASSROOM",
                     state=ConversationState.IN_LESSON,
                     metadata={
