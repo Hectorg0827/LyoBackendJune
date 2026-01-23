@@ -1,0 +1,118 @@
+{
+  "response": "Here's the current weather!",
+  "ui_layout": {
+    "id": "66da010c-c9b8-4ec9-b11b-46f982419be8",
+    "type": "card",
+    "title": "Current Weather",
+    "subtitle": null,
+    "background_color": null,
+    "children": [
+      {
+        "id": "43030e9d-4b3c-4e87-a5d2-d2d87bba9c9c",
+        "type": "text",
+        "content": "San Francisco, CA",
+        "font_style": "headline",
+        "color": null,
+        "alignment": "leading"
+      },
+      {
+        "id": "7bc77942-de3c-43ea-9500-8d34ccb5ad01",
+        "type": "hstack",
+        "spacing": 12.0,
+        "alignment": "center",
+        "children": [
+          {
+            "id": "934e84ed-ebeb-4ba1-af49-b17cc5dd5f3f",
+            "type": "text",
+            "content": "72\u00b0F",
+            "font_style": "title",
+            "color": null,
+            "alignment": "leading"
+          },
+          {
+            "id": "3e064282-bd80-4785-acaf-f02016d4f9d9",
+            "type": "vstack",
+            "spacing": 12.0,
+            "alignment": "leading",
+            "children": [
+              {
+                "id": "e4efb483-a47c-4edb-9b2b-81368af99fff",
+                "type": "text",
+                "content": "Sunny",
+                "font_style": "body",
+                "color": null,
+                "alignment": "leading"
+              },
+              {
+                "id": "59afc620-1850-4822-a23f-816b48c37f96",
+                "type": "text",
+                "content": "Feels like 75\u00b0F",
+                "font_style": "caption",
+                "color": null,
+                "alignment": "leading"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "81191037-272d-461e-99a1-981be97dd02c",
+        "type": "divider",
+        "color": null
+      },
+      {
+        "id": "4cdf3c95-fdc2-4118-97ee-65e3d6951159",
+        "type": "hstack",
+        "spacing": 12.0,
+        "alignment": "center",
+        "children": [
+          {
+            "id": "232011ad-e5b4-4611-b19a-a65f804f43df",
+            "type": "text",
+            "content": "Humidity: 65%",
+            "font_style": "caption",
+            "color": null,
+            "alignment": "leading"
+          },
+          {
+            "id": "71e852a7-0cf0-4efc-91f7-691bdb2e7baa",
+            "type": "text",
+            "content": "Wind: 12 mph",
+            "font_style": "caption",
+            "color": null,
+            "alignment": "leading"
+          }
+        ]
+      },
+      {
+        "id": "38177323-9166-4fa8-a2c8-fa75f90038aa",
+        "type": "button",
+        "label": "Refresh Weather",
+        "action_id": "refresh_weather",
+        "variant": "primary",
+        "is_disabled": false
+      },
+      {
+        "id": "4656ab27-f7d5-489b-8f95-d0abc13b5ea0",
+        "type": "spacer",
+        "height": 8.0
+      },
+      {
+        "id": "e94e1c4e-14cf-4312-bf8d-35287321f4bc",
+        "type": "text",
+        "content": "Last updated: Just now",
+        "font_style": "caption",
+        "color": null,
+        "alignment": "center"
+      }
+    ]
+  },
+  "content_types": null,
+  "session_id": null,
+  "conversation_id": null,
+  "response_mode": null,
+  "quick_explainer": null,
+  "course_proposal": null,
+  "actions": null,
+  "suggestions": null
+}

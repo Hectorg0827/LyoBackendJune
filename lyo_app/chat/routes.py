@@ -51,6 +51,7 @@ from lyo_app.personalization.service import personalization_engine
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.core.context_engine import context_engine
 from lyo_app.core.personality import LYO_SYSTEM_PROMPT
+from lyo_app.chat.a2ui_integration import chat_a2ui_service
 
 logger = logging.getLogger(__name__)
 
@@ -415,7 +416,29 @@ async def chat_endpoint(
                     objectives=course_data.get("learning_objectives", [])
                 )
             )
-        
+
+        # Generate A2UI component based on mode and data
+        ui_component = None
+        try:
+            if mode == ChatMode.COURSE_PLANNER and course_data:
+                ui_component = chat_a2ui_service.generate_course_creation_ui(course_data)
+            elif mode == ChatMode.PRACTICE and agent_result.get("quiz_data"):
+                ui_component = chat_a2ui_service.generate_quiz_ui(agent_result["quiz_data"])
+            elif mode == ChatMode.QUICK_EXPLAINER:
+                topic = context.get("topic", "Topic")
+                ui_component = chat_a2ui_service.generate_explanation_ui(
+                    assembled["response"], topic
+                )
+            elif mode == ChatMode.NOTE_TAKER and agent_result.get("note_data"):
+                ui_component = chat_a2ui_service.generate_note_ui(agent_result["note_data"])
+            else:
+                # Generate welcome UI for general responses
+                user_name = current_user.first_name if current_user else "there"
+                ui_component = chat_a2ui_service.generate_welcome_ui(user_name)
+        except Exception as e:
+            logger.error(f"A2UI generation failed: {e}")
+            ui_component = chat_a2ui_service.generate_error_ui("Failed to generate interface")
+
         return ChatResponse(
             response=assembled["response"],
             message_id=assistant_message.id,
@@ -425,6 +448,7 @@ async def chat_endpoint(
             quick_explainer=quick_explainer_data,
             course_proposal=course_proposal_data,
             content_types=content_types,
+            ui_component=ui_component.to_dict() if ui_component else None,
             type=open_classroom_type,
             payload=open_classroom_payload,
             conversation_history=updated_history,

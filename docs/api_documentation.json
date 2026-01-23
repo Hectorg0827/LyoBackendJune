@@ -1,0 +1,581 @@
+{
+  "meta": {
+    "generator": "Lyo Documentation Generator",
+    "version": "1.0.0",
+    "generated_at": "2026-01-22T00:00:24.440449",
+    "project": "Lyo Learning Platform"
+  },
+  "project_info": {
+    "name": "Lyo Learning Platform",
+    "description": "Comprehensive AI-powered educational platform with adaptive learning",
+    "version": "1.0.0",
+    "features": [
+      "Adaptive AI-powered learning",
+      "Recursive A2UI components",
+      "Real-time collaboration",
+      "Cross-platform support",
+      "Comprehensive analytics"
+    ]
+  },
+  "components": [
+    {
+      "name": "StoryViewerResponse",
+      "file": "lyo_app/routers/stories.py",
+      "description": "User who viewed a story.",
+      "type": "ui_component"
+    },
+    {
+      "name": "CircuitState",
+      "file": "lyo_app/core/ai_resilience.py",
+      "description": "Component: CircuitState",
+      "type": "ui_component"
+    },
+    {
+      "name": "CircuitBreakerConfig",
+      "file": "lyo_app/core/ai_resilience.py",
+      "description": "Component: CircuitBreakerConfig",
+      "type": "ui_component"
+    },
+    {
+      "name": "CircuitBreaker",
+      "file": "lyo_app/core/ai_resilience.py",
+      "description": "Component: CircuitBreaker",
+      "type": "ui_component"
+    },
+    {
+      "name": "LazyComponentConfig",
+      "file": "lyo_app/cache/lazy_components.py",
+      "description": "Configuration for lazy loading behavior",
+      "type": "ui_component"
+    },
+    {
+      "name": "ComponentLoader",
+      "file": "lyo_app/cache/lazy_components.py",
+      "description": "Handles lazy loading of complex A2UI components",
+      "type": "ui_component"
+    },
+    {
+      "name": "UILayoutCache",
+      "file": "lyo_app/cache/performance_cache.py",
+      "description": "Specialized caching for UI layouts",
+      "type": "ui_component"
+    },
+    {
+      "name": "UIComponentBase",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: UIComponentBase",
+      "type": "ui_component"
+    },
+    {
+      "name": "VStackComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: VStackComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "HStackComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: HStackComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "CardComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: CardComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "TextComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: TextComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "ButtonComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: ButtonComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "ImageComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: ImageComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "DividerComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: DividerComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "SpacerComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: SpacerComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: QuizComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "CourseRoadmapComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: CourseRoadmapComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "CoursePreviewComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: CoursePreviewComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "LearningNodeComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: LearningNodeComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "ProgressTrackerComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: ProgressTrackerComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "InteractiveLessonComponent",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: InteractiveLessonComponent",
+      "type": "ui_component"
+    },
+    {
+      "name": "A2UIFactory",
+      "file": "lyo_app/chat/a2ui_recursive.py",
+      "description": "Component: A2UIFactory",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickExplainerAgent",
+      "file": "lyo_app/chat/agents.py",
+      "description": "Agent for quick explanations and definitions",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickExplainerRequest",
+      "file": "lyo_app/chat/schemas.py",
+      "description": "Request for quick explanations",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickExplainerData",
+      "file": "lyo_app/chat/schemas.py",
+      "description": "Quick explainer embedded data for iOS",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickExplainerResponse",
+      "file": "lyo_app/chat/schemas.py",
+      "description": "Response for quick explanations",
+      "type": "ui_component"
+    },
+    {
+      "name": "VideoPlayerComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Advanced video player with learning features",
+      "type": "ui_component"
+    },
+    {
+      "name": "InteractiveVideoComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Interactive video with embedded questions and activities",
+      "type": "ui_component"
+    },
+    {
+      "name": "VideoPlaylistComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Video playlist for course sequences",
+      "type": "ui_component"
+    },
+    {
+      "name": "CodeSandboxComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Interactive coding environment",
+      "type": "ui_component"
+    },
+    {
+      "name": "CodeEditorComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Standalone code editor with syntax highlighting",
+      "type": "ui_component"
+    },
+    {
+      "name": "CodeOutputComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Display code execution output",
+      "type": "ui_component"
+    },
+    {
+      "name": "CodeDiffComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Show differences between code versions",
+      "type": "ui_component"
+    },
+    {
+      "name": "CollaborationSpaceComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Real-time collaboration space",
+      "type": "ui_component"
+    },
+    {
+      "name": "WhiteboardComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Interactive whiteboard for visual collaboration",
+      "type": "ui_component"
+    },
+    {
+      "name": "AnnotationComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Add annotations to content",
+      "type": "ui_component"
+    },
+    {
+      "name": "PeerReviewComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Peer review and feedback system",
+      "type": "ui_component"
+    },
+    {
+      "name": "SimulationComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Interactive simulations for learning",
+      "type": "ui_component"
+    },
+    {
+      "name": "VirtualLabComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Virtual laboratory environment",
+      "type": "ui_component"
+    },
+    {
+      "name": "GameBasedLearningComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Gamified learning experiences",
+      "type": "ui_component"
+    },
+    {
+      "name": "AutoGradedAssignmentComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Automatically graded assignments",
+      "type": "ui_component"
+    },
+    {
+      "name": "PortfolioComponent",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Student portfolio for work showcase",
+      "type": "ui_component"
+    },
+    {
+      "name": "AdvancedA2UIFactory",
+      "file": "lyo_app/chat/advanced_a2ui_components.py",
+      "description": "Factory for creating advanced A2UI components",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickActionType",
+      "file": "lyo_app/ambient/models.py",
+      "description": "Types of quick actions available",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickAction",
+      "file": "lyo_app/ambient/models.py",
+      "description": "Quick action item for Cmd+K palette or floating widget.\nNot a database model - generated on-the-fly based on context.",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickActionResponse",
+      "file": "lyo_app/ambient/schemas.py",
+      "description": "Quick action item for context palette",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickActionsRequest",
+      "file": "lyo_app/ambient/schemas.py",
+      "description": "Request for contextual quick actions",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickActionsResponse",
+      "file": "lyo_app/ambient/schemas.py",
+      "description": "Response with list of quick actions",
+      "type": "ui_component"
+    },
+    {
+      "name": "StoryView",
+      "file": "lyo_app/models/social.py",
+      "description": "Component: StoryView",
+      "type": "ui_component"
+    },
+    {
+      "name": "ClipView",
+      "file": "lyo_app/models/clips.py",
+      "description": "Track clip views for analytics.",
+      "type": "ui_component"
+    },
+    {
+      "name": "ComponentDocumentation",
+      "file": "lyo_app/dev_tools/documentation_generator.py",
+      "description": "Documentation for a UI component",
+      "type": "ui_component"
+    },
+    {
+      "name": "TestSuite",
+      "file": "lyo_app/testing/test_orchestrator.py",
+      "description": "Test suite configuration",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizType",
+      "file": "lyo_app/ai_study/models.py",
+      "description": "Quiz type enumeration",
+      "type": "ui_component"
+    },
+    {
+      "name": "GeneratedQuiz",
+      "file": "lyo_app/ai_study/models.py",
+      "description": "Represents an AI-generated quiz for a study session or resource",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizAttempt",
+      "file": "lyo_app/ai_study/models.py",
+      "description": "Represents a user's attempt at a generated quiz",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizGenerationRequest",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "Request to generate a quiz",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizQuestion",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "A single quiz question",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizGenerationResponse",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "Response from quiz generation",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizAnswerSubmission",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "A single answer submission",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizAttemptRequest",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "Request to start or submit a quiz attempt",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizResultDetail",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "Detailed result for a single question",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizAttemptResponse",
+      "file": "lyo_app/ai_study/schemas.py",
+      "description": "Response from quiz attempt submission",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizGenerationRequest",
+      "file": "lyo_app/ai_study/quiz_generation_service.py",
+      "description": "Request parameters for quiz generation",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizQuestion",
+      "file": "lyo_app/ai_study/quiz_generation_service.py",
+      "description": "Individual quiz question with all possible formats",
+      "type": "ui_component"
+    },
+    {
+      "name": "GeneratedQuiz",
+      "file": "lyo_app/ai_study/quiz_generation_service.py",
+      "description": "Complete generated quiz with all questions and metadata",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizGenerationService",
+      "file": "lyo_app/ai_study/quiz_generation_service.py",
+      "description": "Intelligent Quiz Generation Service with AI-powered question creation",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizGenerationRequest",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Quiz generation request - exactly as specified",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuizQuestion",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Individual quiz question",
+      "type": "ui_component"
+    },
+    {
+      "name": "A2UILessonPayload",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Lesson for nested course roadmap",
+      "type": "ui_component"
+    },
+    {
+      "name": "A2UIModulePayload",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Module with lessons for nested course roadmap",
+      "type": "ui_component"
+    },
+    {
+      "name": "A2UICourseRoadmapPayload",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Nested course roadmap structure for iOS",
+      "type": "ui_component"
+    },
+    {
+      "name": "A2UIQuizQuestionPayload",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Quiz question for iOS",
+      "type": "ui_component"
+    },
+    {
+      "name": "A2UIQuizPayload",
+      "file": "lyo_app/ai_study/clean_routes.py",
+      "description": "Nested quiz structure for iOS",
+      "type": "ui_component"
+    },
+    {
+      "name": "UserPreview",
+      "file": "lyo_app/community/schemas.py",
+      "description": "Lite user profile for community views.",
+      "type": "ui_component"
+    },
+    {
+      "name": "QuickExplainerData",
+      "file": "lyo_app/ai_agents/schemas.py",
+      "description": "Data for quick explainer mode.",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewSchedule",
+      "file": "lyo_app/ai_classroom/models.py",
+      "description": "Spaced repetition scheduler.\nTracks when content should be reviewed for optimal retention.",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewQuality",
+      "file": "lyo_app/ai_classroom/spaced_repetition_service.py",
+      "description": "SM-2 Quality ratings:\n0 - Complete blackout, no memory\n1 - Incorrect response, but upon seeing correct answer, remembered\n2 - Incorrect response, but correct answer seemed easy to recall\n3 - Correct response with serious difficulty\n4 - Correct response after hesitation\n5 - Perfect response with no hesitation",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewResult",
+      "file": "lyo_app/ai_classroom/spaced_repetition_service.py",
+      "description": "Result after processing a review.",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewStats",
+      "file": "lyo_app/ai_classroom/spaced_repetition_service.py",
+      "description": "User's review statistics.",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewItem",
+      "file": "lyo_app/ai_classroom/schemas.py",
+      "description": "A single item in the review queue",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewQueueResponse",
+      "file": "lyo_app/ai_classroom/schemas.py",
+      "description": "Today's review queue",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewSubmitRequest",
+      "file": "lyo_app/ai_classroom/schemas.py",
+      "description": "Submit a review response",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewSubmitResponse",
+      "file": "lyo_app/ai_classroom/schemas.py",
+      "description": "Response after submitting a review",
+      "type": "ui_component"
+    },
+    {
+      "name": "PrerequisiteNode",
+      "file": "lyo_app/ai_agents/a2a/pedagogy_agent.py",
+      "description": "Node in the prerequisite graph",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewScope",
+      "file": "lyo_app/ai_agents/a2a/qa_checker_agent.py",
+      "description": "What aspects to review",
+      "type": "ui_component"
+    },
+    {
+      "name": "ReviewFocus",
+      "file": "lyo_app/ai_agents/multi_agent_v2/agents/qa_agent.py",
+      "description": "Types of quality review focus areas",
+      "type": "ui_component"
+    },
+    {
+      "name": "TargetedReviewAgent",
+      "file": "lyo_app/ai_agents/multi_agent_v2/agents/qa_agent.py",
+      "description": "Specialized agent for reviewing specific portions of content.\nUsed for granular re-review after fixes.",
+      "type": "ui_component"
+    }
+  ],
+  "api_endpoints": [],
+  "architecture": {
+    "layers": [
+      {
+        "name": "Presentation",
+        "description": "SwiftUI and Web frontends"
+      },
+      {
+        "name": "API",
+        "description": "FastAPI backend services"
+      },
+      {
+        "name": "Business Logic",
+        "description": "AI orchestration and learning engine"
+      },
+      {
+        "name": "Data",
+        "description": "Persistent storage and caching"
+      },
+      {
+        "name": "Integration",
+        "description": "External service integrations"
+      }
+    ]
+  },
+  "quality_metrics": {
+    "test_coverage": "100%",
+    "performance_benchmark": "<100ms",
+    "memory_usage": "<500MB",
+    "uptime_target": "99.9%"
+  }
+}

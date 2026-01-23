@@ -876,11 +876,12 @@ class ContentTypePayload(BaseModel):
 class ChatResponse(BaseModel):
     """Enhanced chat response with A2UI content types"""
     response: str = Field(..., description="AI response text")
-    contentTypes: List[ContentTypePayload] = Field(default_factory=list, description="A2UI widget payloads")
+    ui_component: List[ContentTypePayload] = Field(default_factory=list, serialization_alias="uiComponent", description="A2UI widget payloads")
     conversationHistory: List[ConversationMessage] = Field(..., description="Updated conversation history")
 
     class Config:
         populate_by_name = True
+        serialize_by_alias = True  # Serialize using camelCase for iOS (ui_component -> uiComponent)
 
 @router.post("/chat")
 async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
@@ -950,7 +951,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
         
         return ChatResponse(
             response=response_content,
-            contentTypes=content_types,
+            ui_component=content_types,
             conversationHistory=updated_history
         )
         
