@@ -304,9 +304,11 @@ async def chat_endpoint(
         await save_user_message()
         assistant_message = await save_assistant_message()
         
-        # 11. Record telemetry (fire-and-forget pattern for non-critical operation)
-        asyncio.create_task(
-            telemetry_store.record(
+        # 11. Record telemetry (await to avoid "transaction closed" errors)
+        # Note: fire-and-forget with asyncio.create_task + db session causes errors
+        # because FastAPI closes the session before the task completes
+        try:
+            await telemetry_store.record(
                 db,
                 event_type="chat_response",
                 session_id=session_id,
@@ -322,7 +324,8 @@ async def chat_endpoint(
                     "action": request.action
                 }
             )
-        )
+        except Exception as tele_err:
+            logger.warning(f"Telemetry recording failed (non-critical): {tele_err}")
         
         # 12. Build updated history
         updated_history = []
