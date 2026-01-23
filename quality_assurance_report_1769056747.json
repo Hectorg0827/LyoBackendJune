@@ -1,0 +1,160 @@
+{
+  "timestamp": 1769056747.0307221,
+  "overall_success": false,
+  "quality_gates": {
+    "Performance": {
+      "passed": true,
+      "duration": 0.004204988479614258
+    },
+    "Memory": {
+      "passed": true,
+      "duration": 0.001
+    },
+    "Responsiveness": {
+      "passed": true,
+      "duration": 0.0007588863372802734
+    },
+    "Data Integrity": {
+      "passed": true,
+      "duration": 0.0007538795471191406
+    }
+  },
+  "test_results": {
+    "Unit Tests": {
+      "start_time": "2026-01-21T23:39:06.371089",
+      "suites": {},
+      "summary": {
+        "total_tests": 0,
+        "passed_tests": 0,
+        "failed_tests": 0,
+        "error_tests": 0,
+        "skipped_tests": 0,
+        "success_rate": 0,
+        "total_duration": 0.0,
+        "suites_summary": {},
+        "overall_status": "failed"
+      },
+      "end_time": "2026-01-21T23:39:06.371118",
+      "total_duration": 1.621246337890625e-05
+    },
+    "Integration Tests": {
+      "start_time": "2026-01-21T23:39:06.371158",
+      "suites": {
+        "system_integration": {
+          "results": [
+            "TestResult(test_id='system_integration_000', test_name='test_data_consistency_across_systems', test_type=<TestType.INTEGRATION: 'integration'>, status=<TestStatus.PASSED: 'passed'>, duration=0.6046338081359863, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 371487), end_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 976160), error_message=None, assertions_count=4, passed_assertions=4, metadata={'adaptive_sessions': 1, 'cache_hit': True, 'realtime_active': True, 'performance_metrics': 2, 'session_id': 'd0ec69ae-60c2-42e5-9ec3-0f0afd0e5ab6'})",
+            "TestResult(test_id='system_integration_001', test_name='test_advanced_component_rendering', test_type=<TestType.INTEGRATION: 'integration'>, status=<TestStatus.PASSED: 'passed'>, duration=0.010720968246459961, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 379923), end_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 390663), error_message=None, assertions_count=6, passed_assertions=6, metadata={'json_size': 3940, 'component_count': 5, 'serialization_success': True, 'deserialization_success': True})",
+            "TestResult(test_id='system_integration_002', test_name='test_response_assembler_integration', test_type=<TestType.INTEGRATION: 'integration'>, status=<TestStatus.PASSED: 'passed'>, duration=0.03195381164550781, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 390692), end_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 422659), error_message=None, assertions_count=7, passed_assertions=7, metadata={'first_call_time': 8.991, 'second_call_time': 1.172, 'cache_speedup': 7.67, 'batch_time': 20.598, 'progressive_time': 0.217, 'batch_components': 3})"
+          ],
+          "duration": 0.6053931713104248,
+          "status": "passed"
+        }
+      },
+      "summary": {
+        "total_tests": 3,
+        "passed_tests": 3,
+        "failed_tests": 0,
+        "error_tests": 0,
+        "skipped_tests": 0,
+        "success_rate": 100.0,
+        "total_duration": 0.605,
+        "suites_summary": {
+          "system_integration": {
+            "total": 3,
+            "passed": 3,
+            "failed": 0,
+            "error": 0,
+            "skipped": 0,
+            "duration": 0.6053931713104248,
+            "status": "passed"
+          }
+        },
+        "overall_status": "passed"
+      },
+      "end_time": "2026-01-21T23:39:06.976687",
+      "total_duration": 0.6054320335388184
+    },
+    "End-to-End Tests": {
+      "start_time": "2026-01-21T23:39:06.976754",
+      "suites": {
+        "complete_user_journeys": {
+          "results": [
+            "TestResult(test_id='complete_user_journeys_000', test_name='test_complete_learning_journey', test_type=<TestType.END_TO_END: 'end_to_end'>, status=<TestStatus.PASSED: 'passed'>, duration=0.0020830631256103516, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 976785), end_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 978885), error_message=None, assertions_count=4, passed_assertions=4, metadata={'session_id': 'f75f42f7-05e6-4312-a209-3c38246e1062', 'recommendations_count': 0, 'analytics_sessions': 1})",
+            "TestResult(test_id='complete_user_journeys_001', test_name='test_collaborative_learning_session', test_type=<TestType.END_TO_END: 'end_to_end'>, status=<TestStatus.PASSED: 'passed'>, duration=0.0020291805267333984, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 978913), end_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 980960), error_message=None, assertions_count=4, passed_assertions=4, metadata={'users_joined': 3, 'active_users_peak': 3, 'collaboration_features': 2})",
+            "TestResult(test_id='complete_user_journeys_002', test_name='test_adaptive_content_delivery', test_type=<TestType.END_TO_END: 'end_to_end'>, status=<TestStatus.PASSED: 'passed'>, duration=0.0026998519897460938, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 981001), end_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 983773), error_message=None, assertions_count=4, passed_assertions=4, metadata={'total_sessions': 3, 'recommendations': 0, 'final_accuracy': 0.7, 'content_adapted': True})"
+          ],
+          "duration": 0.0070269107818603516,
+          "status": "passed"
+        }
+      },
+      "summary": {
+        "total_tests": 3,
+        "passed_tests": 3,
+        "failed_tests": 0,
+        "error_tests": 0,
+        "skipped_tests": 0,
+        "success_rate": 100.0,
+        "total_duration": 0.007,
+        "suites_summary": {
+          "complete_user_journeys": {
+            "total": 3,
+            "passed": 3,
+            "failed": 0,
+            "error": 0,
+            "skipped": 0,
+            "duration": 0.0070269107818603516,
+            "status": "passed"
+          }
+        },
+        "overall_status": "passed"
+      },
+      "end_time": "2026-01-21T23:39:06.983841",
+      "total_duration": 0.007055997848510742
+    },
+    "Performance Tests": {
+      "start_time": "2026-01-21T23:39:06.983894",
+      "suites": {
+        "performance_load_tests": {
+          "results": [
+            "TestResult(test_id='performance_load_tests_000', test_name='test_performance_under_load', test_type=<TestType.PERFORMANCE: 'performance'>, status=<TestStatus.PASSED: 'passed'>, duration=0.04657101631164551, start_time=datetime.datetime(2026, 1, 21, 23, 39, 6, 983917), end_time=datetime.datetime(2026, 1, 21, 23, 39, 7, 30506), error_message=None, assertions_count=4, passed_assertions=4, metadata={'concurrent_users': 50, 'successful_sessions': 50, 'session_creation_time': 0.006, 'operations_time': 0.032, 'total_time': 0.046, 'operations_per_second': 4643.35})"
+          ],
+          "duration": 0.04668116569519043,
+          "status": "passed"
+        }
+      },
+      "summary": {
+        "total_tests": 1,
+        "passed_tests": 1,
+        "failed_tests": 0,
+        "error_tests": 0,
+        "skipped_tests": 0,
+        "success_rate": 100.0,
+        "total_duration": 0.047,
+        "suites_summary": {
+          "performance_load_tests": {
+            "total": 1,
+            "passed": 1,
+            "failed": 0,
+            "error": 0,
+            "skipped": 0,
+            "duration": 0.04668116569519043,
+            "status": "passed"
+          }
+        },
+        "overall_status": "passed"
+      },
+      "end_time": "2026-01-21T23:39:07.030670",
+      "total_duration": 0.046707868576049805
+    }
+  },
+  "summary": {
+    "total_tests": 7,
+    "passed_tests": 7,
+    "failed_tests": 0,
+    "success_rate": 100.0,
+    "total_duration": 0.659,
+    "quality_gates_passed": 4,
+    "total_quality_gates": 4
+  },
+  "recommendations": []
+}

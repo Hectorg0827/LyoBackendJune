@@ -53,11 +53,11 @@ _job_manager: Optional[JobManager] = None
 class CourseGenerationRequest(BaseModel):
     """Enhanced request to generate a new course"""
     request: str = Field(
-        ..., 
-        min_length=10,
+        ...,
+        min_length=3,
         max_length=2000,
         description="Natural language description of the course to generate",
-        examples=["Create a comprehensive Python programming course for beginners that covers variables, functions, and object-oriented programming"]
+        examples=["Create a comprehensive Python programming course for beginners that covers variables, functions, and object-oriented programming", "Biology", "Machine Learning"]
     )
     user_context: Optional[Dict[str, Any]] = Field(
         default=None,

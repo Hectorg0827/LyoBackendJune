@@ -6,16 +6,20 @@ Handles post-processing of AI responses including:
 - Length enforcement
 - Response formatting
 - Chip action generation
+- Performance optimizations with caching and lazy loading
 """
 
 import hashlib
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional, Set
 from uuid import uuid4
 from dataclasses import dataclass
 
 from lyo_app.chat.models import ChatMode, CTAType
 from lyo_app.chat.schemas import CTAItem, ChipActionItem
+from lyo_app.chat.a2ui_recursive import A2UIFactory, UIComponent, ChatResponseV2, migrate_legacy_content_types
+from lyo_app.cache.performance_cache import cache_result, CacheKeys, performance_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -447,23 +451,535 @@ class ResponseAssembler:
     def validate_response(self, response: str) -> Dict[str, Any]:
         """Validate a response meets quality requirements"""
         issues = []
-        
+
         # Check minimum length
         if not self.length_enforcer.validate_minimum(response):
             issues.append("Response too short")
-        
+
         # Check for common issues
         if response.strip().startswith("I apologize") or response.strip().startswith("I'm sorry"):
             issues.append("Response appears to be an error message")
-        
+
         # Check for incomplete JSON (if response should be structured)
         if "{" in response and "}" not in response:
             issues.append("Incomplete JSON structure")
-        
+
         return {
             "is_valid": len(issues) == 0,
             "issues": issues
         }
+
+    # =============================================================================
+    # A2UI FACTORY METHODS
+    # =============================================================================
+
+    def create_weather_ui(self, weather_data: Dict[str, Any]) -> UIComponent:
+        """Create a comprehensive weather display using recursive A2UI"""
+        return A2UIFactory.card(
+            A2UIFactory.text(f"{weather_data.get('location', 'Unknown Location')}", style="headline"),
+            A2UIFactory.hstack(
+                A2UIFactory.text(f"{weather_data.get('temp', 'N/A')}°F", style="title"),
+                A2UIFactory.vstack(
+                    A2UIFactory.text(weather_data.get('condition', 'Unknown'), style="body"),
+                    A2UIFactory.text(f"Feels like {weather_data.get('feels_like', 'N/A')}°F", style="caption")
+                )
+            ),
+            A2UIFactory.divider(),
+            A2UIFactory.hstack(
+                A2UIFactory.text(f"Humidity: {weather_data.get('humidity', 'N/A')}%", style="caption"),
+                A2UIFactory.text(f"Wind: {weather_data.get('wind_speed', 'N/A')} mph", style="caption")
+            ),
+            A2UIFactory.button("Refresh Weather", "refresh_weather", variant="primary"),
+            A2UIFactory.spacer(height=8),
+            A2UIFactory.text("Last updated: Just now", style="caption", alignment="center"),
+            title="Current Weather"
+        )
+
+    def create_course_overview_ui(self, course_data: Dict[str, Any]) -> UIComponent:
+        """Create a comprehensive course overview with nested components"""
+        modules = []
+        for i, module in enumerate(course_data.get('modules', [])):
+            module_card = A2UIFactory.card(
+                A2UIFactory.text(module.get('description', 'No description available'), style="body"),
+                A2UIFactory.spacer(height=8),
+                A2UIFactory.hstack(
+                    A2UIFactory.text(f"{module.get('lessons', 0)} lessons", style="caption"),
+                    A2UIFactory.text("•", style="caption"),
+                    A2UIFactory.text(f"{module.get('duration', 0)} mins", style="caption")
+                ),
+                A2UIFactory.spacer(height=12),
+                A2UIFactory.button(
+                    "Start Module" if module.get('status') != 'completed' else "Review Module",
+                    f"start_module_{module.get('id', i)}",
+                    variant="primary" if module.get('status') != 'completed' else "secondary"
+                ),
+                title=module.get('title', f'Module {i+1}')
+            )
+            modules.append(module_card)
+
+        return A2UIFactory.vstack(
+            A2UIFactory.text(course_data.get('title', 'Course'), style="title", alignment="center"),
+            A2UIFactory.text(course_data.get('description', 'Learn new skills'), style="body", alignment="center"),
+            A2UIFactory.spacer(height=16),
+            A2UIFactory.hstack(
+                A2UIFactory.text(f"{course_data.get('total_modules', 0)} modules", style="caption"),
+                A2UIFactory.text("•", style="caption"),
+                A2UIFactory.text(f"{course_data.get('estimated_time', 0)} hours", style="caption")
+            ),
+            A2UIFactory.divider(),
+            *modules,
+            A2UIFactory.spacer(height=16),
+            A2UIFactory.button("Save to My Courses", "save_course", variant="ghost"),
+            spacing=16.0
+        )
+
+    def create_quiz_results_ui(self, quiz_data: Dict[str, Any]) -> UIComponent:
+        """Create an interactive quiz results display"""
+        score = quiz_data.get('score', 0)
+        total = quiz_data.get('total_questions', 0)
+        percentage = int((score / total) * 100) if total > 0 else 0
+
+        # Create question cards
+        question_cards = []
+        for i, question in enumerate(quiz_data.get('questions', [])):
+            is_correct = question.get('user_correct', False)
+            card = A2UIFactory.card(
+                A2UIFactory.text(question.get('question', ''), style="body"),
+                A2UIFactory.spacer(height=8),
+                A2UIFactory.hstack(
+                    A2UIFactory.text("✓" if is_correct else "✗", style="headline",
+                                   color="#22c55e" if is_correct else "#ef4444"),
+                    A2UIFactory.text(
+                        question.get('user_answer', 'No answer'),
+                        style="body",
+                        color="#22c55e" if is_correct else "#ef4444"
+                    )
+                ),
+                A2UIFactory.text(f"Correct answer: {question.get('correct_answer', '')}", style="caption"),
+                A2UIFactory.text(question.get('explanation', ''), style="caption") if question.get('explanation') else A2UIFactory.spacer(height=0),
+                title=f"Question {i+1}"
+            )
+            question_cards.append(card)
+
+        return A2UIFactory.vstack(
+            A2UIFactory.text("Quiz Results", style="title", alignment="center"),
+            A2UIFactory.spacer(height=16),
+            A2UIFactory.card(
+                A2UIFactory.text(f"{score}/{total}", style="title", alignment="center",
+                               color="#22c55e" if percentage >= 70 else "#ef4444"),
+                A2UIFactory.text(f"{percentage}%", style="headline", alignment="center",
+                               color="#22c55e" if percentage >= 70 else "#ef4444"),
+                A2UIFactory.text(
+                    "Great job!" if percentage >= 70 else "Keep practicing!",
+                    style="body", alignment="center"
+                ),
+                title="Your Score"
+            ),
+            A2UIFactory.divider(),
+            *question_cards,
+            A2UIFactory.spacer(height=16),
+            A2UIFactory.hstack(
+                A2UIFactory.button("Retake Quiz", "retake_quiz", variant="secondary"),
+                A2UIFactory.button("Continue Learning", "continue_learning", variant="primary")
+            ),
+            spacing=16.0
+        )
+
+    def create_study_plan_ui(self, plan_data: Dict[str, Any]) -> UIComponent:
+        """Create a personalized study plan interface"""
+        topics = []
+        for topic in plan_data.get('topics', []):
+            difficulty = topic.get('difficulty', 'medium')
+            difficulty_color = {
+                'easy': '#22c55e',
+                'medium': '#f59e0b',
+                'hard': '#ef4444'
+            }.get(difficulty, '#6b7280')
+
+            topic_card = A2UIFactory.card(
+                A2UIFactory.hstack(
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(topic.get('title', 'Topic'), style="headline"),
+                        A2UIFactory.text(f"{topic.get('estimated_time', 0)} minutes", style="caption")
+                    ),
+                    A2UIFactory.text(difficulty.title(), style="caption", color=difficulty_color)
+                ),
+                A2UIFactory.text(topic.get('description', ''), style="body"),
+                A2UIFactory.spacer(height=12),
+                A2UIFactory.button(
+                    f"Start {topic.get('title', 'Topic')}",
+                    f"start_topic_{topic.get('id', '')}",
+                    variant="primary"
+                )
+            )
+            topics.append(topic_card)
+
+        return A2UIFactory.vstack(
+            A2UIFactory.text("Your Personalized Study Plan", style="title", alignment="center"),
+            A2UIFactory.text(plan_data.get('description', 'Tailored to your learning goals'),
+                           style="body", alignment="center"),
+            A2UIFactory.spacer(height=16),
+            A2UIFactory.card(
+                A2UIFactory.hstack(
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(str(len(plan_data.get('topics', []))), style="title", alignment="center"),
+                        A2UIFactory.text("Topics", style="caption", alignment="center")
+                    ),
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(f"{plan_data.get('total_time', 0)}", style="title", alignment="center"),
+                        A2UIFactory.text("Minutes", style="caption", alignment="center")
+                    ),
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(f"{plan_data.get('difficulty_level', 'Mixed')}", style="title", alignment="center"),
+                        A2UIFactory.text("Level", style="caption", alignment="center")
+                    )
+                ),
+                title="Study Overview"
+            ),
+            A2UIFactory.divider(),
+            *topics,
+            A2UIFactory.spacer(height=16),
+            A2UIFactory.button("Customize Plan", "customize_plan", variant="ghost"),
+            spacing=16.0
+        )
+
+    def create_course_preview_ui(self, course_data: Dict[str, Any]) -> UIComponent:
+        """Create a course preview UI using AI Classroom data"""
+        return A2UIFactory.vstack(
+            A2UIFactory.text("🎓 Course Available", style="headline", alignment="center"),
+            A2UIFactory.spacer(height=8),
+
+            A2UIFactory.course_preview(
+                course_id=course_data.get('id', ''),
+                title=course_data.get('title', 'Untitled Course'),
+                description=course_data.get('description', 'No description available'),
+                subject=course_data.get('subject', 'General'),
+                grade_band=course_data.get('grade_band', 'All Levels'),
+                estimated_minutes=course_data.get('estimated_minutes', 60),
+                total_nodes=course_data.get('total_nodes', 10),
+                thumbnail_url=course_data.get('thumbnail_url')
+            ),
+
+            A2UIFactory.text("Ready to start learning?", style="body", alignment="center"),
+
+            A2UIFactory.hstack(
+                A2UIFactory.button("Preview Course", "preview_course", variant="secondary"),
+                A2UIFactory.button("Start Learning", "start_course", variant="primary")
+            ),
+
+            spacing=16.0,
+            alignment="center"
+        )
+
+    def create_learning_progress_ui(self, progress_data: Dict[str, Any]) -> UIComponent:
+        """Create a learning progress display using AI Classroom data"""
+        current_node = progress_data.get('current_node', 0)
+        total_nodes = progress_data.get('total_nodes', 1)
+
+        return A2UIFactory.vstack(
+            A2UIFactory.progress_tracker(
+                course_title=progress_data.get('course_title', 'Your Course'),
+                current_node=current_node,
+                total_nodes=total_nodes,
+                current_node_title=progress_data.get('current_node_title'),
+                next_node_title=progress_data.get('next_node_title')
+            ),
+
+            A2UIFactory.card(
+                A2UIFactory.text("Keep Learning", style="headline"),
+                A2UIFactory.text(
+                    progress_data.get('motivation_message',
+                    f"You're making great progress! {current_node} of {total_nodes} lessons completed."),
+                    style="body"
+                ),
+                A2UIFactory.spacer(height=12),
+                A2UIFactory.button("Continue Learning", "continue_learning", variant="primary"),
+                title="Your Progress"
+            ),
+
+            spacing=16.0
+        )
+
+    def create_interactive_lesson_ui(self, lesson_data: Dict[str, Any]) -> UIComponent:
+        """Create an interactive lesson UI using AI Classroom data"""
+        lesson_components = [
+            A2UIFactory.text(lesson_data.get('title', 'Lesson'), style="title", alignment="center"),
+            A2UIFactory.spacer(height=12)
+        ]
+
+        # Add the main lesson component
+        lesson_components.append(
+            A2UIFactory.interactive_lesson(
+                lesson_id=lesson_data.get('id', ''),
+                title=lesson_data.get('title', 'Lesson'),
+                content=lesson_data.get('content', 'No content available'),
+                lesson_type=lesson_data.get('type', 'text'),
+                media_url=lesson_data.get('media_url'),
+                duration_seconds=lesson_data.get('duration_seconds'),
+                has_quiz=lesson_data.get('has_quiz', False)
+            )
+        )
+
+        # Add action buttons
+        action_buttons = []
+        if lesson_data.get('has_quiz', False):
+            action_buttons.append(A2UIFactory.button("Take Quiz", "take_quiz", variant="primary"))
+
+        action_buttons.append(A2UIFactory.button("Continue", "continue_lesson", variant="secondary"))
+
+        if action_buttons:
+            lesson_components.append(A2UIFactory.spacer(height=16))
+            lesson_components.append(A2UIFactory.hstack(*action_buttons))
+
+        return A2UIFactory.vstack(*lesson_components, spacing=16.0, alignment="center")
+
+    def create_course_completion_ui(self, completion_data: Dict[str, Any]) -> UIComponent:
+        """Create a course completion celebration UI"""
+        return A2UIFactory.vstack(
+            A2UIFactory.text("🎉 Congratulations!", style="title", alignment="center"),
+            A2UIFactory.spacer(height=8),
+
+            A2UIFactory.card(
+                A2UIFactory.text(f"You completed: {completion_data.get('course_title', 'the course')}", style="headline"),
+                A2UIFactory.divider(),
+                A2UIFactory.hstack(
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(f"{completion_data.get('total_nodes', 0)}", style="title", alignment="center"),
+                        A2UIFactory.text("Lessons", style="caption", alignment="center")
+                    ),
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(f"{completion_data.get('time_spent', 0)}m", style="title", alignment="center"),
+                        A2UIFactory.text("Time", style="caption", alignment="center")
+                    ),
+                    A2UIFactory.vstack(
+                        A2UIFactory.text(f"{completion_data.get('score', 100)}%", style="title", alignment="center"),
+                        A2UIFactory.text("Score", style="caption", alignment="center")
+                    )
+                ),
+                title="Course Complete!"
+            ),
+
+            A2UIFactory.text("What would you like to do next?", style="body", alignment="center"),
+
+            A2UIFactory.hstack(
+                A2UIFactory.button("View Certificate", "view_certificate", variant="secondary"),
+                A2UIFactory.button("Find More Courses", "explore_courses", variant="primary")
+            ),
+
+            spacing=16.0,
+            alignment="center"
+        )
+
+    # =============================================================================
+    # PERFORMANCE-ENHANCED METHODS
+    # =============================================================================
+
+    @cache_result(CacheKeys.UI_LAYOUT, ttl=1800)  # Cache for 30 minutes
+    async def create_course_preview_ui_cached(self, course_data: Dict[str, Any]) -> UIComponent:
+        """Create course preview UI with caching"""
+        performance_monitor.start_timing("course_preview_ui", course_data.get("course_id", "unknown"))
+
+        try:
+            # Import here to avoid circular imports
+            from lyo_app.cache.lazy_components import component_loader
+
+            # Use lazy loading for course data
+            course_id = course_data.get("course_id")
+            if course_id:
+                optimized_course = await component_loader.load_course_preview_lazy(course_id, **course_data)
+                ui_component = A2UIFactory.from_dict(optimized_course) if isinstance(optimized_course, dict) else optimized_course
+            else:
+                ui_component = self.create_course_preview_ui(course_data)
+
+            duration = performance_monitor.end_timing("course_preview_ui", course_data.get("course_id", "unknown"))
+            logger.debug(f"Course preview UI created in {duration:.3f}s")
+
+            return ui_component
+
+        except Exception as e:
+            logger.error(f"Course preview UI creation failed: {e}")
+            return self._create_fallback_ui("course_preview")
+
+    @cache_result(CacheKeys.UI_LAYOUT, ttl=300)  # Cache for 5 minutes (shorter for progress)
+    async def create_learning_progress_ui_cached(self, progress_data: Dict[str, Any]) -> UIComponent:
+        """Create learning progress UI with caching"""
+        user_id = progress_data.get("user_id", "unknown")
+        course_id = progress_data.get("course_id", "unknown")
+
+        performance_monitor.start_timing("progress_ui", f"{user_id}:{course_id}")
+
+        try:
+            # Import here to avoid circular imports
+            from lyo_app.cache.lazy_components import component_loader
+
+            # Use lazy loading for progress data
+            optimized_progress = await component_loader.load_learning_progress_lazy(user_id, course_id)
+            ui_component = A2UIFactory.from_dict(optimized_progress) if isinstance(optimized_progress, dict) else optimized_progress
+
+            duration = performance_monitor.end_timing("progress_ui", f"{user_id}:{course_id}")
+            logger.debug(f"Progress UI created in {duration:.3f}s")
+
+            return ui_component
+
+        except Exception as e:
+            logger.error(f"Progress UI creation failed: {e}")
+            return self._create_fallback_ui("progress_tracker")
+
+    async def create_interactive_lesson_ui_cached(self, lesson_data: Dict[str, Any]) -> UIComponent:
+        """Create interactive lesson UI with lazy loading"""
+        lesson_id = lesson_data.get("lesson_id", "unknown")
+
+        performance_monitor.start_timing("lesson_ui", lesson_id)
+
+        try:
+            # Import here to avoid circular imports
+            from lyo_app.cache.lazy_components import component_loader
+
+            # Use lazy loading with prefetching
+            optimized_lesson = await component_loader.load_interactive_lesson_lazy(lesson_id, **lesson_data)
+            ui_component = A2UIFactory.from_dict(optimized_lesson) if isinstance(optimized_lesson, dict) else optimized_lesson
+
+            duration = performance_monitor.end_timing("lesson_ui", lesson_id)
+            logger.debug(f"Lesson UI created in {duration:.3f}s")
+
+            return ui_component
+
+        except Exception as e:
+            logger.error(f"Lesson UI creation failed: {e}")
+            return self._create_fallback_ui("interactive_lesson")
+
+    async def assemble_response_with_progressive_rendering(
+        self,
+        response: str,
+        ui_layout: Optional[UIComponent] = None,
+        **kwargs
+    ) -> ChatResponseV2:
+        """Assemble response with progressive rendering optimizations"""
+        performance_monitor.start_timing("response_assembly", "progressive")
+
+        try:
+            # Import here to avoid circular imports
+            from lyo_app.cache.lazy_components import progressive_renderer
+
+            # Apply progressive rendering if UI layout is complex
+            if ui_layout and self._is_complex_layout(ui_layout):
+                optimized_layout = await progressive_renderer.render_progressive(
+                    ui_layout.model_dump() if hasattr(ui_layout, 'model_dump') else ui_layout
+                )
+                ui_layout = A2UIFactory.from_dict(optimized_layout)
+
+            # Standard assembly with optimized components
+            assembled_response = ChatResponseV2(
+                response=response,
+                ui_layout=ui_layout,
+                session_id=kwargs.get('session_id'),
+                conversation_id=kwargs.get('conversation_id'),
+                response_mode=kwargs.get('response_mode', 'standard')
+            )
+
+            duration = performance_monitor.end_timing("response_assembly", "progressive")
+            logger.debug(f"Progressive response assembly completed in {duration:.3f}s")
+
+            return assembled_response
+
+        except Exception as e:
+            logger.error(f"Progressive response assembly failed: {e}")
+            # Fallback to standard assembly
+            return ChatResponseV2(
+                response=response,
+                ui_layout=ui_layout,
+                **kwargs
+            )
+
+    async def batch_create_ui_components(
+        self,
+        component_specs: List[Dict[str, Any]],
+        max_concurrent: int = 3
+    ) -> List[UIComponent]:
+        """Create multiple UI components concurrently"""
+        performance_monitor.start_timing("batch_ui_creation", f"batch_{len(component_specs)}")
+
+        # Create semaphore for concurrency control
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def create_component(spec: Dict[str, Any]) -> UIComponent:
+            async with semaphore:
+                component_type = spec.get("type")
+
+                if component_type == "course_preview":
+                    return await self.create_course_preview_ui_cached(spec)
+                elif component_type == "progress_tracker":
+                    return await self.create_learning_progress_ui_cached(spec)
+                elif component_type == "interactive_lesson":
+                    return await self.create_interactive_lesson_ui_cached(spec)
+                else:
+                    # Use factory for simple components
+                    return A2UIFactory.from_dict(spec)
+
+        try:
+            # Execute all component creation tasks concurrently
+            components = await asyncio.gather(
+                *[create_component(spec) for spec in component_specs],
+                return_exceptions=True
+            )
+
+            # Handle exceptions and provide fallbacks
+            result_components = []
+            for i, component in enumerate(components):
+                if isinstance(component, Exception):
+                    logger.error(f"Component creation failed for spec {i}: {component}")
+                    result_components.append(self._create_fallback_ui("error"))
+                else:
+                    result_components.append(component)
+
+            duration = performance_monitor.end_timing("batch_ui_creation", f"batch_{len(component_specs)}")
+            logger.debug(f"Batch UI creation completed in {duration:.3f}s")
+
+            return result_components
+
+        except Exception as e:
+            logger.error(f"Batch UI creation failed: {e}")
+            return [self._create_fallback_ui("error") for _ in component_specs]
+
+    def _is_complex_layout(self, ui_layout: UIComponent) -> bool:
+        """Determine if layout is complex enough to benefit from progressive rendering"""
+        if not ui_layout:
+            return False
+
+        # Check if layout has nested children beyond a threshold
+        def count_nested_components(component, depth=0):
+            if depth > 3:  # Arbitrary complexity threshold
+                return True
+
+            if hasattr(component, 'children') and component.children:
+                for child in component.children:
+                    if count_nested_components(child, depth + 1):
+                        return True
+
+            return False
+
+        return count_nested_components(ui_layout)
+
+    def _create_fallback_ui(self, component_type: str) -> UIComponent:
+        """Create fallback UI component for errors"""
+        return A2UIFactory.card(
+            A2UIFactory.text(
+                f"Content temporarily unavailable",
+                style="body",
+                alignment="center",
+                color="gray"
+            ),
+            A2UIFactory.button(
+                "Retry",
+                f"retry_{component_type}",
+                variant="secondary"
+            ),
+            title="Loading Error"
+        )
+
+    async def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get current performance metrics"""
+        return performance_monitor.get_performance_report()
 
 
 # =============================================================================

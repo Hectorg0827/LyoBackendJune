@@ -189,7 +189,12 @@ class ChatResponse(BaseModel):
     content_types: Optional[List[Dict[str, Any]]] = Field(
         None, serialization_alias="contentTypes", description="A2UI content widgets"
     )
-    
+
+    # Full A2UI Component Support
+    ui_component: Optional[Dict[str, Any]] = Field(
+        None, serialization_alias="uiComponent", description="Complete A2UI component tree"
+    )
+
     # A2UI Command fields (for OPEN_CLASSROOM, etc.)
     type: Optional[str] = Field(None, description="A2UI action type (e.g., 'OPEN_CLASSROOM')")
     payload: Optional[OpenClassroomPayload] = Field(None, description="A2UI payload for classroom navigation")
