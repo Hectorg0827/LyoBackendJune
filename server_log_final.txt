@@ -1,0 +1,29 @@
+/Users/hectorgarcia/Desktop/LyoBackendJune/venv/lib/python3.12/site-packages/webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+2026-02-01 14:44:34 [info     ] AI Performance Optimizer initialized
+2026-02-01 14:44:34 [warning  ] scikit-learn not available. Personalization features will be limited.
+2026-02-01 14:44:34 [info     ] Production AIOrchestrator initialized with Gemma 4 and multi-model support
+AI optimization routes not available: No module named 'lyo_app.ai_agents.optimization.orchestrator'
+/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/ai_agents/multi_agent_v2/agents/base_agent.py:20: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+Google Cloud Storage not available
+Traceback (most recent call last):
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/test_audio_server.py", line 5, in <module>
+    from lyo_app.app_factory import create_app
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/app_factory.py", line 32, in <module>
+    from .routers import a2ui
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/routers/a2ui.py", line 9, in <module>
+    from lyo_app.streaming.ws import manager
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/streaming/ws.py", line 16, in <module>
+    class ConnectionManager:
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/streaming/ws.py", line 85, in ConnectionManager
+    async def stream_ui_update(self, session_id: str, stream_id: string, chunk: str):
+                                                                 ^^^^^^
+NameError: name 'string' is not defined. Did you forget to import 'string'?

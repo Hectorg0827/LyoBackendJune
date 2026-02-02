@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from lyo_app.models.enhanced import User
 from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, Token, LoginResponse, RefreshTokenRequest
 from lyo_app.auth.service import AuthService

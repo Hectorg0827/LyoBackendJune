@@ -39,6 +39,9 @@ from lyo_app.chat.schemas import (
     GreetingResponse,
     OpenClassroomCourse, OpenClassroomPayload
 )
+from lyo_app.core.lyo_protocol import (
+    LyoBlock, BlockType, SemanticRole, PresentationHint, ConceptPayload
+)
 from lyo_app.chat.router import chat_router, mode_transition_manager
 from lyo_app.chat.agents import agent_registry
 from lyo_app.chat.assembler import response_assembler
@@ -278,7 +281,7 @@ async def chat_endpoint(
         
         async def save_user_message():
             return await conversation_store.add_message(
-                db, conversation.id,
+                db, active_conversation_id,
                 role="user",
                 content=request.message,
                 mode_used=mode.value
@@ -286,7 +289,7 @@ async def chat_endpoint(
         
         async def save_assistant_message():
             return await conversation_store.add_message(
-                db, conversation.id,
+                db, active_conversation_id,
                 role="assistant",
                 content=assembled["response"],
                 mode_used=mode.value,
@@ -299,6 +302,10 @@ async def chat_endpoint(
                 cache_hit=cache_hit
             )
         
+        # Capture ID before saves expire the conversation object
+        # accessing attributes on expired objects in async session causes greenlet errors
+        active_conversation_id = conversation.id
+
         # Execute saves sequentially to avoid SQLAlchemy session conflicts
         # (asyncio.gather with shared db session causes IllegalStateChangeError)
         await save_user_message()
@@ -312,7 +319,7 @@ async def chat_endpoint(
                 db,
                 event_type="chat_response",
                 session_id=session_id,
-                conversation_id=conversation.id,
+                conversation_id=active_conversation_id,
                 message_id=assistant_message.id,
                 mode_chosen=mode.value,
                 tokens_used=agent_result.get("tokens_used"),
@@ -358,7 +365,7 @@ async def chat_endpoint(
                 difficulty=course_data.get("difficulty", "intermediate"),
                 estimated_hours=course_data.get("estimated_hours"),
                 learning_objectives=course_data.get("learning_objectives"),
-                source_conversation_id=conversation.id
+                source_conversation_id=active_conversation_id
             )
             generated_course_id = saved_course.id
         
@@ -442,16 +449,16 @@ async def chat_endpoint(
             logger.error(f"A2UI generation failed: {e}")
             ui_component = chat_a2ui_service.generate_error_ui("Failed to generate interface")
 
-        return ChatResponse(
+        response_obj = ChatResponse(
             response=assembled["response"],
             message_id=assistant_message.id,
-            conversation_id=conversation.id,
+            conversation_id=active_conversation_id,
             mode_used=mode.value,
             mode_confidence=confidence,
             quick_explainer=quick_explainer_data,
             course_proposal=course_proposal_data,
             content_types=content_types,
-            ui_component=ui_component.to_dict() if ui_component else None,
+            ui_component=None, # Filled below
             type=open_classroom_type,
             payload=open_classroom_payload,
             conversation_history=updated_history,
@@ -461,8 +468,31 @@ async def chat_endpoint(
             cache_hit=cache_hit,
             latency_ms=latency_ms,
             generated_course_id=generated_course_id,
-            generated_note_id=generated_note_id
+            generated_note_id=generated_note_id,
+            lyo_blocks=agent_result.get("lyo_blocks") or ([
+                LyoBlock(
+                    id=str(uuid4()),
+                    type=BlockType.CONCEPT,
+                    role=SemanticRole.NORMAL,
+                    content=ConceptPayload(markdown=assembled["response"]),
+                    presentation_hint=PresentationHint.INLINE
+                )
+            ] if assembled["response"] else [])
         )
+        
+        # Safe Serialization of UI Component
+        if ui_component:
+            if hasattr(ui_component, "model_dump"):
+                response_obj.ui_component = ui_component.model_dump(by_alias=True, exclude_none=True)
+            elif hasattr(ui_component, "dict"):
+                 response_obj.ui_component = ui_component.dict(by_alias=True, exclude_none=True)
+            elif hasattr(ui_component, "to_dict"):
+                 response_obj.ui_component = ui_component.to_dict()
+            else:
+                 logger.warning(f"Could not serialize ui_component of type {type(ui_component)}")
+                 response_obj.ui_component = None
+
+        return response_obj
         
     except Exception as e:
         logger.error(f"Chat endpoint error: {e}", exc_info=True)
@@ -768,6 +798,50 @@ async def quick_explain_endpoint(
             context=context,
             conversation_history=history
         )
+        
+        return QuickExplainerResponse(
+            explanation=result.get("response", ""),
+            key_points=result.get("key_points", []),
+            related_topics=result.get("related_topics", [])
+        )
+    except Exception as e:
+        logger.error(f"Explanation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate explanation"
+        )
+
+
+# =============================================================================
+# COURSE LIST ENDPOINT (Missing Fix)
+# =============================================================================
+
+@router.get("/courses", response_model=List[ChatCourseRead])
+async def get_chat_courses(
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get list of AI-generated courses suitable for chat cards.
+    """
+    try:
+        courses = await course_store.get_public_courses(db, limit=limit, offset=offset)
+        return [
+            ChatCourseRead(
+                id=c.id,
+                title=c.title,
+                description=c.description,
+                difficulty=c.difficulty,
+                estimated_hours=c.estimated_hours,
+                module_count=len(c.modules) if c.modules else 0
+            ) 
+            for c in courses
+        ]
+    except Exception as e:
+        logger.error(f"Failed to fetch courses: {e}")
+        # Return empty list instead of erroring to keep chat functional
+        return []
         
         assembled = response_assembler.assemble(
             response=result.get("response", ""),

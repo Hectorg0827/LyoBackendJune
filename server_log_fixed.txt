@@ -1,0 +1,16 @@
+/Users/hectorgarcia/Desktop/LyoBackendJune/venv/lib/python3.12/site-packages/webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+Traceback (most recent call last):
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/test_audio_server.py", line 4, in <module>
+    from lyo_app.app_factory import create_app
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/app_factory.py", line 11, in <module>
+    from .routers import (
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/routers/auth.py", line 4, in <module>
+    from lyo_app.auth.routes import router
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/auth/routes.py", line 14, in <module>
+    from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, Token, LoginResponse, RefreshTokenRequest
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/auth/schemas.py", line 12, in <module>
+    from lyo_app.auth.security_middleware import SecurityConfig
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/auth/security_middleware.py", line 17, in <module>
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+ModuleNotFoundError: No module named 'slowapi'

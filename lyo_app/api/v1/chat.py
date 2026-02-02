@@ -824,11 +824,110 @@ Format responses with markdown. Keep responses concise but informative.
     except Exception as e:
         logger.error(f"Chat V2 endpoint failed: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
                 "error": True,
                 "message": f"Request could not be processed: {str(e)}" if not settings.is_production() else "Request could not be processed. Please try again.",
                 "category": "business_logic",
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
             }
+        )
+
+
+# ============================================================
+# AI CLASSROOM A2UI ENDPOINT
+# ============================================================
+
+@router.get("/classroom/lesson/{lesson_id}/ui")
+async def get_lesson_ui(
+    lesson_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate A2UI components for rendering a specific lesson.
+    Returns server-driven UI that iOS can render dynamically.
+    """
+    try:
+        from lyo_app.a2ui.classroom_generator import classroom_a2ui_generator
+        from lyo_app.ai_agents.multi_agent_v2.services import course_service
+        
+        # Fetch lesson data from course service
+        # For now, using mock data until we wire up the real course lookup
+        lesson_data = {
+            "title": "Introduction to Python Variables",
+            "content": """
+# Variables in Python
+
+Variables are containers for storing data values. In Python, you don't need to declare variable types.
+
+## Creating Variables
+
+```python
+name = "Alice"
+age = 25
+height = 5.6
+is_student = True
+```
+
+### Rules for Variable Names
+
+- Must start with a letter or underscore
+- Can only contain alphanumeric characters and underscores
+- Case-sensitive (age, Age, and AGE are different)
+
+## Examples
+
+Here are common variable types:
+
+- **Strings**: Text data
+- **Integers**: Whole numbers  
+- **Floats**: Decimal numbers
+- **Booleans**: True/False values
+
+Try creating your own variables and see what works!
+""",
+            "module_title": "Python Basics",
+            "lesson_number": 1,
+            "total_lessons": 12,
+            "has_next": True,
+            "has_previous": False,
+            "quiz": {
+                "question": "Which of these is a valid Python variable name?",
+                "options": [
+                    "2nd_variable",
+                    "second-variable",
+                    "second_variable",
+                    "second variable"
+                ],
+                "correct_index": 2,
+                "explanation": "Variable names must start with a letter or underscore and can't contain hyphens or spaces."
+            }
+        }
+        
+        # Generate A2UI for the lesson
+        ui_component = classroom_a2ui_generator.generate_lesson_ui(
+            lesson_title=lesson_data["title"],
+            lesson_content=lesson_data["content"],
+            module_title=lesson_data["module_title"],
+            lesson_number=lesson_data["lesson_number"],
+            total_lessons=lesson_data["total_lessons"],
+            has_next=lesson_data["has_next"],
+            has_previous=lesson_data["has_previous"],
+            quiz_data=lesson_data.get("quiz")
+        )
+        
+        return {
+            "lesson_id": lesson_id,
+            "a2ui": ui_component.model_dump(),
+            "metadata": {
+                "estimated_duration": 15,
+                "difficulty": "beginner"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to generate lesson UI: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate lesson UI: {str(e)}"
         )

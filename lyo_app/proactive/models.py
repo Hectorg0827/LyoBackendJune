@@ -6,7 +6,7 @@ from datetime import datetime, time
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, JSON, Text, Time, ARRAY
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, JSON, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -113,12 +113,12 @@ class UserNotificationPreferences(TenantMixin, Base):
     # Daily limits
     max_notifications_per_day: Mapped[int] = mapped_column(Integer, default=5)
 
-    # Intervention type preferences (array of enabled types)
+    # Intervention type preferences (stored as JSON for SQLite/PostgreSQL compatibility)
     enabled_intervention_types: Mapped[Optional[List]] = mapped_column(
-        ARRAY(String), nullable=True
+        JSON, nullable=True  # List of enabled intervention type strings
     )
     disabled_intervention_types: Mapped[Optional[List]] = mapped_column(
-        ARRAY(String), nullable=True
+        JSON, nullable=True  # List of disabled intervention type strings
     )
 
     # Study time preferences (when user usually studies)

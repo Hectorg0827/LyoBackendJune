@@ -17,12 +17,13 @@ if __name__ == "__main__":
     print("=" * 60)
     
     try:
+        print("🚀 Launching Uvicorn...", flush=True)
         uvicorn.run(
             "lyo_app.main:app",
             host="0.0.0.0",
             port=8000,
             reload=True,
-            log_level="info"
+            log_level="debug"
         )
     except Exception as e:
         print(f"❌ Error starting server: {e}")

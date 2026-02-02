@@ -18,6 +18,9 @@ from abc import ABC, abstractmethod
 from lyo_app.chat.models import ChatMode, ChipAction
 from lyo_app.chat.templates import PromptTemplates, CTATemplates, SYSTEM_PROMPTS
 from lyo_app.core.ai_resilience import ai_resilience_manager
+from lyo_app.core.lyo_protocol import (
+    LyoBlock, BlockType, SemanticRole, PresentationHint, A2UICinematic
+)
 
 logger = logging.getLogger(__name__)
 
@@ -520,11 +523,47 @@ class GeneralAgent(BaseAgent):
         
         # Call AI
         response_text, metadata = await self.call_ai(messages)
+
+        # Check for Cinematic Hook JSON
+        lyo_blocks = []
+        clean_response = response_text
+        
+        try:
+            if "CINEMATIC_HOOK" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    json_str = response_text[start:end]
+                    data = json.loads(json_str)
+                    
+                    if data.get("type") == "CINEMATIC_HOOK":
+                        payload = data.get("payload", {})
+                        
+                        # Create LyoBlock
+                        block = LyoBlock(
+                            id=str(uuid4()),
+                            type=BlockType.HOOK, # Assuming HOOK or CONCEPT. Let's use HOOK if available or defaults.
+                            role=SemanticRole.HOOK,
+                            content=A2UICinematic(
+                                title=payload.get("title", "Cinematic Moment"),
+                                subtitle=payload.get("subtitle", "Focus Mode"),
+                                mood=payload.get("mood", "epic"),
+                                videoUrl=payload.get("video_url")
+                            ),
+                            presentation_hint=PresentationHint.CINEMATIC
+                        )
+                        lyo_blocks.append(block)
+                        
+                        # Remove JSON from potential displayed text, or just silence it
+                        clean_response = "" # Silence text if it's purely a command
+        except Exception as e:
+            logger.warning(f"Failed to parse Cinematic Hook: {e}")
         
         return {
-            "response": response_text,
+            "response": clean_response,
             "ctas": self.cta_templates.get_ctas_for_context("after_explanation"),
             "chips": self.get_chips(),
+            "lyo_blocks": lyo_blocks,
             **metadata
         }
 

@@ -1,0 +1,20 @@
+/Users/hectorgarcia/Desktop/LyoBackendJune/venv/lib/python3.12/site-packages/webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+Traceback (most recent call last):
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/test_audio_server.py", line 4, in <module>
+    from lyo_app.app_factory import create_app
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/app_factory.py", line 11, in <module>
+    from .routers import (
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/routers/feed.py", line 4, in <module>
+    from lyo_app.feeds.routes import router
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/feeds/routes.py", line 21, in <module>
+    from lyo_app.feeds.service import FeedsService
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/feeds/service.py", line 25, in <module>
+    from lyo_app.tasks import video_tasks
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/tasks/__init__.py", line 3, in <module>
+    from lyo_app.tasks.course_generation import generate_course_task
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/tasks/course_generation.py", line 19, in <module>
+    from lyo_app.models.production import Task, Course, Lesson, CourseItem, TaskState, CourseStatus
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/models/production.py", line 5, in <module>
+    from lyo_app.models.enhanced import (
+ImportError: cannot import name 'Badge' from 'lyo_app.models.enhanced' (/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/models/enhanced.py). Did you mean: 'Base'?

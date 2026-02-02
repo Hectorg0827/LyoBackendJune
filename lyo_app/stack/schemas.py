@@ -27,5 +27,25 @@ class StackItemCreate(BaseModel):
     ref_id: Optional[str] = Field(None, description="Reference id for source item")
     source_type: Optional[str] = Field(None, description="Source type (lesson, post, etc)")
     source_id: Optional[int] = Field(None, description="Source entity ID")
-    context_data: Optional[Dict[str, Any]] = None
+class StackItemRead(BaseModel):
+    """Schema for reading a stack item."""
+    
+    id: int
+    user_id: int
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    item_type: StackItemType = Field(..., alias="type")
+    
+    status: str
+    progress: float
+    
+    ref_id: Optional[str] = Field(None, alias="content_id")
+    source_type: Optional[str] = Field(None, alias="content_type")
+    
+    extra_data: Optional[Dict[str, Any]] = None
+    created_at: Any
+    
+    class Config:
+        from_attributes = True
+
 

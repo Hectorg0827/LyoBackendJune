@@ -70,7 +70,7 @@ class TaskResponse(BaseModel):
 AGENT_CARD = {
     "name": "Lyo Learning Agent",
     "description": "AI-powered personal learning mentor",
-    "url": "https://lyo-backend-830162750094.us-central1.run.app",
+    "url": "https://lyo-backend-5oq7jszolq-uc.a.run.app",
     "version": "1.0.0",
     "capabilities": {
         "streaming": True,

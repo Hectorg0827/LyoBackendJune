@@ -8,11 +8,28 @@ import os
 import logging
 
 # Import all routers
-from .routers import (
-    auth, media, feed, stories, messaging, notifications,
-    tutor, planner, practice, resources, search, moderation, admin, performance,
-    memory, engagement, calendar, hooks, sync, clips
-)
+# Import all routers
+from .routers import auth
+from .routers import media
+from .routers import feed
+from .routers import stories
+from .routers import messaging
+from .routers import notifications
+from .routers import tutor
+from .routers import planner
+from .routers import practice
+from .routers import resources
+from .routers import search
+from .routers import moderation
+from .routers import admin
+from .routers import performance
+from .routers import memory
+from .routers import engagement
+from .routers import calendar
+from .routers import hooks
+from .routers import sync
+from .routers import clips
+from .routers import a2ui
 
 # Global AI components for lifecycle management
 ai_components = {}
@@ -282,6 +299,7 @@ def create_app() -> FastAPI:
         (hooks.router, "/api/v1", "Behavioral Hooks"),
         (sync.router, "/api/v1", "Multi-Device Sync"),
         (clips.router, "/api/v1", "Educational Clips"),  # NEW: Clips router
+        (a2ui.router, "/api/v1", "A2UI Real-time Engine"), # NEW: A2UI router
     ]
 
     # Phase 1: Add ambient presence and proactive interventions

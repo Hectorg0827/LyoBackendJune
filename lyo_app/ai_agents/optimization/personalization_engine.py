@@ -214,18 +214,45 @@ class UserEmbeddingModel:
         self.content_embeddings: Dict[str, np.ndarray] = {}
         
         if SKLEARN_AVAILABLE:
-            self.tfidf_vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
-            self.pca = PCA(n_components=embedding_dim)
-            self.kmeans = KMeans(n_clusters=10, random_state=42)
+            # Lazy init - initialized in _ensure_models
+            self.tfidf_vectorizer = None
+            self.pca = None
+            self.kmeans = None
         else:
             logger.warning("scikit-learn not available. Personalization features will be limited.")
             self.tfidf_vectorizer = None
             self.pca = None
             self.kmeans = None
+            
+    def _ensure_models(self):
+        """Lazy load ML models."""
+        global SKLEARN_AVAILABLE
+        
+        if not SKLEARN_AVAILABLE:
+            return
+            
+        if self.tfidf_vectorizer is not None:
+            return
+            
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer as TFIDF
+            from sklearn.decomposition import PCA as PCA_CLS
+            from sklearn.cluster import KMeans as KMEANS_CLS
+            
+            logger.info("Initializing personalization ML models...")
+            self.tfidf_vectorizer = TFIDF(max_features=1000, stop_words='english')
+            self.pca = PCA_CLS(n_components=self.embedding_dim)
+            self.kmeans = KMEANS_CLS(n_clusters=10, random_state=42)
+            logger.info("Personalization models initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize ML models: {e}")
+            SKLEARN_AVAILABLE = False
         
     async def generate_user_embedding(self, user_profile: UserProfile, interaction_history: List[Dict]) -> np.ndarray:
         """Generate dense embedding for user based on profile and interactions."""
         try:
+            self._ensure_models()
+            
             # Start with profile features
             profile_features = user_profile.to_vector()
             
@@ -322,6 +349,8 @@ class UserEmbeddingModel:
     
     def cluster_users(self) -> Dict[int, int]:
         """Cluster users into similar groups."""
+        self._ensure_models()
+        
         if len(self.user_embeddings) < 10 or not self.kmeans:
             return {}
         

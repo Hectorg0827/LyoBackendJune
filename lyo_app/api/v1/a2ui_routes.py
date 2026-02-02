@@ -16,6 +16,8 @@ from lyo_app.auth.jwt_auth import get_optional_current_user
 from lyo_app.models.enhanced import User
 from lyo_app.chat.a2ui_integration import chat_a2ui_service
 from lyo_app.a2ui.a2ui_generator import a2ui
+from lyo_app.a2ui.capability_handler import get_client_capabilities, ClientCapabilities
+
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,8 @@ async def get_screen(
     screen_id: str,
     request: A2UIScreenRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_current_user)
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    capabilities: ClientCapabilities = Depends(get_client_capabilities)
 ):
     """
     Get A2UI screen component tree

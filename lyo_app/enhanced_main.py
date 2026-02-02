@@ -475,13 +475,6 @@ def create_app() -> FastAPI:
         logger.info("✅ Stories routes integrated at /api/v1/stories - Ephemeral content active!")
     except ImportError as e:
         logger.warning(f"Stories routes not available: {e}")
-
-    try:
-        from lyo_app.classroom.routes import router as classroom_router
-        app.include_router(classroom_router)
-        logger.info("✅ Classroom routes integrated - Virtual classroom sessions active!")
-    except ImportError as e:
-        logger.warning(f"Classroom routes not available: {e}")
     
     # Multi-Agent Course Generation v2
     try:
