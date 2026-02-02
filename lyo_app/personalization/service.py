@@ -149,16 +149,23 @@ class PersonalizationEngine:
         """
         Update learner state with new signals
         """
+        # Convert learner_id to int for database operations
+        try:
+            user_id = int(update.learner_id)
+        except (ValueError, TypeError):
+            logger.error(f"Invalid learner_id: {update.learner_id}")
+            return {"status": "error", "message": "Invalid learner_id"}
+        
         # Get or create learner state
         result = await db.execute(
             select(LearnerState).where(
-                LearnerState.user_id == update.learner_id
+                LearnerState.user_id == user_id
             )
         )
         state = result.scalar_one_or_none()
         
         if not state:
-            state = LearnerState(user_id=update.learner_id)
+            state = LearnerState(user_id=user_id)
             db.add(state)
         
         # Update affect if provided
@@ -179,7 +186,7 @@ class PersonalizationEngine:
             
             # Store aggregated sample
             sample = AffectSample(
-                user_id=update.learner_id,
+                user_id=user_id,
                 valence=update.affect.valence,
                 arousal=update.affect.arousal,
                 confidence=update.affect.confidence,
@@ -268,11 +275,15 @@ class PersonalizationEngine:
 
         # Layer 1 continuity: recent chat sessions (authenticated users)
         try:
+            # Import inside function to avoid circular dependencies
             from lyo_app.chat.models import ChatConversation, ChatMessage
+            from sqlalchemy.orm import load_only
 
+            # Query conversations with only needed columns
             conv_result = await db.execute(
                 select(ChatConversation)
                 .where(ChatConversation.user_id == str(user_id))
+                .options(load_only(ChatConversation.id, ChatConversation.topic, ChatConversation.context_data))
                 .order_by(desc(ChatConversation.updated_at))
                 .limit(2)
             )
@@ -280,13 +291,15 @@ class PersonalizationEngine:
 
             session_lines: List[str] = []
             for conv in conversations:
-                topic = conv.topic or (conv.context_data or {}).get("topic")
+                # Access attributes safely
+                topic = getattr(conv, "topic", None) or (getattr(conv, "context_data", {}) or {}).get("topic")
                 topic_prefix = f"Topic: {topic}" if topic else "Topic: (unspecified)"
 
                 # Pull last user+assistant turns (compact)
                 msg_result = await db.execute(
                     select(ChatMessage)
                     .where(ChatMessage.conversation_id == conv.id)
+                    .options(load_only(ChatMessage.content, ChatMessage.role))
                     .order_by(desc(ChatMessage.created_at))
                     .limit(4)
                 )

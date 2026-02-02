@@ -1,19 +1,15 @@
-"""
-AI Resilience Manager with Circuit Breaker Pattern
-Implements fallback mechanisms, retries, and load balancing for AI models
-"""
-
+import os
+import json
 import asyncio
 import aiohttp
 import time
 import logging
 import random
-import json
-import os
-from typing import Dict, List, Optional, Any, Callable, Tuple
+from typing import Dict, List, Optional, Any, Callable, Tuple, AsyncGenerator
 from enum import Enum
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
+from openai import AsyncOpenAI
 from lyo_app.core.config import settings
 
 try:
@@ -114,64 +110,67 @@ class AIResilienceManager:
         self.cache_ttl = 300
         self.daily_costs: Dict[str, float] = {}
         self.daily_usage_reset = time.time()
+        self.openai_client: Optional[AsyncOpenAI] = None
 
     async def initialize(self):
         print(f">>> [PID {os.getpid()}] AI Resilience Init: Starting...", flush=True)
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY") or get_secret("OPENAI_API_KEY")
+        
+        # Enhanced logging for debugging Cloud Run secrets
+        print(f">>> [PID {os.getpid()}] API Key Check:", flush=True)
+        print(f"    - GEMINI_API_KEY env: {'[REDACTED]' if os.getenv('GEMINI_API_KEY') else 'None'}", flush=True)
+        print(f"    - GOOGLE_API_KEY env: {'[REDACTED]' if os.getenv('GOOGLE_API_KEY') else 'None'}", flush=True)
+        print(f"    - OPENAI_API_KEY env: {'[REDACTED]' if os.getenv('OPENAI_API_KEY') else 'None'}", flush=True)
+        
         if not gemini_key:
-            # Try specific project-controlled secret first
-            gemini_key = get_secret("GEMINI_API_KEY")
-            if not gemini_key:
-                # Fallback to general Google API key secret
-                gemini_key = get_secret("GOOGLE_API_KEY")
-            
+            print("    - Attempting to fetch GEMINI_API_KEY from secrets...", flush=True)
+            gemini_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
         if not gemini_key:
-            # Final fallback to settings
+            print("    - Attempting to fetch GEMINI_API_KEY from settings...", flush=True)
             gemini_key = settings.gemini_api_key or ""
             
-        key_status = "FOUND" if gemini_key else "MISSING"
-        key_len = len(gemini_key) if gemini_key else 0
-        print(f">>> [PID {os.getpid()}] AI Resilience Init: GEMINI_API_KEY status={key_status}, length={key_len}", flush=True)
-        logger.info(f"AI Resilience Init: GEMINI_API_KEY status={key_status}, length={key_len}")
-        
-        if not gemini_key:
-            logger.warning(f"⚠️ GEMINI_API_KEY not found! AI models will NOT be functional.")
-            logger.warning(f"   Checked: GEMINI_API_KEY, GOOGLE_API_KEY (env + secrets)")
-            logger.warning(f"   Available env keys: {[k for k in os.environ.keys() if 'API' in k or 'KEY' in k or 'SECRET' in k][:10]}")
-        
+        print(f"    - Final GEMINI_KEY present: {bool(gemini_key)}", flush=True)
+        print(f"    - Final OPENAI_KEY present: {bool(openai_key)}", flush=True)
+
+        if openai_key:
+            self.openai_client = AsyncOpenAI(api_key=openai_key)
+            
         self.models = {
-            "gemini-2.5-flash": AIModelConfig(
-                name="Google Gemini 2.5 Flash",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "gemini-2.0-flash": AIModelConfig(
+                name="Google Gemini 2.0 Flash",
+                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
                 api_key=gemini_key,
                 max_tokens=4000,
-                timeout=45,
                 priority=1,
-                cost_per_token=0.001,
-                capabilities=["chat", "code", "analysis", "fast"],
+                capabilities=["chat", "fast", "multimodal"],
             ),
-            "gemini-2.5-pro": AIModelConfig(
-                name="Google Gemini 2.5 Pro",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+            "gpt-4o-mini": AIModelConfig(
+                name="OpenAI GPT-4o mini",
+                endpoint="openai", # Flag to use openai_client
+                api_key=openai_key or "",
+                max_tokens=4000,
+                priority=1,
+                capabilities=["chat", "fast", "conversational"],
+            ),
+            "gemini-2.0-pro": AIModelConfig(
+                name="Google Gemini 2.0 Pro",
+                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro:generateContent",
                 api_key=gemini_key,
                 max_tokens=8000,
-                timeout=60,
                 priority=2,
-                cost_per_token=0.005,
-                capabilities=["chat", "code", "analysis", "creative", "multimodal"],
+                capabilities=["chat", "creative"],
             ),
-            "gemini-2.0-flash-lite": AIModelConfig(
-                name="Google Gemini 2.0 Flash Lite",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent",
-                api_key=gemini_key,
-                max_tokens=1000,
-                timeout=15,
-                priority=3,
-                cost_per_token=0.0005,
-                capabilities=["chat", "fast", "lightweight"],
+            "gpt-4o": AIModelConfig(
+                name="OpenAI GPT-4o",
+                endpoint="openai",
+                api_key=openai_key or "",
+                max_tokens=4000,
+                priority=2,
+                capabilities=["chat", "complex"],
             ),
         }
-        print(f">>> [PID {os.getpid()}] AI Resilience Init: Configured {len(self.models)} models", flush=True)
+        print(f">>> [PID {os.getpid()}] AI Resilience Init: Configured {len(self.models)} models (OpenAI: {bool(openai_key)})", flush=True)
 
         for model_name in self.models:
             self.circuit_breakers[model_name] = CircuitBreaker(
@@ -207,6 +206,68 @@ class AIResilienceManager:
         # Pre-warm connection pool for faster first requests
         await self._prewarm_connections()
 
+    async def stream_chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+        provider_order: Optional[List[str]] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Streaming chat completion with fallbacks."""
+        if not self.models:
+            await self.initialize()
+
+        if not provider_order:
+            provider_order = self._select_optimal_provider(messages, max_tokens)
+
+        for model_name in provider_order:
+            if model_name not in self.models:
+                continue
+            
+            model = self.models[model_name]
+            cb = self.circuit_breakers[model_name]
+            
+            if not cb.is_closed:
+                continue
+
+            try:
+                if model.endpoint == "openai":
+                    if not self.openai_client:
+                        logger.warning(f"OpenAI client missing for {model_name}")
+                        continue
+                    logger.info(f"Attempting OpenAI stream for {model_name}")
+                    stream = await self.openai_client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=True
+                    )
+                    async for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            yield chunk.choices[0].delta.content
+                    return # Success
+                else:
+                    logger.info(f"Attempting Gemini stream for {model_name}")
+                    async for chunk in self._stream_gemini(model_name, model, messages, temperature, max_tokens):
+                        yield chunk
+                    return
+            except Exception as e:
+                logger.error(f"Streaming error with {model_name} (Type: {type(e).__name__}): {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                continue
+        
+        yield "I'm having trouble responding right now. Please try again."
+
+    async def _stream_gemini(self, model_key: str, model: AIModelConfig, messages: List[Dict[str, str]], temperature: float, max_tokens: int):
+        """Internal helper for Gemini streaming."""
+        # Simple implementation using existing logic but for streaming
+        # Actually, let's just yield the full response for now if streaming is not fully wired
+        # to avoid complex SSE parsing here.
+        res = await self.chat_completion(messages, temperature, max_tokens, provider_order=[model_key])
+        yield res.get("content", "")
+
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -231,43 +292,50 @@ class AIResilienceManager:
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
         
-        if provider_order:
-            # The original code had a hardcoded map, but the new _get_available_models
-            # will return actual model configs. We need to adapt this.
-            # For now, let's assume provider_order contains model names directly
-            # or we need to map them to actual model names.
-            # Given the new _get_available_models, we should probably pass capabilities
-            # or rely on the optimal provider selection to give us model names.
-            # Let's simplify this part to use the new _get_available_models.
-            # The `_select_optimal_provider` returns a list of model names.
-            available_models_with_configs = [
-                (name, self.models[name]) for name in provider_order if name in self.models
-            ]
-        else:
-            available_models_with_configs = self._get_available_models() # This now returns (name, config) tuples
+        print(f">>> [PID {os.getpid()}] chat_completion: provider_order={provider_order}, self.models.keys()={list(self.models.keys())}", flush=True)
+        
+        available_models_with_configs = [
+            (name, self.models[name]) for name in provider_order if name in self.models
+        ]
+        
+        print(f">>> [PID {os.getpid()}] chat_completion: available_models_with_configs count={len(available_models_with_configs)}", flush=True)
 
         if not available_models_with_configs:
-            error_msg = ("No AI models available. This usually means GEMINI_API_KEY is missing or invalid. "
-                        "Check Cloud Run secrets: ensure 'GEMINI_API_KEY' or 'GOOGLE_API_KEY' secret is configured.")
+            error_msg = "No AI models available."
             logger.error(error_msg)
             raise Exception(error_msg)
         
         last_exception = None
-        for model_name, model in available_models_with_configs: # Iterate over (name, config) tuples
+        for model_name, model in available_models_with_configs:
             cb = self.circuit_breakers[model_name]
             if not cb.is_closed:
                 continue
-            if self._is_over_cost_limit(model_name, model):
-                continue
             try:
-                result = await self._call_model_with_messages(
-                    model_name, model, messages, temperature, max_tokens
-                )
+                if model.endpoint == "openai":
+                    if not self.openai_client: continue
+                    res = await self.openai_client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                    result = {
+                        "content": res.choices[0].message.content,
+                        "model": model.name,
+                        "tokens_used": res.usage.total_tokens if res.usage else 0,
+                        "response_time": 0,
+                        "timestamp": time.time(),
+                    }
+                else:
+                    result = await self._call_model_with_messages(
+                        model_name, model, messages, temperature, max_tokens
+                    )
+                
                 if use_cache:
                     self._add_to_cache(cache_key, result)
-                self._track_usage(model_name, result.get("tokens_used", 0), model)
                 return result
-            except Exception as e:  # noqa: PERF203
+            except Exception as e:
+                logger.error(f"Error calling {model_name}: {e}")
                 last_exception = e
                 continue
         return self._get_fallback_response(message_str, str(last_exception))
@@ -389,7 +457,7 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-2.5-flash"]  # Default
+            return ["gemini-2.0-flash"]  # Default
         
         last_message = messages[-1].get("content", "")
         total_chars = sum(len(m.get("content", "")) for m in messages)
@@ -409,15 +477,15 @@ class AIResilienceManager:
         is_complex = any(p in last_message.lower() for p in complex_patterns)
         
         # Routing logic:
-        # - Short messages (<100 chars) + simple patterns -> lite (fastest)
-        # - Complex patterns or long context -> 2.5-pro (most capable)
-        # - Otherwise -> 2.5-flash (balanced)
+        # - Short messages (<100 chars) + simple patterns -> flash (fastest)
+        # - Complex patterns or long context -> 2.0-pro (most capable)
+        # - Otherwise -> 2.0-flash (balanced)
         if len(last_message) < 100 and (is_simple or max_tokens < 256):
-            return ["gemini-2.0-flash-lite", "gemini-2.5-flash"]
+            return ["gpt-4o-mini", "gemini-2.0-flash"]
         elif is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-2.5-pro", "gemini-2.5-flash"]
+            return ["gemini-2.0-pro", "gpt-4o"]
         else:
-            return ["gemini-2.5-flash", "gemini-2.5-pro"]
+            return ["gemini-2.0-flash", "gpt-4o-mini"]
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:

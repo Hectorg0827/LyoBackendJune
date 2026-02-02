@@ -57,17 +57,24 @@ class RedisRateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.block_duration = block_duration
+        self.redis_client = None
         
-        if not self.redis_url:
-            logger.warning("No Redis URL configured - rate limiting will use in-memory fallback")
-            self.redis_client = None
+        # Lazy initialization - do NOT connect here to avoid import-time crashes
+        logger.info("RedisRateLimiter initialized (lazy connection strategy)")
+            
+    def _ensure_connection(self):
+        """Lazy connection to Redis."""
+        if self.redis_client:
             return
-        
+
+        if not self.redis_url:
+            return
+            
         try:
             self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
             # Test connection
             self.redis_client.ping()
-            logger.info("Redis rate limiter initialized successfully")
+            logger.info("Redis rate limiter connected successfully")
         except Exception as e:
             logger.error(f"Failed to connect to Redis for rate limiting: {e}")
             self.redis_client = None
@@ -106,6 +113,8 @@ class RedisRateLimiter:
             Tuple of (is_allowed, rate_limit_info)
         """
         effective_max = limit_override if limit_override is not None else self.max_requests
+        
+        self._ensure_connection()
         
         if not self.redis_client:
             # Fail open if Redis is unavailable
@@ -179,6 +188,8 @@ class RedisRateLimiter:
         Returns:
             Rate limit status information
         """
+        self._ensure_connection()
+        
         if not self.redis_client:
             return {"requests_made": 0, "remaining": self.max_requests}
         

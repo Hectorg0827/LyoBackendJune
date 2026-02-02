@@ -1,0 +1,14 @@
+
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+redis
+PyJWT
+openai
+webrtcvad-python
+deepgram-sdk
+numpy
+python-multipart
+python-jose[cryptography]
+websockets

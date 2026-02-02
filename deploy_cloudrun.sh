@@ -18,7 +18,7 @@ set -euo pipefail
 #   PROJECT_ID=my-project REGION=us-central1 ./deploy_cloudrun.sh
 #   ./deploy_cloudrun.sh my-project
 
-PROJECT_ID=${1:-${PROJECT_ID:-}}
+PROJECT_ID=${1:-${PROJECT_ID:-lyobackend}}
 REGION=${REGION:-us-central1}
 SERVICE=${SERVICE:-lyo-backend}
 SERVICE_ACCOUNT_NAME=${SERVICE_ACCOUNT_NAME:-${SERVICE}-sa}

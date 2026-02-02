@@ -170,6 +170,8 @@ async def init_db() -> None:
         # Legacy schema patches
         await _ensure_users_schema(conn)
         await _ensure_stack_items_schema(conn)
+        await _ensure_learner_states_schema(conn)
+        await _ensure_learner_mastery_schema(conn)
         await _ensure_refresh_tokens_table(conn)
         logger.info("Database models registered successfully")
 
@@ -318,6 +320,100 @@ async def _ensure_stack_items_schema(conn) -> None:
     except Exception as e:
         # Don't fail startup if patch can't be applied; log and proceed.
         logger.error(f"❌ Failed applying stack_items schema patch: {e}")
+
+
+async def _ensure_learner_states_schema(conn) -> None:
+    """Ensure learner_states table has required context awareness columns."""
+
+    def _get_table_info(sync_conn):
+        dialect_name = sync_conn.dialect.name
+        inspector = inspect(sync_conn)
+        has_table = inspector.has_table("learner_states")
+        column_names = set()
+        if has_table:
+            column_names = {col["name"] for col in inspector.get_columns("learner_states")}
+        return dialect_name, has_table, column_names
+
+    try:
+        dialect_name, has_table, column_names = await conn.run_sync(_get_table_info)
+    except Exception as e:
+        logger.warning(f"⚠️ learner_states schema inspection failed: {e}")
+        return
+
+    if not has_table:
+        return
+
+    if dialect_name != "postgresql":
+        return
+
+    ddl_statements: list[str] = []
+
+    if "current_active_context" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE learner_states ADD COLUMN current_active_context VARCHAR(255) DEFAULT 'student'"
+        )
+
+    if "detected_deadline" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE learner_states ADD COLUMN detected_deadline TIMESTAMP WITHOUT TIME ZONE"
+        )
+
+    if not ddl_statements:
+        return
+
+    try:
+        for stmt in ddl_statements:
+            await conn.execute(text(stmt))
+        logger.info("✅ Applied learner_states schema patch (added missing context columns)")
+    except Exception as e:
+        logger.error(f"❌ Failed applying learner_states schema patch: {e}")
+
+
+async def _ensure_learner_mastery_schema(conn) -> None:
+    """Ensure learner_mastery table has required context & source columns."""
+
+    def _get_table_info(sync_conn):
+        dialect_name = sync_conn.dialect.name
+        inspector = inspect(sync_conn)
+        has_table = inspector.has_table("learner_mastery")
+        column_names = set()
+        if has_table:
+            column_names = {col["name"] for col in inspector.get_columns("learner_mastery")}
+        return dialect_name, has_table, column_names
+
+    try:
+        dialect_name, has_table, column_names = await conn.run_sync(_get_table_info)
+    except Exception as e:
+        logger.warning(f"⚠️ learner_mastery schema inspection failed: {e}")
+        return
+
+    if not has_table:
+        return
+
+    if dialect_name != "postgresql":
+        return
+
+    ddl_statements: list[str] = []
+
+    if "context_tag" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE learner_mastery ADD COLUMN context_tag VARCHAR(255) DEFAULT 'academic'"
+        )
+
+    if "source_of_mastery" not in column_names:
+        ddl_statements.append(
+            "ALTER TABLE learner_mastery ADD COLUMN source_of_mastery VARCHAR(255) DEFAULT 'course'"
+        )
+
+    if not ddl_statements:
+        return
+
+    try:
+        for stmt in ddl_statements:
+            await conn.execute(text(stmt))
+        logger.info("✅ Applied learner_mastery schema patch (added missing context/source columns)")
+    except Exception as e:
+        logger.error(f"❌ Failed applying learner_mastery schema patch: {e}")
 
 
 async def _ensure_refresh_tokens_table(conn) -> None:

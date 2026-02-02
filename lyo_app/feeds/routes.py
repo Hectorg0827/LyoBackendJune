@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.auth.routes import get_current_user
 from lyo_app.auth.schemas import UserRead
 from lyo_app.core.database import get_db
+from lyo_app.core.database import get_db
 from lyo_app.feeds.schemas import (
     PostCreate, PostUpdate, PostRead, PostWithDetailsRead,
     CommentCreate, CommentUpdate, CommentRead,
@@ -20,7 +21,6 @@ from lyo_app.feeds.schemas import (
 )
 from lyo_app.feeds.service import FeedsService
 from lyo_app.stack.schemas import StackItemRead
-
 
 router = APIRouter()
 feeds_service = FeedsService()

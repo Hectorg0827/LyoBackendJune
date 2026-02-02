@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import json
 import numpy as np
-from scipy import stats
+# Lazy import scipy.stats only when needed
+# from scipy import stats
 
 import structlog
 
@@ -213,8 +214,13 @@ class Experiment:
         # Use the best performing treatment variant
         best_treatment = max(treatment_variants, key=lambda v: v.conversion_rate)
         
+        # Use the best performing treatment variant
+        best_treatment = max(treatment_variants, key=lambda v: v.conversion_rate)
+        
         # Perform two-proportion z-test
         try:
+            from scipy import stats
+
             control_successes = control.conversions
             control_trials = control.participants
             treatment_successes = best_treatment.conversions

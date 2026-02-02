@@ -1,0 +1,21 @@
+/Users/hectorgarcia/Desktop/LyoBackendJune/venv/lib/python3.12/site-packages/webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+2026-02-01 14:15:44 [info     ] AI Performance Optimizer initialized
+2026-02-01 14:15:44 [warning  ] scikit-learn not available. Personalization features will be limited.
+2026-02-01 14:15:44 [warning  ] Optimization modules not available - running in basic mode
+2026-02-01 14:15:44 [info     ] Production AIOrchestrator initialized with Gemma 4 and multi-model support
+AI optimization routes not available: No module named 'scipy'
+Traceback (most recent call last):
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/test_audio_server.py", line 4, in <module>
+    from lyo_app.app_factory import create_app
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/app_factory.py", line 11, in <module>
+    from .routers import (
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/routers/tutor.py", line 4, in <module>
+    from lyo_app.ai_agents.multi_agent_v2.tutor_routes import router
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/ai_agents/multi_agent_v2/__init__.py", line 133, in <module>
+    from lyo_app.ai_agents.multi_agent_v2.agents import (
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/ai_agents/multi_agent_v2/agents/__init__.py", line 13, in <module>
+    from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent, AgentMetrics
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/ai_agents/multi_agent_v2/agents/base_agent.py", line 20, in <module>
+    import google.generativeai as genai
+ModuleNotFoundError: No module named 'google.generativeai'

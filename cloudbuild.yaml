@@ -63,6 +63,10 @@ substitutions:
   _REGION: 'us-central1'  
   _IMAGE: 'us-central1-docker.pkg.dev/lyobackend/lyo-backend-repo/lyo-backend-production:latest'
 
+timeout: 3600s  # 1 hour timeout to handle large builds
+
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: 'E2_HIGHCPU_8'
+
+

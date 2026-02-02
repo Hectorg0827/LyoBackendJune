@@ -11,6 +11,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 
 from lyo_app.chat.models import ChatMode, ChipAction, CTAType
+from lyo_app.core.lyo_protocol import LyoBlock
 
 
 # =============================================================================
@@ -188,6 +189,11 @@ class ChatResponse(BaseModel):
     )
     content_types: Optional[List[Dict[str, Any]]] = Field(
         None, serialization_alias="contentTypes", description="A2UI content widgets"
+    )
+    
+    # Lyo Protocol Support (The Future)
+    lyo_blocks: Optional[List[LyoBlock]] = Field(
+        None, serialization_alias="lyoBlocks", description="Lyo Protocol Blocks"
     )
 
     # Full A2UI Component Support
