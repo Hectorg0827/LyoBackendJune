@@ -84,9 +84,9 @@ class EnhancedSettings(BaseSettings):
     # Google Gemini - supports both GOOGLE_API_KEY and GEMINI_API_KEY
     GOOGLE_API_KEY: str = Field("", description="Google Gemini API key")
     GEMINI_API_KEY: Optional[str] = Field(None, description="Google Gemini API key (alternative)")
-    GEMINI_MODEL_DEFAULT: str = Field("gemini-1.5-flash", description="Default Gemini model")
+    GEMINI_MODEL_DEFAULT: str = Field("gemini-2.0-flash", description="Default Gemini model")
     GEMINI_MODEL_VISION: str = Field("gemini-pro-vision", description="Gemini vision model")
-    GEMINI_MODEL_FLASH: str = Field("gemini-1.5-flash", description="Gemini flash model")
+    GEMINI_MODEL_FLASH: str = Field("gemini-2.0-flash", description="Gemini flash model")
     GEMINI_MAX_TOKENS: int = Field(4096, description="Gemini max tokens")
     GEMINI_TEMPERATURE: float = Field(0.7, description="Gemini temperature")
     GEMINI_TOP_P: float = Field(0.8, description="Gemini top_p")

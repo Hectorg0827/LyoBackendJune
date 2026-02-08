@@ -516,6 +516,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ A2A Protocol routes not available: {e}")
 
+    # Temporal Workflow Routes - Durable AI Course Generation
+    try:
+        from lyo_app.routers.workflows import router as workflow_router
+        app.include_router(workflow_router)
+        logger.info("✅ Temporal Workflow routes integrated - Durable AI generation at /api/v1/workflows!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Temporal Workflow routes not available: {e}")
+
     # Multi-Tenant SaaS API
     try:
         from lyo_app.tenants.routes import router as tenants_router

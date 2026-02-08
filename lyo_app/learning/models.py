@@ -12,6 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from lyo_app.core.database import Base
 from lyo_app.tenants.mixins import TenantMixin
+from pgvector.sqlalchemy import Vector
 
 
 class DifficultyLevel(str, Enum):
@@ -61,6 +62,7 @@ class Course(TenantMixin, Base):
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_featured: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     generation_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
+    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(768))
     
     # Instructor (foreign key to User)
     instructor_id: Mapped[int] = mapped_column(
@@ -126,6 +128,7 @@ class Lesson(TenantMixin, Base):
     tags: Mapped[Optional[dict]] = mapped_column(JSON)
     difficulty_score: Mapped[Optional[float]] = mapped_column(Float)
     generation_prompt: Mapped[Optional[str]] = mapped_column(Text)
+    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(768))
     
     # Lesson status
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

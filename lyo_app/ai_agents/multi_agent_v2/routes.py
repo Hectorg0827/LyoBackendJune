@@ -14,7 +14,8 @@ system. It supports:
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from uuid import uuid4
+from uuid import uuid4, UUID
+import asyncio
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
@@ -35,6 +36,15 @@ from lyo_app.ai_agents.multi_agent_v2 import (
     QualityTier
 )
 
+# Lyo V2 Schemas for conversion
+from lyo_app.api.v2.course_schemas import (
+    LyoCourse, LyoModule, LyoLesson, LyoArtifact,
+    ArtifactType, RenderTarget, ArtifactAIMetadata,
+    ConceptExplainerPayload, QuizArtifactPayload,
+    FlashcardsPayload, Flashcard, QuizQuestion, QuizOption,
+    NotesPayload, NoteSection
+)
+
 logger = logging.getLogger(__name__)
 
 # Create router
@@ -46,6 +56,10 @@ router = APIRouter(
 # Global pipeline instance (will be initialized with proper config)
 _pipeline: Optional[CourseGenerationPipeline] = None
 _job_manager: Optional[JobManager] = None
+
+# 🧠 Production-Grade Job Store
+# fallback if DB is not available or for fast retrieval
+_job_store: Dict[str, Dict[str, Any]] = {}
 
 
 # ==================== REQUEST/RESPONSE MODELS ====================
@@ -207,14 +221,23 @@ def get_pipeline() -> CourseGenerationPipeline:
     """Get or create the pipeline instance"""
     global _pipeline, _job_manager
     if _pipeline is None:
-        # In production, this would use proper database session
+        # Check if we can get a DB session
+        job_man = None
+        try:
+            from lyo_app.core.database import AsyncSessionLocal
+            # Note: We can't easily create a session here as it's not async
+            # So we pass None and let the pipeline handle it or use the store
+            pass
+        except ImportError:
+            pass
+
         config = PipelineConfig(
             max_retries_per_step=3,
             parallel_lesson_batch_size=3,
             qa_min_score=60,
             save_intermediate_results=True
         )
-        _pipeline = CourseGenerationPipeline(config=config, job_manager=_job_manager)
+        _pipeline = CourseGenerationPipeline(config=config, job_manager=job_man)
     return _pipeline
 
 
@@ -243,19 +266,169 @@ async def run_course_generation(
     user_context: Optional[Dict[str, Any]],
     pipeline: CourseGenerationPipeline
 ):
-    """Background task to run course generation"""
+    """Background task to run course generation with store updates"""
     try:
         logger.info(f"Starting course generation for job {job_id}")
+        
+        # Initialize store entry
+        _job_store[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "progress_percent": 5,
+            "current_step": "initializing",
+            "steps_completed": [],
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        # Inner progress update function
+        async def update_progress(status: JobStatus, step: str):
+            if job_id in _job_store:
+                _job_store[job_id].update({
+                    "status": "running",
+                    "progress_percent": status_to_progress(status),
+                    "current_step": step,
+                    "updated_at": datetime.utcnow()
+                })
+                if step not in _job_store[job_id]["steps_completed"]:
+                    _job_store[job_id]["steps_completed"].append(step)
+
+        # Run pipeline
+        # Note: In a full implementation, we'd hook into pipeline events
+        # For now, we manually update after the full call or wait for it to finish
+        # since pipeline.generate_course is a single awaitable here.
+        
         course = await pipeline.generate_course(
             user_request=request,
             user_context=user_context,
             job_id=job_id
         )
+        
+        # Mark as completed
+        if job_id in _job_store:
+            _job_store[job_id].update({
+                "status": "completed",
+                "progress_percent": 100,
+                "current_step": "completed",
+                "completed_at": datetime.utcnow(),
+                "result": course
+            })
+            
         logger.info(f"Course generation completed for job {job_id}: {course.course_id}")
     except PipelineError as e:
         logger.error(f"Pipeline error for job {job_id}: {e}")
+        if job_id in _job_store:
+            _job_store[job_id].update({
+                "status": "failed",
+                "error": str(e),
+                "updated_at": datetime.utcnow()
+            })
     except Exception as e:
         logger.error(f"Unexpected error for job {job_id}: {e}")
+        if job_id in _job_store:
+            _job_store[job_id].update({
+                "status": "failed",
+                "error": str(e),
+                "updated_at": datetime.utcnow()
+            })
+
+
+# ==================== LYO CONVERTER ====================
+
+def convert_to_lyo_course(generated: GeneratedCourse) -> LyoCourse:
+    """
+    Converts a multi-agent GeneratedCourse into a LyoCourse (V2) 
+    compatible with the SwiftUI A2UI renderer.
+    """
+    lyo_modules = []
+    
+    # Map Modules
+    for mod_idx, mod_outline in enumerate(generated.curriculum.modules):
+        lyo_lessons = []
+        
+        # Find lessons belonging to this module
+        # Note: We added module_id to LessonContent schema earlier
+        module_lessons = [l for l in generated.lessons if l.module_id == mod_outline.id]
+        
+        for les_idx, les_content in enumerate(module_lessons):
+            lyo_artifacts = []
+            
+            # 1. Map Content Blocks to Artifacts
+            for block in les_content.content_blocks:
+                # Use block_type (discriminated union)
+                if block.block_type == "text":
+                    payload = ConceptExplainerPayload(
+                        markdown=block.content if isinstance(block.content, str) else str(block.content),
+                        key_takeaways=les_content.key_takeaways
+                    )
+                    lyo_artifacts.append(LyoArtifact(
+                        artifact_id=f"{les_content.lesson_id}_text_{block.order}",
+                        type=ArtifactType.CONCEPT_EXPLAINER,
+                        content=payload.dict(),
+                        ai_metadata=ArtifactAIMetadata(confidence=0.95)
+                    ))
+                elif block.block_type == "code":
+                    payload = NotesPayload(
+                        title=block.title or "Code Example",
+                        sections=[NoteSection(
+                            title=block.language,
+                            content=f"```\n{block.code}\n```\n\n{block.explanation or ''}",
+                            is_callout=True
+                        )]
+                    )
+                    lyo_artifacts.append(LyoArtifact(
+                        artifact_id=f"{les_content.lesson_id}_code_{block.order}",
+                        type=ArtifactType.NOTES,
+                        content=payload.dict(),
+                        ai_metadata=ArtifactAIMetadata(confidence=1.0)
+                    ))
+            
+            # 2. Add Quiz if present
+            if generated.assessments:
+                # Filter questions for this lesson
+                relevant_qs = [q for q in generated.assessments.questions if q.question_id.startswith(les_content.lesson_id)]
+                if relevant_qs:
+                    quiz_qs = []
+                    for q in relevant_qs:
+                        opts = [QuizOption(id=opt.label, text=opt.text) for opt in q.options]
+                        quiz_qs.append(QuizQuestion(
+                            id=q.question_id,
+                            text=q.question,
+                            options=opts,
+                            correct_option_id=q.correct_answer,
+                            explanation=q.explanation
+                        ))
+                    
+                    lyo_artifacts.append(LyoArtifact(
+                        artifact_id=f"{les_content.lesson_id}_quiz",
+                        type=ArtifactType.QUIZ,
+                        content=QuizArtifactPayload(questions=quiz_qs).dict(),
+                        ai_metadata=ArtifactAIMetadata(confidence=0.9)
+                    ))
+
+            lyo_lessons.append(LyoLesson(
+                lesson_id=les_content.lesson_id,
+                title=les_content.title,
+                goal=les_content.key_takeaways[0] if les_content.key_takeaways else "Learn",
+                artifacts=lyo_artifacts,
+                duration_minutes=les_content.estimated_duration_minutes
+            ))
+            
+        lyo_modules.append(LyoModule(
+            module_id=mod_outline.id,
+            title=mod_outline.title,
+            goal=mod_outline.description,
+            lessons=lyo_lessons
+        ))
+        
+    return LyoCourse(
+        course_id=generated.course_id,
+        title=generated.curriculum.course_title,
+        target_audience=generated.curriculum.modules[0].learning_outcomes[0] if generated.curriculum.modules else "beginner",
+        learning_objectives=generated.curriculum.modules[0].learning_outcomes if generated.curriculum.modules else ["Learn"],
+        modules=lyo_modules,
+        generation_source="multi_agent_v2"
+    )
 
 
 # ==================== API ENDPOINTS ====================
@@ -355,22 +528,21 @@ async def generate_course(
 )
 async def get_job_status(job_id: str):
     """
-    Get the status of a course generation job.
-    
-    Poll this endpoint to track progress of course generation.
+    Get the status of a course generation job from store or DB.
     """
     try:
-        # In production, this would query the job manager
-        # For now, return a mock response showing structure
-        
-        # TODO: Integrate with actual JobManager when database is configured
+        # 1. Check in-memory store (primary for active jobs)
+        if job_id in _job_store:
+            return JobStatusResponse(**_job_store[job_id])
+            
+        # 2. Fallback to placeholder if not found (avoids 404 while job is starting)
+        # In production we'd check DB here
         return JobStatusResponse(
             job_id=job_id,
-            status="running",  # Would come from JobManager
-            progress_percent=50,
-            current_step="content",
-            steps_completed=["intent", "curriculum"],
-            estimated_time_remaining_seconds=120,
+            status="pending",
+            progress_percent=0,
+            current_step="initializing",
+            steps_completed=[],
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )
@@ -630,28 +802,41 @@ async def set_model_mode(
 # ==================== COURSE RETRIEVAL ENDPOINTS ====================
 
 @router.get(
-    "/{course_id}",
-    response_model=CourseDetailResponse,
+    "/{job_id_or_course_id}",
+    response_model=LyoCourse,
     summary="Get Generated Course",
     description="Get the full details of a generated course."
 )
-async def get_course(course_id: str):
+async def get_course(job_id_or_course_id: str):
     """
-    Get full details of a generated course.
-    
-    Returns the complete course including all lessons, assessments, and QA report.
+    Get full details of a generated course, converted to LyoCourse format.
     """
     try:
-        # In production, this would query the database
+        # 1. Check job store for completed job
+        if job_id_or_course_id in _job_store:
+            job = _job_store[job_id_or_course_id]
+            if job.get("status") == "completed" and "result" in job:
+                return convert_to_lyo_course(job["result"])
+            elif job.get("status") == "failed":
+                raise HTTPException(status_code=400, detail=f"Job failed: {job.get('error')}")
+            else:
+                # Still processing - return 202 Accepted
+                raise HTTPException(status_code=202, detail="Job still processing")
+
+        # 2. Fallback: Demo data if specifically requested
+        if "demo" in job_id_or_course_id.lower():
+            from lyo_app.api.v2.course_generator_routes import get_spanish_101_demo
+            return await get_spanish_101_demo()
+
         raise HTTPException(
             status_code=404,
-            detail=f"Course {course_id} not found"
+            detail=f"Course/Job {job_id_or_course_id} not found"
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get course {course_id}: {e}")
+        logger.error(f"Failed to get course {job_id_or_course_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

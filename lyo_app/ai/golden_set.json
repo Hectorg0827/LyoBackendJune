@@ -1,0 +1,71 @@
+[
+    {
+        "id": "scenario_01",
+        "description": "Basic educational explanation",
+        "request": {
+            "text": "What is photosynthesis?"
+        },
+        "expected": {
+            "intent": "EXPLAIN",
+            "planning_steps": [
+                "RAG_RETRIEVE",
+                "GENERATE_TEXT"
+            ]
+        }
+    },
+    {
+        "id": "scenario_02",
+        "description": "Quiz creation with subject",
+        "request": {
+            "text": "Test me on the French Revolution"
+        },
+        "expected": {
+            "intent": "QUIZ",
+            "planning_steps": [
+                "RAG_RETRIEVE",
+                "CREATE_ARTIFACT",
+                "GENERATE_TEXT"
+            ]
+        }
+    },
+    {
+        "id": "scenario_03",
+        "description": "Artifact modification (too hard)",
+        "request": {
+            "text": "This is too hard, make it easier",
+            "active_artifact": {
+                "artifact_id": "test_quiz_id",
+                "artifact_type": "QUIZ",
+                "artifact_version": 1
+            }
+        },
+        "expected": {
+            "intent": "MODIFY_ARTIFACT",
+            "planning_steps": [
+                "UPDATE_ARTIFACT",
+                "GENERATE_TEXT"
+            ]
+        }
+    },
+    {
+        "id": "scenario_04",
+        "description": "Multimodal - Image context",
+        "request": {
+            "text": "Explain this diagram",
+            "media": [
+                {
+                    "modality": "IMAGE",
+                    "uri": "gs://lyo-assets/diagram1.jpg",
+                    "mime_type": "image/jpeg"
+                }
+            ]
+        },
+        "expected": {
+            "intent": "EXPLAIN",
+            "planning_steps": [
+                "SEARCH_WEB",
+                "GENERATE_TEXT"
+            ]
+        }
+    }
+]

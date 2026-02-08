@@ -127,7 +127,7 @@ Use the Socratic method to facilitate deep understanding.
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
-            provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-flash-lite"]  # Google Gemini models
+            provider_order=["gemini-2.0-flash", "gpt-4o-mini", "gemini-2.0-pro"]  # Google Gemini models
         )
         
         # 6. Build updated conversation history to maintain state
@@ -923,7 +923,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
-            provider_order=["gemini-2.0-flash", "gemini-2.5-flash", "openai"]
+            provider_order=["gemini-2.0-flash", "gpt-4o-mini", "gpt-4o"]
         )
         
         # Extract content with fallback
@@ -1055,7 +1055,7 @@ Include practical examples and clear explanations."""
             messages=[{"role": "user", "content": course_prompt}],
             temperature=0.7,
             max_tokens=4000,
-            provider_order=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"]
+            provider_order=["gemini-2.0-flash", "gpt-4o-mini", "gemini-2.0-pro"]
         )
         
         # Check for fallback response (AI service unavailable)

@@ -144,6 +144,9 @@ async def get_db_session() -> AsyncSession:
 async def init_db() -> None:
     """Initialize the database by creating all tables."""
     async with engine.begin() as conn:
+        # Enable pgvector extension
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
         from lyo_app.auth.rbac import Role, Permission, user_roles, role_permissions  # noqa: F401

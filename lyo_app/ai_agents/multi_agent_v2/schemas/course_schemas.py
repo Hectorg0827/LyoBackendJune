@@ -118,7 +118,7 @@ class CourseIntent(BaseModel):
 class LessonOutline(BaseModel):
     """Outline for a single lesson within a module"""
     
-    id: str = Field(..., pattern=r'^les_\d+_\d+$', description="Lesson ID (e.g., les_1_1)")
+    id: str = Field(..., description="Lesson ID (e.g., les_1_1)")
     title: str = Field(..., min_length=5, max_length=100)
     description: str = Field(..., min_length=20, max_length=500)
     estimated_minutes: int = Field(..., ge=5, le=60)
@@ -136,7 +136,7 @@ class LessonOutline(BaseModel):
 class ModuleOutline(BaseModel):
     """Outline for a course module containing multiple lessons"""
     
-    id: str = Field(..., pattern=r'^mod_\d+$', description="Module ID (e.g., mod_1)")
+    id: str = Field(..., description="Module ID (e.g., mod_1)")
     title: str = Field(..., min_length=5, max_length=100)
     description: str = Field(..., min_length=20, max_length=500)
     lessons: List[LessonOutline] = Field(..., min_length=2, max_length=7)
@@ -268,7 +268,8 @@ ContentBlock = Annotated[
 class LessonContent(BaseModel):
     """Complete lesson content from Content Creator"""
     
-    lesson_id: str = Field(..., pattern=r'^mod\d+_les\d+$')
+    lesson_id: str = Field(..., description="Lesson ID (e.g., les_1_1 or mod1_les1)")
+    module_id: Optional[str] = Field(default=None, description="Module this lesson belongs to")
     title: str = Field(..., min_length=5, max_length=200)
     lesson_type: LessonType = Field(default=LessonType.CONCEPT)
     introduction: str = Field(..., min_length=50)
@@ -276,6 +277,7 @@ class LessonContent(BaseModel):
     summary: str = Field(..., min_length=20)
     key_takeaways: List[str] = Field(..., min_length=1, max_length=10)
     next_steps: Optional[str] = Field(default=None, description="What comes next")
+    estimated_duration_minutes: int = Field(default=10, ge=1)
 
 
 # ============================================================

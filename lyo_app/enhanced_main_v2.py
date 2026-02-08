@@ -216,10 +216,11 @@ def create_app() -> FastAPI:
     app.mount(settings.API_V1_PREFIX, v1_router)
     
     # Include API routers with v2 prefix
-    from lyo_app.api.v2 import audio_router, courses_router
+    from lyo_app.api.v2 import audio_router, courses_router, generator_router
     v2_router = FastAPI()
     v2_router.include_router(audio_router, tags=["audio"])
     v2_router.include_router(courses_router, prefix="/courses", tags=["courses"])
+    v2_router.include_router(generator_router, tags=["generator"])
     
     app.mount("/api/v2", v2_router)
     

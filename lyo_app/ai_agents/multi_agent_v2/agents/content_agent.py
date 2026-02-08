@@ -28,6 +28,7 @@ from lyo_app.ai_agents.multi_agent_v2.schemas.course_schemas import (
 class LessonGenerationContext:
     """Context for generating a single lesson"""
     lesson_outline: LessonOutline
+    module_id: str
     module_title: str
     module_description: str
     course_topic: str

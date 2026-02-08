@@ -46,8 +46,46 @@ def test_chat():
         print(f"❌ Chat request failed: {e}")
         return False
 
+STREAM_ENDPOINT = f"{BASE_URL}/api/v1/chat/stream"
+
+def test_chat_stream():
+    print(f"🌊 Testing chat stream at {STREAM_ENDPOINT}...")
+    headers = {
+        "Content-Type": "application/json",
+    }
+    # Matches ChatStreamRequest from iOS: message and context (string)
+    payload = {
+        "message": "Hello stream",
+        "context": "mode: test" 
+    }
+    
+    try:
+        # Note: In real usage this is SSE, but requests.post should return 200 OK and stream content
+        response = requests.post(STREAM_ENDPOINT, json=payload, headers=headers, stream=True)
+        print(f"Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            print("✅ Chat stream endpoint exists and returns 200!")
+            # Verify we get some content
+            for line in response.iter_lines():
+                if line:
+                    print(f"Received chunk: {line}")
+                    break # Just verify we get something
+            return True
+        else:
+            print(f"❌ Chat stream test failed: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Chat stream request failed: {e}")
+        return False
+
 if __name__ == "__main__":
     if check_health():
-        test_chat()
+        chat_ok = test_chat()
+        stream_ok = test_chat_stream()
+        if chat_ok and stream_ok:
+            print("🎉 All verifications passed!") 
+        else:
+            print("⚠️ Some verifications failed.")
     else:
         print("⚠️ Health check failed, skipping chat test.")
