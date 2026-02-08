@@ -368,3 +368,129 @@ class CommunityEventWithDetailsRead(CommunityEventRead):
     
     attendees: List[EventAttendanceRead] = Field(..., description="Event attendees")
     study_group: Optional[StudyGroupRead] = Field(None, description="Associated study group")
+
+
+# =============================================================================
+# SOCIAL FEED SCHEMAS (Posts, Comments, Likes, Reports, Blocks)
+# =============================================================================
+
+from lyo_app.community.models import PostType, PostVisibility, ReportTargetType, ReportReason
+
+
+class PostCreate(BaseModel):
+    """Schema for creating a new post."""
+    content: str = Field(..., min_length=1, max_length=5000, description="Post content")
+    media_urls: Optional[List[str]] = Field(None, max_items=10, description="Media URLs")
+    tags: Optional[List[str]] = Field(None, max_items=20, description="Tags")
+    post_type: PostType = Field(default=PostType.TEXT, description="Post type")
+    linked_course_id: Optional[int] = Field(None, description="Linked course ID")
+    linked_group_id: Optional[int] = Field(None, description="Linked study group ID")
+    visibility: PostVisibility = Field(default=PostVisibility.PUBLIC, description="Visibility")
+
+
+class PostUpdate(BaseModel):
+    """Schema for updating a post."""
+    content: Optional[str] = Field(None, min_length=1, max_length=5000)
+    tags: Optional[List[str]] = Field(None, max_items=20)
+    visibility: Optional[PostVisibility] = None
+
+
+class PostRead(BaseModel):
+    """Schema for reading a post."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    author_id: int
+    author_name: str
+    author_avatar: Optional[str] = None
+    author_level: int = 1
+    content: str
+    media_urls: List[str] = []
+    tags: List[str] = []
+    like_count: int
+    comment_count: int
+    has_liked: bool = False  # Populated per-request
+    has_bookmarked: bool = False  # Populated per-request
+    post_type: PostType
+    linked_course_id: Optional[int] = None
+    linked_group_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    is_edited: bool
+    is_pinned: bool
+    visibility: PostVisibility
+
+
+class CommentCreate(BaseModel):
+    """Schema for creating a comment."""
+    content: str = Field(..., min_length=1, max_length=2000, description="Comment content")
+    parent_id: Optional[UUID] = Field(None, description="Parent comment ID for replies")
+
+
+class CommentRead(BaseModel):
+    """Schema for reading a comment."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    post_id: UUID
+    author_id: int
+    author_name: str
+    author_avatar: Optional[str] = None
+    content: str
+    like_count: int
+    has_liked: bool = False
+    parent_id: Optional[UUID] = None
+    reply_count: int
+    created_at: datetime
+    is_edited: bool
+
+
+class ReportCreate(BaseModel):
+    """Schema for creating a report."""
+    target_type: ReportTargetType
+    target_id: str
+    reason: ReportReason
+    description: Optional[str] = Field(None, max_length=1000)
+
+
+class ReportRead(BaseModel):
+    """Schema for report response."""
+    id: UUID
+    status: str
+    message: str = "Report submitted successfully"
+
+
+class BlockUserCreate(BaseModel):
+    """Schema for blocking a user."""
+    user_id: int
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class BlockedUserRead(BaseModel):
+    """Schema for reading blocked user."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    user_id: int
+    user_name: str
+    user_avatar: Optional[str] = None
+    blocked_at: datetime
+
+
+class PaginatedPostsResponse(BaseModel):
+    """Paginated posts response."""
+    items: List[PostRead]
+    page: int
+    limit: int
+    total_count: int
+    total_pages: int
+
+
+class PaginatedCommentsResponse(BaseModel):
+    """Paginated comments response."""
+    items: List[CommentRead]
+    page: int
+    limit: int
+    total_count: int
+    total_pages: int
+

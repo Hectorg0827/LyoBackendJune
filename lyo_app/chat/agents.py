@@ -11,7 +11,7 @@ Agent implementations for different chat modes:
 import json
 import logging
 import time
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, AsyncGenerator
 from uuid import uuid4
 from abc import ABC, abstractmethod
 
@@ -47,6 +47,17 @@ class BaseAgent(ABC):
     ) -> Dict[str, Any]:
         """Process a message and return response"""
         pass
+
+    async def process_stream(
+        self,
+        message: str,
+        context: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> AsyncGenerator[str, None]:
+        """Process a message and yield response chunks (Default: non-streaming fallback)"""
+        # Default implementation: wait for full response and yield it
+        result = await self.process(message, context, conversation_history)
+        yield result.get("response", "")
     
     async def call_ai(
         self,
@@ -63,7 +74,7 @@ class BaseAgent(ABC):
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                provider_order=provider_order or ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-lite"]
+                provider_order=provider_order or ["gemini-2.0-flash", "gpt-4o-mini", "gemini-2.0-pro"]
             )
             
             latency_ms = int((time.time() - start_time) * 1000)
@@ -568,6 +579,42 @@ class GeneralAgent(BaseAgent):
         }
 
 
+    async def process_stream(
+        self,
+        message: str,
+        context: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> AsyncGenerator[str, None]:
+        """Stream general conversation"""
+        context = context or {}
+        
+        # Build messages
+        messages = [
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
+        ]
+        
+        # Add conversation history
+        if conversation_history:
+            for msg in conversation_history[-10:]:
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", "")
+                })
+        
+        # Add context if provided
+        if context.get("context"):
+            messages.append({
+                "role": "system",
+                "content": f"Additional context: {context['context']}"
+            })
+        
+        messages.append({"role": "user", "content": message})
+        
+        # Call AI Stream
+        async for chunk in ai_resilience_manager.stream_chat_completion(messages):
+            yield chunk
+
+
 # =============================================================================
 # AGENT REGISTRY
 # =============================================================================
@@ -598,6 +645,18 @@ class AgentRegistry:
         """Process a message with the appropriate agent"""
         agent = self.get_agent(mode)
         return await agent.process(message, context, conversation_history)
+
+    async def process_stream(
+        self,
+        mode: ChatMode,
+        message: str,
+        context: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> AsyncGenerator[str, None]:
+        """Process a message stream with the appropriate agent"""
+        agent = self.get_agent(mode)
+        async for chunk in agent.process_stream(message, context, conversation_history):
+            yield chunk
 
 
 # =============================================================================

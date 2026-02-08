@@ -12,13 +12,21 @@ logger = logging.getLogger(__name__)
 # Create main v1 router
 api_router = APIRouter()
 
-# Import chat first - it has NO database dependencies
+# Lyo 2.0 Router - Layered Architecture
 try:
-    from .chat import router as chat_router
-    api_router.include_router(chat_router, tags=["Chat"])
-    logger.info("✅ Chat router loaded")
+    from .chat_lyo2 import router as chat_lyo2_router
+    api_router.include_router(chat_lyo2_router, prefix="/lyo2", tags=["Lyo 2.0"])
+    logger.info("✅ Lyo 2.0 Chat router loaded")
 except Exception as e:
-    logger.error(f"❌ Failed to load chat router: {e}")
+    logger.error(f"❌ Failed to load Lyo 2.0 Chat router: {e}")
+
+# Lyo 2.0 Streaming Router
+try:
+    from .stream_lyo2 import router as stream_lyo2_router
+    api_router.include_router(stream_lyo2_router, prefix="/lyo2", tags=["Lyo 2.0 Streaming"])
+    logger.info("✅ Lyo 2.0 Streaming router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load Lyo 2.0 Streaming router: {e}")
 
 # Import health router - minimal dependencies
 try:

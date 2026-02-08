@@ -18,6 +18,7 @@ from lyo_app.learning.schemas import (
     CourseCreate, CourseUpdate, LessonCreate, LessonUpdate,
     CourseEnrollmentCreate, LessonCompletionCreate
 )
+from lyo_app.services.embedding_service import embedding_service
 
 
 class LearningService:
@@ -57,6 +58,11 @@ class LearningService:
         )
         
         db.add(db_course)
+        
+        # Generate embedding
+        embed_text = f"{course_data.title} {course_data.description or ''} {course_data.short_description or ''}"
+        db_course.embedding = await embedding_service.embed_text(embed_text.strip())
+        
         await db.commit()
         await db.refresh(db_course)
         
@@ -182,6 +188,11 @@ class LearningService:
         )
         
         db.add(db_lesson)
+
+        # Generate embedding
+        embed_text = f"{lesson_data.title} {lesson_data.description or ''} {lesson_data.content or ''}"
+        db_lesson.embedding = await embedding_service.embed_text(embed_text.strip())
+
         await db.commit()
         await db.refresh(db_lesson)
         

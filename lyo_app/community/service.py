@@ -1374,3 +1374,680 @@ class CommunityService:
             )
         )
         return result.scalar_one_or_none()
+
+    # =============================================================================
+    # SOCIAL FEED OPERATIONS (Posts, Comments, Likes, Reports, Blocks)
+    # =============================================================================
+
+    from lyo_app.community.models import (
+        CommunityPost, PostComment, PostLike, PostBookmark,
+        ContentReport, UserBlock, PostType, PostVisibility,
+        ReportTargetType, ReportReason, ReportStatus
+    )
+    from lyo_app.community.schemas import (
+        PostCreate, PostUpdate, CommentCreate,
+        ReportCreate, BlockUserCreate
+    )
+
+    async def create_post(
+        self,
+        db: AsyncSession,
+        author_id: int,
+        post_data: "PostCreate"
+    ) -> Dict[str, Any]:
+        """Create a new community post."""
+        from lyo_app.community.models import CommunityPost
+        
+        # Get author info
+        user = await db.get(User, author_id)
+        if not user:
+            raise ValueError("User not found")
+        
+        db_post = CommunityPost(
+            author_id=author_id,
+            author_name=user.display_name or user.username or f"User {author_id}",
+            author_avatar=user.avatar_url,
+            author_level=getattr(user, 'level', 1) or 1,
+            content=post_data.content,
+            media_urls=post_data.media_urls or [],
+            tags=post_data.tags or [],
+            post_type=post_data.post_type,
+            visibility=post_data.visibility,
+            linked_course_id=post_data.linked_course_id,
+            linked_group_id=post_data.linked_group_id,
+        )
+        
+        db.add(db_post)
+        await db.commit()
+        await db.refresh(db_post)
+        
+        return self._post_to_dict(db_post, has_liked=False, has_bookmarked=False)
+
+    async def get_posts(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        page: int = 1,
+        limit: int = 20,
+        post_type: Optional[Any] = None,
+        sort_by: str = "recent",
+        tag: Optional[str] = None,
+        author_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Get posts with filtering and pagination."""
+        from lyo_app.community.models import CommunityPost, PostLike, PostBookmark, UserBlock
+        
+        # Get blocked user IDs
+        blocked_result = await db.execute(
+            select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)
+        )
+        blocked_ids = [r[0] for r in blocked_result.fetchall()]
+        
+        # Build query
+        query = select(CommunityPost).where(
+            CommunityPost.is_deleted == False,
+            CommunityPost.visibility == PostVisibility.PUBLIC
+        )
+        
+        # Exclude blocked users
+        if blocked_ids:
+            query = query.where(~CommunityPost.author_id.in_(blocked_ids))
+        
+        # Apply filters
+        if post_type:
+            query = query.where(CommunityPost.post_type == post_type)
+        
+        if tag:
+            query = query.where(CommunityPost.tags.contains([tag]))
+        
+        if author_id:
+            query = query.where(CommunityPost.author_id == author_id)
+        
+        # Apply sorting
+        if sort_by == "popular":
+            query = query.order_by(desc(CommunityPost.like_count))
+        elif sort_by == "trending":
+            # Trending = recent + popular
+            query = query.order_by(
+                desc(CommunityPost.like_count + CommunityPost.comment_count),
+                desc(CommunityPost.created_at)
+            )
+        else:  # recent
+            query = query.order_by(desc(CommunityPost.created_at))
+        
+        # Count total
+        count_query = select(func.count()).select_from(query.subquery())
+        total_result = await db.execute(count_query)
+        total_count = total_result.scalar() or 0
+        
+        # Paginate
+        offset = (page - 1) * limit
+        query = query.offset(offset).limit(limit)
+        
+        result = await db.execute(query)
+        posts = result.scalars().all()
+        
+        # Get user's likes and bookmarks for these posts
+        post_ids = [p.id for p in posts]
+        
+        liked_result = await db.execute(
+            select(PostLike.post_id).where(
+                PostLike.post_id.in_(post_ids),
+                PostLike.user_id == user_id
+            )
+        )
+        liked_ids = {r[0] for r in liked_result.fetchall()}
+        
+        bookmarked_result = await db.execute(
+            select(PostBookmark.post_id).where(
+                PostBookmark.post_id.in_(post_ids),
+                PostBookmark.user_id == user_id
+            )
+        )
+        bookmarked_ids = {r[0] for r in bookmarked_result.fetchall()}
+        
+        items = [
+            self._post_to_dict(p, p.id in liked_ids, p.id in bookmarked_ids)
+            for p in posts
+        ]
+        
+        return {
+            "items": items,
+            "page": page,
+            "limit": limit,
+            "total_count": total_count,
+            "total_pages": (total_count + limit - 1) // limit
+        }
+
+    async def get_post_by_id(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        user_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get a single post by ID."""
+        from lyo_app.community.models import CommunityPost, PostLike, PostBookmark
+        
+        result = await db.execute(
+            select(CommunityPost).where(
+                CommunityPost.id == post_id,
+                CommunityPost.is_deleted == False
+            )
+        )
+        post = result.scalar_one_or_none()
+        
+        if not post:
+            return None
+        
+        # Check like/bookmark status
+        like_result = await db.execute(
+            select(PostLike).where(
+                PostLike.post_id == post_id,
+                PostLike.user_id == user_id
+            )
+        )
+        has_liked = like_result.scalar_one_or_none() is not None
+        
+        bookmark_result = await db.execute(
+            select(PostBookmark).where(
+                PostBookmark.post_id == post_id,
+                PostBookmark.user_id == user_id
+            )
+        )
+        has_bookmarked = bookmark_result.scalar_one_or_none() is not None
+        
+        return self._post_to_dict(post, has_liked, has_bookmarked)
+
+    async def update_post(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        author_id: int,
+        post_data: "PostUpdate"
+    ) -> Optional[Dict[str, Any]]:
+        """Update a post (author only)."""
+        from lyo_app.community.models import CommunityPost
+        
+        result = await db.execute(
+            select(CommunityPost).where(
+                CommunityPost.id == post_id,
+                CommunityPost.is_deleted == False
+            )
+        )
+        post = result.scalar_one_or_none()
+        
+        if not post:
+            return None
+        
+        if post.author_id != author_id:
+            raise ValueError("Not authorized to update this post")
+        
+        if post_data.content is not None:
+            post.content = post_data.content
+        if post_data.tags is not None:
+            post.tags = post_data.tags
+        if post_data.visibility is not None:
+            post.visibility = post_data.visibility
+        
+        post.is_edited = True
+        post.updated_at = datetime.utcnow()
+        
+        await db.commit()
+        await db.refresh(post)
+        
+        return self._post_to_dict(post, False, False)
+
+    async def delete_post(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        author_id: int
+    ) -> bool:
+        """Soft delete a post (author only)."""
+        from lyo_app.community.models import CommunityPost
+        
+        result = await db.execute(
+            select(CommunityPost).where(
+                CommunityPost.id == post_id,
+                CommunityPost.is_deleted == False
+            )
+        )
+        post = result.scalar_one_or_none()
+        
+        if not post:
+            return False
+        
+        if post.author_id != author_id:
+            raise ValueError("Not authorized to delete this post")
+        
+        post.is_deleted = True
+        post.updated_at = datetime.utcnow()
+        
+        await db.commit()
+        return True
+
+    async def toggle_post_like(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        user_id: int
+    ) -> Dict[str, Any]:
+        """Toggle like on a post."""
+        from lyo_app.community.models import CommunityPost, PostLike
+        
+        # Check post exists
+        post_result = await db.execute(
+            select(CommunityPost).where(
+                CommunityPost.id == post_id,
+                CommunityPost.is_deleted == False
+            )
+        )
+        post = post_result.scalar_one_or_none()
+        
+        if not post:
+            raise ValueError("Post not found")
+        
+        # Check existing like
+        like_result = await db.execute(
+            select(PostLike).where(
+                PostLike.post_id == post_id,
+                PostLike.user_id == user_id
+            )
+        )
+        existing_like = like_result.scalar_one_or_none()
+        
+        if existing_like:
+            # Unlike
+            await db.delete(existing_like)
+            post.like_count = max(0, post.like_count - 1)
+            liked = False
+        else:
+            # Like
+            new_like = PostLike(post_id=post_id, user_id=user_id)
+            db.add(new_like)
+            post.like_count += 1
+            liked = True
+        
+        await db.commit()
+        
+        return {"liked": liked, "like_count": post.like_count}
+
+    async def toggle_post_bookmark(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        user_id: int
+    ) -> Dict[str, Any]:
+        """Toggle bookmark on a post."""
+        from lyo_app.community.models import CommunityPost, PostBookmark
+        
+        # Check post exists
+        post_result = await db.execute(
+            select(CommunityPost).where(
+                CommunityPost.id == post_id,
+                CommunityPost.is_deleted == False
+            )
+        )
+        post = post_result.scalar_one_or_none()
+        
+        if not post:
+            raise ValueError("Post not found")
+        
+        # Check existing bookmark
+        bookmark_result = await db.execute(
+            select(PostBookmark).where(
+                PostBookmark.post_id == post_id,
+                PostBookmark.user_id == user_id
+            )
+        )
+        existing_bookmark = bookmark_result.scalar_one_or_none()
+        
+        if existing_bookmark:
+            await db.delete(existing_bookmark)
+            bookmarked = False
+        else:
+            new_bookmark = PostBookmark(post_id=post_id, user_id=user_id)
+            db.add(new_bookmark)
+            bookmarked = True
+        
+        await db.commit()
+        
+        return {"bookmarked": bookmarked}
+
+    async def get_comments(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        user_id: int,
+        page: int = 1,
+        limit: int = 20,
+        parent_id: Optional[uuid.UUID] = None
+    ) -> Dict[str, Any]:
+        """Get comments for a post with pagination."""
+        from lyo_app.community.models import PostComment, UserBlock
+        
+        # Get blocked user IDs
+        blocked_result = await db.execute(
+            select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)
+        )
+        blocked_ids = [r[0] for r in blocked_result.fetchall()]
+        
+        query = select(PostComment).where(
+            PostComment.post_id == post_id,
+            PostComment.is_deleted == False
+        )
+        
+        if parent_id:
+            query = query.where(PostComment.parent_id == parent_id)
+        else:
+            query = query.where(PostComment.parent_id.is_(None))
+        
+        if blocked_ids:
+            query = query.where(~PostComment.author_id.in_(blocked_ids))
+        
+        query = query.order_by(asc(PostComment.created_at))
+        
+        # Count total
+        count_query = select(func.count()).select_from(query.subquery())
+        total_result = await db.execute(count_query)
+        total_count = total_result.scalar() or 0
+        
+        # Paginate
+        offset = (page - 1) * limit
+        query = query.offset(offset).limit(limit)
+        
+        result = await db.execute(query)
+        comments = result.scalars().all()
+        
+        items = [self._comment_to_dict(c, False) for c in comments]
+        
+        return {
+            "items": items,
+            "page": page,
+            "limit": limit,
+            "total_count": total_count,
+            "total_pages": (total_count + limit - 1) // limit
+        }
+
+    async def create_comment(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        author_id: int,
+        comment_data: "CommentCreate"
+    ) -> Dict[str, Any]:
+        """Create a comment on a post."""
+        from lyo_app.community.models import CommunityPost, PostComment
+        
+        # Check post exists
+        post_result = await db.execute(
+            select(CommunityPost).where(
+                CommunityPost.id == post_id,
+                CommunityPost.is_deleted == False
+            )
+        )
+        post = post_result.scalar_one_or_none()
+        
+        if not post:
+            raise ValueError("Post not found")
+        
+        # Get author info
+        user = await db.get(User, author_id)
+        if not user:
+            raise ValueError("User not found")
+        
+        db_comment = PostComment(
+            post_id=post_id,
+            author_id=author_id,
+            author_name=user.display_name or user.username or f"User {author_id}",
+            author_avatar=user.avatar_url,
+            content=comment_data.content,
+            parent_id=comment_data.parent_id,
+        )
+        
+        db.add(db_comment)
+        
+        # Update post comment count
+        post.comment_count += 1
+        
+        # Update parent reply count if this is a reply
+        if comment_data.parent_id:
+            parent_result = await db.execute(
+                select(PostComment).where(PostComment.id == comment_data.parent_id)
+            )
+            parent = parent_result.scalar_one_or_none()
+            if parent:
+                parent.reply_count += 1
+        
+        await db.commit()
+        await db.refresh(db_comment)
+        
+        return self._comment_to_dict(db_comment, False)
+
+    async def delete_comment(
+        self,
+        db: AsyncSession,
+        post_id: uuid.UUID,
+        comment_id: uuid.UUID,
+        author_id: int
+    ) -> bool:
+        """Soft delete a comment (author only)."""
+        from lyo_app.community.models import CommunityPost, PostComment
+        
+        result = await db.execute(
+            select(PostComment).where(
+                PostComment.id == comment_id,
+                PostComment.post_id == post_id,
+                PostComment.is_deleted == False
+            )
+        )
+        comment = result.scalar_one_or_none()
+        
+        if not comment:
+            return False
+        
+        if comment.author_id != author_id:
+            raise ValueError("Not authorized to delete this comment")
+        
+        comment.is_deleted = True
+        
+        # Update post comment count
+        post_result = await db.execute(
+            select(CommunityPost).where(CommunityPost.id == post_id)
+        )
+        post = post_result.scalar_one_or_none()
+        if post:
+            post.comment_count = max(0, post.comment_count - 1)
+        
+        await db.commit()
+        return True
+
+    async def toggle_comment_like(
+        self,
+        db: AsyncSession,
+        comment_id: uuid.UUID,
+        user_id: int
+    ) -> Dict[str, Any]:
+        """Toggle like on a comment."""
+        from lyo_app.community.models import PostComment
+        
+        # Note: For simplicity, we're just tracking like_count on the comment
+        # A full implementation would have a CommentLike junction table
+        result = await db.execute(
+            select(PostComment).where(
+                PostComment.id == comment_id,
+                PostComment.is_deleted == False
+            )
+        )
+        comment = result.scalar_one_or_none()
+        
+        if not comment:
+            raise ValueError("Comment not found")
+        
+        # Simple toggle (in production, use a junction table)
+        # For now, just increment/decrement
+        comment.like_count += 1
+        
+        await db.commit()
+        
+        return {"liked": True, "like_count": comment.like_count}
+
+    async def create_report(
+        self,
+        db: AsyncSession,
+        reporter_id: int,
+        report_data: "ReportCreate"
+    ) -> Dict[str, Any]:
+        """Create a content report."""
+        from lyo_app.community.models import ContentReport, ReportStatus
+        
+        db_report = ContentReport(
+            reporter_id=reporter_id,
+            target_type=report_data.target_type,
+            target_id=report_data.target_id,
+            reason=report_data.reason,
+            description=report_data.description,
+        )
+        
+        db.add(db_report)
+        await db.commit()
+        await db.refresh(db_report)
+        
+        return {
+            "id": str(db_report.id),
+            "status": db_report.status.value,
+            "message": "Report submitted successfully"
+        }
+
+    async def get_blocked_users(
+        self,
+        db: AsyncSession,
+        blocker_id: int
+    ) -> List[Dict[str, Any]]:
+        """Get list of users blocked by current user."""
+        from lyo_app.community.models import UserBlock
+        
+        result = await db.execute(
+            select(UserBlock).where(UserBlock.blocker_id == blocker_id)
+        )
+        blocks = result.scalars().all()
+        
+        blocked_list = []
+        for block in blocks:
+            user = await db.get(User, block.blocked_id)
+            if user:
+                blocked_list.append({
+                    "id": block.id,
+                    "user_id": block.blocked_id,
+                    "user_name": user.display_name or user.username or f"User {block.blocked_id}",
+                    "user_avatar": user.avatar_url,
+                    "blocked_at": block.created_at
+                })
+        
+        return blocked_list
+
+    async def block_user(
+        self,
+        db: AsyncSession,
+        blocker_id: int,
+        block_data: "BlockUserCreate"
+    ) -> Dict[str, Any]:
+        """Block a user."""
+        from lyo_app.community.models import UserBlock
+        
+        # Check if already blocked
+        existing = await db.execute(
+            select(UserBlock).where(
+                UserBlock.blocker_id == blocker_id,
+                UserBlock.blocked_id == block_data.user_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise ValueError("User already blocked")
+        
+        db_block = UserBlock(
+            blocker_id=blocker_id,
+            blocked_id=block_data.user_id,
+            reason=block_data.reason
+        )
+        
+        db.add(db_block)
+        await db.commit()
+        await db.refresh(db_block)
+        
+        user = await db.get(User, block_data.user_id)
+        
+        return {
+            "id": db_block.id,
+            "user_id": block_data.user_id,
+            "user_name": user.display_name if user else f"User {block_data.user_id}",
+            "user_avatar": user.avatar_url if user else None,
+            "blocked_at": db_block.created_at
+        }
+
+    async def unblock_user(
+        self,
+        db: AsyncSession,
+        blocker_id: int,
+        blocked_id: int
+    ) -> bool:
+        """Unblock a user."""
+        from lyo_app.community.models import UserBlock
+        
+        result = await db.execute(
+            select(UserBlock).where(
+                UserBlock.blocker_id == blocker_id,
+                UserBlock.blocked_id == blocked_id
+            )
+        )
+        block = result.scalar_one_or_none()
+        
+        if not block:
+            return False
+        
+        await db.delete(block)
+        await db.commit()
+        return True
+
+    def _post_to_dict(self, post: Any, has_liked: bool, has_bookmarked: bool) -> Dict[str, Any]:
+        """Convert post model to dictionary."""
+        return {
+            "id": str(post.id),
+            "author_id": post.author_id,
+            "author_name": post.author_name,
+            "author_avatar": post.author_avatar,
+            "author_level": post.author_level,
+            "content": post.content,
+            "media_urls": post.media_urls or [],
+            "tags": post.tags or [],
+            "like_count": post.like_count,
+            "comment_count": post.comment_count,
+            "has_liked": has_liked,
+            "has_bookmarked": has_bookmarked,
+            "post_type": post.post_type.value,
+            "linked_course_id": post.linked_course_id,
+            "linked_group_id": post.linked_group_id,
+            "created_at": post.created_at.isoformat(),
+            "updated_at": post.updated_at.isoformat(),
+            "is_edited": post.is_edited,
+            "is_pinned": post.is_pinned,
+            "visibility": post.visibility.value
+        }
+
+    def _comment_to_dict(self, comment: Any, has_liked: bool) -> Dict[str, Any]:
+        """Convert comment model to dictionary."""
+        return {
+            "id": str(comment.id),
+            "post_id": str(comment.post_id),
+            "author_id": comment.author_id,
+            "author_name": comment.author_name,
+            "author_avatar": comment.author_avatar,
+            "content": comment.content,
+            "like_count": comment.like_count,
+            "has_liked": has_liked,
+            "parent_id": str(comment.parent_id) if comment.parent_id else None,
+            "reply_count": comment.reply_count,
+            "created_at": comment.created_at.isoformat(),
+            "is_edited": comment.is_edited
+        }
+

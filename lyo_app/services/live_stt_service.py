@@ -2,7 +2,10 @@ import asyncio
 import logging
 import os
 from typing import Optional, Callable
-from deepgram import AsyncDeepgramClient
+try:
+    from deepgram import AsyncDeepgramClient
+except ImportError:
+    AsyncDeepgramClient = None
 
 logger = logging.getLogger(__name__)
 
@@ -11,8 +14,11 @@ class DeepgramSTTService:
         self.api_key = api_key or os.getenv("DEEPGRAM_API_KEY")
         self._demo_mode = False
         
-        if not self.api_key:
-            logger.warning("⚠️ DEEPGRAM_API_KEY not found. Using DEMO mode.")
+        if not self.api_key or not AsyncDeepgramClient:
+            if not self.api_key:
+                logger.warning("⚠️ DEEPGRAM_API_KEY not found. Using DEMO mode.")
+            else:
+                logger.warning("⚠️ Deepgram package not installed. Using DEMO mode.")
             self._demo_mode = True
             self.client = None
         else:

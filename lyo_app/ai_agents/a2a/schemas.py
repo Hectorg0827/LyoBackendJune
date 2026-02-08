@@ -59,14 +59,24 @@ class ArtifactType(str, Enum):
 
 class EventType(str, Enum):
     """Types of streaming events"""
-    TASK_STARTED = "task_started"
-    TASK_PROGRESS = "task_progress"
-    TASK_COMPLETED = "task_completed"
-    TASK_FAILED = "task_failed"
-    ARTIFACT_CREATED = "artifact_created"
+    PIPELINE_STARTED = "pipeline_started"
+    PHASE_STARTED = "phase_started"
+    PHASE_PROGRESS = "phase_progress"
+    PHASE_COMPLETED = "phase_completed"
+    PHASE_FAILED = "phase_failed"
     AGENT_HANDOFF = "agent_handoff"
+    ARTIFACT_CREATED = "artifact_created"
+    PIPELINE_COMPLETED = "pipeline_completed"
+    ERROR = "error"
+    
+    # Legacy/Internal types
+    TASK_PROGRESS = "task_progress"
     CONTENT_CHUNK = "content_chunk"
-    THINKING = "thinking"  # Agent reasoning (for transparency)
+    THINKING = "thinking"
+    
+    # Agent-level events
+    AGENT_STARTED = "agent_started"
+    AGENT_COMPLETED = "agent_completed"
 
 
 class MessageRole(str, Enum):
@@ -304,13 +314,14 @@ class StreamingEvent(BaseModel):
     Real-time event for SSE streaming.
     Clients receive these as the pipeline progresses.
     """
-    event_type: EventType
-    task_id: str
+    type: EventType = Field(..., alias="event_type")
+    task_id: str = Field(..., alias="pipeline_id")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    # Event-specific data
+    # Context
+    phase: Optional[str] = None
     agent_name: Optional[str] = None
-    progress_percent: Optional[int] = Field(None, ge=0, le=100)
+    progress_percent: Optional[int] = Field(None, ge=0, le=100, alias="progress")
     message: Optional[str] = None
     
     # Content chunk (for CONTENT_CHUNK events)
@@ -320,16 +331,26 @@ class StreamingEvent(BaseModel):
     # Artifact reference (for ARTIFACT_CREATED events)
     artifact: Optional[Artifact] = None
     
+    # Final results (for PIPELINE_COMPLETED)
+    payload: Optional[Dict[str, Any]] = None
+    
     # Thinking (for THINKING events)
     thinking_content: Optional[str] = None
     
-    # Error (for TASK_FAILED events)
+    # Error (for ERROR events)
     error: Optional[str] = None
+    
+    # Generic bucket for extra fields (legacy/internal)
+    data: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        populate_by_name = True
     
     def to_sse_data(self) -> str:
         """Format for Server-Sent Events"""
         import json
-        data_str = json.dumps(self.model_dump(mode='json', exclude_none=True))
+        # Use by_alias=True to export as 'type', 'pipeline_id', 'progress'
+        data_str = json.dumps(self.model_dump(mode='json', exclude_none=True, by_alias=True))
         return f"data: {data_str}\n\n"
 
 

@@ -306,6 +306,225 @@ class MarketplaceItem(Base):
     seller = relationship("User", foreign_keys=[seller_id], lazy="noload")
 
 
+# =============================================================================
+# SOCIAL FEED MODELS (Posts, Comments, Likes, Reports, Blocks)
+# =============================================================================
+
+class PostType(str, Enum):
+    """Post type enumeration."""
+    TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    POLL = "poll"
+    ACHIEVEMENT = "achievement"
+    COURSE_SHARE = "course_share"
+    QUESTION_DISCUSSION = "question_discussion"
+    STUDY_TIP = "study_tip"
+
+
+class PostVisibility(str, Enum):
+    """Post visibility enumeration."""
+    PUBLIC = "public"
+    FOLLOWERS = "followers"
+    PRIVATE = "private"
+    GROUP = "group"
+
+
+class ReportTargetType(str, Enum):
+    """Report target type."""
+    POST = "post"
+    COMMENT = "comment"
+    USER = "user"
+    GROUP = "group"
+    EVENT = "event"
+
+
+class ReportReason(str, Enum):
+    """Report reason enumeration."""
+    SPAM = "spam"
+    HARASSMENT = "harassment"
+    HATE_SPEECH = "hate_speech"
+    VIOLENCE = "violence"
+    SEXUAL_CONTENT = "sexual_content"
+    MISINFORMATION = "misinformation"
+    IMPERSONATION = "impersonation"
+    COPYRIGHT = "copyright"
+    OTHER = "other"
+
+
+class ReportStatus(str, Enum):
+    """Report status enumeration."""
+    PENDING = "pending"
+    REVIEWED = "reviewed"
+    RESOLVED = "resolved"
+    DISMISSED = "dismissed"
+
+
+class CommunityPost(Base):
+    """
+    Community post model for social feed.
+    """
+    __tablename__ = "community_posts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    
+    # Author
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    
+    # Content
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    media_urls = Column(JSON, nullable=True)  # List of media URLs
+    tags = Column(JSON, nullable=True)  # List of tags
+    
+    # Type and visibility
+    post_type: Mapped[PostType] = mapped_column(SQLEnum(PostType), default=PostType.TEXT)
+    visibility: Mapped[PostVisibility] = mapped_column(SQLEnum(PostVisibility), default=PostVisibility.PUBLIC)
+    
+    # Linked content
+    linked_course_id: Mapped[Optional[int]] = mapped_column(ForeignKey("courses.id"), nullable=True)
+    linked_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("study_groups.id"), nullable=True)
+    
+    # Status
+    is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # Hidden by moderation
+    
+    # Denormalized counts (for performance)
+    like_count: Mapped[int] = mapped_column(Integer, default=0)
+    comment_count: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    author = relationship("User", foreign_keys=[author_id], lazy="noload")
+    comments = relationship("PostComment", back_populates="post", cascade="all, delete-orphan")
+    likes = relationship("PostLike", back_populates="post", cascade="all, delete-orphan")
+
+
+class PostComment(Base):
+    """
+    Comment on a community post.
+    """
+    __tablename__ = "post_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    
+    # References
+    post_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("community_posts.id"), index=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("post_comments.id"), nullable=True)  # For replies
+    
+    # Content
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    # Status
+    is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    
+    # Denormalized counts
+    like_count: Mapped[int] = mapped_column(Integer, default=0)
+    reply_count: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    post = relationship("CommunityPost", back_populates="comments")
+    author = relationship("User", foreign_keys=[author_id], lazy="noload")
+    replies = relationship("PostComment", remote_side=[id], backref="parent")
+
+
+class PostLike(Base):
+    """
+    Like on a post or comment.
+    """
+    __tablename__ = "post_likes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    # References
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    post_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("community_posts.id"), nullable=True, index=True)
+    comment_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("post_comments.id"), nullable=True, index=True)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    post = relationship("CommunityPost", back_populates="likes")
+    user = relationship("User", foreign_keys=[user_id], lazy="noload")
+
+
+class PostBookmark(Base):
+    """
+    User bookmark for a post.
+    """
+    __tablename__ = "post_bookmarks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    post_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("community_posts.id"), index=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    user = relationship("User", foreign_keys=[user_id], lazy="noload")
+
+
+class ContentReport(Base):
+    """
+    Report for inappropriate content.
+    """
+    __tablename__ = "content_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    
+    # Reporter
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    
+    # Target
+    target_type: Mapped[ReportTargetType] = mapped_column(SQLEnum(ReportTargetType))
+    target_id: Mapped[str] = mapped_column(String(100), index=True)  # UUID or int as string
+    
+    # Report details
+    reason: Mapped[ReportReason] = mapped_column(SQLEnum(ReportReason))
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Status
+    status: Mapped[ReportStatus] = mapped_column(SQLEnum(ReportStatus), default=ReportStatus.PENDING)
+    reviewed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    
+    # Relationships
+    reporter = relationship("User", foreign_keys=[reporter_id], lazy="noload")
+    reviewer = relationship("User", foreign_keys=[reviewed_by_id], lazy="noload")
+
+
+class UserBlock(Base):
+    """
+    User blocking another user.
+    """
+    __tablename__ = "user_blocks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    blocker_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    blocked_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    blocker = relationship("User", foreign_keys=[blocker_id], lazy="noload")
+    blocked = relationship("User", foreign_keys=[blocked_id], lazy="noload")
+
+
 # Add reverse relationships to existing models (these would be added to the respective model files)
 """
 Additional relationships to add to existing models:

@@ -713,3 +713,388 @@ async def delete_marketplace_item(
     if not success:
         raise HTTPException(status_code=404, detail="Item not found or unauthorized")
     return None
+
+
+# =============================================================================
+# SOCIAL FEED ENDPOINTS (Posts, Comments, Likes, Reports, Blocks)
+# =============================================================================
+
+from lyo_app.community.schemas import (
+    PostCreate, PostUpdate, PostRead, PaginatedPostsResponse,
+    CommentCreate, CommentRead, PaginatedCommentsResponse,
+    ReportCreate, ReportRead, BlockUserCreate, BlockedUserRead
+)
+from lyo_app.community.models import PostType, PostVisibility
+
+
+# Posts CRUD
+@router.post("/posts", response_model=PostRead, status_code=status.HTTP_201_CREATED)
+async def create_post(
+    post_data: PostCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new community post."""
+    try:
+        post = await community_service.create_post(
+            db=db,
+            author_id=current_user.id,
+            post_data=post_data
+        )
+        return post
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create post")
+
+
+@router.get("/posts", response_model=PaginatedPostsResponse)
+async def list_posts(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=50),
+    post_type: Optional[PostType] = Query(None),
+    sort_by: str = Query("recent", pattern="^(recent|popular|trending)$"),
+    tag: Optional[str] = Query(None),
+    author_id: Optional[int] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List posts with filtering, pagination, and sorting."""
+    try:
+        result = await community_service.get_posts(
+            db=db,
+            user_id=current_user.id,
+            page=page,
+            limit=limit,
+            post_type=post_type,
+            sort_by=sort_by,
+            tag=tag,
+            author_id=author_id
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch posts")
+
+
+@router.get("/posts/{post_id}", response_model=PostRead)
+async def get_post(
+    post_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get a specific post by ID."""
+    try:
+        post = await community_service.get_post_by_id(
+            db=db,
+            post_id=post_id,
+            user_id=current_user.id
+        )
+        if not post:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+        return post
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch post")
+
+
+@router.put("/posts/{post_id}", response_model=PostRead)
+async def update_post(
+    post_id: uuid.UUID,
+    post_data: PostUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a post (author only)."""
+    try:
+        post = await community_service.update_post(
+            db=db,
+            post_id=post_id,
+            author_id=current_user.id,
+            post_data=post_data
+        )
+        if not post:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found or access denied")
+        return post
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update post")
+
+
+@router.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_post(
+    post_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a post (author only)."""
+    try:
+        success = await community_service.delete_post(
+            db=db,
+            post_id=post_id,
+            author_id=current_user.id
+        )
+        if not success:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found or access denied")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete post")
+
+
+# Likes & Bookmarks
+@router.post("/posts/{post_id}/like", status_code=status.HTTP_200_OK)
+async def like_post(
+    post_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Toggle like on a post."""
+    try:
+        result = await community_service.toggle_post_like(
+            db=db,
+            post_id=post_id,
+            user_id=current_user.id
+        )
+        return {"liked": result["liked"], "like_count": result["like_count"]}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to toggle like")
+
+
+@router.post("/posts/{post_id}/bookmark", status_code=status.HTTP_200_OK)
+async def bookmark_post(
+    post_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Toggle bookmark on a post."""
+    try:
+        result = await community_service.toggle_post_bookmark(
+            db=db,
+            post_id=post_id,
+            user_id=current_user.id
+        )
+        return {"bookmarked": result["bookmarked"]}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to toggle bookmark")
+
+
+# Comments
+@router.get("/posts/{post_id}/comments", response_model=PaginatedCommentsResponse)
+async def list_comments(
+    post_id: uuid.UUID,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=50),
+    parent_id: Optional[uuid.UUID] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List comments for a post with optional reply threading."""
+    try:
+        result = await community_service.get_comments(
+            db=db,
+            post_id=post_id,
+            user_id=current_user.id,
+            page=page,
+            limit=limit,
+            parent_id=parent_id
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch comments")
+
+
+@router.post("/posts/{post_id}/comments", response_model=CommentRead, status_code=status.HTTP_201_CREATED)
+async def create_comment(
+    post_id: uuid.UUID,
+    comment_data: CommentCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a comment on a post."""
+    try:
+        comment = await community_service.create_comment(
+            db=db,
+            post_id=post_id,
+            author_id=current_user.id,
+            comment_data=comment_data
+        )
+        return comment
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create comment")
+
+
+@router.delete("/posts/{post_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comment(
+    post_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a comment (author only)."""
+    try:
+        success = await community_service.delete_comment(
+            db=db,
+            post_id=post_id,
+            comment_id=comment_id,
+            author_id=current_user.id
+        )
+        if not success:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found or access denied")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete comment")
+
+
+@router.post("/posts/{post_id}/comments/{comment_id}/like", status_code=status.HTTP_200_OK)
+async def like_comment(
+    post_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Toggle like on a comment."""
+    try:
+        result = await community_service.toggle_comment_like(
+            db=db,
+            comment_id=comment_id,
+            user_id=current_user.id
+        )
+        return {"liked": result["liked"], "like_count": result["like_count"]}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to toggle comment like")
+
+
+# Moderation: Reports & Blocks
+@router.post("/reports", response_model=ReportRead, status_code=status.HTTP_201_CREATED)
+async def report_content(
+    report_data: ReportCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Report inappropriate content."""
+    try:
+        report = await community_service.create_report(
+            db=db,
+            reporter_id=current_user.id,
+            report_data=report_data
+        )
+        return report
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create report")
+
+
+@router.get("/blocks", response_model=List[BlockedUserRead])
+async def list_blocked_users(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all users blocked by current user."""
+    try:
+        blocks = await community_service.get_blocked_users(
+            db=db,
+            blocker_id=current_user.id
+        )
+        return blocks
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch blocked users")
+
+
+@router.post("/blocks", response_model=BlockedUserRead, status_code=status.HTTP_201_CREATED)
+async def block_user(
+    block_data: BlockUserCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Block a user."""
+    try:
+        if block_data.user_id == current_user.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot block yourself")
+        
+        block = await community_service.block_user(
+            db=db,
+            blocker_id=current_user.id,
+            block_data=block_data
+        )
+        return block
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to block user")
+
+
+@router.delete("/blocks/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unblock_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Unblock a user."""
+    try:
+        success = await community_service.unblock_user(
+            db=db,
+            blocker_id=current_user.id,
+            blocked_id=user_id
+        )
+        if not success:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Block not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to unblock user")
+
+
+# ── Stub endpoints expected by the iOS client ────────────────────────────
+# These return empty arrays until full implementation is available.
+
+@router.get("/courses/discover")
+async def discover_courses(
+    filters: Optional[str] = Query(None, description="Optional filter string"),
+):
+    """Discover shared community courses (stub)."""
+    return []
+
+
+@router.get("/institutions")
+async def get_institutions(
+    filters: Optional[str] = Query(None),
+    lat: Optional[float] = Query(None),
+    lng: Optional[float] = Query(None),
+):
+    """List educational institutions (stub)."""
+    return []
+
+
+@router.get("/institutions/{institution_id}")
+async def get_institution(institution_id: str):
+    """Get institution details (stub)."""
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+
+
+@router.get("/institutions/search")
+async def search_institutions(
+    query: str = Query("", description="Search query"),
+    lat: Optional[float] = Query(None),
+    lng: Optional[float] = Query(None),
+):
+    """Search institutions (stub)."""
+    return []
+

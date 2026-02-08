@@ -16,3 +16,19 @@ site/
 tests/
 tmp/
 *.log
+
+# Additional exclusions
+*.pcm
+*.wav
+*.mp3
+*.mp4
+docs/
+infrastructure/
+ios_integration/
+test_*.py
+verify_*.py
+*.md
+docker/
+alembic/
+scripts/
+uploads/

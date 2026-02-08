@@ -259,9 +259,10 @@ class A2AOrchestrator:
         
         # Emit start event
         yield StreamingEvent(
-            event_type=EventType.TASK_STARTED,
+            type=EventType.PIPELINE_STARTED,
             task_id=pipeline_id,
             agent_name="orchestrator",
+            progress_percent=0,
             data={
                 "topic": request.topic,
                 "phases": [p.value for p in PipelinePhase],
@@ -277,17 +278,17 @@ class A2AOrchestrator:
             # Emit completion
             response = self._build_response()
             yield StreamingEvent(
-                event_type=EventType.TASK_COMPLETED,
+                type=EventType.PIPELINE_COMPLETED,
                 task_id=pipeline_id,
                 agent_name="orchestrator",
-                progress=1.0,
-                data=response.dict(),
+                progress_percent=100,
+                payload=response.model_dump(mode='json'),
                 message="Course generation complete!"
             )
             
         except Exception as e:
             yield StreamingEvent(
-                event_type=EventType.ERROR,
+                type=EventType.ERROR,
                 task_id=pipeline_id,
                 agent_name="orchestrator",
                 data={"error": str(e), "traceback": traceback.format_exc()},
@@ -440,10 +441,11 @@ class A2AOrchestrator:
         
         # Emit phase start
         yield StreamingEvent(
-            event_type=EventType.AGENT_STARTED,
+            type=EventType.PHASE_STARTED,
             task_id=state.pipeline_id,
+            phase=phase.value,
             agent_name=agent_name,
-            progress=state.overall_progress,
+            progress_percent=int(state.overall_progress * 100),
             message=f"Starting {phase.value} phase..."
         )
         
@@ -473,10 +475,11 @@ class A2AOrchestrator:
             
             # Emit completion
             yield StreamingEvent(
-                event_type=EventType.AGENT_COMPLETED,
+                type=EventType.PHASE_COMPLETED,
                 task_id=state.pipeline_id,
+                phase=phase.value,
                 agent_name=agent_name,
-                progress=state.overall_progress,
+                progress_percent=int(state.overall_progress * 100),
                 data={"duration_ms": result.duration_ms},
                 message=f"Completed {phase.value} in {elapsed:.1f}s"
             )
@@ -486,8 +489,9 @@ class A2AOrchestrator:
             result.error = str(e)
             
             yield StreamingEvent(
-                event_type=EventType.ERROR,
+                type=EventType.ERROR,
                 task_id=state.pipeline_id,
+                phase=phase.value,
                 agent_name=agent_name,
                 data={"error": str(e)},
                 message=f"Phase {phase.value} failed: {str(e)}"
@@ -511,10 +515,10 @@ class A2AOrchestrator:
         state = self._current_state
         
         yield StreamingEvent(
-            event_type=EventType.PROGRESS,
+            type=EventType.PHASE_PROGRESS,
             task_id=state.pipeline_id,
             agent_name="orchestrator",
-            progress=state.overall_progress,
+            progress_percent=int(state.overall_progress * 100),
             message="Running visual and voice generation in parallel..."
         )
         
@@ -557,10 +561,10 @@ class A2AOrchestrator:
         self._update_progress(PipelinePhase.VOICE)
         
         yield StreamingEvent(
-            event_type=EventType.PROGRESS,
+            type=EventType.PHASE_PROGRESS,
             task_id=state.pipeline_id,
             agent_name="orchestrator",
-            progress=state.overall_progress,
+            progress_percent=int(state.overall_progress * 100),
             message="Visual and voice generation complete!"
         )
     
@@ -741,7 +745,7 @@ class A2AOrchestrator:
         )
         
         # Check quality gate
-        if hasattr(output, 'overall_quality_score'):
+        if hasattr(output, 'overall_quality_score') and output.overall_quality_score is not None:
             if output.overall_quality_score < self.config.min_qa_score:
                 raise ValueError(
                     f"QA score {output.overall_quality_score:.2f} below minimum {self.config.min_qa_score}"
