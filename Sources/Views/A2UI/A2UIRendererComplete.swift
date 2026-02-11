@@ -755,17 +755,380 @@ struct A2UIRendererComplete: View {
     }
 
     private func evaluateCondition(_ condition: String) -> Bool {
-        // Simple condition evaluation
-        // In production, this would be a proper expression evaluator
-        switch condition {
-        case "user.isPremium":
-            return UserManager.shared.currentUser?.tier != .free
-        case "user.isLoggedIn":
-            return UserManager.shared.currentUser != nil
+        let evaluator = A2UIConditionEvaluator(context: context)
+        return evaluator.evaluate(condition)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MARK: - Condition Evaluator
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Production-ready condition evaluator for A2UI shouldRender logic
+/// Supports: comparisons (==, !=, >, <, >=, <=), boolean logic (&&, ||, !), property access
+struct A2UIConditionEvaluator {
+    let context: A2UIRenderContext
+    
+    /// Main entry point for condition evaluation
+    func evaluate(_ condition: String) -> Bool {
+        let trimmed = condition.trimmingCharacters(in: .whitespaces)
+        
+        // Handle empty conditions
+        guard !trimmed.isEmpty else { return true }
+        
+        // Parse and evaluate
+        return evaluateExpression(trimmed)
+    }
+    
+    // MARK: - Expression Parsing
+    
+    private func evaluateExpression(_ expr: String) -> Bool {
+        var expression = expr.trimmingCharacters(in: .whitespaces)
+        
+        // Handle NOT operator
+        if expression.hasPrefix("!") {
+            let inner = String(expression.dropFirst()).trimmingCharacters(in: .whitespaces)
+            // Handle !(expression)
+            if inner.hasPrefix("("), let parenExpr = extractParenthesized(inner) {
+                return !evaluateExpression(parenExpr)
+            }
+            return !evaluateExpression(inner)
+        }
+        
+        // Handle parentheses
+        if expression.hasPrefix("(") {
+            if let parenExpr = extractParenthesized(expression) {
+                let afterParen = String(expression.dropFirst(parenExpr.count + 2)).trimmingCharacters(in: .whitespaces)
+                let parenResult = evaluateExpression(parenExpr)
+                
+                // Check for chained boolean operators after parentheses
+                if afterParen.hasPrefix("&&") {
+                    let rest = String(afterParen.dropFirst(2))
+                    return parenResult && evaluateExpression(rest)
+                } else if afterParen.hasPrefix("||") {
+                    let rest = String(afterParen.dropFirst(2))
+                    return parenResult || evaluateExpression(rest)
+                }
+                return parenResult
+            }
+        }
+        
+        // Handle OR (lowest precedence)
+        if let orIndex = findOperator("||", in: expression) {
+            let left = String(expression[..<orIndex])
+            let right = String(expression[expression.index(orIndex, offsetBy: 2)...])
+            return evaluateExpression(left) || evaluateExpression(right)
+        }
+        
+        // Handle AND (higher precedence than OR)
+        if let andIndex = findOperator("&&", in: expression) {
+            let left = String(expression[..<andIndex])
+            let right = String(expression[expression.index(andIndex, offsetBy: 2)...])
+            return evaluateExpression(left) && evaluateExpression(right)
+        }
+        
+        // Handle comparison operators
+        return evaluateComparison(expression)
+    }
+    
+    private func extractParenthesized(_ expr: String) -> String? {
+        guard expr.hasPrefix("(") else { return nil }
+        
+        var depth = 0
+        var endIndex = expr.startIndex
+        
+        for (index, char) in expr.enumerated() {
+            if char == "(" { depth += 1 }
+            else if char == ")" { depth -= 1 }
+            
+            if depth == 0 {
+                endIndex = expr.index(expr.startIndex, offsetBy: index)
+                break
+            }
+        }
+        
+        let start = expr.index(after: expr.startIndex)
+        guard endIndex > start else { return nil }
+        return String(expr[start..<endIndex])
+    }
+    
+    private func findOperator(_ op: String, in expr: String) -> String.Index? {
+        var depth = 0
+        var i = expr.startIndex
+        
+        while i < expr.endIndex {
+            let char = expr[i]
+            if char == "(" { depth += 1 }
+            else if char == ")" { depth -= 1 }
+            
+            if depth == 0 && expr[i...].hasPrefix(op) {
+                return i
+            }
+            i = expr.index(after: i)
+        }
+        return nil
+    }
+    
+    // MARK: - Comparison Evaluation
+    
+    private func evaluateComparison(_ expr: String) -> Bool {
+        // Check for comparison operators in order of length (longest first)
+        let operators = [">=", "<=", "!=", "==", ">", "<"]
+        
+        for op in operators {
+            if let opRange = expr.range(of: op) {
+                let left = String(expr[..<opRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                let right = String(expr[opRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                
+                let leftValue = resolveValue(left)
+                let rightValue = resolveValue(right)
+                
+                return compare(leftValue, op, rightValue)
+            }
+        }
+        
+        // No comparison operator - treat as boolean property access
+        return resolveBooleanValue(expr)
+    }
+    
+    private func compare(_ left: Any?, _ op: String, _ right: Any?) -> Bool {
+        // Handle nil comparisons
+        if left == nil && right == nil { return op == "==" }
+        if left == nil || right == nil { return op == "!=" }
+        
+        // String comparison
+        if let leftStr = left as? String, let rightStr = right as? String {
+            switch op {
+            case "==": return leftStr == rightStr
+            case "!=": return leftStr != rightStr
+            case ">": return leftStr > rightStr
+            case "<": return leftStr < rightStr
+            case ">=": return leftStr >= rightStr
+            case "<=": return leftStr <= rightStr
+            default: return false
+            }
+        }
+        
+        // Numeric comparison
+        if let leftNum = toDouble(left), let rightNum = toDouble(right) {
+            switch op {
+            case "==": return leftNum == rightNum
+            case "!=": return leftNum != rightNum
+            case ">": return leftNum > rightNum
+            case "<": return leftNum < rightNum
+            case ">=": return leftNum >= rightNum
+            case "<=": return leftNum <= rightNum
+            default: return false
+            }
+        }
+        
+        // Boolean comparison
+        if let leftBool = left as? Bool, let rightBool = right as? Bool {
+            switch op {
+            case "==": return leftBool == rightBool
+            case "!=": return leftBool != rightBool
+            default: return false
+            }
+        }
+        
+        return false
+    }
+    
+    private func toDouble(_ value: Any?) -> Double? {
+        if let num = value as? Double { return num }
+        if let num = value as? Int { return Double(num) }
+        if let str = value as? String, let num = Double(str) { return num }
+        return nil
+    }
+    
+    // MARK: - Value Resolution
+    
+    private func resolveValue(_ token: String) -> Any? {
+        let trimmed = token.trimmingCharacters(in: .whitespaces)
+        
+        // String literal
+        if (trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"")) ||
+           (trimmed.hasPrefix("'") && trimmed.hasSuffix("'")) {
+            return String(trimmed.dropFirst().dropLast())
+        }
+        
+        // Boolean literals
+        if trimmed == "true" { return true }
+        if trimmed == "false" { return false }
+        if trimmed == "nil" || trimmed == "null" { return nil }
+        
+        // Numeric literal
+        if let num = Double(trimmed) { return num }
+        if let num = Int(trimmed) { return num }
+        
+        // Property access
+        return resolveProperty(trimmed)
+    }
+    
+    private func resolveBooleanValue(_ token: String) -> Bool {
+        let trimmed = token.trimmingCharacters(in: .whitespaces)
+        
+        // Boolean literals
+        if trimmed == "true" { return true }
+        if trimmed == "false" { return false }
+        
+        // Property access returning boolean
+        if let value = resolveProperty(trimmed) as? Bool {
+            return value
+        }
+        
+        // Non-nil = truthy
+        return resolveProperty(trimmed) != nil
+    }
+    
+    private func resolveProperty(_ path: String) -> Any? {
+        let components = path.split(separator: ".").map(String.init)
+        guard !components.isEmpty else { return nil }
+        
+        let root = components[0]
+        let rest = Array(components.dropFirst())
+        
+        switch root {
+        // User properties
+        case "user":
+            return resolveUserProperty(rest)
+            
+        // Context properties
+        case "context":
+            return resolveContextProperty(rest)
+            
+        // Session properties
+        case "session":
+            return resolveSessionProperty(rest)
+            
+        // Device properties
+        case "device":
+            return resolveDeviceProperty(rest)
+            
+        // Feature flags
+        case "feature":
+            return resolveFeatureFlag(rest)
+            
+        // App properties
+        case "app":
+            return resolveAppProperty(rest)
+            
         default:
-            return true
+            return nil
         }
     }
+    
+    // MARK: - Property Resolvers
+    
+    private func resolveUserProperty(_ path: [String]) -> Any? {
+        guard let user = UserManager.shared.currentUser else { return nil }
+        guard !path.isEmpty else { return user }
+        
+        switch path[0] {
+        case "isPremium":
+            return user.tier != .free
+        case "isLoggedIn":
+            return true
+        case "tier":
+            return user.tier.rawValue
+        case "level":
+            return user.level ?? 1
+        case "xp":
+            return user.xp ?? 0
+        case "streak":
+            return user.streakDays ?? 0
+        case "email":
+            return user.email
+        case "displayName":
+            return user.displayName
+        case "hasCompletedOnboarding":
+            return user.hasCompletedOnboarding ?? false
+        default:
+            return nil
+        }
+    }
+    
+    private func resolveContextProperty(_ path: [String]) -> Any? {
+        guard !path.isEmpty else { return context.rawValue }
+        
+        switch path[0] {
+        case "type":
+            return context.rawValue
+        case "isChat":
+            return context == .chat
+        case "isClassroom":
+            return context == .classroom
+        case "isHomework":
+            return context == .homework
+        case "isStudyPlanning":
+            return context == .studyPlanning
+        case "isAssessment":
+            return context == .assessment
+        default:
+            return nil
+        }
+    }
+    
+    private func resolveSessionProperty(_ path: [String]) -> Any? {
+        guard !path.isEmpty else { return nil }
+        
+        switch path[0] {
+        case "duration":
+            return SessionManager.shared.sessionDuration
+        case "isActive":
+            return SessionManager.shared.isSessionActive
+        case "messagesCount":
+            return SessionManager.shared.messageCount
+        case "hasInteracted":
+            return SessionManager.shared.hasUserInteracted
+        default:
+            return nil
+        }
+    }
+    
+    private func resolveDeviceProperty(_ path: [String]) -> Any? {
+        guard !path.isEmpty else { return nil }
+        
+        switch path[0] {
+        case "isIPad":
+            return UIDevice.current.userInterfaceIdiom == .pad
+        case "isIPhone":
+            return UIDevice.current.userInterfaceIdiom == .phone
+        case "hasCamera":
+            return UIImagePickerController.isSourceTypeAvailable(.camera)
+        case "hasMicrophone":
+            return AVAudioSession.sharedInstance().availableInputs?.isEmpty == false
+        case "orientation":
+            return UIDevice.current.orientation.isLandscape ? "landscape" : "portrait"
+        default:
+            return nil
+        }
+    }
+    
+    private func resolveFeatureFlag(_ path: [String]) -> Any? {
+        guard !path.isEmpty else { return nil }
+        return FeatureFlagManager.shared.isEnabled(path[0])
+    }
+    
+    private func resolveAppProperty(_ path: [String]) -> Any? {
+        guard !path.isEmpty else { return nil }
+        
+        switch path[0] {
+        case "version":
+            return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        case "build":
+            return Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        case "isDebug":
+            #if DEBUG
+            return true
+            #else
+            return false
+            #endif
+        default:
+            return nil
+        }
+    }
+
 
     private func renderFallback(_ component: A2UIComponent) -> some View {
         if let fallback = A2UICapabilityManager.shared.fallbackFor(component.type) {

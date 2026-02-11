@@ -3,6 +3,7 @@ import asyncio
 import json
 import uuid
 import time
+from datetime import datetime
 from typing import AsyncGenerator, Dict, Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+router_agent = MultimodalRouter()
+planner_agent = LyoPlanner()
+
 @router.post("/chat/stream")
 async def stream_lyo2_chat(
     request: RouterRequest,
@@ -28,107 +32,97 @@ async def stream_lyo2_chat(
 ):
     """
     Lyo 2.0 Streaming Chat Endpoint (SSE).
+    Returns a stream of UI blocks as they are ready.
     """
+    trace_id = str(uuid.uuid4())
+    logger.info(f"🚀 [STREAM] Starting session {trace_id} for user {current_user.id}")
+    
     async def event_generator() -> AsyncGenerator[str, None]:
-        trace_id = str(uuid.uuid4())
+        start_time = time.time()
         
         try:
             # 1. Send initial skeleton blocks immediately
+            logger.info(f"📡 [STREAM][{trace_id}] Sending skeleton event")
             yield f"data: {json.dumps({'type': 'skeleton', 'blocks': ['answer', 'artifact']})}\n\n"
             await asyncio.sleep(0.01) # Yield to event loop
             
-            # --- FAST TRACK: GREETINGS ---
-            # Pre-routing check for simple greetings to ensure sub-100ms latency
-            greetings = {"hi", "hello", "hey", "ciao", "hola", "yo", "greeting", "greetings"}
-            clean_text = (request.text or "").strip().lower().replace("!", "").replace(".", "")
-            
-            if clean_text in greetings:
-                logger.info(f"[{trace_id}] Greeting detected: '{clean_text}'. Bypassing router.")
-                from lyo_app.chat.agents import agent_registry
-                from lyo_app.chat.models import ChatMode
-                
-                chat_history = TURN_TO_DICT(request.conversation_history)
-                async for token in agent_registry.process_stream(
-                    mode=ChatMode.GENERAL,
-                    message=request.text or "",
-                    context={"learner_context": request.state_summary},
-                    conversation_history=chat_history
-                ):
-                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
-                
-                yield "data: [DONE]\n\n"
-                return
-
             # 2. Layer A: Routing
-            from lyo_app.ai.router import MultimodalRouter
-            router_agent = MultimodalRouter()
-            
-            routing_response = await router_agent.route(request)
-            decision = routing_response.decision
-            
-            # FAST TRACK: Chat / Conversation (LLM Decision)
-            from lyo_app.ai.schemas.lyo2 import Intent
-            if decision.intent == Intent.CHAT or decision.intent == Intent.UNKNOWN:
-                from lyo_app.chat.agents import agent_registry
-                from lyo_app.chat.models import ChatMode
-                
-                chat_history = TURN_TO_DICT(request.conversation_history)
-                async for token in agent_registry.process_stream(
-                    mode=ChatMode.GENERAL,
-                    message=request.text or "",
-                    context={"learner_context": request.state_summary},
-                    conversation_history=chat_history
-                ):
-                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
-                
-                yield "data: [DONE]\n\n"
+            logger.info(f"🔍 [STREAM][{trace_id}] Starting Routing...")
+            r_start = time.time()
+            try:
+                routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
+            except asyncio.TimeoutError:
+                logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Routing phase timed out'})}\n\n"
                 return
-
-            if decision.needs_clarification:
+                
+            decision = routing_response.decision
+            logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
+            
+            if decision.needs_clarification and decision.confidence > 0.3:
+                # Only ask for clarification if the router is reasonably confident
+                # that it truly cannot understand. Low-confidence clarifications
+                # from fallback routing should not block the pipeline.
+                logger.info(f"🤔 [STREAM][{trace_id}] Needs clarification: {decision.clarification_question}")
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
                 return
 
             # 3. Layer B: Planning
-            from lyo_app.ai.planner import LyoPlanner
-            planner_agent = LyoPlanner()
-            plan = await planner_agent.plan(request, decision)
+            logger.info(f"📋 [STREAM][{trace_id}] Starting Planning...")
+            p_start = time.time()
+            try:
+                plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=35.0)
+            except asyncio.TimeoutError:
+                logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 35s")
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Planning phase timed out'})}\n\n"
+                return
             
-            # 4. Layer C: Execution (Streaming)
-            from lyo_app.ai.executor import LyoExecutor
+            logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
+
+            # 4. Layer C: Execution (Simulated Streaming)
+            logger.info(f"⚡ [STREAM][{trace_id}] Starting Execution...")
+            e_start = time.time()
             executor = LyoExecutor(db)
             
-            history = TURN_TO_DICT(request.conversation_history)
+            # Build conversation history for multi-turn context
+            history = [
+                {"role": turn.role, "content": turn.content}
+                for turn in request.conversation_history
+            ] if request.conversation_history else []
             
-            # Streaming Execution
-            async for event in executor.execute_stream(
-                user_id=str(current_user.id),
-                plan=plan,
-                original_request=request.text or "",
-                conversation_history=history
-            ):
-                if event["type"] == "token":
-                     yield f"data: {json.dumps({'type': 'token', 'token': event.get('token', event.get('text', ''))})}\n\n"
-                elif event["type"] == "artifact":
-                     yield f"data: {json.dumps({'type': 'artifact', 'block': event['block'].model_dump()})}\n\n"
-                elif event["type"] == "answer_done":
-                     yield f"data: {json.dumps({'type': 'answer', 'block': event['block'].model_dump()})}\n\n"
-                elif event["type"] == "actions":
-                     yield f"data: {json.dumps({'type': 'actions', 'blocks': [b.model_dump() for b in event['blocks']]})}\n\n"
-                      
+            try:
+                execution_response = await asyncio.wait_for(
+                    executor.execute(
+                        user_id=str(current_user.id),
+                        plan=plan,
+                        original_request=request.text or "",
+                        conversation_history=history
+                    ),
+                    timeout=60.0 # Execution can take longer
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"❌ [STREAM][{trace_id}] Execution timed out after 60s")
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Execution phase timed out'})}\n\n"
+                return
+                
+            logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
+            
+            # Send Final Blocks
+            yield f"data: {json.dumps({'type': 'answer', 'block': execution_response.answer_block.model_dump()})}\n\n"
+            
+            if execution_response.artifact_block:
+                yield f"data: {json.dumps({'type': 'artifact', 'block': execution_response.artifact_block.model_dump()})}\n\n"
+                
+            yield f"data: {json.dumps({'type': 'actions', 'blocks': [b.model_dump() for b in execution_response.next_actions]})}\n\n"
+            
             # Completion signal
             yield "data: [DONE]\n\n"
+            logger.info(f"🏁 [STREAM][{trace_id}] Total session time: {time.time()-start_time:.2f}s")
 
         except Exception as e:
-            logger.error(f"Streaming failed for {trace_id}: {e}")
+            logger.error(f"💥 [STREAM][{trace_id}] Critical failure: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-    
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-def TURN_TO_DICT(history):
-    if not history: return []
-    return [
-        {"role": turn.role, "content": turn.content}
-        for turn in history
-    ]
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
