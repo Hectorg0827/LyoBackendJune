@@ -16,9 +16,14 @@ def _get_gemini_model():
     """Lazy-initialise a Gemini model for text generation."""
     api_key = getattr(settings, "google_api_key", None) or getattr(settings, "gemini_api_key", None)
     if not api_key:
-        logger.warning("No Gemini API key available for executor text generation")
+        logger.error(
+            "⚠️ No Gemini API key available for executor text generation! "
+            "Set GEMINI_API_KEY or GOOGLE_API_KEY env var. "
+            "Chat will return fallback error messages."
+        )
         return None
     genai.configure(api_key=api_key)
+    logger.info(f"✅ Gemini executor model initialised (key ending ...{api_key[-4:]})")
     return genai.GenerativeModel(
         "gemini-2.0-flash",
         generation_config={"temperature": 0.7, "max_output_tokens": 2048},

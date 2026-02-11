@@ -1,7 +1,7 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class InputModality(str, Enum):
@@ -20,6 +20,10 @@ class Intent(str, Enum):
     SCHEDULE_REMINDERS = "SCHEDULE_REMINDERS"
     COMMUNITY = "COMMUNITY"
     MODIFY_ARTIFACT = "MODIFY_ARTIFACT"
+    GREETING = "GREETING"
+    CHAT = "CHAT"
+    HELP = "HELP"
+    GENERAL = "GENERAL"
     UNKNOWN = "UNKNOWN"
 
 
@@ -46,7 +50,7 @@ class ActiveArtifactContext(BaseModel):
 
 
 class RouterEntity(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     subject: Optional[str] = None
     topic: Optional[str] = None
     grade_level: Optional[str] = None
@@ -57,7 +61,7 @@ class RouterEntity(BaseModel):
 
 
 class RouterDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     intent: Intent
     confidence: float = Field(ge=0, le=1)
     entities: RouterEntity = Field(default_factory=RouterEntity)
@@ -72,6 +76,20 @@ class RouterDecision(BaseModel):
 
     # Cost controls
     suggested_tier: Literal["TINY", "MEDIUM", "LARGE"] = "TINY"
+
+    @field_validator("suggested_tier", mode="before")
+    @classmethod
+    def normalize_tier(cls, v: Any) -> str:
+        """Gemini sometimes returns non-standard tier names like LOW, HIGH, SMALL."""
+        if isinstance(v, str):
+            v_upper = v.upper().strip()
+            mapping = {
+                "LOW": "TINY", "SMALL": "TINY", "MINI": "TINY",
+                "MED": "MEDIUM", "STANDARD": "MEDIUM", "NORMAL": "MEDIUM",
+                "HIGH": "LARGE", "BIG": "LARGE", "COMPLEX": "LARGE",
+            }
+            return mapping.get(v_upper, v_upper)
+        return v
 
 
 class ConversationTurn(BaseModel):

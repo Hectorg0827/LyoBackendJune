@@ -58,16 +58,16 @@ enum APIEnvironment {
     var baseURL: String {
         switch self {
         case .development:
-            return "http://localhost:8000"
+            return Endpoints.development.absoluteString
         case .staging:
-            return "https://lyo-backend-staging.run.app"  // If you have staging
+            return Endpoints.staging.absoluteString
         case .production:
-            return "https://lyo-backend-production-830162750094.us-central1.run.app"
+            return Endpoints.production.absoluteString
         }
     }
     
     var apiPath: String {
-        return "/api/v1"
+        return "/\(Endpoints.Version.v1.rawValue)"
     }
     
     static var current: APIEnvironment {
@@ -78,6 +78,7 @@ enum APIEnvironment {
         #endif
     }
 }
+
 
 // MARK: - App Initialization Helper
 

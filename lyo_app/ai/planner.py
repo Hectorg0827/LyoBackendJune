@@ -77,10 +77,15 @@ Create a plan to fulfill this request. Take conversation history into account fo
         result = await self.execute(request=request, decision=decision)
         
         if not result.success:
-            # Fallback plan if planning fails
+            logger.error(
+                f"LyoPlanner.execute() FAILED — error: {result.error}, "
+                f"raw_response: {(result.raw_response or '')[:200]}"
+            )
+            # Fallback plan: still attempt to answer the user's question
+            # directly via text generation rather than giving up.
             return LyoPlan(
                 steps=[
-                    {"action_type": "GENERATE_TEXT", "description": "Apologize and ask for clarification due to planning error.", "parameters": {}}
+                    {"action_type": "GENERATE_TEXT", "description": f"Answer the user's question: {(request.text or '')[:200]}", "parameters": {}}
                 ],
                 grounding_required=False
             )

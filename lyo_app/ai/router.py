@@ -28,26 +28,32 @@ class MultimodalRouter(BaseAgent[RouterDecision]):
 You are the Lyo 2.0 Multimodal Router. Your job is to analyze user input (text, images, audio references) and decide the best course of action.
 Lyo is an Outcome Engine for learning.
 
-## Intents:
-- EXPLAIN: User wants a concept explained.
+## Intents (use EXACTLY one of these values):
+- EXPLAIN: User wants a concept explained or has a general question.
 - QUIZ: User wants to be tested on a topic.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.
 - SUMMARIZE_NOTES: User has provided notes and wants a summary.
 - SCHEDULE_REMINDERS: User wants to set study reminders.
 - COMMUNITY: User wants to interact with the learning community.
-- MODIFY_ARTIFACT: User is asking to change an existing quiz, plan, or flashcard set (e.g., "too hard", "make it shorter").
-- UNKNOWN: Intent cannot be determined.
+- MODIFY_ARTIFACT: User is asking to change an existing quiz, plan, or flashcard set.
+- GREETING: User is saying hello, hi, hey, or greeting.
+- CHAT: User wants general conversation or small talk.
+- HELP: User is asking for help or what Lyo can do.
+- GENERAL: Any other request that doesn't fit above categories.
+- UNKNOWN: Intent truly cannot be determined.
+
+## suggested_tier (use EXACTLY one of these values):
+- TINY: Simple questions, greetings, minor modifications.
+- MEDIUM: Most standard requests (standard quiz, explanation).
+- LARGE: Complex study plans, high-volume note summarization.
 
 ## Guidelines:
 1. Detect entities like subject, topic, grade level, and test dates.
-2. If the user is replying to an active artifact context, set `is_reply_to_artifact` to true and detect the intent (often MODIFY_ARTIFACT).
-3. Determine if clarification is needed before proceeding. If so, provide a single, targeted question.
-4. Suggest a processing tier (TINY, MEDIUM, LARGE) based on complexity.
-   - TINY: Simple questions, minor modifications.
-   - MEDIUM: Most standard requests (standard quiz, explanation).
-   - LARGE: Complex study plans, high-volume note summarization.
-5. Extract context from images or audio signals if provided in the description.
+2. If the user is replying to an active artifact context, set `is_reply_to_artifact` to true.
+3. Set `needs_clarification` to true ONLY if you genuinely cannot determine what the user wants. For greetings, chat, or general questions, set it to false.
+4. Do NOT set needs_clarification=true for simple messages like "hello", "teach me X", etc.
+5. Extract context from images or audio signals if provided.
 
 YOU MUST RESPOND ONLY WITH JSON.
 """
@@ -79,12 +85,19 @@ YOU MUST RESPOND ONLY WITH JSON.
         result = await self.execute(request=request)
         
         if not result.success:
-            # Fallback to UNKNOWN if routing fails
+            # Router failed — log the real error for debugging, then use a
+            # sensible fallback so the pipeline still produces an answer.
+            logger.error(
+                f"MultimodalRouter.execute() FAILED — error: {result.error}, "
+                f"raw_response: {(result.raw_response or '')[:200]}"
+            )
+            # Default to EXPLAIN with high confidence so the planner/executor
+            # still runs instead of dead-ending with a useless clarification.
             decision = RouterDecision(
-                intent="UNKNOWN",
-                confidence=0.0,
-                needs_clarification=True,
-                clarification_question="I'm sorry, I'm having trouble understanding. Could you rephrase that?"
+                intent="EXPLAIN",
+                confidence=0.5,
+                needs_clarification=False,
+                suggested_tier="MEDIUM"
             )
         else:
             decision = result.data
