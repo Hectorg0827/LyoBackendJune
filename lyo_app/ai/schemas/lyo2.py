@@ -128,17 +128,18 @@ class ActionType(str, Enum):
     SEARCH_WEB = "SEARCH_WEB"
     GENERATE_TEXT = "GENERATE_TEXT"
     GENERATE_AUDIO = "GENERATE_AUDIO"
+    GENERATE_A2UI = "GENERATE_A2UI"
 
 
 class PlannedAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     action_type: ActionType
     parameters: Dict[str, Any] = Field(default_factory=dict)
     description: str
 
 
 class LyoPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     steps: List[PlannedAction] = Field(default_factory=list)
     artifacts_to_create: List[ArtifactType] = Field(default_factory=list)
     safety_constraints: List[str] = Field(default_factory=list)
@@ -155,19 +156,23 @@ class UIBlockType(str, Enum):
     FLASHCARDS = "FlashcardsBlock"
     CTA_ROW = "CTARow"
     SKELETON = "Skeleton"
+    OPEN_CLASSROOM = "OpenClassroomBlock"
+    A2UI_COMPONENT = "A2UIComponent"
 
 
 class UIBlock(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     type: UIBlockType
     content: Dict[str, Any]
     version_id: Optional[str] = None
 
 
 class UnifiedChatResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     answer_block: UIBlock  # TutorMessage
     artifact_block: Optional[UIBlock] = None
     next_actions: List[UIBlock] = Field(default_factory=list)  # CTA Row
+    a2ui_blocks: List[UIBlock] = Field(default_factory=list)  # A2UI component blocks
+    open_classroom_payload: Optional[Dict[str, Any]] = None  # Course creation trigger
     audio_summary_url: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)

@@ -112,6 +112,23 @@ async def stream_lyo2_chat(
             
             if execution_response.artifact_block:
                 yield f"data: {json.dumps({'type': 'artifact', 'block': execution_response.artifact_block.model_dump()})}\n\n"
+            
+            # Send A2UI component blocks (rich interactive UI)
+            for a2ui_block in execution_response.a2ui_blocks:
+                logger.info(f"🎨 [STREAM][{trace_id}] Sending a2ui event")
+                yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
+            
+            # Send open_classroom payload (course creation trigger)
+            if execution_response.open_classroom_payload:
+                logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
+                oc_block = {
+                    "type": "OpenClassroomBlock",
+                    "content": {
+                        "type": "OPEN_CLASSROOM",
+                        **execution_response.open_classroom_payload
+                    }
+                }
+                yield f"data: {json.dumps({'type': 'open_classroom', 'block': oc_block})}\n\n"
                 
             yield f"data: {json.dumps({'type': 'actions', 'blocks': [b.model_dump() for b in execution_response.next_actions]})}\n\n"
             
