@@ -26,7 +26,7 @@ from lyo_app.core.database import Base
 from lyo_app.auth.models import User  # noqa: F401
 from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
 from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem, UserPostInteraction  # noqa: F401
-from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
+from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance, PrivateLesson, Booking, Review  # noqa: F401
 from lyo_app.gamification.models import UserXP, Achievement, UserAchievement, Streak, UserLevel, LeaderboardEntry, Badge, UserBadge  # noqa: F401
 # from lyo_app.resources.models import EducationalResource, ResourceTag, CourseResource, ResourceCollection  # noqa: F401
 from lyo_app.ai_agents.models import *  # noqa: F401

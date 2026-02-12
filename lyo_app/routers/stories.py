@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, and_, or_
+from sqlalchemy.orm import selectinload
 import uuid
 import logging
 
@@ -95,13 +97,15 @@ class StoryViewerResponse(BaseModel):
 # HELPER FUNCTIONS
 # ============================================================================
 
-def story_model_to_response(story: StoryModel, current_user_id: int, db: Session) -> StoryResponse:
+async def story_model_to_response(story: StoryModel, current_user_id: int, db: AsyncSession) -> StoryResponse:
     """Convert SQLAlchemy model to response schema."""
     # Check if current user has seen this story
-    is_seen = db.query(StoryView).filter(
+    stmt = select(StoryView).filter(
         StoryView.story_id == story.id,
         StoryView.viewer_id == current_user_id
-    ).first() is not None
+    )
+    result = await db.execute(stmt)
+    is_seen = result.scalars().first() is not None
     
     # Parse metadata for slides
     metadata = story.story_metadata or {}
@@ -146,22 +150,31 @@ def story_model_to_response(story: StoryModel, current_user_id: int, db: Session
     )
 
 
-async def cleanup_expired_stories(db: Session):
+async def cleanup_expired_stories():
     """Background task to delete expired stories."""
+    from lyo_app.core.database import get_db_session
+    db = await get_db_session()
     try:
-        expired = db.query(StoryModel).filter(
-            StoryModel.expires_at < datetime.utcnow(),
+        now = datetime.utcnow()
+        stmt = select(StoryModel).filter(
+            StoryModel.expires_at < now,
             StoryModel.is_highlight == False
-        ).all()
+        )
+        result = await db.execute(stmt)
+        expired = result.scalars().all()
+        
         
         for story in expired:
             db.delete(story)
         
-        db.commit()
-        logger.info(f"🗑️ Cleaned up {len(expired)} expired stories")
+        await db.commit()
+        if expired:
+            logger.info(f"🗑️ Cleaned up {len(expired)} expired stories")
     except Exception as e:
         logger.error(f"❌ Failed to cleanup expired stories: {e}")
-        db.rollback()
+        await db.rollback()
+    finally:
+        await db.close()
 
 
 # ============================================================================
@@ -172,7 +185,7 @@ async def cleanup_expired_stories(db: Session):
 @router.get("/", response_model=StoriesResponse)
 async def get_stories_feed(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = None
 ):
     """
@@ -182,21 +195,26 @@ async def get_stories_feed(
     """
     # Trigger cleanup in background
     if background_tasks:
-        background_tasks.add_task(cleanup_expired_stories, db)
+        background_tasks.add_task(cleanup_expired_stories)
     
     now = datetime.utcnow()
     
     # Get all non-expired stories
-    stories = db.query(StoryModel).filter(
+    stmt = select(StoryModel).options(
+        selectinload(StoryModel.user)
+    ).filter(
         StoryModel.expires_at > now
-    ).order_by(StoryModel.created_at.desc()).all()
+    ).order_by(StoryModel.created_at.desc())
+    
+    result = await db.execute(stmt)
+    stories = result.scalars().all()
     
     # Separate current user's story
     my_story = None
     other_stories = []
     
     for story in stories:
-        response = story_model_to_response(story, current_user.id, db)
+        response = await story_model_to_response(story, current_user.id, db)
         if story.user_id == current_user.id:
             my_story = response
         else:
@@ -211,17 +229,22 @@ async def get_stories_feed(
 @router.get("/me", response_model=List[StoryResponse])
 async def get_my_stories(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get current user's active stories."""
     now = datetime.utcnow()
     
-    stories = db.query(StoryModel).filter(
+    stmt = select(StoryModel).options(
+        selectinload(StoryModel.user)
+    ).filter(
         StoryModel.user_id == current_user.id,
         StoryModel.expires_at > now
-    ).order_by(StoryModel.created_at.desc()).all()
+    ).order_by(StoryModel.created_at.desc())
     
-    return [story_model_to_response(s, current_user.id, db) for s in stories]
+    result = await db.execute(stmt)
+    stories = result.scalars().all()
+    
+    return [await story_model_to_response(s, current_user.id, db) for s in stories]
 
 
 @router.post("", response_model=StoryResponse)
@@ -229,7 +252,7 @@ async def get_my_stories(
 async def create_story(
     request: StoryCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create a new story that expires in 24 hours.
@@ -263,15 +286,15 @@ async def create_story(
         )
         
         db.add(story)
-        db.commit()
-        db.refresh(story)
+        await db.commit()
+        await db.refresh(story)
         
         logger.info(f"✅ Story created by user {current_user.id}, expires at {story.expires_at}")
         
-        return story_model_to_response(story, current_user.id, db)
+        return await story_model_to_response(story, current_user.id, db)
         
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"❌ Failed to create story: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -283,13 +306,17 @@ async def create_story(
 async def get_story(
     story_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get a specific story by ID."""
-    story = db.query(StoryModel).filter(
+    stmt = select(StoryModel).options(
+        selectinload(StoryModel.user)
+    ).filter(
         StoryModel.id == int(story_id),
         StoryModel.expires_at > datetime.utcnow()
-    ).first()
+    )
+    result = await db.execute(stmt)
+    story = result.scalars().first()
     
     if not story:
         raise HTTPException(
@@ -297,17 +324,19 @@ async def get_story(
             detail="Story not found or expired"
         )
     
-    return story_model_to_response(story, current_user.id, db)
+    return await story_model_to_response(story, current_user.id, db)
 
 
 @router.delete("/{story_id}")
 async def delete_story(
     story_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Delete a story (only owner can delete)."""
-    story = db.query(StoryModel).filter(StoryModel.id == int(story_id)).first()
+    stmt = select(StoryModel).filter(StoryModel.id == int(story_id))
+    result = await db.execute(stmt)
+    story = result.scalars().first()
     
     if not story:
         raise HTTPException(
@@ -322,7 +351,7 @@ async def delete_story(
         )
     
     db.delete(story)
-    db.commit()
+    await db.commit()
     
     logger.info(f"🗑️ Story {story_id} deleted by user {current_user.id}")
     
@@ -334,10 +363,12 @@ async def delete_story(
 async def mark_story_viewed(
     story_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Mark a story as viewed by the current user."""
-    story = db.query(StoryModel).filter(StoryModel.id == int(story_id)).first()
+    stmt = select(StoryModel).filter(StoryModel.id == int(story_id))
+    result = await db.execute(stmt)
+    story = result.scalars().first()
     
     if not story:
         raise HTTPException(
@@ -346,10 +377,12 @@ async def mark_story_viewed(
         )
     
     # Check if already viewed
-    existing_view = db.query(StoryView).filter(
+    stmt = select(StoryView).filter(
         StoryView.story_id == story.id,
         StoryView.viewer_id == current_user.id
-    ).first()
+    )
+    result = await db.execute(stmt)
+    existing_view = result.scalars().first()
     
     if not existing_view:
         # Create view record
@@ -362,7 +395,7 @@ async def mark_story_viewed(
         # Increment view count
         story.view_count = (story.view_count or 0) + 1
         
-        db.commit()
+        await db.commit()
     
     return {"status": "viewed", "story_id": story_id}
 
@@ -371,10 +404,12 @@ async def mark_story_viewed(
 async def get_story_viewers(
     story_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get list of users who viewed a story (only owner can see)."""
-    story = db.query(StoryModel).filter(StoryModel.id == int(story_id)).first()
+    stmt = select(StoryModel).filter(StoryModel.id == int(story_id))
+    result = await db.execute(stmt)
+    story = result.scalars().first()
     
     if not story:
         raise HTTPException(
@@ -388,14 +423,16 @@ async def get_story_viewers(
             detail="You can only view viewers of your own stories"
         )
     
-    views = db.query(StoryView).filter(StoryView.story_id == story.id).all()
+    stmt = select(StoryView).filter(StoryView.story_id == story.id)
+    result = await db.execute(stmt)
+    views = result.scalars().all()
     
     return [
         StoryViewerResponse(
-            user_id=str(v.viewer.id),
+            user_id=str(v.viewer.id) if v.viewer else "Unknown",
             user_name=v.viewer.username if v.viewer else "Unknown",
             user_avatar=v.viewer.avatar_url if v.viewer else None,
             viewed_at=v.viewed_at
         )
-        for v in views if v.viewer
+        for v in views
     ]

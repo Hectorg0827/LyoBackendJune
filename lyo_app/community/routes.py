@@ -20,7 +20,10 @@ from lyo_app.community.schemas import (
     EventAttendanceCreate, EventAttendanceUpdate, EventAttendanceRead,
     BeaconBase, CommunityQuestionCreate, CommunityQuestionRead,
     CommunityAnswerCreate, CommunityAnswerRead,
-    MarketplaceItemCreate, MarketplaceItemUpdate, MarketplaceItemRead
+    MarketplaceItemCreate, MarketplaceItemUpdate, MarketplaceItemRead,
+    PrivateLessonCreate, PrivateLessonRead,
+    BookingCreate, BookingRead, BookingSlotRead,
+    ReviewCreate, ReviewRead, ReviewStatsRead
 )
 from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
 from lyo_app.stack import crud as stack_crud
@@ -311,9 +314,24 @@ async def list_community_events(
             upcoming_only=upcoming_only,
             user_id=current_user.id
         )
-        return events
+        
+        total = await community_service.get_community_events_count(
+            db=db,
+            event_type=event_type,
+            study_group_id=study_group_id,
+            upcoming_only=upcoming_only,
+            user_id=current_user.id
+        )
+        
+        return {
+            "events": events,
+            "total": total,
+            "page": (skip // limit) + 1 if limit > 0 else 1,
+            "per_page": limit,
+            "has_next": (skip + limit) < total
+        }
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch events")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch events: {str(e)}")
 
 
 @router.get("/events/{event_id}", response_model=CommunityEventRead)
@@ -1060,6 +1078,205 @@ async def unblock_user(
         raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to unblock user")
+
+# =============================================================================
+# PRIVATE LESSONS, BOOKINGS & REVIEWS
+# =============================================================================
+
+
+@router.get("/lessons/{lesson_id}", response_model=PrivateLessonRead)
+async def get_private_lesson(
+    lesson_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get a specific private lesson by ID."""
+    lesson = await community_service.get_private_lesson(db, lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
+    return lesson
+
+
+@router.post("/lessons", response_model=PrivateLessonRead, status_code=status.HTTP_201_CREATED)
+async def create_private_lesson(
+    lesson_data: PrivateLessonCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new private lesson offering."""
+    try:
+        lesson = await community_service.create_private_lesson(
+            db=db,
+            instructor_id=current_user.id,
+            lesson_data=lesson_data
+        )
+        return lesson
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/lessons/{lesson_id}/slots", response_model=List[BookingSlotRead])
+async def get_available_slots(
+    lesson_id: int,
+    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get available booking slots for a lesson on a given date."""
+    try:
+        target_date = datetime.strptime(date, "%Y-%m-%d") if date else datetime.utcnow()
+        slots = await community_service.get_available_slots(db, lesson_id, target_date)
+        return slots
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date format. Use YYYY-MM-DD.")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/bookings", response_model=BookingRead, status_code=status.HTTP_201_CREATED)
+async def create_booking(
+    booking_data: BookingCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new booking for a lesson slot."""
+    try:
+        booking = await community_service.create_booking(
+            db=db,
+            student_id=current_user.id,
+            booking_data=booking_data
+        )
+        return BookingRead(
+            id=booking.id,
+            lesson_id=booking.lesson_id,
+            lesson_title=None,  # Can be enriched later
+            student_id=booking.student_id,
+            status=booking.status,
+            slot_start=booking.slot_start,
+            slot_end=booking.slot_end,
+            notes=booking.notes,
+            created_at=booking.created_at
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/bookings/my", response_model=List[BookingRead])
+async def get_user_bookings(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all bookings for the current user."""
+    try:
+        bookings = await community_service.get_user_bookings(db, current_user.id)
+        return [
+            BookingRead(
+                id=b.id,
+                lesson_id=b.lesson_id,
+                lesson_title=None,
+                student_id=b.student_id,
+                status=b.status,
+                slot_start=b.slot_start,
+                slot_end=b.slot_end,
+                notes=b.notes,
+                created_at=b.created_at
+            )
+            for b in bookings
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/bookings/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_booking(
+    booking_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Cancel a booking."""
+    try:
+        await community_service.cancel_booking(db, current_user.id, booking_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/reviews/{target_type}/{target_id}", response_model=List[ReviewRead])
+async def get_reviews(
+    target_type: str,
+    target_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get reviews for a lesson or institution."""
+    try:
+        reviews = await community_service.get_reviews(db, target_type, target_id)
+        return [
+            ReviewRead(
+                id=r.id,
+                author_id=r.author_id,
+                author_name=None,  # Can be enriched with a join
+                author_avatar=None,
+                target_type=r.target_type,
+                target_id=r.target_id,
+                rating=r.rating,
+                text=r.text,
+                created_at=r.created_at
+            )
+            for r in reviews
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/reviews", response_model=ReviewRead, status_code=status.HTTP_201_CREATED)
+async def submit_review(
+    review_data: ReviewCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Submit a review for a lesson or institution."""
+    try:
+        review = await community_service.submit_review(
+            db=db,
+            author_id=current_user.id,
+            review_data=review_data
+        )
+        return ReviewRead(
+            id=review.id,
+            author_id=review.author_id,
+            author_name=None,
+            author_avatar=None,
+            target_type=review.target_type,
+            target_id=review.target_id,
+            rating=review.rating,
+            text=review.text,
+            created_at=review.created_at
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get("/reviews/{target_type}/{target_id}/stats", response_model=ReviewStatsRead)
+async def get_review_stats(
+    target_type: str,
+    target_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get review statistics for a lesson or institution."""
+    try:
+        stats = await community_service.get_review_stats(db, target_type, target_id)
+        return ReviewStatsRead(**stats)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 # ── Stub endpoints expected by the iOS client ────────────────────────────

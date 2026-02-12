@@ -5,6 +5,9 @@ Handles study groups, community events, and collaborative learning operations.
 
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select, func, and_, or_, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +17,7 @@ from lyo_app.community.models import (
     StudyGroup, GroupMembership, CommunityEvent, EventAttendance,
     StudyGroupStatus, StudyGroupPrivacy, MembershipRole,
     EventStatus, AttendanceStatus, CommunityQuestion, CommunityAnswer,
-    MarketplaceItem
+    MarketplaceItem, PrivateLesson, Booking, Review, BookingStatus
 )
 from lyo_app.community.schemas import (
     StudyGroupCreate, StudyGroupUpdate,
@@ -23,7 +26,9 @@ from lyo_app.community.schemas import (
     EventAttendanceCreate, EventAttendanceUpdate,
     CommunityQuestionCreate, CommunityAnswerCreate,
     EventBeacon, QuestionBeacon, UserActivityBeacon, MarketplaceBeacon,
-    MarketplaceItemCreate, MarketplaceItemUpdate
+    MarketplaceItemCreate, MarketplaceItemUpdate,
+    BookingCreate, ReviewCreate, BookingSlotRead,
+    PrivateLessonCreate
 )
 from lyo_app.models.enhanced import User
 from lyo_app.stack.models import StackItem, StackItemType, StackItemStatus
@@ -124,6 +129,26 @@ class CommunityService:
                 return None
         
         return group
+
+    async def _has_group_permission(
+        self, 
+        db: AsyncSession, 
+        group_id: int, 
+        user_id: int, 
+        required_roles: List[MembershipRole]
+    ) -> bool:
+        """Check if user has one of the required roles in the group."""
+        result = await db.execute(
+            select(GroupMembership).where(
+                and_(
+                    GroupMembership.study_group_id == group_id,
+                    GroupMembership.user_id == user_id,
+                    GroupMembership.is_approved == True,
+                    GroupMembership.role.in_(required_roles)
+                )
+            )
+        )
+        return result.scalar_one_or_none() is not None
 
     async def update_study_group(
         self, 
@@ -825,46 +850,98 @@ class CommunityService:
         # Add attendee count and user context
         events_data = []
         for event in events:
-            attendee_count = await self._get_event_attendee_count(db, event.id)
-            user_attendance = None
-            
-            if user_id:
-                user_attendance = await self._get_user_attendance(db, event.id, user_id)
-            
-            event_data = {
-                "id": event.id,
-                "title": event.title,
-                "description": event.description,
-                "event_type": event.event_type,
-                "status": event.status,
-                "location": event.location,
-                "meeting_url": event.meeting_url,
-                "max_attendees": event.max_attendees,
-                "start_time": event.start_time,
-                "end_time": event.end_time,
-                "timezone": event.timezone,
-                "organizer_id": event.organizer_id,
-                "study_group_id": event.study_group_id,
-                "course_id": event.course_id,
-                "lesson_id": event.lesson_id,
-                "created_at": event.created_at,
-                "updated_at": event.updated_at,
-                "latitude": event.latitude,
-                "longitude": event.longitude,
-                "room_id": event.room_id,
-                "image_url": event.image_url,
-                "attendee_count": attendee_count,
-                "user_attendance_status": user_attendance.status if user_attendance else None,
-                "is_full": event.max_attendees and attendee_count >= event.max_attendees,
-                "organizer_profile": {
-                    "id": event.organizer.id,
-                    "name": f"{event.organizer.first_name or ''} {event.organizer.last_name or event.organizer.username}".strip(),
-                    "avatar": event.organizer.avatar_url
-                } if event.organizer else None
-            }
-            events_data.append(event_data)
+            try:
+                # Defensive check for potential None event
+                if not event:
+                    continue
+
+                attendee_count = await self._get_event_attendee_count(db, event.id)
+                user_attendance = None
+                
+                if user_id:
+                    user_attendance = await self._get_user_attendance(db, event.id, user_id)
+                
+                # Parse organizer name safely
+                organizer_data = None
+                if event.organizer:
+                    organizer_name = f"{event.organizer.first_name or ''} {event.organizer.last_name or event.organizer.username}".strip()
+                    if not organizer_name:
+                        organizer_name = "Unknown Organizer"
+                        
+                    organizer_data = {
+                        "id": event.organizer.id,
+                        "name": organizer_name,
+                        "avatar": event.organizer.avatar_url
+                    }
+
+                event_data = {
+                    "id": event.id,
+                    "title": event.title,
+                    "description": event.description,
+                    "event_type": event.event_type,
+                    "status": event.status,
+                    "location": event.location,
+                    "meeting_url": event.meeting_url,
+                    "max_attendees": event.max_attendees,
+                    "start_time": event.start_time,
+                    "end_time": event.end_time,
+                    "timezone": event.timezone,
+                    "organizer_id": event.organizer_id,
+                    "study_group_id": event.study_group_id,
+                    "course_id": event.course_id,
+                    "lesson_id": event.lesson_id,
+                    "created_at": event.created_at,
+                    "updated_at": event.updated_at,
+                    "latitude": event.latitude,
+                    "longitude": event.longitude,
+                    "room_id": event.room_id,
+                    "image_url": event.image_url,
+                    "attendee_count": attendee_count,
+                    "user_attendance_status": user_attendance.status if user_attendance else None,
+                    "is_full": bool(event.max_attendees and attendee_count >= event.max_attendees),
+                    "organizer_profile": organizer_data
+                }
+                events_data.append(event_data)
+            except Exception as e:
+                logger.error(f"Error processing community event {getattr(event, 'id', 'unknown')}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                continue
         
         return events_data
+
+    async def get_community_events_count(
+        self,
+        db: AsyncSession,
+        user_id: Optional[int] = None,
+        study_group_id: Optional[int] = None,
+        course_id: Optional[int] = None,
+        event_type: Optional[str] = None,
+        status: Optional[EventStatus] = None,
+        upcoming_only: bool = False
+    ) -> int:
+        """
+        Get total count of community events matching filters.
+        """
+        query = select(func.count(CommunityEvent.id))
+        conditions = []
+        
+        if status:
+            conditions.append(CommunityEvent.status == status)
+        if study_group_id:
+            conditions.append(CommunityEvent.study_group_id == study_group_id)
+        if course_id:
+            conditions.append(CommunityEvent.course_id == course_id)
+        if event_type:
+            conditions.append(CommunityEvent.event_type == event_type)
+        if upcoming_only:
+            conditions.append(CommunityEvent.start_time > datetime.utcnow())
+        
+        if conditions:
+            query = query.where(and_(*conditions))
+            
+        result = await db.execute(query)
+        return result.scalar() or 0
 
     async def get_community_stats(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
         """
@@ -940,6 +1017,30 @@ class CommunityService:
             "user_groups_count": user_groups_count,
             "user_events_count": user_events_count,
         }
+
+    async def _get_group_member_count(self, db: AsyncSession, group_id: int) -> int:
+        """Get count of active members in a group."""
+        result = await db.execute(
+            select(func.count(GroupMembership.id)).where(
+                and_(
+                    GroupMembership.study_group_id == group_id,
+                    GroupMembership.is_approved == True
+                )
+            )
+        )
+        return result.scalar() or 0
+
+    async def _get_user_membership(self, db: AsyncSession, group_id: int, user_id: int) -> Optional[GroupMembership]:
+        """Get user's membership for a group."""
+        result = await db.execute(
+            select(GroupMembership).where(
+                and_(
+                    GroupMembership.study_group_id == group_id,
+                    GroupMembership.user_id == user_id
+                )
+            )
+        )
+        return result.scalar_one_or_none()
 
     # Phase 3: Campus Map & Beacons
     
@@ -2049,5 +2150,298 @@ class CommunityService:
             "reply_count": comment.reply_count,
             "created_at": comment.created_at.isoformat(),
             "is_edited": comment.is_edited
+        }
+
+    # =========================================================================
+    # PRIVATE LESSONS & BOOKINGS
+    # =========================================================================
+
+    async def create_private_lesson(
+        self,
+        db: AsyncSession,
+        instructor_id: int,
+        lesson_data: PrivateLessonCreate
+    ) -> PrivateLesson:
+        """Create a new private lesson offering."""
+        lesson = PrivateLesson(
+            title=lesson_data.title,
+            description=lesson_data.description,
+            subject=lesson_data.subject,
+            price_per_hour=lesson_data.price_per_hour,
+            currency=lesson_data.currency,
+            duration_minutes=lesson_data.duration_minutes,
+            location=lesson_data.location,
+            latitude=lesson_data.latitude,
+            longitude=lesson_data.longitude,
+            instructor_id=instructor_id,
+        )
+        db.add(lesson)
+        await db.commit()
+        await db.refresh(lesson)
+        return lesson
+
+    async def get_private_lesson(
+        self,
+        db: AsyncSession,
+        lesson_id: int
+    ) -> Optional[PrivateLesson]:
+        """Fetch a single private lesson by ID."""
+        result = await db.execute(
+            select(PrivateLesson).where(PrivateLesson.id == lesson_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_available_slots(
+        self,
+        db: AsyncSession,
+        lesson_id: int,
+        date: datetime
+    ) -> List[BookingSlotRead]:
+        """
+        Generate 1-hour time slots for a lesson on a given date.
+        Marks slots as unavailable if an existing booking overlaps.
+        """
+        # Fetch existing bookings for this lesson on this date
+        day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+
+        result = await db.execute(
+            select(Booking).where(
+                and_(
+                    Booking.lesson_id == lesson_id,
+                    Booking.slot_start >= day_start,
+                    Booking.slot_start < day_end,
+                    Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED])
+                )
+            )
+        )
+        existing_bookings = result.scalars().all()
+        booked_hours = {b.slot_start.hour for b in existing_bookings}
+
+        slots: List[BookingSlotRead] = []
+        for hour in range(9, 18):  # 9am – 5pm (last slot starts at 5pm, ends 6pm)
+            if hour == 12:  # Skip lunch
+                continue
+            slot_start = day_start.replace(hour=hour)
+            slot_end = day_start.replace(hour=hour + 1)
+            is_available = hour not in booked_hours
+
+            slots.append(BookingSlotRead(
+                id=f"{lesson_id}-{date.strftime('%Y%m%d')}-{hour:02d}00",
+                start_time=slot_start,
+                end_time=slot_end,
+                is_available=is_available
+            ))
+
+        return slots
+
+    async def create_booking(
+        self,
+        db: AsyncSession,
+        student_id: int,
+        booking_data: BookingCreate
+    ) -> Booking:
+        """
+        Create a booking. Parses the slot_id to get the hour,
+        then checks for conflicts before inserting.
+        """
+        lesson = await self.get_private_lesson(db, booking_data.lesson_id)
+        if not lesson:
+            raise ValueError("Lesson not found")
+
+        # Parse slot_id format: "{lessonId}-{YYYYMMDD}-{HHMM}"
+        parts = booking_data.slot_id.split("-")
+        if len(parts) < 3:
+            raise ValueError("Invalid slot ID format")
+
+        date_str = parts[1]  # YYYYMMDD
+        time_str = parts[2]  # HHMM
+        slot_start = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M")
+        slot_end = slot_start + timedelta(hours=1)
+
+        # Check for conflicts
+        conflict = await db.execute(
+            select(Booking).where(
+                and_(
+                    Booking.lesson_id == booking_data.lesson_id,
+                    Booking.slot_start == slot_start,
+                    Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED])
+                )
+            )
+        )
+        if conflict.scalar_one_or_none():
+            raise ValueError("This time slot is already booked")
+
+        booking = Booking(
+            lesson_id=booking_data.lesson_id,
+            student_id=student_id,
+            slot_start=slot_start,
+            slot_end=slot_end,
+            notes=booking_data.notes,
+            status=BookingStatus.PENDING,
+        )
+        db.add(booking)
+        await db.commit()
+        await db.refresh(booking)
+        return booking
+
+    async def get_user_bookings(
+        self,
+        db: AsyncSession,
+        user_id: int
+    ) -> List[Booking]:
+        """Get all bookings for a user, newest first."""
+        result = await db.execute(
+            select(Booking)
+            .where(Booking.student_id == user_id)
+            .order_by(desc(Booking.created_at))
+        )
+        return list(result.scalars().all())
+
+    async def cancel_booking(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        booking_id: int
+    ) -> Booking:
+        """Cancel a booking. Only the student who made it can cancel."""
+        result = await db.execute(
+            select(Booking).where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+        if not booking:
+            raise ValueError("Booking not found")
+        if booking.student_id != user_id:
+            raise PermissionError("You can only cancel your own bookings")
+        if booking.status == BookingStatus.CANCELLED:
+            raise ValueError("Booking is already cancelled")
+
+        booking.status = BookingStatus.CANCELLED
+        booking.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(booking)
+        return booking
+
+    async def _get_event_attendee_count(self, db: AsyncSession, event_id: int) -> int:
+        """Get count of attendees for an event."""
+        result = await db.execute(
+            select(func.count(EventAttendance.id)).where(
+                and_(
+                    EventAttendance.event_id == event_id,
+                    EventAttendance.status.in_([AttendanceStatus.GOING, AttendanceStatus.MAYBE])
+                )
+            )
+        )
+        return result.scalar() or 0
+
+    async def _get_user_attendance(self, db: AsyncSession, event_id: int, user_id: int) -> Optional[EventAttendance]:
+        """Get user's attendance record for an event."""
+        result = await db.execute(
+            select(EventAttendance).where(
+                and_(
+                    EventAttendance.event_id == event_id,
+                    EventAttendance.user_id == user_id
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # =========================================================================
+    # REVIEWS
+    # =========================================================================
+
+    async def get_reviews(
+        self,
+        db: AsyncSession,
+        target_type: str,
+        target_id: str
+    ) -> List[Review]:
+        """Get all reviews for a specific target (lesson or institution)."""
+        result = await db.execute(
+            select(Review)
+            .where(
+                and_(
+                    Review.target_type == target_type,
+                    Review.target_id == target_id
+                )
+            )
+            .order_by(desc(Review.created_at))
+        )
+        return list(result.scalars().all())
+
+    async def submit_review(
+        self,
+        db: AsyncSession,
+        author_id: int,
+        review_data: ReviewCreate
+    ) -> Review:
+        """Submit a review. One review per user per target."""
+        # Check for existing review by this user on this target
+        existing = await db.execute(
+            select(Review).where(
+                and_(
+                    Review.author_id == author_id,
+                    Review.target_type == review_data.target_type,
+                    Review.target_id == review_data.target_id
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise ValueError("You have already reviewed this item")
+
+        review = Review(
+            author_id=author_id,
+            target_type=review_data.target_type,
+            target_id=review_data.target_id,
+            rating=review_data.rating,
+            text=review_data.text,
+        )
+        db.add(review)
+        await db.commit()
+        await db.refresh(review)
+        return review
+
+    async def get_review_stats(
+        self,
+        db: AsyncSession,
+        target_type: str,
+        target_id: str
+    ) -> Dict[str, Any]:
+        """Compute average rating, total count, and rating distribution."""
+        result = await db.execute(
+            select(
+                func.avg(Review.rating).label("avg"),
+                func.count(Review.id).label("cnt")
+            ).where(
+                and_(
+                    Review.target_type == target_type,
+                    Review.target_id == target_id
+                )
+            )
+        )
+        row = result.one()
+        avg_rating = float(row.avg) if row.avg else 0.0
+        total = int(row.cnt)
+
+        # Rating distribution
+        dist_result = await db.execute(
+            select(
+                Review.rating,
+                func.count(Review.id).label("cnt")
+            ).where(
+                and_(
+                    Review.target_type == target_type,
+                    Review.target_id == target_id
+                )
+            ).group_by(Review.rating)
+        )
+        distribution = {str(i): 0 for i in range(1, 6)}
+        for r_row in dist_result.all():
+            distribution[str(r_row.rating)] = int(r_row.cnt)
+
+        return {
+            "average_rating": round(avg_rating, 1),
+            "review_count": total,
+            "rating_distribution": distribution
         }
 

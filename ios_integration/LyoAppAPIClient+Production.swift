@@ -14,10 +14,15 @@ import Combine
 extension LyoAppAPIClient {
     
     /// Production base URL for LyoBackend
-    static let productionBaseURL = "https://lyo-backend-production-830162750094.us-central1.run.app"
+    static var productionBaseURL: String {
+        Endpoints.production.absoluteString
+    }
     
     /// Development base URL (local)
-    static let developmentBaseURL = "http://localhost:8000"
+    static var developmentBaseURL: String {
+        Endpoints.development.absoluteString
+    }
+
     
     /// Configure the API client for production
     static func configureForProduction() {

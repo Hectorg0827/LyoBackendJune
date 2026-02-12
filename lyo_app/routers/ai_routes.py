@@ -231,6 +231,100 @@ async def generate_quiz(request: AIGenerateRequest):
     return await generate_ai_response(request)
 
 
+# =============================================================================
+# QUICK CHAT ENDPOINT (Non-Streaming Fast Path)
+# =============================================================================
+
+class AIChatRequest(BaseModel):
+    """Request schema for quick chat — used by iOS fast path"""
+    message: str = Field(..., min_length=1, max_length=5000, description="The user message")
+    stream: bool = Field(False, description="Whether to stream (always false for this endpoint)")
+    provider: Optional[str] = Field("gemini", description="AI provider preference")
+    context: Optional[Dict[str, str]] = Field(None, description="Optional context (course_id, lesson_id)")
+
+
+class AIChatResponse(BaseModel):
+    """Response schema for quick chat"""
+    model_config = {"protected_namespaces": ()}
+
+    response: str = Field(..., description="AI response text")
+    conversationHistory: Optional[List[Dict[str, str]]] = Field(None, description="Conversation turns")
+    latency_ms: Optional[int] = Field(None, description="Response time in milliseconds")
+    model_used: Optional[str] = Field(None, description="AI model used")
+
+
+@router.post("/chat", response_model=AIChatResponse)
+async def quick_chat(request: AIChatRequest):
+    """
+    Lightweight non-streaming chat endpoint for fast-path responses.
+    
+    Used by the iOS Two-Speed Engine for simple questions, greetings,
+    and quick interactions that don't need the full Lyo2 streaming pipeline.
+    Targets < 500ms response time.
+    
+    Note: This endpoint does NOT require authentication (public access).
+    """
+    start_time = time.time()
+    
+    try:
+        # Ensure AI manager is initialized
+        if not ai_resilience_manager.session:
+            await ai_resilience_manager.initialize()
+        
+        # Build a conversational prompt
+        system_prompt = (
+            "You are Lyo, a friendly and knowledgeable AI learning companion. "
+            "Keep your response concise (2-4 sentences) and helpful. "
+            "Use a warm, conversational tone. "
+            "If the user is asking about a topic, give a brief but informative answer."
+        )
+        
+        # Add context if provided
+        if request.context:
+            course_id = request.context.get("course_id")
+            lesson_id = request.context.get("lesson_id")
+            if course_id:
+                system_prompt += f"\nContext: Currently in course {course_id}"
+            if lesson_id:
+                system_prompt += f", lesson {lesson_id}"
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.message}
+        ]
+        
+        # Generate response using the resilience manager (Gemini → GPT fallback)
+        result = await ai_resilience_manager.chat_completion(
+            messages=messages,
+            max_tokens=500,  # Keep fast-path responses short
+            temperature=0.7
+        )
+        
+        response_text = result.get("content") or result.get("response") or result.get("text") or ""
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        return AIChatResponse(
+            response=response_text,
+            conversationHistory=[
+                {"role": "user", "content": request.message},
+                {"role": "assistant", "content": response_text}
+            ],
+            latency_ms=latency_ms,
+            model_used="gemini-flash"
+        )
+        
+    except Exception as e:
+        logger.error(f"Quick chat failed: {e}", exc_info=True)
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        # Fallback response
+        return AIChatResponse(
+            response="I'm here to help! Could you tell me more about what you'd like to learn?",
+            latency_ms=latency_ms,
+            model_used="fallback"
+        )
+
+
 @router.get("/health")
 async def ai_health():
     """Check AI service health"""
