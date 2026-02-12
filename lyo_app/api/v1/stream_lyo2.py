@@ -107,11 +107,48 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             
-            # Send Final Blocks
-            yield f"data: {json.dumps({'type': 'answer', 'block': execution_response.answer_block.model_dump()})}\n\n"
+            # --- Multipart Agent Block Markers ---
+            # Wrap the answer text with agent markers for cinematic reveal on iOS.
+            # The iOS AgenticClassroomViewModel parses [tutor], [quiz], [content], etc.
+            # to split the response into visually distinct agent blocks.
+            answer_text = execution_response.answer_block.content.get("text", "")
+            if answer_text and not any(f"[{tag}]" in answer_text for tag in ["tutor", "quiz", "sentiment", "content", "metacognition"]):
+                # Wrap the main answer with a [tutor] marker
+                enriched_content = dict(execution_response.answer_block.content)
+                enriched_content["text"] = f"[tutor]\n{answer_text}"
+                enriched_block = UIBlock(
+                    type=execution_response.answer_block.type,
+                    content=enriched_content,
+                    version_id=execution_response.answer_block.version_id
+                )
+                yield f"data: {json.dumps({'type': 'answer', 'block': enriched_block.model_dump()})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'answer', 'block': execution_response.answer_block.model_dump()})}\n\n"
             
             if execution_response.artifact_block:
-                yield f"data: {json.dumps({'type': 'artifact', 'block': execution_response.artifact_block.model_dump()})}\n\n"
+                # Send agent-tagged artifact event
+                artifact = execution_response.artifact_block
+                artifact_type = artifact.type
+                
+                # Map artifact types to agent roles for cinematic reveal
+                agent_tag_map = {
+                    UIBlockType.QUIZ: "quiz",
+                    UIBlockType.STUDY_PLAN: "content",
+                    UIBlockType.FLASHCARDS: "content",
+                    UIBlockType.CODE: "tutor",
+                }
+                agent_tag = agent_tag_map.get(artifact_type, "content")
+                
+                # Tag the artifact content with agent marker
+                tagged_content = dict(artifact.content) if artifact.content else {}
+                tagged_content["_agent"] = agent_tag
+                
+                tagged_artifact = UIBlock(
+                    type=artifact.type,
+                    content=tagged_content,
+                    version_id=artifact.version_id
+                )
+                yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
             
             # Send A2UI component blocks (rich interactive UI)
             for a2ui_block in execution_response.a2ui_blocks:

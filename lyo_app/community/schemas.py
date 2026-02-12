@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from lyo_app.community.models import (
     StudyGroupStatus, StudyGroupPrivacy, MembershipRole,
-    EventType, EventStatus, AttendanceStatus
+    EventType, EventStatus, AttendanceStatus, BookingStatus
 )
 
 
@@ -368,6 +368,105 @@ class CommunityEventWithDetailsRead(CommunityEventRead):
     
     attendees: List[EventAttendanceRead] = Field(..., description="Event attendees")
     study_group: Optional[StudyGroupRead] = Field(None, description="Associated study group")
+
+
+# =============================================================================
+# BOOKING & REVIEW SCHEMAS
+# =============================================================================
+
+
+class PrivateLessonCreate(BaseModel):
+    """Schema for creating a private lesson."""
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    subject: str = Field(..., min_length=1, max_length=100)
+    price_per_hour: float = Field(default=0.0, ge=0.0)
+    currency: str = Field(default="USD", max_length=10)
+    duration_minutes: int = Field(default=60, ge=15, le=480)
+    location: Optional[str] = Field(None, max_length=500)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class PrivateLessonRead(BaseModel):
+    """Schema for reading a private lesson — matches iOS APIPrivateLesson."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    description: Optional[str] = None
+    subject: str
+    price_per_hour: float
+    currency: str
+    duration_minutes: int
+    location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    is_active: bool
+    instructor_id: int
+    instructor_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BookingSlotRead(BaseModel):
+    """Matches iOS APIBookingSlot (snake_case for .convertFromSnakeCase decoder)."""
+    id: str
+    start_time: datetime
+    end_time: datetime
+    is_available: bool
+
+
+class BookingCreate(BaseModel):
+    """Matches iOS APIBookingRequest."""
+    lesson_id: int
+    slot_id: str  # Encoded as "{lessonId}-{YYYYMMDD}-{HHMM}" — parsed server-side
+    notes: Optional[str] = None
+
+
+class BookingRead(BaseModel):
+    """Matches iOS APIBookingResponse."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    lesson_id: int
+    lesson_title: Optional[str] = None
+    student_id: int
+    status: BookingStatus
+    slot_start: datetime
+    slot_end: datetime
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+class ReviewCreate(BaseModel):
+    """Matches iOS APIReviewRequest."""
+    target_type: str = Field(..., pattern="^(lesson|institution)$")
+    target_id: str
+    rating: int = Field(..., ge=1, le=5)
+    text: Optional[str] = Field(None, max_length=2000)
+
+
+class ReviewRead(BaseModel):
+    """Matches iOS APIReview."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    author_id: int
+    author_name: Optional[str] = None
+    author_avatar: Optional[str] = None
+    target_type: str
+    target_id: str
+    rating: int
+    text: Optional[str] = None
+    created_at: datetime
+
+
+class ReviewStatsRead(BaseModel):
+    """Matches iOS APIReviewStats."""
+    average_rating: float
+    review_count: int
+    rating_distribution: dict  # {"1": count, "2": count, ...}
 
 
 # =============================================================================

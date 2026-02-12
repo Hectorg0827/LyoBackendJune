@@ -301,15 +301,20 @@ CRITICAL RULES:
         if not self._available:
             raise RuntimeError(f"Agent {self.name} is not available (no API key)")
         
+        start = time.time()
+        logger.info(f"🤖 Agent {self.name}: Calling {self.model_name} (Attempt {attempt})...")
         try:
             response = await asyncio.wait_for(
                 self.model.generate_content_async(prompt),
                 timeout=self.timeout_seconds
             )
             
+            duration = time.time() - start
             if not response.text:
+                logger.warning(f"⚠️ Agent {self.name}: Empty response from {self.model_name} after {duration:.2f}s")
                 raise ValueError("Empty response from model")
             
+            logger.info(f"✨ Agent {self.name}: Received response from {self.model_name} in {duration:.2f}s")
             return response.text
             
         except asyncio.TimeoutError:

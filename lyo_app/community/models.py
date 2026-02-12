@@ -307,6 +307,109 @@ class MarketplaceItem(Base):
 
 
 # =============================================================================
+# PRIVATE LESSONS, BOOKINGS & REVIEWS
+# =============================================================================
+
+
+class BookingStatus(str, Enum):
+    """Booking status enumeration."""
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+
+
+class PrivateLesson(Base):
+    """
+    Private lesson offered by an instructor.
+    Users can browse and book available time slots.
+    """
+    __tablename__ = "private_lessons"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    subject = Column(String(100), nullable=False, index=True)
+
+    # Pricing
+    price_per_hour = Column(Float, nullable=False, default=0.0)
+    currency = Column(String(10), nullable=False, default="USD")
+    duration_minutes = Column(Integer, nullable=False, default=60)
+
+    # Location
+    location = Column(String(500), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+
+    # Status
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # Associations
+    instructor_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Metadata
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    instructor = relationship("User", foreign_keys=[instructor_id], lazy="noload")
+    bookings = relationship("Booking", back_populates="lesson", cascade="all, delete-orphan")
+
+
+class Booking(Base):
+    """
+    Booking for a private lesson time slot.
+    Tracks student reservations with conflict detection.
+    """
+    __tablename__ = "bookings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    status = Column(SQLEnum(BookingStatus), nullable=False, default=BookingStatus.PENDING)
+    notes = Column(Text, nullable=True)
+
+    # Time slot
+    slot_start = Column(DateTime, nullable=False, index=True)
+    slot_end = Column(DateTime, nullable=False)
+
+    # Associations
+    lesson_id = Column(Integer, ForeignKey("private_lessons.id"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Metadata
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    lesson = relationship("PrivateLesson", back_populates="bookings")
+    student = relationship("User", foreign_keys=[student_id], lazy="noload")
+
+
+class Review(Base):
+    """
+    Polymorphic review model for lessons and institutions.
+    target_type + target_id identify what is being reviewed.
+    """
+    __tablename__ = "reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rating = Column(Integer, nullable=False)  # 1-5
+    text = Column(Text, nullable=True)
+
+    # Polymorphic target
+    target_type = Column(String(50), nullable=False, index=True)  # "lesson" or "institution"
+    target_id = Column(String(50), nullable=False, index=True)
+
+    # Associations
+    author_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Metadata
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    author = relationship("User", foreign_keys=[author_id], lazy="noload")
+
+
+# =============================================================================
 # SOCIAL FEED MODELS (Posts, Comments, Likes, Reports, Blocks)
 # =============================================================================
 

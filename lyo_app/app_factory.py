@@ -30,6 +30,7 @@ from .routers import hooks
 from .routers import sync
 from .routers import clips
 from .routers import a2ui
+from .community.routes import router as community_router
 
 # Global AI components for lifecycle management
 ai_components = {}
@@ -300,6 +301,8 @@ def create_app() -> FastAPI:
         (sync.router, "/api/v1", "Multi-Device Sync"),
         (clips.router, "/api/v1", "Educational Clips"),  # NEW: Clips router
         (a2ui.router, "/api/v1", "A2UI Real-time Engine"), # NEW: A2UI router
+        (community_router, "/api/v1/community", "Community Hub"),
+        (community_router, "/community", "Community Hub (compat)"),
     ]
 
     # Phase 1: Add ambient presence and proactive interventions
