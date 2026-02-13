@@ -322,6 +322,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Analytics routes not available: {e}")
 
+    # iOS Compatibility Routes (feed alias, progress analytics)
+    try:
+        from lyo_app.api.v1.ios_compatibility import router as ios_compat_router
+        app.include_router(ios_compat_router)
+        logger.info("✅ iOS Compatibility routes integrated")
+    except ImportError as e:
+        logger.warning(f"iOS Compatibility routes not available: {e}")
+
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
