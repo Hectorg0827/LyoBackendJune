@@ -55,6 +55,7 @@ from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.core.context_engine import context_engine
 from lyo_app.core.personality import LYO_SYSTEM_PROMPT
 from lyo_app.chat.a2ui_integration import chat_a2ui_service
+from lyo_app.a2ui.a2ui_producer import a2ui_producer
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +122,16 @@ but do not be creepy or over-specific. Just a gentle nod to their journey.
         logger.error(f"Error generating greeting: {e}")
         greeting_text = "Welcome back! Ready to learn something new?"
 
+    # Build context-aware suggestions
+    if learner_context:
+        suggestions = ["Continue where I left off", "Review my struggles", "Create a course"]
+    else:
+        suggestions = ["Teach me something new", "Create a course", "Quiz me on a topic"]
+
     return GreetingResponse(
         greeting=greeting_text,
-        context_used=bool(learner_context)
+        context_used=bool(learner_context),
+        suggestions=suggestions
     )
 
 
@@ -427,27 +435,34 @@ async def chat_endpoint(
                 )
             )
 
-        # Generate A2UI component based on mode and data
+        # Generate A2UI component via A2UIProducer chokepoint
         ui_component = None
         try:
             if mode == ChatMode.COURSE_PLANNER and course_data:
-                ui_component = chat_a2ui_service.generate_course_creation_ui(course_data)
+                result = a2ui_producer.produce_course(course_data, topic=request.message)
+                ui_component = result.get("a2ui_component")
+                # Also set open_classroom payload from producer if not already set
+                if result.get("open_classroom") and not open_classroom_payload:
+                    open_classroom_payload = result["open_classroom"]
+                    open_classroom_type = "OPEN_CLASSROOM"
             elif mode == ChatMode.PRACTICE and agent_result.get("quiz_data"):
-                ui_component = chat_a2ui_service.generate_quiz_ui(agent_result["quiz_data"])
+                ui_component = a2ui_producer.produce_quiz(agent_result["quiz_data"])
             elif mode == ChatMode.QUICK_EXPLAINER:
                 topic = context.get("topic", "Topic")
-                ui_component = chat_a2ui_service.generate_explanation_ui(
-                    assembled["response"], topic
+                ui_component = a2ui_producer.produce_explanation(
+                    assembled["response"], topic=topic
                 )
             elif mode == ChatMode.NOTE_TAKER and agent_result.get("note_data"):
+                # Notes still use ChatA2UIService (no producer method yet)
                 ui_component = chat_a2ui_service.generate_note_ui(agent_result["note_data"])
             else:
-                # Generate welcome UI for general responses
-                user_name = current_user.first_name if current_user else "there"
-                ui_component = chat_a2ui_service.generate_welcome_ui(user_name)
+                # General responses — produce an explanation card
+                ui_component = a2ui_producer.produce_explanation(
+                    assembled["response"], topic=request.message[:80]
+                )
         except Exception as e:
             logger.error(f"A2UI generation failed: {e}")
-            ui_component = chat_a2ui_service.generate_error_ui("Failed to generate interface")
+            ui_component = a2ui_producer.produce_error("Failed to generate interface")
 
         response_obj = ChatResponse(
             response=assembled["response"],
@@ -480,14 +495,14 @@ async def chat_endpoint(
             ] if assembled["response"] else [])
         )
         
-        # Safe Serialization of UI Component
+        # Safe Serialization of UI Component (snake_case for iOS CodingKeys)
         if ui_component:
-            if hasattr(ui_component, "model_dump"):
-                response_obj.ui_component = ui_component.model_dump(by_alias=True, exclude_none=True)
+            if hasattr(ui_component, "to_dict"):
+                response_obj.ui_component = ui_component.to_dict()
+            elif hasattr(ui_component, "model_dump"):
+                response_obj.ui_component = ui_component.model_dump(by_alias=False, exclude_none=True)
             elif hasattr(ui_component, "dict"):
-                 response_obj.ui_component = ui_component.dict(by_alias=True, exclude_none=True)
-            elif hasattr(ui_component, "to_dict"):
-                 response_obj.ui_component = ui_component.to_dict()
+                 response_obj.ui_component = ui_component.dict(by_alias=False, exclude_none=True)
             else:
                  logger.warning(f"Could not serialize ui_component of type {type(ui_component)}")
                  response_obj.ui_component = None

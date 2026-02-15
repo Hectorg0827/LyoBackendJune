@@ -14,7 +14,7 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
-from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse
+from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,31 @@ async def stream_lyo2_chat(
             
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
 
+            # ── Deterministic A2UI injection ──────────────────────────
+            # The LLM planner sometimes omits GENERATE_A2UI steps even
+            # when the intent clearly demands rich UI. Ensure one exists.
+            _has_a2ui_step = any(
+                s.action_type == ActionType.GENERATE_A2UI for s in plan.steps
+            )
+            _intent_to_a2ui = {
+                Intent.COURSE:     {"ui_type": "course", "title": request.text or ""},
+                Intent.EXPLAIN:    {"ui_type": "explanation"},
+                Intent.QUIZ:       {"ui_type": "quiz"},
+                Intent.FLASHCARDS: {"ui_type": "quiz"},
+                Intent.STUDY_PLAN: {"ui_type": "study_plan"},
+            }
+            if not _has_a2ui_step and decision.intent in _intent_to_a2ui:
+                a2ui_params = _intent_to_a2ui[decision.intent]
+                plan.steps.append(PlannedAction(
+                    action_type=ActionType.GENERATE_A2UI,
+                    description=f"Auto-injected A2UI step for intent {decision.intent}",
+                    parameters=a2ui_params,
+                ))
+                logger.info(
+                    f"📌 [STREAM][{trace_id}] Injected GENERATE_A2UI step "
+                    f"(intent={decision.intent}, ui_type={a2ui_params['ui_type']})"
+                )
+
             # 4. Layer C: Execution (Simulated Streaming)
             logger.info(f"⚡ [STREAM][{trace_id}] Starting Execution...")
             e_start = time.time()
@@ -96,7 +121,8 @@ async def stream_lyo2_chat(
                         user_id=str(current_user.id),
                         plan=plan,
                         original_request=request.text or "",
-                        conversation_history=history
+                        conversation_history=history,
+                        intent=decision.intent.value if decision.intent else None
                     ),
                     timeout=60.0 # Execution can take longer
                 )
