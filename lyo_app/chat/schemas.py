@@ -382,3 +382,7 @@ class GreetingResponse(BaseModel):
     """Response for proactive greeting"""
     greeting: str = Field(..., description="The generated greeting message")
     context_used: bool = Field(False, description="Whether personalized context was used")
+    suggestions: list[str] = Field(
+        default=["Teach me something new", "Create a course", "Quiz me on a topic"],
+        description="Suggestion chips to show after the greeting"
+    )

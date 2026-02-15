@@ -1,5 +1,6 @@
 import logging
 import json
+import uuid
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
@@ -9,6 +10,7 @@ from lyo_app.services.mutator import FollowUpMutator
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
 from lyo_app.chat.a2ui_integration import ChatA2UIService
+from lyo_app.a2ui.a2ui_producer import a2ui_producer
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +109,11 @@ USER QUESTION:
 
         return static_content or "I'm sorry, I encountered an issue generating a response. Please try again."
 
-    async def execute(self, user_id: str, plan: LyoPlan, original_request: str, conversation_history: list = None) -> UnifiedChatResponse:
+    async def execute(self, user_id: str, plan: LyoPlan, original_request: str, conversation_history: list = None, intent: str = None) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
         conversation_history: list of {"role": ..., "content": ...} dicts for multi-turn context.
+        intent: the router's classified intent (e.g. EXPLAIN, QUIZ, COURSE) for contextual suggestions.
         """
         execution_context = {
             "retrieved_content": [],
@@ -151,7 +154,7 @@ USER QUESTION:
                     logger.warning("UPDATE_ARTIFACT requested but no artifact_id found in plan")
                 
             elif step.action_type == ActionType.GENERATE_A2UI:
-                # Generate rich A2UI components based on the ui_type parameter
+                # Generate rich A2UI components via the A2UIProducer chokepoint
                 ui_type = step.parameters.get("ui_type", "explanation")
                 a2ui_result = await self._generate_a2ui(
                     ui_type=ui_type,
@@ -160,10 +163,11 @@ USER QUESTION:
                     context=execution_context
                 )
                 if a2ui_result:
-                    if a2ui_result.get("type") == "open_classroom":
-                        execution_context["open_classroom_payload"] = a2ui_result["payload"]
-                    elif a2ui_result.get("component"):
-                        execution_context["a2ui_blocks"].append(a2ui_result["component"])
+                    if a2ui_result.get("open_classroom"):
+                        execution_context["open_classroom_payload"] = a2ui_result["open_classroom"]
+                        logger.info(f"\u2705 open_classroom_payload set via A2UIProducer")
+                    if a2ui_result.get("a2ui_component"):
+                        execution_context["a2ui_blocks"].append(a2ui_result["a2ui_component"])
                 
             elif step.action_type == ActionType.GENERATE_TEXT:
                 # Final text generation step — call Gemini with all context
@@ -203,11 +207,26 @@ USER QUESTION:
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=[UIBlock(type=UIBlockType.CTA_ROW, content={"actions": ["Continue", "More info"]})],
+            next_actions=self._contextual_actions(intent),
             a2ui_blocks=a2ui_ui_blocks,
             open_classroom_payload=execution_context.get("open_classroom_payload"),
-            metadata={"latency_ms": 100} # Mock
+            metadata={"latency_ms": 100}
         )
+
+    def _contextual_actions(self, intent: str = None) -> list:
+        """Generate context-aware suggestion buttons based on the classified intent."""
+        _intent_actions = {
+            "EXPLAIN":    ["Deep Dive", "Quiz Me", "Create Course"],
+            "COURSE":     ["Start Learning", "Customize", "Save for Later"],
+            "QUIZ":       ["Explain Answers", "Try Harder", "New Topic"],
+            "FLASHCARDS": ["Start Review", "More Cards", "Quiz Me"],
+            "STUDY_PLAN": ["Start Now", "Modify Plan", "Create Course"],
+            "SUMMARIZE_NOTES": ["Deep Dive", "Quiz Me", "Flashcards"],
+            "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
+            "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
+        }
+        actions = _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
+        return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions})]
 
     async def _generate_a2ui(
         self,
@@ -217,64 +236,53 @@ USER QUESTION:
         context: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """
-        Generate A2UI components or open_classroom payloads based on ui_type.
+        Generate A2UI components via the A2UIProducer chokepoint.
         
-        Returns dict with either:
-          {"type": "open_classroom", "payload": {...}}  — for course creation
-          {"component": A2UIComponent}                  — for rich UI blocks
-          None on failure
+        The Producer guarantees:
+        - Valid A2UI component output (never None, never malformed)
+        - iOS-compatible open_classroom payload shape
+        - Sub-millisecond rendering (pure Python, no LLM in this stage)
+        
+        Returns dict with:
+          {"a2ui_component": A2UIComponent, "open_classroom": {...}} — for courses
+          {"a2ui_component": A2UIComponent}                          — for other types
         """
         try:
+            topic = step_params.get("title", original_request[:80])
+            
             if ui_type == "course":
-                # Generate course data via Gemini, then build an open_classroom payload
+                # Generate course data via Gemini, then pass through producer
                 course_data = await self._generate_course_data(original_request, step_params, context)
-                if course_data:
-                    # Also generate an A2UI card for it
-                    a2ui_comp = self.a2ui_service.generate_course_creation_ui(course_data)
-                    return {
-                        "type": "open_classroom",
-                        "payload": course_data,
-                        "component": a2ui_comp
-                    }
+                result = a2ui_producer.produce_course(course_data, topic=topic)
+                return result
                     
             elif ui_type == "quiz":
                 quiz_data = step_params.get("quiz_data") or await self._generate_quiz_data(original_request, context)
-                if quiz_data:
-                    a2ui_comp = self.a2ui_service.generate_quiz_ui(quiz_data)
-                    return {"component": a2ui_comp}
+                component = a2ui_producer.produce_quiz(quiz_data)
+                return {"a2ui_component": component}
                     
             elif ui_type == "study_plan":
                 plan_data = step_params.get("plan_data") or {
-                    "title": step_params.get("title", original_request[:80]),
+                    "title": topic,
                     "milestones": [],
                     "duration": "2 weeks"
                 }
-                # Use explanation UI as a rich container for study plans
-                topic = step_params.get("title", original_request[:80])
-                content = context.get("final_text", f"Here's your study plan for {topic}")
-                a2ui_comp = self.a2ui_service.generate_explanation_ui(content, f"📋 Study Plan: {topic}")
-                return {"component": a2ui_comp}
+                component = a2ui_producer.produce_study_plan(plan_data, topic=topic)
+                return {"a2ui_component": component}
                 
-            elif ui_type == "explanation":
-                topic = step_params.get("title", original_request[:80])
-                # If we already have generated text, use it; otherwise generate concise content
+            else:  # "explanation" or any other type
+                # If we already have generated text, use it; otherwise generate
                 content = context.get("final_text", "")
                 if not content:
                     content = await self._generate_text(original_request, context, step_params)
                     context["final_text"] = content
-                a2ui_comp = self.a2ui_service.generate_explanation_ui(content, topic)
-                return {"component": a2ui_comp}
-                
-            else:
-                logger.warning(f"Unknown A2UI ui_type: {ui_type}, falling back to explanation")
-                topic = step_params.get("title", original_request[:80])
-                content = context.get("final_text", original_request)
-                a2ui_comp = self.a2ui_service.generate_explanation_ui(content, topic)
-                return {"component": a2ui_comp}
+                component = a2ui_producer.produce_explanation(content, topic=topic)
+                return {"a2ui_component": component}
                 
         except Exception as e:
             logger.error(f"A2UI generation failed for ui_type={ui_type}: {e}", exc_info=True)
-            return None
+            error_component = a2ui_producer.produce_error(f"Content generation failed")
+            return {"a2ui_component": error_component}
 
     async def _generate_course_data(
         self, original_request: str, step_params: Dict[str, Any], context: Dict[str, Any]
