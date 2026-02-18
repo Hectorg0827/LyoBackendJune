@@ -243,6 +243,14 @@ class AIChatRequest(BaseModel):
     context: Optional[Dict[str, str]] = Field(None, description="Optional context (course_id, lesson_id)")
 
 
+class SuggestionChipResponse(BaseModel):
+    """A single context-aware suggestion chip returned with each chat response"""
+    id: str
+    text: str
+    icon: str
+    actionType: str
+
+
 class AIChatResponse(BaseModel):
     """Response schema for quick chat"""
     model_config = {"protected_namespaces": ()}
@@ -251,6 +259,7 @@ class AIChatResponse(BaseModel):
     conversationHistory: Optional[List[Dict[str, str]]] = Field(None, description="Conversation turns")
     latency_ms: Optional[int] = Field(None, description="Response time in milliseconds")
     model_used: Optional[str] = Field(None, description="AI model used")
+    suggestions: Optional[List[SuggestionChipResponse]] = Field(None, description="Context-aware follow-up chips")
 
 
 @router.post("/chat", response_model=AIChatResponse)
@@ -265,7 +274,56 @@ async def quick_chat(request: AIChatRequest):
     Note: This endpoint does NOT require authentication (public access).
     """
     start_time = time.time()
-    
+
+    # ---------------------------------------------------------------------------
+    # Rule-based suggestion fallback chips (used if LLM suggestion gen fails)
+    # ---------------------------------------------------------------------------
+    _FALLBACK_SUGGESTIONS: List[SuggestionChipResponse] = [
+        SuggestionChipResponse(id="1", text="Teach me something new", icon="sparkles", actionType="learn"),
+        SuggestionChipResponse(id="2", text="Create a course for me", icon="plus.circle", actionType="create_course"),
+        SuggestionChipResponse(id="3", text="🤖 Multi-Agent Course", icon="cpu", actionType="create_course_a2a"),
+        SuggestionChipResponse(id="4", text="Quiz me on a topic", icon="questionmark.circle", actionType="quiz"),
+    ]
+
+    async def _generate_suggestions(user_msg: str, ai_reply: str) -> List[SuggestionChipResponse]:
+        """Ask AI for 3 contextual follow-up chips based on the conversation turn."""
+        try:
+            suggestion_prompt = (
+                "Based on the following conversation turn, return exactly 3 follow-up suggestion chips as JSON. "
+                "Each chip drives the user's next action inside a learning app. "
+                "Return ONLY a JSON array like:\n"
+                '[{"id":"s1","text":"Short label","icon":"SF Symbol name","actionType":"learn|create_course|create_course_a2a|quiz|flashcards|extract|explore"}]\n'
+                "Keep text under 35 chars. Use common SF Symbol names (sparkles, book.fill, plus.circle, questionmark.circle, cpu, rectangle.stack, doc.text, map).\n"
+                f"User said: {user_msg}\n"
+                f"Assistant replied: {ai_reply[:300]}"
+            )
+            suggestion_messages = [
+                {"role": "system", "content": "You are a JSON generator. Reply with only valid JSON, no markdown fences."},
+                {"role": "user", "content": suggestion_prompt},
+            ]
+            result = await ai_resilience_manager.chat_completion(
+                messages=suggestion_messages,
+                max_tokens=250,
+                temperature=0.5,
+            )
+            raw = result.get("content") or result.get("response") or result.get("text") or ""
+            # Strip any accidental markdown fences
+            raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            import json as _json
+            chips_data = _json.loads(raw)
+            chips = []
+            for i, c in enumerate(chips_data[:4]):
+                chips.append(SuggestionChipResponse(
+                    id=c.get("id", f"s{i+1}"),
+                    text=c.get("text", ""),
+                    icon=c.get("icon", "sparkles"),
+                    actionType=c.get("actionType", "learn"),
+                ))
+            return chips if chips else _FALLBACK_SUGGESTIONS
+        except Exception as se:
+            logger.warning(f"Suggestion generation failed (using fallback): {se}")
+            return _FALLBACK_SUGGESTIONS
+
     try:
         # Ensure AI manager is initialized
         if not ai_resilience_manager.session:
@@ -302,6 +360,9 @@ async def quick_chat(request: AIChatRequest):
         
         response_text = result.get("content") or result.get("response") or result.get("text") or ""
         latency_ms = int((time.time() - start_time) * 1000)
+
+        # Generate context-aware chips after the main response (non-blocking best-effort)
+        suggestions = await _generate_suggestions(request.message, response_text)
         
         return AIChatResponse(
             response=response_text,
@@ -310,7 +371,8 @@ async def quick_chat(request: AIChatRequest):
                 {"role": "assistant", "content": response_text}
             ],
             latency_ms=latency_ms,
-            model_used="gemini-flash"
+            model_used="gemini-flash",
+            suggestions=suggestions,
         )
         
     except Exception as e:
@@ -321,7 +383,8 @@ async def quick_chat(request: AIChatRequest):
         return AIChatResponse(
             response="I'm here to help! Could you tell me more about what you'd like to learn?",
             latency_ms=latency_ms,
-            model_used="fallback"
+            model_used="fallback",
+            suggestions=_FALLBACK_SUGGESTIONS,
         )
 
 
