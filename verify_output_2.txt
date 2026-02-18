@@ -1,0 +1,26 @@
+Traceback (most recent call last):
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/verify_router.py", line 5, in <module>
+    from lyo_app.chat.router import ChatRouter, ChatMode
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/chat/__init__.py", line 16, in <module>
+    from lyo_app.chat.routes import router as chat_router
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/lyo_app/chat/routes.py", line 23, in <module>
+    from sqlalchemy.ext.asyncio import AsyncSession
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/__init__.py", line 18, in <module>
+    from .scoping import async_scoped_session as async_scoped_session
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/scoping.py", line 24, in <module>
+    from .session import _AS
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 35, in <module>
+    from ...orm import close_all_sessions as _sync_close_all_sessions
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/sqlalchemy/orm/__init__.py", line 23, in <module>
+    from ._orm_constructors import _mapper_fn as mapper
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/sqlalchemy/orm/_orm_constructors.py", line 34, in <module>
+    from .session import Session
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 68, in <module>
+    from .unitofwork import UOWTransaction
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1091, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1191, in get_data
+KeyboardInterrupt

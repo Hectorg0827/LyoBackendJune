@@ -1,0 +1,34 @@
+
+--- Testing Chat Router ---
+>>> [PID 53179] AI Resilience: Lazy Initialization in chat_completion...
+>>> [PID 53179] AI Resilience Init: Starting...
+>>> [PID 53179] API Key Check:
+    - GEMINI_API_KEY env: None
+    - GOOGLE_API_KEY env: None
+    - OPENAI_API_KEY env: None
+    - Attempting to fetch GEMINI_API_KEY from secrets...
+    - Attempting to fetch GEMINI_API_KEY from settings...
+    - Final GEMINI_KEY present: True
+    - Final OPENAI_KEY present: False
+>>> [PID 53179] AI Resilience Init: Configured 4 models (OpenAI: False)
+INFO:lyo_app.core.ai_resilience:AI Resilience Manager initialized with 4 models
+INFO:lyo_app.core.ai_resilience:✅ Connection pool pre-warmed successfully
+>>> [PID 53179] chat_completion: provider_order=['gemini-2.0-flash', 'gpt-4o-mini'], self.models.keys()=['gemini-2.0-flash', 'gpt-4o-mini', 'gemini-2.0-pro', 'gpt-4o']
+>>> [PID 53179] chat_completion: available_models_with_configs count=2
+Input: 'Quiz me on Swift' -> Mode: practice, Conf: 0.9, Reason: Semantic routing: The user wants to be quizzed, indicating a desire for practice.
+Traceback (most recent call last):
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/verify_router.py", line 51, in <module>
+    asyncio.run(test_router())
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 686, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/Users/hectorgarcia/Desktop/LyoBackendJune/verify_router.py", line 21, in test_router
+    assert "strong pattern match" in reason1.lower() or "pattern match" in reason1.lower()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
