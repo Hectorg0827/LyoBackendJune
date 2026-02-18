@@ -16,7 +16,7 @@ async def get_feed_alias(
     limit: int = Query(10),
     content_type: Optional[str] = Query(None)
 ):
-    \"\"\"Alias for /feeds/ to support iOS app naming convention.\"\"\"
+    """Alias for /feeds/ to support iOS app naming convention."""
     # We adapt the parameters (offset -> skip) and call the existing feed logic
     from lyo_app.api.v1.feeds import get_personalized_feed
     return await get_personalized_feed(
@@ -31,7 +31,7 @@ async def get_feed_alias(
 async def get_progress_analytics(
     current_user: Any = Depends(get_current_user_or_guest)
 ):
-    \"\"\"Placeholder for analytics progress to avoid 404s in iOS app.\"\"\"
+    """Placeholder for analytics progress to avoid 404s in iOS app."""
     return {
         "status": "success",
         "data": {

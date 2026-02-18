@@ -64,28 +64,28 @@ class A2UIElementType(str, Enum):
     VIDEO_TRANSCRIPT = "video_transcript"
 
     # 4. Quiz & Assessment
-    QUIZ_MCQ = "quiz_mcq"
-    QUIZ_MULTI_SELECT = "quiz_multi_select"
-    QUIZ_TRUE_FALSE = "quiz_true_false"
-    QUIZ_FILL_BLANK = "quiz_fill_blank"
-    QUIZ_MATCHING = "quiz_matching"
-    QUIZ_DRAG_DROP = "quiz_drag_drop"
-    QUIZ_ORDERING = "quiz_ordering"
-    QUIZ_SHORT_ANSWER = "quiz_short_answer"
-    QUIZ_ESSAY = "quiz_essay"
-    QUIZ_MATH = "quiz_math"
-    QUIZ_CODE = "quiz_code"
-    QUIZ_DRAWING = "quiz_drawing"
-    QUIZ_AUDIO = "quiz_audio"
-    QUIZ_SPEAKING = "quiz_speaking"
-    QUIZ_TIMING = "quiz_timing"
-    QUIZ_ADAPTIVE = "quiz_adaptive"
+    QUIZ_MCQ = "quizMcq"
+    QUIZ_MULTI_SELECT = "quizMultiSelect"
+    QUIZ_TRUE_FALSE = "quizTrueFalse"
+    QUIZ_FILL_BLANK = "quizFillBlank"
+    QUIZ_MATCHING = "quizMatching"
+    QUIZ_DRAG_DROP = "quizDragDrop"
+    QUIZ_ORDERING = "quizOrdering"
+    QUIZ_SHORT_ANSWER = "quizShortAnswer"
+    QUIZ_ESSAY = "quizEssay"
+    QUIZ_MATH = "quizMathInput"
+    QUIZ_CODE = "quizCodeExercise"
+    QUIZ_DRAWING = "quizDrawing"
+    QUIZ_AUDIO = "quizVoiceResponse"
+    QUIZ_SPEAKING = "quizVoiceResponse"
+    QUIZ_TIMING = "quizMcq"
+    QUIZ_ADAPTIVE = "quizMcq"
     FLASHCARD = "flashcard"
-    FLASHCARD_DECK = "flashcard_deck"
-    PRACTICE_SET = "practice_set"
-    EXAM_MODE = "exam_mode"
-    RUBRIC = "rubric"
-    CONFIDENCE_METER = "confidence_meter"
+    FLASHCARD_DECK = "flashcardDeck"
+    PRACTICE_SET = "quizMcq"
+    EXAM_MODE = "quizMcq"
+    RUBRIC = "rubricView"
+    CONFIDENCE_METER = "progressBar"
 
     # 5. Study Planning & Organization
     STUDY_PLAN_OVERVIEW = "study_plan_overview"
@@ -136,9 +136,9 @@ class A2UIElementType(str, Enum):
     SUBMISSION_PORTAL = "submission_portal"
 
     # 8. Interactive Widgets & Controls
-    ACTION_BUTTON = "action_button"
+    ACTION_BUTTON = "button"
     SUGGESTIONS = "suggestions"
-    SELECTION_CHIPS = "selection_chips"
+    SELECTION_CHIPS = "filterChips"
     RATING_INPUT = "rating_input"
     SLIDER = "slider"
     TOGGLE = "toggle"
@@ -166,9 +166,9 @@ class A2UIElementType(str, Enum):
     KNOWLEDGE_GRAPH = "knowledge_graph"
 
     # 10. Gamification & Feedback
-    PROGRESS_BAR = "progress_bar"
-    PROGRESS_RING = "progress_ring"
-    XP_GAIN = "xp_gain"
+    PROGRESS_BAR = "progressBar"
+    PROGRESS_RING = "progressBar"
+    XP_GAIN = "xpBadge"
     STREAK_INDICATOR = "streak_indicator"
     ACHIEVEMENT = "achievement"
     CONFETTI = "confetti"
@@ -196,12 +196,12 @@ class A2UIElementType(str, Enum):
     COGNITIVE_LOAD_INDICATOR = "cognitive_load"
     
     # 12. Layout
-    VSTACK = "vstack"
-    HSTACK = "hstack"
-    ZSTACK = "zstack"
+    VSTACK = "vStack"
+    HSTACK = "hStack"
+    ZSTACK = "zStack"
     GRID = "grid"
     CARD = "card"
-    SCROLL = "scroll"
+    SCROLL = "scrollView"
     
     # Fallback
     UNKNOWN = "unknown"
@@ -281,20 +281,22 @@ class A2UIComponent(BaseModel):
     children: Optional[List['A2UIComponent']] = None
 
     def to_dict(self) -> dict:
-        """Convert to dict (Backward Compatibility)"""
-        # Try Pydantic v2
+        """Convert to dict for iOS consumption.
+        
+        Uses Python field names (snake_case) NOT aliases (camelCase),
+        because iOS CodingKeys expect snake_case:
+          foreground_color, background_color, font_size, etc.
+        Uses mode="json" to ensure enum values are serialized as strings.
+        """
         if hasattr(self, "model_dump"):
-            return self.model_dump(by_alias=True, exclude_none=True)
-        # Fallback to Pydantic v1
-        return self.dict(by_alias=True, exclude_none=True)
+            return self.model_dump(by_alias=False, exclude_none=True, mode="json")
+        return self.dict(by_alias=False, exclude_none=True)
 
     def to_json(self) -> str:
-        """Convert to JSON string (Backward Compatibility)"""
-        # Try Pydantic v2
+        """Convert to JSON string for iOS consumption."""
         if hasattr(self, "model_dump_json"):
-            return self.model_dump_json(by_alias=True, exclude_none=True)
-        # Fallback to Pydantic v1
-        return self.json(by_alias=True, exclude_none=True)
+            return self.model_dump_json(by_alias=False, exclude_none=True)
+        return self.json(by_alias=False, exclude_none=True)
 
     class Config:
         populate_by_name = True

@@ -9,6 +9,7 @@ FastAPI routes for the chat module including:
 - Practice endpoint
 - Note endpoints
 - Telemetry endpoints
+- A2A (Agent-to-Agent) endpoints
 """
 
 import asyncio
@@ -56,6 +57,12 @@ from lyo_app.core.context_engine import context_engine
 from lyo_app.core.personality import LYO_SYSTEM_PROMPT
 from lyo_app.chat.a2ui_integration import chat_a2ui_service
 from lyo_app.a2ui.a2ui_producer import a2ui_producer
+
+# A2A Imports
+from lyo_app.ai_agents.a2a.schemas import (
+    A2ACourseRequest, A2ACourseResponse,
+    StreamingEvent as A2AStreamingEvent
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,17 +200,12 @@ async def chat_endpoint(
             except Exception:
                 await db.rollback()
         
-        # 2. Route the message
-        mode, confidence, reasoning = chat_router.route(
-            message=request.message,
-            mode_hint=request.mode_hint,
-            action=request.action,
-            context=request.context
-        )
-        
-        logger.info(f"Routed to {mode.value} with confidence {confidence}: {reasoning}")
-        
-        # 3. Build context for agent
+        # 2. Build Context & History EARLY (for Router)
+        history = []
+        if request.conversation_history:
+            for msg in request.conversation_history:
+                history.append({"role": msg.role, "content": msg.content})
+
         context = {
             "context": request.context,
             "conversation_id": conversation.id,
@@ -225,13 +227,17 @@ async def chat_endpoint(
                     context["learner_id"] = str(current_user.id)
             except Exception as e:
                 logger.warning(f"Personalization context unavailable: {e}")
-                await db.rollback()
+                
+        # 3. Route the message (Now with full context)
+        mode, confidence, reasoning = await chat_router.route(
+            message=request.message,
+            mode_hint=request.mode_hint,
+            action=request.action,
+            context=context,
+            conversation_history=history
+        )
         
-        # 4. Build conversation history
-        history = []
-        if request.conversation_history:
-            for msg in request.conversation_history:
-                history.append({"role": msg.role, "content": msg.content})
+        logger.info(f"Routed to {mode.value} with confidence {confidence}: {reasoning}")
         
         # 5. Check cache for similar requests
         cache_hit = False
@@ -435,6 +441,16 @@ async def chat_endpoint(
                 )
             )
 
+        # Test Prep Logic
+        study_plan_data = None
+        if mode == ChatMode.TEST_PREP and agent_result.get("study_plan"):
+             study_plan_data = agent_result["study_plan"]
+             content_types.append({
+                 "type": "study_plan",
+                 "id": study_plan_data.get("plan_id", str(uuid4())),
+                 "data": study_plan_data
+             })
+
         # Generate A2UI component via A2UIProducer chokepoint
         ui_component = None
         try:
@@ -472,6 +488,7 @@ async def chat_endpoint(
             mode_confidence=confidence,
             quick_explainer=quick_explainer_data,
             course_proposal=course_proposal_data,
+            study_plan=study_plan_data,
             content_types=content_types,
             ui_component=None, # Filled below
             type=open_classroom_type,
@@ -578,36 +595,12 @@ async def chat_stream_endpoint(
                 except Exception:
                     await db.rollback()
             
-            # 2. Route the message
-            mode, confidence, reasoning = chat_router.route(
-                message=request.message,
-                mode_hint=request.mode_hint,
-                action=request.action,
-                context=request.context
-            )
-            
-            # 3. Send start event
-            yield StreamEvent(
-                event=EventType.MESSAGE_START,
-                data={
-                    "session_id": session_id,
-                    "conversation_id": conversation.id,
-                    "mode": mode.value,
-                    "confidence": confidence,
-                    "timestamp": time.time()
-                }
-            ).to_sse()
-            
-            # 4. Check cache first
-            cache_hit = False
-            cached_response = None
-            
-            if response_cache:
-                cached_response = await response_cache.get(request.message, mode.value)
-                if cached_response:
-                    cache_hit = True
-            
-            # 5. Build context
+            # 2. Build Context & History EARLY (for Router)
+            history = []
+            if request.conversation_history:
+                for msg in request.conversation_history:
+                    history.append({"role": msg.role, "content": msg.content})
+
             context = {
                 "context": request.context,
                 "conversation_id": conversation.id,
@@ -630,10 +623,35 @@ async def chat_stream_endpoint(
                 except Exception as e:
                     logger.warning(f"Personalization context unavailable: {e}")
             
-            history = []
-            if request.conversation_history:
-                for msg in request.conversation_history:
-                    history.append({"role": msg.role, "content": msg.content})
+            # 3. Route the message
+            mode, confidence, reasoning = await chat_router.route(
+                message=request.message,
+                mode_hint=request.mode_hint,
+                action=request.action,
+                context=context,
+                conversation_history=history
+            )
+            
+            # 4. Send start event
+            yield StreamEvent(
+                event=EventType.MESSAGE_START,
+                data={
+                    "session_id": session_id,
+                    "conversation_id": conversation.id,
+                    "mode": mode.value,
+                    "confidence": confidence,
+                    "timestamp": time.time()
+                }
+            ).to_sse()
+            
+            # 5. Check cache first
+            cache_hit = False
+            cached_response = None
+            
+            if response_cache:
+                cached_response = await response_cache.get(request.message, mode.value)
+                if cached_response:
+                    cache_hit = True
             
             # 6. Get or generate response
             if cached_response:
@@ -784,9 +802,126 @@ async def _save_stream_messages(
         logger.error(f"Failed to save stream messages: {e}")
 
 
+
 # =============================================================================
-# QUICK EXPLAINER ENDPOINT
+# A2A ENDPOINTS
 # =============================================================================
+
+@router.post("/a2a/generate", response_model=A2ACourseResponse)
+async def generate_a2a_course(
+    request: A2ACourseRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user)
+):
+    """
+    Generate a complete course using the A2A multi-agent pipeline (Synchronous).
+    """
+    try:
+        from lyo_app.ai_agents.a2a import get_orchestrator
+        orchestrator = get_orchestrator()
+        
+        # Inject user context if authenticated
+        if current_user and not request.user_context:
+            request.user_context = {
+                "user_id": str(current_user.id),
+                "level": "intermediate" # Could fetch from profile
+            }
+            
+        return await orchestrator.generate_course(request)
+    except Exception as e:
+        logger.error(f"A2A generation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.post("/a2a/stream")
+async def stream_a2a_course(
+    request: A2ACourseRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user)
+):
+    """
+    Generate a course using A2A with streaming updates (SSE).
+    """
+    from lyo_app.ai_agents.a2a import get_orchestrator
+    orchestrator = get_orchestrator()
+    
+    # Inject user context if authenticated
+    if current_user and not request.user_context:
+        request.user_context = {
+            "user_id": str(current_user.id),
+            "level": "intermediate"
+        }
+
+    async def generate_events() -> AsyncGenerator[str, None]:
+        try:
+            async for event in orchestrator.generate_course_streaming(request):
+                yield event.to_sse()
+        except Exception as e:
+            logger.error(f"A2A stream failed: {e}", exc_info=True)
+            yield A2AStreamingEvent(
+                type=EventType.ERROR,
+                task_id="unknown",
+                agent_name="orchestrator",
+                data={"error": str(e)},
+                message="Stream failed"
+            ).to_sse()
+
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream"
+    )
+
+@router.get("/a2a/status/{task_id}")
+async def get_a2a_task_status(task_id: str):
+    """
+    Get status of an A2A generation task.
+    """
+    from lyo_app.ai_agents.a2a import get_orchestrator
+    orchestrator = get_orchestrator()
+    state = orchestrator.get_pipeline_state()
+    
+    if state and state.pipeline_id == task_id:
+        return {
+            "task_id": state.pipeline_id,
+            "status": state.final_status if state.final_status else "in_progress",
+            "progress_percent": int(state.overall_progress * 100),
+            "current_stage": state.current_phase.value if state.current_phase else None,
+            "error": None # Simplified for now
+        }
+    
+    raise HTTPException(status_code=404, detail="Task not found or expired")
+
+@router.get("/a2a/result/{task_id}")
+async def get_a2a_task_result(task_id: str):
+    """
+    Get final result of an A2A generation task.
+    Returns format compatible with APICourseResult.
+    """
+    from lyo_app.ai_agents.a2a import get_orchestrator
+    orchestrator = get_orchestrator()
+    state = orchestrator.get_pipeline_state()
+    
+    if state and state.pipeline_id == task_id:
+        # Check if finalized
+        output = state.final_output
+        if not output:
+             raise HTTPException(status_code=400, detail="Result not ready")
+             
+        # Extract course data from assembly artifact
+        # Note: The structure depends on what _assemble returns in orchestrator.py
+        # It returns {"artifacts": {...}, "course_id": ...}
+        
+        # Simplified return for iOS compatibility
+        return {
+            "course_id": output.get("course_id", task_id),
+            "title": output.get("title", f"Course on {state.request.topic}"),
+            "description": output.get("description", "A2A Generated Course"),
+            "modules": [], # TODO: Extract real modules from artifacts
+            "estimated_duration": 45,
+            "difficulty": state.request.difficulty
+        }
+        
+    raise HTTPException(status_code=404, detail="Result not found or expired")
 
 @router.post("/explain", response_model=QuickExplainerResponse)
 async def quick_explain_endpoint(
@@ -827,58 +962,7 @@ async def quick_explain_endpoint(
         )
 
 
-# =============================================================================
-# COURSE LIST ENDPOINT (Missing Fix)
-# =============================================================================
 
-@router.get("/courses", response_model=List[ChatCourseRead])
-async def get_chat_courses(
-    limit: int = Query(20, ge=1, le=50),
-    offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get list of AI-generated courses suitable for chat cards.
-    """
-    try:
-        courses = await course_store.get_public_courses(db, limit=limit, offset=offset)
-        return [
-            ChatCourseRead(
-                id=c.id,
-                title=c.title,
-                description=c.description,
-                difficulty=c.difficulty,
-                estimated_hours=c.estimated_hours,
-                module_count=len(c.modules) if c.modules else 0
-            ) 
-            for c in courses
-        ]
-    except Exception as e:
-        logger.error(f"Failed to fetch courses: {e}")
-        # Return empty list instead of erroring to keep chat functional
-        return []
-        
-        assembled = response_assembler.assemble(
-            response=result.get("response", ""),
-            mode=ChatMode.QUICK_EXPLAINER,
-            ctas=result.get("ctas"),
-            chips=result.get("chips")
-        )
-        
-        return QuickExplainerResponse(
-            explanation=assembled["response"],
-            key_points=result.get("key_points", []),
-            related_topics=result.get("related_topics", []),
-            ctas=assembled["ctas"],
-            chip_actions=assembled["chip_actions"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Quick explain error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
 
 
 # =============================================================================
