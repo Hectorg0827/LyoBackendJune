@@ -253,6 +253,9 @@ class A2UIProps(BaseModel):
     is_disabled: Optional[bool] = Field(None, alias="isDisabled")
     variant: Optional[str] = None  # For button styles: primary, outline, etc.
     
+    # Intent-based routing (e.g. "open_classroom" triggers classroom on iOS)
+    intent: Optional[str] = None
+    
     # Streaming
     stream_id: Optional[str] = Field(None, alias="streamId")
     
