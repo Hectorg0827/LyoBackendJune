@@ -318,7 +318,7 @@ class A2UIProducer:
         ], spacing=12))
 
         inner = self.gen.vstack(children, spacing=16, padding_horizontal=20, padding_vertical=20)
-        return A2UIComponent(type=A2UIElementType.CARD, props=A2UIProps(), children=[inner])
+        return A2UIComponent(type=A2UIElementType.CARD, props=A2UIProps(intent="open_classroom"), children=[inner])
 
     def _render_explanation(self, explanation: NormalizedExplanation) -> A2UIComponent:
         """Render an explanation with content, key points, and actions."""
