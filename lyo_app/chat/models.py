@@ -31,6 +31,7 @@ class ChatMode(str, Enum):
     COURSE_PLANNER = "course_planner"
     PRACTICE = "practice"
     NOTE_TAKER = "note_taker"
+    TEST_PREP = "test_prep"
     GENERAL = "general"
 
 

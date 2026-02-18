@@ -615,6 +615,77 @@ class GeneralAgent(BaseAgent):
             yield chunk
 
 
+
+# =============================================================================
+# TEST PREP AGENT
+# =============================================================================
+
+class TestPrepAgent(BaseAgent):
+    """Agent for creating study plans and test prep"""
+    
+    mode = ChatMode.TEST_PREP
+    
+    async def process(
+        self,
+        message: str,
+        context: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> Dict[str, Any]:
+        """Process test prep request"""
+        context = context or {}
+        
+        # Build messages
+        messages = [
+            {"role": "system", "content": self.get_system_prompt(context.get("learner_context"))},
+        ]
+        
+        # Add conversation history
+        if conversation_history:
+            for msg in conversation_history[-6:]:
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", "")
+                })
+        
+        messages.append({"role": "user", "content": message})
+        
+        # Call AI
+        response_text, metadata = await self.call_ai(messages, temperature=0.6)
+        
+        # Parse plan
+        plan_data = self._parse_plan_response(response_text)
+        
+        # Determine CTAs based on plan existence
+        ctas = []
+        if plan_data:
+            ctas = [
+                {"type": "add_to_calendar", "label": "Add to Calendar", "action": "add_calendar", "priority": 1},
+                {"type": "start_session", "label": "Start First Session", "action": "start_study_session", "priority": 2}
+            ]
+        
+        return {
+            "response": response_text,
+            "study_plan": plan_data,
+            "ctas": ctas,
+            "chips": self.get_chips(),
+            **metadata
+        }
+    
+    def _parse_plan_response(self, text: str) -> Optional[Dict[str, Any]]:
+        """Parse study plan JSON"""
+        try:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                json_str = text[start:end]
+                data = json.loads(json_str)
+                if data.get("type") == "STUDY_PLAN":
+                    return data.get("payload")
+        except Exception:
+            pass
+        return None
+
+
 # =============================================================================
 # AGENT REGISTRY
 # =============================================================================
@@ -628,6 +699,7 @@ class AgentRegistry:
             ChatMode.COURSE_PLANNER: CoursePlannerAgent(),
             ChatMode.PRACTICE: PracticeAgent(),
             ChatMode.NOTE_TAKER: NoteTakerAgent(),
+            ChatMode.TEST_PREP: TestPrepAgent(),
             ChatMode.GENERAL: GeneralAgent(),
         }
     

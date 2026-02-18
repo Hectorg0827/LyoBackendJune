@@ -13,6 +13,7 @@ class InputModality(str, Enum):
 
 class Intent(str, Enum):
     EXPLAIN = "EXPLAIN"
+    COURSE = "COURSE"  # "teach me X", "create a course", "learn about X"
     QUIZ = "QUIZ"
     FLASHCARDS = "FLASHCARDS"
     STUDY_PLAN = "STUDY_PLAN"

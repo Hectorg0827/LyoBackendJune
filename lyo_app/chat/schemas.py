@@ -144,6 +144,33 @@ class CourseProposalData(BaseModel):
     learning_objectives: List[str] = Field(default_factory=list)
 
 
+class StudySession(BaseModel):
+    """A scheduled study session"""
+    id: str
+    title: str
+    description: str
+    topic: str
+    start_time: Optional[datetime] = None
+    duration_minutes: int
+    activity_type: str = Field(..., description="study, review, quiz, practice")
+
+
+class TestPrepData(BaseModel):
+    """Test prep embedded data for iOS"""
+    plan_id: str
+    title: str
+    sessions: List[StudySession]
+    total_sessions: int
+    test_date: Optional[datetime]
+
+
+class StudyPlanResponse(BaseModel):
+    """Response for test prep study plan"""
+    plan_id: str
+    title: str
+    test_date: Optional[datetime] = None
+    sessions: List[StudySession]
+    ctas: List[CTAItem] = Field(default_factory=list)
 # =============================================================================
 # A2UI OPEN_CLASSROOM SCHEMAS
 # =============================================================================
@@ -186,6 +213,9 @@ class ChatResponse(BaseModel):
     )
     course_proposal: Optional[CourseProposalData] = Field(
         None, serialization_alias="courseProposal", description="Course proposal data when mode is 'course_plan'"
+    )
+    study_plan: Optional[TestPrepData] = Field(
+        None, serialization_alias="studyPlan", description="Study plan data when mode is 'test_prep'"
     )
     content_types: Optional[List[Dict[str, Any]]] = Field(
         None, serialization_alias="contentTypes", description="A2UI content widgets"

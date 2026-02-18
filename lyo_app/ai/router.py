@@ -30,6 +30,7 @@ Lyo is an Outcome Engine for learning.
 
 ## Intents (use EXACTLY one of these values):
 - EXPLAIN: User wants a concept explained or has a general question.
+- COURSE: User wants to learn/study a topic, create a course, or requests "teach me X". Use this for any learning request that implies structured content.
 - QUIZ: User wants to be tested on a topic.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.

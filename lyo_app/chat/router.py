@@ -75,8 +75,14 @@ ROUTE_PATTERNS = [
             r"\bchallenge\b",
             r"\bassessment\b",
         ],
-        keywords=["quiz", "test", "practice", "exercise", "questions", "assessment"],
-        weight=1.0
+        keywords=["quiz", "test me", "practice", "exercise", "flashcard"],
+        weight=1.2
+    ),
+    RoutePattern(
+        mode=ChatMode.TEST_PREP,
+        patterns=[], # No specific patterns provided in the instruction, so keeping it empty for now.
+        keywords=["test", "exam", "midterm", "final", "study for", "prepare for"],
+        weight=1.5
     ),
     RoutePattern(
         mode=ChatMode.NOTE_TAKER,
@@ -132,12 +138,12 @@ class ChatRouter:
                 re.compile(p, re.IGNORECASE) for p in route.patterns
             ]
     
-    def route(
+    async def route(
         self,
         message: str,
         mode_hint: Optional[str] = None,
         action: Optional[str] = None,
-        context: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict]] = None
     ) -> Tuple[ChatMode, float, str]:
         """
@@ -146,7 +152,7 @@ class ChatRouter:
         Returns:
             Tuple of (mode, confidence, reasoning)
         """
-        # 1. Check explicit action first (highest priority)
+        # 1. Check explicit action first (highest priority like button clicks)
         if action:
             try:
                 chip_action = ChipAction(action)
@@ -164,25 +170,117 @@ class ChatRouter:
             except ValueError:
                 logger.warning(f"Unknown mode hint: {mode_hint}")
         
-        # 3. Pattern matching
+        # 3. Pattern matching (Fast Pass)
         scores = self._calculate_scores(message)
         
         if scores:
             best_mode = max(scores, key=scores.get)
             best_score = scores[best_mode]
             
-            if best_score > 0.3:  # Confidence threshold
-                return best_mode, min(best_score, 0.9), f"Pattern match: {best_mode.value}"
+            # If regex is very confident (e.g. "Quiz me"), use it.
+            if best_score > 0.6: 
+                return best_mode, min(best_score, 0.99), f"Strong pattern match: {best_mode.value}"
         
-        # 4. Context-aware routing
+        # 4. Semantic Routing (Smart Pass)
+        # If pattern matching was weak or inconclusive, ask the AI.
+        # This provides the "Superior" understanding the user requested.
+        try:
+            semantic_mode, reasoning = await self._semantic_route(message, conversation_history, context=context)
+            if semantic_mode:
+                 return semantic_mode, 0.9, f"Semantic routing: {reasoning}"
+        except Exception as e:
+            logger.error(f"Semantic routing failed: {e}")
+        
+        # 5. Context-aware routing (Fallback)
         if conversation_history:
             context_mode = self._infer_from_history(conversation_history, message)
             if context_mode:
                 return context_mode, 0.7, "Inferred from conversation context"
         
-        # 5. Default to general
+        # 6. Default to general
         return ChatMode.GENERAL, 0.5, "Default routing"
     
+    async def _semantic_route(
+        self, 
+        message: str, 
+        history: Optional[List[Dict]],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Optional[ChatMode], str]:
+        """
+        Use a fast LLM to semantically classify the user's intent.
+        """
+        from lyo_app.core.ai_resilience import ai_resilience_manager
+        
+        # Enhanced Prompt for Ambiguity & Context
+        system_prompt = """
+        You are the Intent Router for an AI Education App.
+        Classify the user's message into one of these modes:
+        
+        1. QUICK_EXPLAINER: Asking for a definition, concept explanation, "what is", or expressing confusion ("I don't get it").
+        2. COURSE_PLANNER: Wants to learn a broad topic, create a syllabus, plan a study path, or "teach me about X".
+        3. PRACTICE: Wants a quiz, exercise, or to be challenged. Also handles "next question" or "another one" if previously practicing.
+        4. TEST_PREP: Wants to study for a specific upcoming test, exam, midterm, or final.
+        5. NOTE_TAKER: Wants to save, summarize, or record information.
+        6. GENERAL: Casual chat, greetings, or unclear intent.
+        
+        CRITICAL: 
+        - If the user says "Next", "Another one", or "More", look at the HISTORY. If they were quizzing, choose PRACTICE. If explaining, choose QUICK_EXPLAINER.
+        - If the user says "I'm confused" or "Simpler", choose QUICK_EXPLAINER.
+        
+        Output valid JSON only: {"mode": "MODE_NAME", "reasoning": "brief reason"}
+        """
+        
+        # Build strict context
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Inject Learner Context if available
+        if context and context.get("learner_context"):
+            messages.append({
+                "role": "system", 
+                "content": f"Learner Context: {context['learner_context']}"
+            })
+        
+        # Add deeper history for context (Last 6 messages)
+        if history:
+            for msg in history[-6:]:
+                content = msg.get("content", "")
+                # No truncation - model needs full context for "explain *that*"
+                messages.append({"role": msg.get("role", "user"), "content": content})
+        
+        messages.append({"role": "user", "content": message})
+        
+        try:
+            response = await ai_resilience_manager.chat_completion(
+                messages=messages,
+                temperature=0.0,
+                max_tokens=60, # Increased slightly for reasoning
+                provider_order=["gemini-2.0-flash", "gpt-4o-mini"] # Speed is key
+            )
+            
+            content = response.get("content", "")
+            
+            # Simple parsing
+            import json
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0:
+                data = json.loads(content[start:end])
+                mode_str = data.get("mode").upper()
+                reasoning = data.get("reasoning", "")
+                
+                # Map to ChatMode
+                if mode_str == "QUICK_EXPLAINER": return ChatMode.QUICK_EXPLAINER, reasoning
+                if mode_str == "COURSE_PLANNER": return ChatMode.COURSE_PLANNER, reasoning
+                if mode_str == "PRACTICE": return ChatMode.PRACTICE, reasoning
+                if mode_str == "TEST_PREP": return ChatMode.TEST_PREP, reasoning
+                if mode_str == "NOTE_TAKER": return ChatMode.NOTE_TAKER, reasoning
+                if mode_str == "GENERAL": return ChatMode.GENERAL, reasoning
+                
+        except Exception as e:
+            logger.warning(f"Router LLM failed: {e}")
+            
+        return None, "Failed"
+
     def _calculate_scores(self, message: str) -> Dict[ChatMode, float]:
         """Calculate routing scores for each mode"""
         message_lower = message.lower()

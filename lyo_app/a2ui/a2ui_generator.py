@@ -325,10 +325,20 @@ class A2UIGenerator:
         
         if "background_color" in kwargs:
             mapped["background_color"] = kwargs["background_color"]
+        if "foreground_color" in kwargs:
+            mapped["foreground_color"] = kwargs["foreground_color"]
         if "corner_radius" in kwargs:
             mapped["corner_radius"] = kwargs["corner_radius"]
         if "width" in kwargs and "width" not in mapped:
             mapped["width"] = A2UIDimension(value=kwargs["width"])
+        
+        # Pass through common styling extras for A2UIProps(extra="allow")
+        _style_keys = {"font_size", "font_weight", "font", "alignment",
+                       "text_color", "opacity", "border_color", "border_width",
+                       "min_height", "max_width", "line_limit"}
+        for k in _style_keys:
+            if k in kwargs:
+                mapped[k] = kwargs[k]
               
         return mapped
 
