@@ -17,6 +17,7 @@ from lyo_app.models.enhanced import User
 from lyo_app.chat.a2ui_integration import chat_a2ui_service
 from lyo_app.a2ui.a2ui_generator import a2ui
 from lyo_app.a2ui.capability_handler import get_client_capabilities, ClientCapabilities
+from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
 
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,106 @@ async def get_screen(
 
             component = a2ui.chat_interface(messages, suggestions)
 
+        elif screen_id == "classroom":
+            # --- Live Classroom Screen ---
+            # Try to resolve topic/progress from an active session
+            session_id_ctx = request.context.get("session_id")
+            lesson_title = "Your Lesson"
+            lesson_subtitle = ""
+            lesson_progress = 0.0
+            lesson_index = 0
+
+            if session_id_ctx:
+                try:
+                    mgr = get_conversation_manager()
+                    sess = mgr.get_session(session_id_ctx)
+                    if sess:
+                        lesson_title = sess.current_topic or lesson_title
+                        lesson_index = sess.current_lesson_index or 0
+                        # Estimate progress: each lesson ~10 min, max 10 lessons
+                        lesson_progress = min(1.0, lesson_index / 10.0)
+                        lesson_subtitle = f"Block {lesson_index + 1}"
+                except Exception as e:
+                    logger.warning(f"Could not resolve classroom session {session_id_ctx}: {e}")
+
+            # Progress header
+            progress_pct = int(lesson_progress * 100)
+            header = a2ui.vstack(
+                children=[
+                    a2ui.hstack(
+                        children=[
+                            a2ui.text(
+                                lesson_title,
+                                font="headline",
+                                color="#FFFFFF",
+                                bold=True
+                            ),
+                            a2ui.spacer(),
+                            a2ui.text(
+                                f"{progress_pct}%",
+                                font="caption",
+                                color="#A0AEC0"
+                            ),
+                        ],
+                        spacing=8
+                    ),
+                    a2ui.progress_bar(lesson_progress, color="#7C3AED"),
+                    a2ui.text(
+                        lesson_subtitle,
+                        font="caption",
+                        color="#A0AEC0"
+                    ) if lesson_subtitle else a2ui.spacer(height=2),
+                ],
+                spacing=6,
+                padding={"top": 16, "leading": 16, "bottom": 8, "trailing": 16}
+            )
+
+            # Content card
+            content_body = (
+                f"Welcome to **{lesson_title}**. Your AI tutor will guide you "
+                f"through each concept step by step. Ask questions anytime — "
+                f"Lio is always here to help."
+            )
+            content_card = a2ui.vstack(
+                children=[
+                    a2ui.markdown(
+                        content_body,
+                        font="body",
+                        color="#E2E8F0"
+                    ),
+                ],
+                spacing=12,
+                padding={"top": 20, "leading": 20, "bottom": 20, "trailing": 20},
+                background_color="#1A1A2E",
+                border_radius=16
+            )
+
+            # Navigation hint
+            nav_bar = a2ui.hstack(
+                children=[
+                    a2ui.button(
+                        "← Prev",
+                        "classroom_prev",
+                        style="secondary"
+                    ),
+                    a2ui.spacer(),
+                    a2ui.button(
+                        "Next →",
+                        "classroom_next",
+                        style="primary"
+                    ),
+                ],
+                spacing=12,
+                padding={"top": 8, "leading": 16, "bottom": 16, "trailing": 16}
+            )
+
+            component = a2ui.scroll(
+                children=[header, content_card, nav_bar],
+                direction="vertical",
+                padding={"top": 0, "leading": 0, "bottom": 0, "trailing": 0},
+                background_color="#0D0D1A"
+            )
+
         else:
             # Default welcome screen
             component = chat_a2ui_service.generate_welcome_ui(user_name)
@@ -183,16 +284,24 @@ async def get_screen(
 async def get_screen_simple(
     screen_id: str,
     user_id: Optional[str] = Query(None),
+    session_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_current_user)
 ):
     """
-    Simplified GET endpoint for screen retrieval
+    Simplified GET endpoint for screen retrieval.
+    Accepts optional session_id for personalized classroom screens.
     """
+    context: dict = {}
+    if session_id:
+        context["session_id"] = session_id
+    if user_id:
+        context["user_id"] = user_id
+
     request = A2UIScreenRequest(
         screen_id=screen_id,
         user_id=user_id,
-        context={}
+        context=context
     )
 
     return await get_screen(screen_id, request, db, current_user)
