@@ -97,19 +97,71 @@ YOU MUST RESPOND ONLY WITH JSON.
         result = await self.execute(request=request)
         
         if not result.success:
-            # Router failed — log the real error for debugging, then use a
-            # sensible fallback so the pipeline still produces an answer.
+            # Router failed — log the real error for debugging, then use
+            # keyword-based intent detection as a smart fallback so the pipeline
+            # still routes to the correct handler even when Gemini JSON fails.
             logger.error(
                 f"MultimodalRouter.execute() FAILED — error: {result.error}, "
                 f"raw_response: {(result.raw_response or '')[:200]}"
             )
-            # Default to EXPLAIN with high confidence so the planner/executor
-            # still runs instead of dead-ending with a useless clarification.
+            text_lower = (request.text or "").lower()
+            history_text = " ".join(
+                t.content.lower()
+                for t in (request.conversation_history or [])[-4:]
+            )
+            combined = text_lower + " " + history_text
+
+            # --- keyword maps (order matters: most specific first) ---
+            _course_kws = [
+                "create course", "create a course", "course on", "course about",
+                "make a course", "build a course", "make me a course",
+                "generate a course", "i want a course", "course for",
+                "teach me about", "teach me on", "learn about", "lesson on",
+            ]
+            _quiz_kws = [
+                "quiz me", "quiz on", "test me", "make a quiz",
+                "give me a quiz", "practice quiz", "test my knowledge",
+            ]
+            _study_plan_kws = [
+                "study plan", "study schedule", "schedule to learn",
+                "plan to learn", "learning plan", "revision plan",
+            ]
+            _summarize_kws = [
+                "summarize", "summary of my notes", "summarize my notes",
+                "sum up", "tldr",
+            ]
+            _flashcard_kws = [
+                "flashcard", "flash card", "make cards", "create cards",
+            ]
+
+            if any(kw in combined for kw in _course_kws):
+                fallback_intent = "COURSE"
+                fallback_tier = "LARGE"
+            elif any(kw in text_lower for kw in _quiz_kws):
+                fallback_intent = "QUIZ"
+                fallback_tier = "MEDIUM"
+            elif any(kw in text_lower for kw in _study_plan_kws):
+                fallback_intent = "STUDY_PLAN"
+                fallback_tier = "MEDIUM"
+            elif any(kw in text_lower for kw in _flashcard_kws):
+                fallback_intent = "FLASHCARDS"
+                fallback_tier = "MEDIUM"
+            elif any(kw in text_lower for kw in _summarize_kws):
+                fallback_intent = "SUMMARIZE_NOTES"
+                fallback_tier = "MEDIUM"
+            else:
+                fallback_intent = "EXPLAIN"
+                fallback_tier = "MEDIUM"
+
+            logger.info(
+                f"⚡ Keyword fallback resolved intent='{fallback_intent}' "
+                f"for text: '{text_lower[:80]}'"
+            )
             decision = RouterDecision(
-                intent="EXPLAIN",
-                confidence=0.5,
+                intent=fallback_intent,
+                confidence=0.6,
                 needs_clarification=False,
-                suggested_tier="MEDIUM"
+                suggested_tier=fallback_tier
             )
         else:
             decision = result.data
