@@ -232,6 +232,36 @@ async def generate_quiz(request: AIGenerateRequest):
 
 
 # =============================================================================
+# LESSON CONTENT ENDPOINT
+# =============================================================================
+
+class LessonContentRequest(BaseModel):
+    """Request schema for lesson-level content generation"""
+    course_title: str = Field(..., min_length=1, max_length=200)
+    lesson_title: str = Field(..., min_length=1, max_length=200)
+    level: str = Field("beginner", description="Difficulty: beginner | intermediate | advanced")
+
+
+class LessonContentResponse(BaseModel):
+    """Response schema for lesson content"""
+    lesson_content: Dict[str, Any]
+    xp_awarded: int = 10
+
+
+@router.post("/lesson-content", response_model=LessonContentResponse)
+async def generate_lesson_content(request: LessonContentRequest):
+    """Generate detailed lesson body, key points, and quiz flag for a given lesson."""
+    from lyo_app.ai.executor import LyoExecutor
+    executor = LyoExecutor(db_session=None)
+    data = await executor._generate_lesson_content_data(
+        lesson_title=request.lesson_title,
+        course_title=request.course_title,
+        level=request.level,
+    )
+    return LessonContentResponse(lesson_content=data, xp_awarded=10)
+
+
+# =============================================================================
 # QUICK CHAT ENDPOINT (Non-Streaming Fast Path)
 # =============================================================================
 
