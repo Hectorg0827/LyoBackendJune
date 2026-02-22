@@ -374,6 +374,60 @@ Include 4-6 lessons. Keep descriptions short. Return ONLY JSON, no markdown."""
             ]
         }
 
+    async def _generate_lesson_content_data(
+        self, lesson_title: str, course_title: str, level: str = "beginner"
+    ) -> Dict[str, Any]:
+        """Generate detailed lesson content using Gemini JSON mode.
+
+        Returns a dict with body_sections, key_points, and has_quiz flag that
+        the iOS A2UI engine renders as a LessonContentView component.
+        """
+        fallback = {
+            "title": lesson_title,
+            "course_title": course_title,
+            "level": level,
+            "body_sections": [
+                {"heading": "Overview", "content": f"In this lesson we explore {lesson_title}."},
+                {"heading": "Key Ideas", "content": "Understanding the core concepts well prepares you for the quiz."},
+            ],
+            "key_points": [f"{lesson_title} is foundational", "Practice makes perfect"],
+            "has_quiz": True,
+        }
+
+        if not (self._gemini_json or self._gemini):
+            return fallback
+
+        prompt = f"""Generate detailed lesson content for a "{level}" course.
+Course: "{course_title}"
+Lesson: "{lesson_title}"
+
+Return ONLY valid JSON with this exact structure:
+{{
+    "title": "{lesson_title}",
+    "course_title": "{course_title}",
+    "level": "{level}",
+    "body_sections": [
+        {{"heading": "Section Heading", "content": "2-3 sentence explanation."}}
+    ],
+    "key_points": ["Bullet point 1", "Bullet point 2", "Bullet point 3"],
+    "has_quiz": true
+}}
+Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clear."""
+
+        try:
+            json_model = self._gemini_json or self._gemini
+            response = await json_model.generate_content_async(prompt)
+            text = response.text.strip() if response.text else None
+            if text:
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                    text = text.rsplit("```", 1)[0]
+                return json.loads(text)
+        except Exception as e:
+            logger.error(f"Lesson content generation failed: {e}", exc_info=True)
+
+        return fallback
+
     async def _generate_quiz_data(self, original_request: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Generate quiz data structure from the request using Gemini JSON mode.
         
