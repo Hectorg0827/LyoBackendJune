@@ -33,6 +33,27 @@ def _get_gemini_model():
     )
 
 
+def _get_json_gemini_model():
+    """Lazy-initialise a Gemini model with JSON-mode output.
+    
+    Using response_mime_type='application/json' forces the model to output
+    valid JSON every time — eliminating markdown-wrapping, missing commas, and
+    other LLM hallucinations that cause Swift JSONDecoder failures on iOS.
+    """
+    api_key = getattr(settings, "google_api_key", None) or getattr(settings, "gemini_api_key", None)
+    if not api_key:
+        return None
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(
+        "gemini-2.0-flash",
+        generation_config={
+            "temperature": 0.5,
+            "max_output_tokens": 2048,
+            "response_mime_type": "application/json",
+        },
+    )
+
+
 class LyoExecutor:
     """
     Layer C: Executor
@@ -46,6 +67,10 @@ class LyoExecutor:
         self.a2ui_service = ChatA2UIService()
         self._db = db_session
         self._gemini = _get_gemini_model()
+        # Separate model instance configured for guaranteed-valid JSON output.
+        # Used for course/quiz generation so the iOS JSONDecoder never sees
+        # hallucinated markdown fences or malformed key names.
+        self._gemini_json = _get_json_gemini_model()
 
     async def _generate_text(self, original_request: str, context: Dict[str, Any], step_params: Dict[str, Any]) -> str:
         """
@@ -319,10 +344,14 @@ Return ONLY valid JSON with this exact structure:
 Include 4-6 lessons. Keep descriptions short. Return ONLY JSON, no markdown."""
         
         try:
-            response = await self._gemini.generate_content_async(prompt)
+            # Use the JSON-mode model — response_mime_type="application/json" guarantees
+            # valid JSON output without markdown fences. No need to strip ``` or run
+            # heuristic cleanup that can silently corrupt nested structures.
+            json_model = self._gemini_json or self._gemini
+            response = await json_model.generate_content_async(prompt)
             text = response.text.strip() if response.text else None
             if text:
-                # Clean markdown wrapping if present
+                # If JSON mode was NOT available (fell back to text model), still clean fences
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1] if "\n" in text else text[3:]
                     text = text.rsplit("```", 1)[0]
@@ -346,15 +375,63 @@ Include 4-6 lessons. Keep descriptions short. Return ONLY JSON, no markdown."""
         }
 
     async def _generate_quiz_data(self, original_request: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Generate quiz data structure from the request."""
+        """Generate quiz data structure from the request using Gemini JSON mode.
+        
+        Uses response_mime_type='application/json' to guarantee valid JSON output,
+        removing the need for any post-processing or heuristic cleaning.
+        """
+        if not (self._gemini_json or self._gemini):
+            # Absolute fallback when no model is available
+            return {
+                "title": f"Quiz: {original_request[:60]}",
+                "current_question": 1,
+                "total_questions": 3,
+                "question": {
+                    "question": f"What is a key concept related to {original_request[:40]}?",
+                    "options": ["Concept A", "Concept B", "Concept C", "Concept D"],
+                    "correct_answer": 0,
+                    "selected_answer": None
+                }
+            }
+
+        prompt = f"""Generate a 3-question quiz about: "{original_request}"
+Return ONLY valid JSON with this exact structure:
+{{
+    "title": "Quiz title",
+    "total_questions": 3,
+    "current_question": 1,
+    "question": {{
+        "question": "Question text?",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correct_answer": 0,
+        "explanation": "Brief explanation of correct answer",
+        "selected_answer": null
+    }}
+}}
+Make options plausible but with one clear correct answer. correct_answer is the 0-based index."""
+
+        try:
+            json_model = self._gemini_json or self._gemini
+            response = await json_model.generate_content_async(prompt)
+            text = response.text.strip() if response.text else None
+            if text:
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                    text = text.rsplit("```", 1)[0]
+                return json.loads(text)
+        except Exception as e:
+            logger.error(f"Quiz data generation failed: {e}", exc_info=True)
+
+        # Fallback
         return {
             "title": f"Quiz: {original_request[:60]}",
             "current_question": 1,
-            "total_questions": 5,
+            "total_questions": 3,
             "question": {
                 "question": f"What is a key concept related to {original_request[:40]}?",
-                "options": ["Option A", "Option B", "Option C", "Option D"],
+                "options": ["Concept A", "Concept B", "Concept C", "Concept D"],
                 "correct_answer": 0,
+                "explanation": "This is a fundamental concept in the subject.",
                 "selected_answer": None
             }
         }
