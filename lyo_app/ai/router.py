@@ -55,6 +55,7 @@ Lyo is an Outcome Engine for learning.
 3. Set `needs_clarification` to true ONLY if you genuinely cannot determine what the user wants. For greetings, chat, or general questions, set it to false.
 4. Do NOT set needs_clarification=true for simple messages like "hello", "teach me X", etc.
 5. Extract context from images or audio signals if provided.
+6. CRITICAL: When RECENT CONVERSATION HISTORY is provided, treat short answers ("10th grade", "biology", "yes", etc.) as replies to the previous assistant message. Do NOT classify them as UNKNOWN or set needs_clarification=true — use the history to infer intent. For example: if the previous assistant asked "What grade level?" and the user says "10th grade", that is a COURSE reply, not ambiguous.
 
 YOU MUST RESPOND ONLY WITH JSON.
 """
@@ -62,6 +63,16 @@ YOU MUST RESPOND ONLY WITH JSON.
     def build_prompt(self, request: RouterRequest) -> str:
         # Construct the user prompt based on the request
         prompt_parts = []
+
+        # Include recent conversation history FIRST so the LLM has full context
+        # before seeing the latest user message. Without this, follow-up replies
+        # like "10th grade" or "Biology" are classified with no context and trigger
+        # unnecessary clarification questions.
+        if request.conversation_history:
+            history_lines = []
+            for turn in request.conversation_history[-8:]:  # last 8 turns is plenty
+                history_lines.append(f"{turn.role.upper()}: {turn.content}")
+            prompt_parts.append("RECENT CONVERSATION HISTORY:\n" + "\n".join(history_lines))
         
         if request.text:
             prompt_parts.append(f"USER TEXT: {request.text}")
