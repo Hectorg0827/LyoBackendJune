@@ -274,6 +274,50 @@ class A2UIProps(BaseModel):
         extra = "allow" # Allow extra fields without validation error
 
 # ==============================================================================
+# MARK: - Actions, Conditions & Metadata (iOS A2UI parity)
+# ==============================================================================
+
+class A2UIAction(BaseModel):
+    """Action triggered by user interaction — decoded by iOS A2UIComponent"""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    trigger: str = "tap"  # tap, longPress, swipe, appear, etc.
+    type: str = "custom"  # navigate, submit, dismiss, custom, etc.
+    payload: Optional[Dict[str, Any]] = None
+    debounce_ms: Optional[int] = Field(None, alias="debounceMs")
+    haptic_feedback: Optional[str] = Field(None, alias="hapticFeedback")  # light, medium, heavy, success, error
+
+    class Config:
+        populate_by_name = True
+        extra = "allow"
+
+
+class A2UIConditions(BaseModel):
+    """Conditional rendering — decoded by iOS A2UIComponent"""
+    show_if: Optional[str] = Field(None, alias="showIf")
+    hide_if: Optional[str] = Field(None, alias="hideIf")
+    enable_if: Optional[str] = Field(None, alias="enableIf")
+    disable_if: Optional[str] = Field(None, alias="disableIf")
+    min_platform_version: Optional[str] = Field(None, alias="minPlatformVersion")
+
+    class Config:
+        populate_by_name = True
+        extra = "allow"
+
+
+class A2UIMetadata(BaseModel):
+    """Analytics & debug metadata — decoded by iOS A2UIComponent"""
+    analytics_id: Optional[str] = Field(None, alias="analyticsId")
+    debug_label: Optional[str] = Field(None, alias="debugLabel")
+    version: Optional[str] = None
+    priority: Optional[int] = None
+    tags: Optional[List[str]] = None
+
+    class Config:
+        populate_by_name = True
+        extra = "allow"
+
+
+# ==============================================================================
 # MARK: - Component
 # ==============================================================================
 
@@ -282,6 +326,9 @@ class A2UIComponent(BaseModel):
     type: A2UIElementType
     props: A2UIProps = Field(default_factory=A2UIProps)
     children: Optional[List['A2UIComponent']] = None
+    actions: Optional[List[A2UIAction]] = None
+    conditions: Optional[A2UIConditions] = None
+    metadata: Optional[A2UIMetadata] = None
 
     def to_dict(self) -> dict:
         """Convert to dict for iOS consumption.
