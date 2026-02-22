@@ -182,6 +182,50 @@ async def stream_lyo2_chat(
                 yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
             
             # Send open_classroom payload (course creation trigger)
+            # Safety net: if the COURSE pipeline ran but produce_course() returned
+            # None (e.g. Gemini course-data agent failed), synthesise a minimal
+            # payload from the request text so iOS classroom still opens.
+            if (
+                execution_response.open_classroom_payload is None
+                and decision.intent == Intent.COURSE
+            ):
+                import re as _re
+                topic_text = (request.text or "").strip()
+                # Strip leading imperative phrases to get the bare topic
+                topic_text = _re.sub(
+                    r"^(create (a )?course (on|about)?|make (a )?course (on|about)?|"
+                    r"build (a )?course (on|about)?|teach me (about|on)?|"
+                    r"i want (a )?course (on|about)?|course on|course about)\s*",
+                    "",
+                    topic_text,
+                    flags=_re.IGNORECASE,
+                ).strip() or topic_text
+                fallback_oc = {
+                    "course": {
+                        "id": str(uuid.uuid4()),
+                        "title": topic_text.title() if topic_text else "Your Course",
+                        "topic": topic_text,
+                        "level": "beginner",
+                        "duration": "4 weeks",
+                        "objectives": [
+                            f"Understand the fundamentals of {topic_text}",
+                            f"Apply key concepts of {topic_text} in practice",
+                            f"Build confidence with {topic_text}",
+                        ],
+                    }
+                }
+                # Only use the fallback when produce_course() truly returned nothing.
+                # The executor already populates open_classroom_payload from
+                # a2ui_producer.produce_course(), so this branch only fires when
+                # that whole chain failed (e.g. Gemini course-data call error).
+                execution_response = execution_response.model_copy(
+                    update={"open_classroom_payload": fallback_oc}
+                )
+                logger.warning(
+                    f"⚠️ [STREAM][{trace_id}] COURSE intent but no open_classroom_payload — "
+                    f"using synthesised fallback for topic: '{topic_text[:60]}'"
+                )
+
             if execution_response.open_classroom_payload:
                 logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
                 oc_block = {
