@@ -15,7 +15,7 @@ import json
 import uuid
 import asyncio
 
-from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.dependencies import get_current_user, get_current_user_or_guest
 from lyo_app.auth.models import User
 from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
 from lyo_app.ai_agents.a2a.schemas import A2ACourseRequest, ArtifactType
@@ -128,7 +128,7 @@ class CourseResult(BaseModel):
 @router.post("/generate", response_model=CourseGenerationJobResponse)
 async def generate_course(
     request: CourseGenerationRequest,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Submit a course generation job.
@@ -215,7 +215,7 @@ async def generate_course(
 @router.post("/outline", response_model=CourseOutlineResponse)
 async def generate_course_outline(
     request: CourseGenerationRequest,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Create a course outline immediately and continue full generation in background.
@@ -249,7 +249,7 @@ async def generate_course_outline(
 @router.get("/{job_id}/outline", response_model=CourseOutlineResponse)
 async def get_course_outline(
     job_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Retrieve outline for a course generation job.
@@ -271,7 +271,7 @@ async def get_course_outline(
 async def get_course_module(
     job_id: str,
     module_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Retrieve a single module. Returns pending if full course is not ready.
@@ -330,7 +330,7 @@ async def get_course_module(
 async def generate_course_module(
     job_id: str,
     module_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Generate a single module on demand using the outline as contract.
@@ -376,7 +376,7 @@ async def generate_course_module(
 @router.get("/status/{job_id}", response_model=CourseGenerationStatusResponse)
 async def get_course_status(
     job_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Poll for course generation status.
@@ -411,7 +411,7 @@ async def get_course_status(
 @router.post("/{job_id}/force-complete")
 async def force_complete_job(
     job_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Force a stalled job to complete with fallback content.
@@ -458,7 +458,7 @@ async def force_complete_job(
 @router.get("/{job_id}/result", response_model=CourseResult)
 async def get_course_result(
     job_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     Retrieve completed course.
@@ -496,7 +496,7 @@ async def get_course_result(
 @router.post("/stream-a2a")
 async def stream_a2a_generation(
     request: A2AStreamingRequest,
-    current_user: User = Depends(get_current_user)
+    current_user = Depends(get_current_user_or_guest)
 ):
     """
     A2A Protocol Streaming Endpoint.
