@@ -66,122 +66,14 @@ class ReviewScope(str, Enum):
 
 class ContentIssue(BaseModel):
     """A specific issue found in content"""
-    id: str
-    category: IssueCategory
-    severity: IssueSeverity
-    location: str                       # Where in the content (scene_id, block_id, etc.)
-    description: str                    # What's wrong
-    evidence: str                       # Why it's wrong
-    suggestion: str                     # How to fix it
-    confidence: float                   # 0.0-1.0 confidence in the issue
-    auto_fixable: bool                  # Can be automatically corrected
-    references: List[str]               # Sources supporting the issue
-
-
-class FactCheck(BaseModel):
-    """Result of fact-checking a claim"""
-    claim_id: str
-    claim_text: str
-    location: str
-    is_accurate: bool
-    confidence: float
-    explanation: str
-    sources: List[str]
-    suggested_correction: Optional[str] = None
-
-
-class PedagogyCheck(BaseModel):
-    """Result of pedagogical review"""
-    aspect: str                         # What was checked
-    score: float                        # 0.0-1.0
-    feedback: str
-    suggestions: List[str]
-
-
-class AccessibilityCheck(BaseModel):
-    """Accessibility compliance check"""
-    guideline: str                      # WCAG guideline
-    passed: bool
-    details: str
-    remediation: Optional[str] = None
-
-
-class ContentMetrics(BaseModel):
-    """Quantitative metrics about content"""
-    word_count: int
-    avg_sentence_length: float
-    readability_score: float            # 0-100 Flesch-Kincaid
-    reading_level: str                  # Grade level
-    technical_density: float            # Ratio of technical terms
-    jargon_count: int
-    image_alt_text_coverage: float      # % of images with alt text
-    code_comment_density: float         # % of code with comments
-
-
-class QAChecklistItem(BaseModel):
-    """Item in QA checklist"""
-    id: str
     category: str
     description: str
-    passed: bool
-    notes: Optional[str] = None
-
 
 class QAOutput(BaseModel):
-    """Output from the QA Checker Agent"""
-    # Overall assessment - defaults for robustness
-    overall_quality_score: float = 1.0        # 0.0-1.0
+    """Output from the QA Checker Agent - Optimized for ultra-low latency"""
     approval_status: str = "approved"         # approved, needs_revision, rejected
-    summary: str = "Content review completed."
-    
-    # Issue tracking (make list fields optional with defaults)
     issues: List[ContentIssue] = Field(default_factory=list)
     critical_issues_count: int = 0
-    high_issues_count: int = 0
-    medium_issues_count: int = 0
-    low_issues_count: int = 0
-    
-    # Fact checking (optional with defaults)
-    fact_checks: List[FactCheck] = Field(default_factory=list)
-    factual_accuracy_score: float = 1.0       # 0.0-1.0
-    hallucination_detected: bool = False
-    hallucination_details: List[str] = Field(default_factory=list)
-    
-    # Pedagogical assessment (optional with defaults)
-    pedagogy_checks: List[PedagogyCheck] = Field(default_factory=list)
-    pedagogical_quality_score: float = 1.0    # 0.0-1.0
-    bloom_alignment_score: float = 1.0        # How well objectives match Bloom's
-    scaffolding_score: float = 1.0            # Quality of progressive support
-    
-    # Accessibility (optional with defaults)
-    accessibility_checks: List[AccessibilityCheck] = Field(default_factory=list)
-    accessibility_score: float = 1.0          # 0.0-1.0
-    wcag_level: str = "AA"                    # A, AA, AAA
-    
-    # Content metrics (optional)
-    content_metrics: Optional[ContentMetrics] = None
-    
-    # Consistency (optional with defaults)
-    consistency_score: float = 1.0            # 0.0-1.0
-    inconsistencies: List[str] = Field(default_factory=list)
-    
-    # Completeness (optional with defaults)
-    completeness_score: float = 1.0           # 0.0-1.0
-    missing_elements: List[str] = Field(default_factory=list)
-    coverage_by_objective: Dict[str, float] = Field(default_factory=dict)  # objective_id -> coverage %
-    
-    # Checklist (optional with defaults)
-    checklist: List[QAChecklistItem] = Field(default_factory=list)
-    checklist_pass_rate: float = 1.0
-    
-    # Recommendations (optional with defaults)
-    priority_fixes: List[str] = Field(default_factory=list)           # Top things to fix
-    enhancement_suggestions: List[str] = Field(default_factory=list)  # Nice-to-haves
-    
-    # Metadata (optional with defaults)
-    review_scope: ReviewScope = ReviewScope.FULL
-    review_duration_estimate: str = "5-10 minutes"
-    confidence_level: float = 0.9             # Overall confidence in assessment
 
 
 # ============================================================
@@ -372,14 +264,11 @@ Check for:
 □ No contradictions
 □ Cross-references valid
 
-## Output Standards
+### Output Standards
 
 You must:
-1. Be SPECIFIC - cite exact locations and text
-2. Be ACTIONABLE - provide clear fix suggestions
-3. Be CALIBRATED - severity matches actual impact
-4. Be THOROUGH - check everything systematically
-5. Be FAIR - acknowledge what's done well
+1. ONLY return issues if there are critical errors that prevent publishing.
+2. The schema has been aggressively minimized to prioritize low latency. Do not generate verbose explanations unless necessary.
 
 CRITICAL: Return valid JSON matching the QAOutput schema exactly."""
     
@@ -395,26 +284,6 @@ CRITICAL: Return valid JSON matching the QAOutput schema exactly."""
         # Build content section from available inputs
         content_sections = []
         
-        if pedagogy_output:
-            content_sections.append(f"""
-### Pedagogical Structure (from PedagogyAgent)
-- Topic: {pedagogy_output.get('topic', 'N/A')}
-- Learning Objectives: {len(pedagogy_output.get('learning_objectives', []))}
-- Cognitive Chunks: {len(pedagogy_output.get('cognitive_chunks', []))}
-- Key Misconceptions: {pedagogy_output.get('key_misconceptions', [])}
-""")
-        
-        if cinematic_output:
-            modules = cinematic_output.get('modules', [])
-            total_scenes = sum(len(m.get('scenes', [])) for m in modules)
-            content_sections.append(f"""
-### Cinematic Structure (from CinematicDirector)
-- Course Title: {cinematic_output.get('course_title', 'N/A')}
-- Modules: {len(modules)}
-- Total Scenes: {total_scenes}
-- Narrative Arc: {cinematic_output.get('narrative_structure', {}).get('arc_type', 'N/A')}
-""")
-        
         if content_to_review:
             content_sections.append(f"""
 ### Raw Content for Review
@@ -427,118 +296,15 @@ CRITICAL: Return valid JSON matching the QAOutput schema exactly."""
         
         return f"""## Quality Assurance Review Task
 
-Perform a comprehensive quality review of this educational content:
-
-### Review Scope: {review_scope.value}
+Perform a rapid, latency-optimized critical review:
 
 {content_text}
 
-## Your Task
-
-Conduct a thorough quality review covering:
-
-### 1. Factual Accuracy Check
-For each claim or fact:
-- claim_id: "fact_1", "fact_2", etc.
-- claim_text: The exact claim
-- location: Where it appears (scene_id, block_id)
-- is_accurate: true/false
-- confidence: 0.0-1.0
-- explanation: Why accurate or inaccurate
-- sources: Supporting references
-- suggested_correction: If inaccurate
-
-### 2. Hallucination Detection
-Look for AI-generated false content:
-- Made-up statistics
-- Fictional sources
-- Non-existent technical terms
-- False API/syntax
-- Invented studies
-
-Report in hallucination_detected and hallucination_details.
-
-### 3. Issue Identification
-For each issue found:
-- id: "issue_1", etc.
-- category: factual_error, hallucination, outdated, incomplete, unclear, 
-  inconsistent, pedagogical, accessibility, bias, inappropriate, technical, formatting
-- severity: critical, high, medium, low, info
-- location: Specific location
-- description: What's wrong
-- evidence: Why it's wrong
-- suggestion: How to fix
-- confidence: 0.0-1.0
-- auto_fixable: true/false
-- references: Supporting sources
-
-### 4. Pedagogical Assessment
-Review teaching quality:
-- aspect: What you're evaluating (e.g., "objective clarity")
-- score: 0.0-1.0
-- feedback: Assessment
-- suggestions: Improvements
-
-Check:
-- Learning objective measurability
-- Bloom's taxonomy alignment
-- Scaffolding progression
-- Active learning opportunities
-- Assessment alignment
-
-### 5. Accessibility Review
-Check WCAG 2.1 compliance:
-- guideline: The WCAG guideline
-- passed: true/false
-- details: Explanation
-- remediation: How to fix (if failed)
-
-### 6. Content Metrics
-Calculate:
-- word_count, avg_sentence_length
-- readability_score (Flesch-Kincaid 0-100)
-- reading_level (grade level)
-- technical_density
-- jargon_count
-- image_alt_text_coverage
-- code_comment_density
-
-### 7. Consistency Check
-- consistency_score: 0.0-1.0
-- inconsistencies: List of found inconsistencies
-
-### 8. Completeness Check
-- completeness_score: 0.0-1.0
-- missing_elements: What's missing
-- coverage_by_objective: {{"obj_1": 0.8, ...}}
-
-### 9. QA Checklist
-Run through standard checklist:
-- id, category, description
-- passed: true/false
-- notes: Any relevant notes
-
-### 10. Overall Assessment
-- overall_quality_score: 0.0-1.0
-- approval_status: "approved", "needs_revision", or "rejected"
-- summary: Executive summary
-- priority_fixes: Top things that must be fixed
-- enhancement_suggestions: Nice-to-have improvements
-
-## Scoring Guidelines
-
-| Score | Meaning |
-|-------|---------|
-| 0.9-1.0 | Exceptional - publish ready |
-| 0.8-0.9 | Good - minor improvements |
-| 0.7-0.8 | Acceptable - some fixes needed |
-| 0.6-0.7 | Needs work - significant issues |
-| <0.6 | Requires major revision |
-
-## Approval Thresholds
-- **Approved**: Quality score ≥ 0.85, no critical issues
-- **Needs Revision**: Quality score 0.6-0.85 OR has high issues
-- **Rejected**: Quality score < 0.6 OR has critical issues
+## Your Task:
+Output a single JSON object with EXACTLY these schema fields—no others:
+- `approval_status`: "approved", "needs_revision", or "rejected"
+- `issues`: List of dicts `[{{"category": "factual", "description": "What's wrong"}}]` (Return empty list [] if approved)
+- `critical_issues_count`: integer
 
 ## CRITICAL: JSON Output Format
 
@@ -546,38 +312,9 @@ You MUST return a single JSON object matching this EXACT structure (no markdown,
 
 ```json
 {{
-  "overall_quality_score": 0.85,
   "approval_status": "approved",
-  "summary": "Executive summary of the review.",
   "issues": [],
-  "critical_issues_count": 0,
-  "high_issues_count": 0,
-  "medium_issues_count": 0,
-  "low_issues_count": 0,
-  "fact_checks": [],
-  "factual_accuracy_score": 1.0,
-  "hallucination_detected": false,
-  "hallucination_details": [],
-  "pedagogy_checks": [],
-  "pedagogical_quality_score": 1.0,
-  "bloom_alignment_score": 1.0,
-  "scaffolding_score": 1.0,
-  "accessibility_checks": [],
-  "accessibility_score": 1.0,
-  "wcag_level": "AA",
-  "content_metrics": null,
-  "consistency_score": 1.0,
-  "inconsistencies": [],
-  "completeness_score": 1.0,
-  "missing_elements": [],
-  "coverage_by_objective": {{}},
-  "checklist": [],
-  "checklist_pass_rate": 1.0,
-  "priority_fixes": [],
-  "enhancement_suggestions": [],
-  "review_scope": "full",
-  "review_duration_estimate": "5-10 minutes",
-  "confidence_level": 0.9
+  "critical_issues_count": 0
 }}
 ```
 

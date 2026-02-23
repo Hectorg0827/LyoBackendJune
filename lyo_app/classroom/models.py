@@ -4,7 +4,7 @@ Classroom Models for AI-powered classroom features.
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float
 from sqlalchemy.orm import relationship
 
 from lyo_app.core.database import Base
@@ -40,3 +40,26 @@ class ClassroomSession(Base):
     
     def __repr__(self):
         return f"<ClassroomSession(id={self.id}, user_id={self.user_id}, subject={self.subject})>"
+
+class ClassroomInteraction(Base):
+    """Model for AI Classroom card interactions/events."""
+    __tablename__ = "classroom_interactions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("classroom_sessions.id"), nullable=True, index=True)
+    
+    # Event data
+    event_type = Column(String(50), nullable=False, index=True)
+    card_id = Column(String(255), nullable=False, index=True)
+    topic = Column(String(255), nullable=True)
+    
+    duration_seconds = Column(Float, nullable=True)
+    is_correct = Column(Boolean, nullable=True)
+    word_count = Column(Integer, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    session = relationship("ClassroomSession", backref="interactions")
+
+    def __repr__(self):
+        return f"<ClassroomInteraction(id={self.id}, event_type={self.event_type}, card_id={self.card_id})>"

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import asyncio
 import time
@@ -31,6 +32,8 @@ from .routers import sync
 from .routers import clips
 from .routers import a2ui
 from .community.routes import router as community_router
+from .classroom.routes import router as classroom_router
+from .classroom.analytics import router as classroom_analytics_router
 
 # Global AI components for lifecycle management
 ai_components = {}
@@ -156,6 +159,11 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan
     )
+    
+    # Ensure classroom audio directory exists and mount it
+    audio_dir = "/tmp/lyo_classroom_audio"
+    os.makedirs(audio_dir, exist_ok=True)
+    app.mount("/static/classroom_audio", StaticFiles(directory=audio_dir), name="classroom_audio")
     
     # Enhanced CORS for production readiness
     app.add_middleware(
@@ -301,6 +309,8 @@ def create_app() -> FastAPI:
         (sync.router, "/api/v1", "Multi-Device Sync"),
         (clips.router, "/api/v1", "Educational Clips"),  # NEW: Clips router
         (a2ui.router, "/api/v1", "A2UI Real-time Engine"), # NEW: A2UI router
+        (classroom_router, "/api/v1", "Lyo Classroom Streams"), # NEW: Classroom router
+        (classroom_analytics_router, "/api/v1/classroom/analytics", "Classroom Analytics"), # Sprint 4: Analytics
         (community_router, "/api/v1/community", "Community Hub"),
         (community_router, "/community", "Community Hub (compat)"),
     ]
