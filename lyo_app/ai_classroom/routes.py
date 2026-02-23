@@ -951,77 +951,95 @@ async def get_lesson_ui(
     a rich component tree with hero banner, progress, parsed content, 
     quiz sections, and navigation.
     """
-    from lyo_app.ai_classroom.graph_service import get_graph_service
-    from lyo_app.a2ui.classroom_generator import classroom_a2ui_generator
+    try:
+        from lyo_app.ai_classroom.graph_service import get_graph_service
+        from lyo_app.a2ui.classroom_generator import classroom_a2ui_generator
+    except ImportError as e:
+        logger.error(f"❌ Missing dependency for lesson UI: {e}")
+        raise HTTPException(status_code=503, detail=f"Lesson UI service unavailable: missing dependency")
     
-    graph_service = get_graph_service(db)
-    
-    # Get the learning node
-    node = await graph_service.get_node(lesson_id)
+    try:
+        graph_service = get_graph_service(db)
+        
+        # Get the learning node
+        node = await graph_service.get_node(lesson_id)
+    except Exception as e:
+        logger.error(f"❌ Database error fetching lesson node '{lesson_id}': {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database unavailable or learning_nodes table missing. Run migrations first."
+        )
+
     if not node:
         raise HTTPException(status_code=404, detail=f"Lesson node '{lesson_id}' not found")
     
-    # Get course context for progress info
-    course = await graph_service.get_course_with_graph(node.course_id) if node.course_id else None
-    
-    # Extract content from node
-    content = node.content or {}
-    lesson_title = content.get("title") or content.get("narration", "")[:80] or f"Lesson {node.sequence_order + 1}"
-    lesson_content = content.get("narration", "") or content.get("text", "") or content.get("body", "")
-    module_title = course.title if course else "Course"
-    
-    # Calculate lesson position
-    total_lessons = len(course.nodes) if course else 1
-    lesson_number = node.sequence_order + 1
-    
-    # Extract quiz data from interaction nodes
-    quiz_data = None
-    if node.node_type in ("interaction", "INTERACTION"):
-        options = content.get("options", [])
-        if options:
-            # Find correct answer index
-            correct_index = 0
-            for i, opt in enumerate(options):
-                if isinstance(opt, dict) and opt.get("is_correct"):
-                    correct_index = i
-                    break
-                elif content.get("correct_answer") == (opt if isinstance(opt, str) else opt.get("text", "")):
-                    correct_index = i
-                    break
-            
-            quiz_data = {
-                "question": content.get("prompt", content.get("question", "Check your understanding")),
-                "options": [
-                    (opt if isinstance(opt, str) else opt.get("text", f"Option {i+1}"))
-                    for i, opt in enumerate(options)
-                ],
-                "correct_index": correct_index,
-                "explanation": content.get("correct_feedback", content.get("explanation", ""))
+    try:
+        # Get course context for progress info
+        course = await graph_service.get_course_with_graph(node.course_id) if node.course_id else None
+        
+        # Extract content from node
+        content = node.content or {}
+        lesson_title = content.get("title") or content.get("narration", "")[:80] or f"Lesson {node.sequence_order + 1}"
+        lesson_content = content.get("narration", "") or content.get("text", "") or content.get("body", "")
+        module_title = course.title if course else "Course"
+        
+        # Calculate lesson position
+        total_lessons = len(course.nodes) if course else 1
+        lesson_number = node.sequence_order + 1
+        
+        # Extract quiz data from interaction nodes
+        quiz_data = None
+        if node.node_type in ("interaction", "INTERACTION"):
+            options = content.get("options", [])
+            if options:
+                # Find correct answer index
+                correct_index = 0
+                for i, opt in enumerate(options):
+                    if isinstance(opt, dict) and opt.get("is_correct"):
+                        correct_index = i
+                        break
+                    elif content.get("correct_answer") == (opt if isinstance(opt, str) else opt.get("text", "")):
+                        correct_index = i
+                        break
+                
+                quiz_data = {
+                    "question": content.get("prompt", content.get("question", "Check your understanding")),
+                    "options": [
+                        (opt if isinstance(opt, str) else opt.get("text", f"Option {i+1}"))
+                        for i, opt in enumerate(options)
+                    ],
+                    "correct_index": correct_index,
+                    "explanation": content.get("correct_feedback", content.get("explanation", ""))
+                }
+        
+        # Generate A2UI component tree
+        a2ui_component = classroom_a2ui_generator.generate_lesson_ui(
+            lesson_title=lesson_title,
+            lesson_content=lesson_content,
+            module_title=module_title,
+            lesson_number=lesson_number,
+            total_lessons=total_lessons,
+            has_next=(lesson_number < total_lessons),
+            has_previous=(lesson_number > 1),
+            quiz_data=quiz_data
+        )
+        
+        return {
+            "lessonId": lesson_id,
+            "a2ui": a2ui_component.to_dict(),
+            "metadata": {
+                "estimatedDuration": node.estimated_seconds,
+                "difficulty": course.difficulty if course else "intermediate",
+                "nodeType": node.node_type,
+                "courseId": node.course_id,
+                "courseTitle": course.title if course else None
             }
-    
-    # Generate A2UI component tree
-    a2ui_component = classroom_a2ui_generator.generate_lesson_ui(
-        lesson_title=lesson_title,
-        lesson_content=lesson_content,
-        module_title=module_title,
-        lesson_number=lesson_number,
-        total_lessons=total_lessons,
-        has_next=(lesson_number < total_lessons),
-        has_previous=(lesson_number > 1),
-        quiz_data=quiz_data
-    )
-    
-    return {
-        "lessonId": lesson_id,
-        "a2ui": a2ui_component.to_dict(),
-        "metadata": {
-            "estimatedDuration": node.estimated_seconds,
-            "difficulty": course.difficulty if course else "intermediate",
-            "nodeType": node.node_type,
-            "courseId": node.course_id,
-            "courseTitle": course.title if course else None
         }
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error building lesson UI for '{lesson_id}': {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to build lesson UI: {type(e).__name__}: {e}")
 
 
 @router.get("/suggestions")

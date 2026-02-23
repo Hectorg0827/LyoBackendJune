@@ -135,6 +135,13 @@ async def synthesize_speech(request: SynthesizeRequest):
     try:
         service = await get_tts_service()
         
+        if not service.config.api_key:
+            logger.error("❌ TTS synthesis failed: OPENAI_API_KEY not configured on this environment")
+            raise HTTPException(
+                status_code=503,
+                detail="TTS service unavailable: OPENAI_API_KEY not configured"
+            )
+        
         audio_data = await service.synthesize(
             text=request.text,
             voice=request.voice,
@@ -157,8 +164,17 @@ async def synthesize_speech(request: SynthesizeRequest):
         
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"TTS synthesis error: {type(e).__name__}: {e}")
+        error_msg = str(e)
+        logger.error(f"❌ TTS synthesis error: {type(e).__name__}: {error_msg}")
+        # Surface whether it's an auth issue with OpenAI
+        if "401" in error_msg or "Unauthorized" in error_msg:
+            raise HTTPException(
+                status_code=502,
+                detail="TTS API authentication failed — OPENAI_API_KEY may be invalid or expired"
+            )
         raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {type(e).__name__}")
 
 
