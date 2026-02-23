@@ -175,3 +175,5 @@ uploads/
 logs/
 *.log
 lyobackend-service-account-key.json
+.env
+.env.production
