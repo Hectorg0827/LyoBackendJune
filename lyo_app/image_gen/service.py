@@ -7,7 +7,6 @@ for an award-winning learning experience.
 """
 
 import asyncio
-import aiohttp
 import hashlib
 import os
 import logging
@@ -148,12 +147,14 @@ class GeneratedImage:
     prompt_used: str
 
 
+from runware import Runware, IImageInference
+
 class ImageService:
     """
     AI Image Generation Service for Educational Content
     
     Features:
-    - DALL-E 3 integration for highest quality images
+    - Runware integration for ultra-fast, high-quality images
     - Educational prompt templates for various content types
     - Automatic style optimization for learning materials
     - Smart caching for performance
@@ -162,7 +163,7 @@ class ImageService:
     
     def __init__(self, config: Optional[ImageConfig] = None):
         self.config = config or ImageConfig()
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._runware: Optional[Runware] = None
         self._cache: Dict[str, CachedImage] = {}
         self._initialized = False
         
@@ -171,9 +172,9 @@ class ImageService:
         if self._initialized:
             return
             
-        api_key = get_secret("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+        api_key = get_secret("RUNWARE_API_KEY", os.getenv("RUNWARE_API_KEY", ""))
         if not api_key:
-            logger.warning("OpenAI API key not found - Image generation will fail")
+            logger.warning("Runware API key not found - Image generation will fail")
         else:
             self.config.api_key = api_key
             
@@ -181,22 +182,20 @@ class ImageService:
         cache_path = Path(self.config.cache_dir)
         cache_path.mkdir(parents=True, exist_ok=True)
         
-        self._session = aiohttp.ClientSession(
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json"
-            },
-            timeout=aiohttp.ClientTimeout(total=120)  # Images take longer
-        )
+        self._runware = Runware(api_key=self.config.api_key)
+        await self._runware.connect()
         
         self._initialized = True
-        logger.info("Image Generation Service initialized with DALL-E 3")
+        logger.info("Image Generation Service initialized with Runware (SDK webSockets)")
         
     async def close(self):
         """Cleanup resources"""
-        if self._session:
-            await self._session.close()
-            self._session = None
+        if self._runware:
+            try:
+                await self._runware.disconnect()
+            except Exception:
+                pass
+            self._runware = None
         self._initialized = False
         
     def _get_cache_key(self, prompt: str, size: str, quality: str, style: str) -> str:
@@ -256,14 +255,14 @@ class ImageService:
         n: int = 1
     ) -> GeneratedImage:
         """
-        Generate an image using DALL-E 3
+        Generate an image using Runware
         
         Args:
             prompt: Description of the image to generate
             size: Image dimensions
-            quality: standard or hd
+            quality: standard or hd (mapped to inference steps)
             style: vivid or natural
-            n: Number of images (DALL-E 3 only supports 1)
+            n: Number of images
             
         Returns:
             GeneratedImage with URL and metadata
@@ -272,7 +271,7 @@ class ImageService:
             await self.initialize()
             
         if not self.config.api_key:
-            raise ValueError("OpenAI API key not configured")
+            raise ValueError("Runware API key not configured")
             
         size = size or self.config.default_size
         quality = quality or self.config.default_quality
@@ -291,29 +290,35 @@ class ImageService:
                 prompt_used=prompt
             )
             
-        payload = {
-            "model": self.config.model,
-            "prompt": prompt,
-            "n": 1,  # DALL-E 3 only supports 1
-            "size": size.value,
-            "quality": quality.value,
-            "style": style.value,
-            "response_format": "url"
-        }
+        # Map dimensions based on size requested
+        dimensions = size.value.split("x")
+        width = int(dimensions[0])
+        height = int(dimensions[1])
         
-        async with self._session.post(
-            "https://api.openai.com/v1/images/generations",
-            json=payload
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"Image generation error: {response.status} - {error_text}")
-                
-            data = await response.json()
+        # We usually do 20-30 steps for standard/fast generation with Runware
+        steps = 30 if quality == ImageQuality.HD else 20
+        
+        try:
+            request_image = IImageInference(
+                positivePrompt=prompt,
+                model="runwayml/stable-diffusion-v1-5", # Default fast model, can be made configurable
+                numberResults=n,
+                height=height,
+                width=width,
+                steps=steps,
+                CFGScale=7
+            )
             
-        image_data = data["data"][0]
-        url = image_data["url"]
-        revised_prompt = image_data.get("revised_prompt", prompt)
+            images = await self._runware.imageInference(requestImage=request_image)
+            
+            if not images:
+                raise Exception("No images returned from Runware")
+                
+            url = images[0].imageURL
+            revised_prompt = prompt # Runware SDK doesn't natively return revised prompts here
+            
+        except Exception as e:
+            raise Exception(f"Image generation error: {str(e)}")
         
         # Cache result
         self._cache[cache_key] = CachedImage(

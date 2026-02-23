@@ -728,6 +728,16 @@ class A2AOrchestrator:
             if result.output
         }
         
+        # LATENCY OPTIMIZATION: Skip QA for 'fast' tier
+        if state.request.quality_tier == "fast":
+            print(f"[A2A Orchestrator] Skipping QA Agent for 'fast' tier to reduce latency.")
+            return {
+                "approval_status": "approved",
+                "issues": [],
+                "critical_issues_count": 0,
+                "bypassed": True
+            }
+        
         task_input = TaskInput(
             task_id=f"{state.pipeline_id}_qa",
             requesting_agent="orchestrator",

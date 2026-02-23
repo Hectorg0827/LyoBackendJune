@@ -16,11 +16,10 @@ if r.status_code != 200:
 print("✅ Backend healthy\n")
 
 # Test 2: Chat endpoint (fast path)
-print("=== TEST 2: Fast-path chat (POST /api/v1/ai/chat) ===")
+print("=== TEST 2: Fast-path chat (POST /api/v1/chat) ===")
 chat_payload = {
-    "message": "Teach me about photosynthesis",
-    "conversation_id": None,
-    "context": {}
+    "message": "Create a course about Peyton",
+    "conversation_id": None
 }
 headers = {
     "Content-Type": "application/json",
@@ -28,7 +27,7 @@ headers = {
     "X-Tenant-Id": "test-tenant"
 }
 try:
-    r = requests.post(f"{BASE_URL}/api/v1/ai/chat", json=chat_payload, headers=headers, timeout=60)
+    r = requests.post(f"{BASE_URL}/api/v1/chat", json=chat_payload, headers=headers, timeout=60)
     print(f"Status: {r.status_code}")
     if r.status_code == 200:
         data = r.json()
@@ -73,9 +72,10 @@ except Exception as e:
 # Test 3: SSE streaming (deep path)
 print("\n=== TEST 3: SSE stream (POST /api/v1/lyo2/chat/stream) ===")
 stream_payload = {
-    "message": "teach me Python basics",
+    "message": "Create a course about Peyton",
+    "text": "Create a course about Peyton",
     "session_id": "test-session-123",
-    "context": {}
+    "user_id": "test-user-123"
 }
 try:
     r = requests.post(
@@ -86,6 +86,8 @@ try:
         timeout=90
     )
     print(f"Status: {r.status_code}")
+    if r.status_code != 200:
+        print(f"Error body: {r.text}")
     
     event_types = []
     a2ui_events = []
@@ -103,6 +105,7 @@ try:
                 event_types.append(etype)
                 if etype == "a2ui":
                     a2ui_events.append(event)
+                    print(f"A2UI Event: {json.dumps(event, indent=2)}")
                 elif etype == "open_classroom":
                     open_classroom_events.append(event)
             except json.JSONDecodeError:

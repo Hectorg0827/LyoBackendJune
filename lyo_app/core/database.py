@@ -164,7 +164,7 @@ async def init_db() -> None:
         from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
         # Import new mentor chat models
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
-        from lyo_app.classroom.models import ClassroomSession  # noqa: F401
+        from lyo_app.classroom.models import ClassroomSession, ClassroomInteraction  # noqa: F401
         
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")

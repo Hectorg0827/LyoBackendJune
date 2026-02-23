@@ -537,44 +537,66 @@ class GeneralAgent(BaseAgent):
 
         # Check for Cinematic Hook JSON
         lyo_blocks = []
+        ui_component = None
+        block_payload = None
+        block_type = None
         clean_response = response_text
         
         try:
-            if "CINEMATIC_HOOK" in response_text:
-                start = response_text.find("{")
-                end = response_text.rfind("}") + 1
-                if start >= 0 and end > start:
-                    json_str = response_text[start:end]
-                    data = json.loads(json_str)
+            # We look for ANY JSON block at the end (search from the end to avoid
+            # false-positives with braces in conversational text)
+            end = response_text.rfind("}") + 1
+            start = response_text.rfind("{\n") if response_text.rfind("{\n") >= 0 else response_text.rfind("{")
+            if start >= 0 and end > start:
+                json_str = response_text[start:end]
+                data = json.loads(json_str)
+                
+                b_type = data.get("type", "")
+                
+                if b_type == "CINEMATIC_HOOK":
+                    payload = data.get("payload", {})
                     
-                    if data.get("type") == "CINEMATIC_HOOK":
-                        payload = data.get("payload", {})
-                        
-                        # Create LyoBlock
-                        block = LyoBlock(
-                            id=str(uuid4()),
-                            type=BlockType.HOOK, # Assuming HOOK or CONCEPT. Let's use HOOK if available or defaults.
-                            role=SemanticRole.HOOK,
-                            content=A2UICinematic(
-                                title=payload.get("title", "Cinematic Moment"),
-                                subtitle=payload.get("subtitle", "Focus Mode"),
-                                mood=payload.get("mood", "epic"),
-                                videoUrl=payload.get("video_url")
-                            ),
-                            presentation_hint=PresentationHint.CINEMATIC
-                        )
-                        lyo_blocks.append(block)
-                        
-                        # Remove JSON from potential displayed text, or just silence it
-                        clean_response = "" # Silence text if it's purely a command
+                    # Create LyoBlock
+                    block = LyoBlock(
+                        id=str(uuid4()),
+                        type=BlockType.HOOK,
+                        role=SemanticRole.HOOK,
+                        content=A2UICinematic(
+                            title=payload.get("title", "Cinematic Moment"),
+                            subtitle=payload.get("subtitle", "Focus Mode"),
+                            mood=payload.get("mood", "epic"),
+                            videoUrl=payload.get("video_url")
+                        ),
+                        presentation_hint=PresentationHint.CINEMATIC
+                    )
+                    lyo_blocks.append(block)
+                    clean_response = response_text[:start].strip() # Keep everything before the JSON
+                elif b_type in ["MAP_BLOCK", "IMAGE_BLOCK", "CHART_BLOCK", "CODE_BLOCK", "INTERACTIVE_CARD_BLOCK", "FLASHCARD_BLOCK"]:
+                    # Generative UI Block
+                    block_type = b_type
+                    # Create the payload manually to match A2UIBlockPayload schema
+                    # Assuming payload in JSON has {"map_data": ...} etc based on our prompt
+                    payload = data.get("payload", {})
+                    # Keep the conversational text before the JSON
+                    clean_response = response_text[:start].strip()
+                    
+                    # Instead of formal schemas right here, we just pass the dict 
+                    # and the FastAPI response model will serialize it.
+                    block_payload = {
+                        "type": b_type,
+                        **payload
+                    }
+                    
         except Exception as e:
-            logger.warning(f"Failed to parse Cinematic Hook: {e}")
+            logger.warning(f"Failed to parse A2UI Hook/Block: {e}")
         
         return {
             "response": clean_response,
             "ctas": self.cta_templates.get_ctas_for_context("after_explanation"),
             "chips": self.get_chips(),
             "lyo_blocks": lyo_blocks,
+            "type": block_type,
+            "block_payload": block_payload,
             **metadata
         }
 
