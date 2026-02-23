@@ -158,8 +158,8 @@ async def synthesize_speech(request: SynthesizeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"TTS synthesis error: {e}")
-        raise HTTPException(status_code=500, detail="Speech synthesis failed")
+        logger.error(f"TTS synthesis error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {type(e).__name__}")
 
 
 @router.post("/synthesize/stream")
