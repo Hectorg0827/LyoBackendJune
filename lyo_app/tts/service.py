@@ -117,8 +117,8 @@ class TTSService:
         if self._initialized:
             return
             
-        # Get OpenAI API key from secrets
-        api_key = get_secret("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+        # Get OpenAI API key from secrets (strip to remove trailing newlines from Secret Manager)
+        api_key = (get_secret("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "")) or "").strip()
         if not api_key:
             logger.warning("OpenAI API key not found - TTS will use fallback")
         else:

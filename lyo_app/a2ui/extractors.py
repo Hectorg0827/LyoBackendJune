@@ -145,6 +145,7 @@ def _extract_course_from_dict(data: Dict[str, Any], fallback_topic: str) -> Norm
         objectives=objectives,
         difficulty=difficulty,
         duration=duration,
+        thumbnail=data.get("thumbnail") or data.get("thumbnail_url"),
     )
 
 

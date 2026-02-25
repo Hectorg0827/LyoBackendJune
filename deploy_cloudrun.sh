@@ -122,6 +122,14 @@ DEPLOY_CMD+=" --set-env-vars ENVIRONMENT=production"
 DEPLOY_CMD+=" --set-env-vars GCP_PROJECT_ID=${PROJECT_ID}"
 DEPLOY_CMD+=" --set-env-vars PYTHONUNBUFFERED=1"
 
+# Extract RUNWARE_API_KEY from .env.production if it exists, otherwise pass a placholder
+if [ -f .env.production ]; then
+    RUNWARE_KEY=$(grep 'RUNWARE_API_KEY' .env.production | cut -d '=' -f2)
+    DEPLOY_CMD+=" --set-env-vars RUNWARE_API_KEY=${RUNWARE_KEY}"
+else
+    DEPLOY_CMD+=" --set-env-vars RUNWARE_API_KEY=${RUNWARE_API_KEY:-''}"
+fi
+
 # Add Cloud SQL connector if available
 if [[ -n "${CONNECTION_NAME}" ]]; then
     DEPLOY_CMD+=" --add-cloudsql-instances ${CONNECTION_NAME}"
@@ -159,6 +167,13 @@ DEPLOY_CMD+=" --set-secrets SECRET_KEY=secret-key:latest"
 DEPLOY_CMD+=" --set-secrets OPENAI_API_KEY=openai-api-key:latest"
 DEPLOY_CMD+=" --set-secrets GEMINI_API_KEY=gemini-api-key:latest"
 DEPLOY_CMD+=" --set-secrets GOOGLE_API_KEY=gemini-api-key:latest" # Map GEMINI_API_KEY to GOOGLE_API_KEY
+# Redis for job store persistence across instances
+if gcloud secrets describe "redis-url" --quiet >/dev/null 2>&1; then
+    DEPLOY_CMD+=" --set-secrets REDIS_URL=redis-url:latest"
+    log_info "Redis secret found — job store will use Redis"
+else
+    log_warning "Secret 'redis-url' not found. Job store will use in-memory fallback."
+fi
 # DATABASE_URL is handled above if it exists
 
 

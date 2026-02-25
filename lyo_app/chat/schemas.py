@@ -183,6 +183,7 @@ class OpenClassroomCourse(BaseModel):
     level: str = Field("intermediate", description="Difficulty level")
     duration: Optional[str] = Field("~45 min", description="Estimated duration")
     objectives: List[str] = Field(default_factory=list, description="Learning objectives")
+    thumbnail: Optional[str] = Field(None, description="Course thumbnail URL")
 
 
 class OpenClassroomPayload(BaseModel):

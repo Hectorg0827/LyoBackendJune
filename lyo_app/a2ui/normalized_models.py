@@ -60,6 +60,7 @@ class NormalizedCourse:
     difficulty: str = "Beginner"
     duration: str = "~30 min"
     quality_score: Optional[float] = None
+    thumbnail: Optional[str] = None
 
     @property
     def total_lessons(self) -> int:

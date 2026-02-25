@@ -24,8 +24,39 @@ from lyo_app.cache.course_cache import course_cache
 
 router = APIRouter(prefix="/api/v2/courses", tags=["courses-v2"])
 
-# In-memory job tracking (use Redis in production)
-job_store: Dict[str, Dict[str, Any]] = {}
+# Redis-backed job tracking (survives across Cloud Run instances)
+from lyo_app.cache.job_store import get_job_store
+job_store = get_job_store()
+
+
+def _start_background_generation(job_id: str, request, user):
+    """Fire-and-forget background task with exception logging."""
+    task = asyncio.create_task(
+        _generate_course_background(job_id, request, user),
+        name=f"course_gen_{job_id}"
+    )
+    def _on_done(t):
+        if t.cancelled():
+            print(f"⚠️ Background task {job_id} was cancelled")
+        elif t.exception():
+            exc = t.exception()
+            print(f"❌ Background task {job_id} FAILED: {type(exc).__name__}: {exc}")
+            # Mark job as failed so the client knows
+            job = job_store.get(job_id)
+            if job:
+                job["status"] = "completed"
+                job["progress_percent"] = 100
+                job["current_step"] = "Course ready (simplified)"
+                job["error"] = str(exc)
+                job["warning"] = f"Generated with fallback due to: {str(exc)}"
+                try:
+                    from lyo_app.api.v2.courses import _build_fallback_course
+                    job["result"] = _build_fallback_course(job_id, job.get("topic", "General"), {})
+                except Exception:
+                    pass
+                job_store.save(job_id, job)
+    task.add_done_callback(_on_done)
+    return task
 
 
 # MARK: - Request/Response Models
@@ -200,7 +231,7 @@ async def generate_course(
     }
 
     # Start background task
-    asyncio.create_task(_generate_course_background(job_id, request, current_user))
+    _start_background_generation(job_id, request, current_user)
 
     return CourseGenerationJobResponse(
         job_id=job_id,
@@ -241,7 +272,7 @@ async def generate_course_outline(
         "error": None
     }
 
-    asyncio.create_task(_generate_course_background(job_id, request, current_user))
+    _start_background_generation(job_id, request, current_user)
 
     return CourseOutlineResponse(**outline, status="outline_ready")
 
@@ -365,6 +396,7 @@ async def generate_course_module(
 
     job.setdefault("module_results", {})[module_id] = module
     job["updated_at"] = datetime.utcnow().isoformat()
+    job_store.save(job_id, job)
 
     return CourseModuleResponse(
         course_id=outline.get("course_id", job_id),
@@ -449,6 +481,7 @@ async def force_complete_job(
     job["steps_completed"].append("force_completed")
     job["updated_at"] = datetime.utcnow().isoformat()
     job["warning"] = "Force-completed with fallback content due to timeout"
+    job_store.save(job_id, job)
     
     print(f"🆘 Force-completed job {job_id} with fallback content")
     
@@ -576,6 +609,7 @@ async def _generate_course_background(
         job["current_step"] = "Analyzing request..."
         job["steps_completed"].append("initialized")
         job["updated_at"] = datetime.utcnow().isoformat()
+        job_store.save(job_id, job)
 
         # Add small delay for realism
         await asyncio.sleep(0.5)
@@ -589,6 +623,7 @@ async def _generate_course_background(
             job["current_step"] = "Coordinating AI agents..."
             job["steps_completed"].append("orchestrator_started")
             job["updated_at"] = datetime.utcnow().isoformat()
+            job_store.save(job_id, job)
 
             # Get user context
             user_context = request.user_context or {}
@@ -612,6 +647,7 @@ async def _generate_course_background(
             job["current_step"] = "Building course structure..."
             job["steps_completed"].append("agents_completed")
             job["updated_at"] = datetime.utcnow().isoformat()
+            job_store.save(job_id, job)
 
             # Step 3: Convert artifacts to course structure
             course_result = _build_course_from_artifacts(
@@ -624,16 +660,19 @@ async def _generate_course_background(
         except asyncio.TimeoutError:
             print(f"⏱️ A2A Orchestrator TIMEOUT for job {job_id} - using fallback")
             job["steps_completed"].append("orchestrator_timeout")
+            job_store.save(job_id, job)
             
         except Exception as orchestrator_error:
             print(f"⚠️ A2A Orchestrator failed for job {job_id}: {orchestrator_error}")
             job["steps_completed"].append("orchestrator_error")
+            job_store.save(job_id, job)
 
         # Step 3b: Fallback if orchestrator failed
         if course_result is None:
             job["progress_percent"] = 50
             job["current_step"] = "Generating modules from outline..."
             job["updated_at"] = datetime.utcnow().isoformat()
+            job_store.save(job_id, job)
 
             outline = job.get("outline") or _build_outline(job_id, request.request, request.user_context)
             job["outline"] = outline
@@ -663,6 +702,7 @@ async def _generate_course_background(
         job["steps_completed"].append("completed")
         job["updated_at"] = datetime.utcnow().isoformat()
         job["result"] = course_result
+        job_store.save(job_id, job)
 
         elapsed = (datetime.utcnow() - job_start_time).total_seconds()
         print(f"✅ Course generation completed for job {job_id} in {elapsed:.1f}s")
@@ -688,6 +728,7 @@ async def _generate_course_background(
             job["result"] = emergency_course
             job["warning"] = f"Generated with fallback due to: {str(e)}"
             job["updated_at"] = datetime.utcnow().isoformat()
+            job_store.save(job_id, job)
             print(f"🆘 Emergency fallback used for job {job_id}")
 
 
@@ -710,6 +751,7 @@ async def _build_course_from_outline_modules_resilient(
         job["current_step"] = f"Generating module {idx + 1} of {total}"
         job["progress_percent"] = 50 + int(((idx + 1) / total) * 40)
         job["updated_at"] = datetime.utcnow().isoformat()
+        job_store.save(job_id, job)
 
         try:
             # ⏱️ Per-module timeout
@@ -730,6 +772,7 @@ async def _build_course_from_outline_modules_resilient(
         
         # 🌊 Incremental Update: Allow client to fetch finished modules immediately
         job.setdefault("module_results", {})[module.get("id")] = module
+        job_store.save(job_id, job)
         modules.append(module)
 
     return {

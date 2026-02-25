@@ -194,6 +194,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 async def enhanced_error_middleware(request: Request, call_next):
     try:
         return await call_next(request)
+    except HTTPException:
+        # Let FastAPI's registered exception handlers process HTTPExceptions
+        # (they preserve status codes like 404, 403, etc.)
+        raise
     except Exception as e:  # noqa: BLE001
         user_id = getattr(getattr(request.state, "user", None), "id", None)
         return await enhanced_error_handler.handle_error(
