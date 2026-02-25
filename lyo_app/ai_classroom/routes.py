@@ -958,20 +958,51 @@ async def get_lesson_ui(
         logger.error(f"❌ Missing dependency for lesson UI: {e}")
         raise HTTPException(status_code=503, detail=f"Lesson UI service unavailable: missing dependency")
     
+    # Early validation: lesson_id must be a valid UUID (non-UUID IDs like
+    # "intro_1" are local placeholders from the iOS instant-course generator
+    # and don't exist in the database — querying PostgreSQL with them
+    # triggers a DataError before we can return a helpful 404).
+    import uuid as _uuid
+    try:
+        _uuid.UUID(lesson_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Lesson '{lesson_id}' is a local placeholder, not a server-side lesson. "
+                "Wait for the backend course generation to complete, then use the "
+                "UUID-based lesson IDs from the generated course."
+            )
+        )
+
     try:
         graph_service = get_graph_service(db)
         
         # Get the learning node
         node = await graph_service.get_node(lesson_id)
     except Exception as e:
-        logger.error(f"❌ Database error fetching lesson node '{lesson_id}': {type(e).__name__}: {e}")
+        err_name = type(e).__name__
+        logger.error(f"❌ Database error fetching lesson node '{lesson_id}': {err_name}: {e}")
+        # Distinguish between schema-missing and other DB errors
+        if "relation" in str(e).lower() or "table" in str(e).lower() or err_name == "ProgrammingError":
+            raise HTTPException(
+                status_code=503,
+                detail="Database unavailable or learning_nodes table missing. Run migrations first."
+            )
         raise HTTPException(
             status_code=503,
-            detail=f"Database unavailable or learning_nodes table missing. Run migrations first."
+            detail=f"Database error: {err_name}"
         )
 
     if not node:
-        raise HTTPException(status_code=404, detail=f"Lesson node '{lesson_id}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Lesson node '{lesson_id}' not found. "
+                "The course may still be generating — try again in a few seconds, "
+                "or fetch the course's node list first via /api/v1/classroom/courses/{{course_id}}."
+            )
+        )
     
     try:
         # Get course context for progress info

@@ -263,6 +263,22 @@ class CoursePlannerAgent(BaseAgent):
         # Try to parse JSON response
         course_data = self._parse_course_response(response_text, message)
         
+        # Async Generate High-Quality Educational Thumbnail with Runware
+        try:
+            from lyo_app.image_gen.service import get_image_service, ImageSize
+            image_service = await get_image_service()
+            
+            image_result = await image_service.generate_educational(
+                topic=course_data.get("title", message),
+                content_type="concept_diagram",
+                size=ImageSize.SQUARE
+            )
+            course_data["thumbnail"] = image_result.url
+            logger.info(f"Generated Runware thumbnail for course: {image_result.url}")
+        except Exception as e:
+            logger.warning(f"Failed to generate course thumbnail via Runware: {e}")
+            course_data["thumbnail"] = None
+        
         return {
             "response": response_text,
             "course_data": course_data,

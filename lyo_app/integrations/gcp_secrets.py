@@ -32,7 +32,7 @@ class SecretManagerClient:
         secret_path = f"projects/{self.project_id}/secrets/{name}/versions/latest"
         try:
             version = self._client.access_secret_version(name=secret_path)
-            return version.payload.data.decode("utf-8")
+            return version.payload.data.decode("utf-8").strip()
         except Exception:
             return os.getenv(name, default)
 

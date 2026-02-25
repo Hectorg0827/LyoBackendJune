@@ -458,6 +458,7 @@ class A2UIProducer:
                 "level": course.difficulty,
                 "duration": course.duration,
                 "objectives": course.objectives[:6],  # iOS displays max 6
+                "thumbnail": course.thumbnail,
             }
         }
 
