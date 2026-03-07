@@ -574,6 +574,122 @@ async def stream_a2a_generation(
     )
 
 
+@router.get("/{job_id}/modules/{module_id}/stream")
+async def stream_module_generation(
+    job_id: str,
+    module_id: str,
+    current_user = Depends(get_current_user_or_guest)
+):
+    """
+    SSE endpoint — streams module content as it generates.
+
+    Emits a sequence of events:
+      module_start     — module meta (title, lesson count) immediately
+      lesson_ready     — one event per lesson as content becomes available
+      module_complete  — final event with full module JSON
+      error            — on failure (client should fall back to polling)
+
+    If the module is already cached in module_results the full content is
+    replayed instantly so the client always gets the same event shape.
+    """
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["user_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    outline = job.get("outline")
+    if not outline:
+        raise HTTPException(status_code=404, detail="Outline not ready yet")
+
+    module_outline = next(
+        (m for m in outline.get("modules", []) if m.get("id") == module_id),
+        None
+    )
+    if not module_outline:
+        raise HTTPException(status_code=404, detail="Module not found in outline")
+
+    async def event_stream():
+        import time as _time
+
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+        # Immediately confirm the module we're about to stream
+        yield _sse("module_start", {
+            "job_id": job_id,
+            "module_id": module_id,
+            "title": module_outline.get("title", ""),
+            "description": module_outline.get("description", ""),
+            "timestamp": _time.time()
+        })
+
+        # If module content is already generated, replay it instantly
+        existing = job.get("module_results", {}).get(module_id)
+        if existing:
+            for lesson in existing.get("lessons", []):
+                yield _sse("lesson_ready", {
+                    "module_id": module_id,
+                    "lesson": lesson
+                })
+                await asyncio.sleep(0)  # yield control
+
+            yield _sse("module_complete", {
+                "module_id": module_id,
+                "module": existing,
+                "from_cache": True
+            })
+            yield _sse("done", {})
+            return
+
+        # Generate module content now, streaming each lesson as it arrives
+        try:
+            module = await asyncio.wait_for(
+                _generate_module_content(
+                    topic=outline.get("title", ""),
+                    outline=outline,
+                    module_outline=module_outline
+                ),
+                timeout=TIMEOUT_MODULE_GENERATION
+            )
+        except asyncio.TimeoutError:
+            module = _build_fallback_module(module_outline, outline.get("title", ""), None)
+            yield _sse("warning", {"message": "Generation timed out — showing fallback content"})
+        except Exception as exc:
+            yield _sse("error", {"message": str(exc), "module_id": module_id})
+            return
+
+        # Cache the result so subsequent fetches are instant
+        job.setdefault("module_results", {})[module_id] = module
+        job["updated_at"] = datetime.utcnow().isoformat()
+        job_store.save(job_id, job)
+
+        # Stream each lesson individually so the UI can render progressively
+        for lesson in module.get("lessons", []):
+            yield _sse("lesson_ready", {
+                "module_id": module_id,
+                "lesson": lesson
+            })
+            await asyncio.sleep(0)
+
+        yield _sse("module_complete", {
+            "module_id": module_id,
+            "module": module,
+            "from_cache": False
+        })
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
 # ============================================================================
 # TIMEOUT CONFIGURATION - Prevent Infinite Hangs
 # ============================================================================
