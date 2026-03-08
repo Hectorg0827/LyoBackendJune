@@ -192,16 +192,39 @@ async def generate_modules_progressively(job_id: str, course_id: str, topic: str
             
             # Use the robust resilient module builder from v2 courses
             mod_outline = outline["modules"][idx-1]
-            try:
-                module_content = await asyncio.wait_for(
-                    _generate_module_content(
-                        topic=topic,
-                        outline=outline,
-                        module_outline=mod_outline
-                    ),
-                    timeout=TIMEOUT_MODULE_GENERATION
-                )
-            except Exception:
+            module_content = None
+            max_retries = 2
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    module_content = await asyncio.wait_for(
+                        _generate_module_content(
+                            topic=topic,
+                            outline=outline,
+                            module_outline=mod_outline
+                        ),
+                        timeout=TIMEOUT_MODULE_GENERATION
+                    )
+                    # Validate: AI must return actual lessons, not empty stubs
+                    if module_content and module_content.get("lessons"):
+                        print(f"✅ Module {idx} generated via AI (attempt {attempt}): {len(module_content['lessons'])} lessons")
+                        break
+                    else:
+                        print(f"⚠️ Module {idx} AI returned empty lessons (attempt {attempt})")
+                        module_content = None
+                except asyncio.TimeoutError:
+                    print(f"⚠️ Module {idx} AI timed out (attempt {attempt}/{max_retries})")
+                    module_content = None
+                except Exception as gen_err:
+                    print(f"⚠️ Module {idx} AI error (attempt {attempt}/{max_retries}): {gen_err}")
+                    module_content = None
+
+                # Brief pause before retry
+                if attempt < max_retries:
+                    await asyncio.sleep(2)
+
+            if not module_content:
+                print(f"⚠️ Module {idx} all AI attempts failed — using fallback")
                 module_content = _build_fallback_module(mod_outline, topic, {"level": level})
             
             # Inject required struct fields for progressive UI

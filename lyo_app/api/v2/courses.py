@@ -809,6 +809,7 @@ def _build_fallback_module(module_outline: Dict[str, Any], topic: str, user_cont
         "id": module_id,
         "title": module_title,
         "description": module_outline.get("description", f"Learn about {module_title}"),
+        "is_fallback": True,
         "lessons": [
             {
                 "id": f"{module_id}_les_1",
@@ -1106,12 +1107,18 @@ async def _generate_module_content(
     module_description = module_outline.get("description")
 
     system_prompt = (
-        "You are a course module writer. Use the outline as a strict contract. "
+        "You are an expert course module writer for an educational app. "
+        "Use the provided outline as a strict contract. "
         "Return ONLY valid JSON with this schema:\n"
         "{\"id\": string, \"title\": string, \"description\": string, \"lessons\": ["
         "{\"id\": string, \"title\": string, \"content\": string, \"duration_minutes\": int}]}\n"
-        "Rules: Keep lesson count between 3 and 6. Keep lesson content concise but useful. "
-        "Do NOT invent new modules. Use the provided module id and title."
+        "Rules:\n"
+        "- Keep lesson count between 3 and 6.\n"
+        "- Each lesson MUST have rich, educational content (at least 3 paragraphs with examples, explanations, and key takeaways).\n"
+        "- Use markdown formatting (headers, bold, bullet points) in lesson content.\n"
+        "- Include real examples, analogies, and practical applications specific to the topic.\n"
+        "- Do NOT use generic filler text. Every sentence must teach something specific about the topic.\n"
+        "- Do NOT invent new modules. Use the provided module id and title."
     )
 
     user_prompt = (
@@ -1127,7 +1134,7 @@ async def _generate_module_content(
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.4,
-        max_tokens=1200,
+        max_tokens=3000,
         provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"],
     )
 
