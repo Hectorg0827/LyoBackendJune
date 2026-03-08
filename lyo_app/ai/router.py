@@ -30,7 +30,7 @@ Lyo is an Outcome Engine for learning.
 
 ## Intents (use EXACTLY one of these values):
 - EXPLAIN: User wants a concept explained or has a general question.
-- COURSE: User wants to learn/study a topic, create a course, or requests "teach me X". Use this for any learning request that implies structured content.
+- COURSE: User explicitly requests the creation of a structured course, curriculum, or lesson plan. Examples: "create a course on X", "build me a course", "teach me Python from scratch" (imperative, self-directed request). Do NOT use for conversational questions about learning topics — those are EXPLAIN or CHAT.
 - QUIZ: User wants to be tested on a topic.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.
@@ -116,7 +116,7 @@ YOU MUST RESPOND ONLY WITH JSON.
                 "create course", "create a course", "course on", "course about",
                 "make a course", "build a course", "make me a course",
                 "generate a course", "i want a course", "course for",
-                "teach me about", "teach me on", "learn about", "lesson on",
+                "teach me on",
             ]
             _quiz_kws = [
                 "quiz me", "quiz on", "test me", "make a quiz",
