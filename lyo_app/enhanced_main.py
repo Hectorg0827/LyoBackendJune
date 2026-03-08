@@ -334,6 +334,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"iOS Compatibility routes not available: {e}")
 
+
+    try:
+        from lyo_app.api.progressive_course import router as progressive_router
+        app.include_router(progressive_router)
+        logger.info("✅ Progressive Course Generation routes integrated (iOS Phase A Compatibility)")
+    except ImportError as e:
+        logger.warning(f"⚠️ Progressive Course routes not loaded: {e}")
+
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
@@ -365,6 +373,13 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.image_gen.routes import router as image_gen_router
         app.include_router(image_gen_router)
+    except ImportError:
+        pass
+    
+    # Video Generation (Runway Gen-4.5)
+    try:
+        from lyo_app.video_gen.routes import router as video_gen_router
+        app.include_router(video_gen_router)
     except ImportError:
         pass
     
@@ -551,6 +566,46 @@ def create_app() -> FastAPI:
         logger.info("✅ A2UI routes integrated - Server-driven UI for iOS active!")
     except ImportError as e:
         logger.warning(f"A2UI routes not available: {e}")
+
+    # ── Self-Evolution OS: Ambient Presence ──
+    try:
+        from lyo_app.ambient.routes import router as ambient_router
+        app.include_router(ambient_router, prefix="/api/v1")
+        logger.info("✅ Ambient Presence routes integrated - Inline help & quick actions active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Ambient Presence routes not available: {e}")
+
+    # ── Self-Evolution OS: Proactive Interventions ──
+    try:
+        from lyo_app.proactive.routes import router as proactive_router
+        app.include_router(proactive_router, prefix="/api/v1")
+        logger.info("✅ Proactive Intervention routes integrated - Smart nudges active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Proactive Intervention routes not available: {e}")
+
+    # ── Self-Evolution OS: Predictive Intelligence ──
+    try:
+        from lyo_app.predictive.routes import router as predictive_router
+        app.include_router(predictive_router, prefix="/api/v1")
+        logger.info("✅ Predictive Intelligence routes integrated - Struggle prediction & dropout prevention active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Predictive Intelligence routes not available: {e}")
+
+    # ── Self-Evolution OS: Evolution (Goals, Events, Reflections) ──
+    try:
+        from lyo_app.evolution.routes import router as evolution_router
+        app.include_router(evolution_router, prefix="/api/v1")
+        logger.info("✅ Evolution routes integrated - Goals CRUD, Events logging & Reflections active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Evolution routes not available: {e}")
+
+    # ── Self-Evolution OS: Relationship System ──
+    try:
+        from lyo_app.relationship.routes import router as relationship_router
+        app.include_router(relationship_router, prefix="/api/v1")
+        logger.info("✅ Relationship routes integrated - Milestones, personality & memory active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Relationship routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401

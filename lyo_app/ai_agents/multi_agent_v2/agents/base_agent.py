@@ -15,6 +15,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime
+import time
 from typing import TypeVar, Generic, Type, Optional, Dict, Any, List
 
 import google.generativeai as genai
@@ -304,18 +305,33 @@ CRITICAL RULES:
         start = time.time()
         logger.info(f"🤖 Agent {self.name}: Calling {self.model_name} (Attempt {attempt})...")
         try:
-            response = await asyncio.wait_for(
-                self.model.generate_content_async(prompt),
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            
+            # Ensure resilience manager is initialized
+            if not ai_resilience_manager.session:
+                await ai_resilience_manager.initialize()
+                
+            messages = [{"role": "user", "content": prompt}]
+            
+            ai_response = await asyncio.wait_for(
+                ai_resilience_manager.chat_completion(
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    provider_order=[self.model_name, "gemini-2.5-flash", "gpt-4o-mini"]
+                ),
                 timeout=self.timeout_seconds
             )
             
+            response_text = ai_response.get("content", "")
+            
             duration = time.time() - start
-            if not response.text:
+            if not response_text:
                 logger.warning(f"⚠️ Agent {self.name}: Empty response from {self.model_name} after {duration:.2f}s")
                 raise ValueError("Empty response from model")
             
             logger.info(f"✨ Agent {self.name}: Received response from {self.model_name} in {duration:.2f}s")
-            return response.text
+            return response_text
             
         except asyncio.TimeoutError:
             logger.warning(f"Agent {self.name} timed out on attempt {attempt}")

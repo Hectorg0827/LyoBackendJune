@@ -116,7 +116,7 @@ class TutorAgent:
     
     def __init__(self):
         self.name = "tutor_agent"
-        self.model_name = "gemini-2.0-flash"
+        self.model_name = "gemini-3.1-pro-preview-customtools"
         self.temperature = 0.7
         self._available = False
         self.model = None
@@ -156,7 +156,7 @@ class TutorAgent:
             TutorPersonality.SOCRATIC: "guiding through questions rather than direct answers",
             TutorPersonality.DIRECT: "clear, concise, and straight to the point",
             TutorPersonality.PATIENT: "taking time to explain, never rushing, very thorough",
-            TutorPersonality.CHALLENGING: "pushing the student to think deeper, asking probing questions"
+            TutorPersonality.CHALLENGING: "pushing the member to think deeper, asking probing questions"
         }
         
         style_instructions = {
@@ -169,7 +169,7 @@ class TutorAgent:
         
         prompt = f"""You are an expert AI tutor named Lyo. You are {personality_traits[personality]}.
 
-## Student Context
+## Member Context
 - Skill Level: {context.skill_level}
 - Current Topic: {context.current_topic or 'General learning'}
 - Completed Lessons: {len(context.completed_lessons)} lessons
@@ -180,14 +180,14 @@ class TutorAgent:
 
 ## Guidelines
 1. Always be helpful and educational
-2. Adapt to the student's level
+2. Adapt to the member's level
 3. Provide examples when helpful
 4. Encourage questions and exploration
 5. If unsure, acknowledge it honestly
 6. Keep responses focused and relevant
 7. End with a follow-up question or suggestion when appropriate
 
-Remember: Your goal is to help the student truly understand, not just give answers."""
+Remember: Your goal is to help the member truly understand, not just give answers."""
         
         return prompt
     
@@ -287,7 +287,7 @@ Remember: Your goal is to help the student truly understand, not just give answe
 
 Exercise: {exercise_description}
 
-Student's attempt: {user_attempt or 'No attempt yet'}
+Member's attempt: {user_attempt or 'No attempt yet'}
 
 Hint level: {hint_level.value}
 Instructions: {level_instructions[hint_level]}
@@ -349,7 +349,7 @@ Keep the hint concise and helpful."""
             
             prompt = f"""Explain the concept: {concept}
 
-Student level: {context.skill_level}
+Member level: {context.skill_level}
 Explanation style: {style_prompts[use_style]}
 
 Provide:

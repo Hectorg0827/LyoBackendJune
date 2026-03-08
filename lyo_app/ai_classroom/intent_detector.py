@@ -50,6 +50,10 @@ class IntentType(str, Enum):
     FEEDBACK = "feedback"                     # Positive/negative reactions
     HELP = "help"                             # "What can you do?"
     UNKNOWN = "unknown"                       # Can't determine
+    
+    # OS Evolution
+    REFLECT = "reflect"                       # Self-reporting on learning
+    WEEKLY_REVIEW = "weekly_review"           # Requesting a macro summary
 
 
 class ConfidenceLevel(str, Enum):
@@ -168,6 +172,18 @@ INTENT_PATTERNS = {
         r"(?:thanks|thank\s+you|great|awesome|perfect|good|nice)",
         r"(?:that's\s+wrong|incorrect|not\s+right|bad)",
         r"(?:i\s+liked|i\s+didn't\s+like|helpful|not\s+helpful)",
+    ],
+    
+    IntentType.REFLECT: [
+        r"(?:this\s+was\s+hard|this\s+was\s+easy|i'm\s+confused)",
+        r"(?:i\s+feel\s+frustrated|i'm\s+bored)",
+        r"(?:how\s+did\s+i\s+do|feedback\s+on\s+my\s+performance|my\s+understanding)",
+    ],
+    
+    IntentType.WEEKLY_REVIEW: [
+        r"(?:how\s+am\s+i\s+doing|weekly\s+review)",
+        r"(?:my\s+progress|my\s+goals|overall\s+trajectory)",
+        r"(?:what\s+should\s+i\s+focus\s+on)",
     ],
 }
 

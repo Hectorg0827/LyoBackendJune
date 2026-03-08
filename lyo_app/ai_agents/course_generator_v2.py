@@ -79,7 +79,7 @@ class CourseGeneratorV2:
         # In prod, use structured output mode
         response = await ai_resilience_manager.chat_completion(
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            provider_order=["gemini-2.0-flash", "gpt-4o-mini"]
+            provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"]
         )
         
         # Allow AI to do the work, but for this "executable plan" I'll enforce the schema parsing
@@ -127,30 +127,130 @@ class CourseGeneratorV2:
         )
 
     async def _generate_artifact(self, type: ArtifactType, title: str, goal: str) -> LyoArtifact:
-        system_prompt = f"""
-        You are a Content Creator. Generate a {type.value} for the lesson '{title}'.
-        Goal: {goal}.
-        Output strict JSON matching the {type.value} schema.
-        """
-        
-        # Mocking the AI call for artifact generation
-        # logic...
-        
-        # Return a shell for now to satisfy the "Structure" validation
+        """Generate a real AI-powered artifact for a lesson."""
+
+        # Build type-specific prompt for the AI
+        if type == ArtifactType.CONCEPT_EXPLAINER:
+            user_prompt = f"""Generate a detailed concept explainer for the lesson "{title}".
+Learning goal: {goal}
+
+Return ONLY valid JSON with this exact structure:
+{{
+  "markdown": "# {title}\\n\\n(Full, detailed markdown explanation — at least 3 paragraphs covering the concept, examples, and how it connects to the broader topic. Use headers, bullet points, and bold text for emphasis.)",
+  "key_takeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"]
+}}
+Make the explanation thorough, engaging, and educational. Use real examples and analogies."""
+
+        elif type == ArtifactType.QUIZ:
+            user_prompt = f"""Generate a quiz for the lesson "{title}".
+Learning goal: {goal}
+
+Return ONLY valid JSON with this exact structure:
+{{
+  "questions": [
+    {{
+      "id": "q1",
+      "text": "Question text here?",
+      "options": [
+        {{"id": "a", "text": "Option A"}},
+        {{"id": "b", "text": "Option B"}},
+        {{"id": "c", "text": "Option C"}},
+        {{"id": "d", "text": "Option D"}}
+      ],
+      "correct_option_id": "b"
+    }}
+  ]
+}}
+Include 3 questions. Each question must have exactly 4 options. Questions should test real understanding, not just recall."""
+
+        elif type == ArtifactType.FLASHCARDS:
+            user_prompt = f"""Generate flashcards for the lesson "{title}".
+Learning goal: {goal}
+
+Return ONLY valid JSON with this exact structure:
+{{
+  "topic": "{title}",
+  "cards": [
+    {{"front": "Term or question", "back": "Definition or answer"}}
+  ]
+}}
+Include 5-8 flashcards covering the key concepts. Make them useful for spaced repetition."""
+
+        else:
+            user_prompt = f"Generate content for a {type.value} artifact about '{title}'. Goal: {goal}. Return valid JSON."
+
+        system_prompt = f"""You are a world-class educational content creator for the Lyo learning platform.
+Generate a high-quality {type.value} for the lesson '{title}'.
+Goal: {goal}.
+Output ONLY strict valid JSON — no markdown fences, no extra text."""
+
+        # Call the AI
+        try:
+            response = await ai_resilience_manager.chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+            )
+
+            raw = response.get("content", "").strip()
+
+            # Strip markdown code fences if present
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0].strip()
+            elif raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                raw = raw.rsplit("```", 1)[0].strip()
+
+            content = json.loads(raw)
+
+            # Validate with Pydantic models to ensure schema compliance
+            if type == ArtifactType.CONCEPT_EXPLAINER:
+                validated = ConceptExplainerPayload(**content)
+                content = validated.dict()
+            elif type == ArtifactType.QUIZ:
+                validated = QuizArtifactPayload(**content)
+                content = validated.dict()
+            elif type == ArtifactType.FLASHCARDS:
+                validated = FlashcardsPayload(**content)
+                content = validated.dict()
+
+            logger.info(f"✅ AI-generated {type.value} artifact for '{title}'")
+
+            return LyoArtifact(
+                artifact_id=f"art_{type.value}_{title[:5]}",
+                type=type,
+                render_target=RenderTarget.NATIVE,
+                content=content,
+                ai_metadata=ArtifactAIMetadata(confidence=0.92)
+            )
+
+        except Exception as e:
+            logger.warning(f"⚠️ AI artifact generation failed for {type.value}/{title}: {e} — using fallback")
+
+        # Fallback: return minimal valid content so the course isn't broken
         content = {}
         if type == ArtifactType.CONCEPT_EXPLAINER:
-            content = ConceptExplainerPayload(markdown=f"# {title}\n\nExplanation of {goal}...", key_takeaways=["Point 1"]).dict()
+            content = ConceptExplainerPayload(
+                markdown=f"# {title}\n\nThis lesson covers {goal}. Content is being generated — check back shortly for the full explanation.",
+                key_takeaways=[f"Understanding {title} is essential", f"The goal is: {goal}"]
+            ).dict()
         elif type == ArtifactType.QUIZ:
-            content = QuizArtifactPayload(questions=[QuizQuestion(id="q1", text="Question?", options=[QuizOption(id="a", text="A")], correct_option_id="a")]).dict()
+            content = QuizArtifactPayload(
+                questions=[QuizQuestion(id="q1", text=f"What is the main purpose of {title}?",
+                    options=[QuizOption(id="a", text="To understand the basics"), QuizOption(id="b", text="To apply the concept"), QuizOption(id="c", text="To evaluate outcomes"), QuizOption(id="d", text="All of the above")],
+                    correct_option_id="d")]
+            ).dict()
         elif type == ArtifactType.FLASHCARDS:
-            content = FlashcardsPayload(topic=title, cards=[Flashcard(front="Front", back="Back")]).dict()
-            
+            content = FlashcardsPayload(topic=title, cards=[Flashcard(front=title, back=goal)]).dict()
+
         return LyoArtifact(
             artifact_id=f"art_{type.value}_{title[:5]}",
             type=type,
             render_target=RenderTarget.NATIVE,
             content=content,
-            ai_metadata=ArtifactAIMetadata(confidence=0.95)
+            ai_metadata=ArtifactAIMetadata(confidence=0.5)
         )
 
     def _get_fallback_structure(self, topic: str) -> LyoCourse:

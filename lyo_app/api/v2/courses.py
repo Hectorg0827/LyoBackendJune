@@ -448,6 +448,7 @@ async def force_complete_job(
     """
     Force a stalled job to complete with fallback content.
     Called by iOS client when stall is detected.
+    Returns the full course payload so the client can launch the classroom immediately.
     """
     job = job_store.get(job_id)
     if not job:
@@ -455,24 +456,29 @@ async def force_complete_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found"
         )
-    
+
     if job["user_id"] != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
         )
-    
-    # If already completed, just return success
+
+    # If already completed, return the existing result so iOS can use it
     if job["status"] == "completed":
-        return {"status": "already_completed", "job_id": job_id}
-    
+        existing_result = job.get("result")
+        return {
+            "status": "already_completed",
+            "job_id": job_id,
+            "course": existing_result
+        }
+
     # Generate emergency fallback content
     request_data = job.get("request", {})
     topic = request_data.get("request", "Course")
     user_context = request_data.get("user_context", {})
-    
+
     fallback_course = _build_fallback_course(job_id, topic, user_context)
-    
+
     # Mark as completed with fallback
     job["status"] = "completed"
     job["progress_percent"] = 100
@@ -482,10 +488,15 @@ async def force_complete_job(
     job["updated_at"] = datetime.utcnow().isoformat()
     job["warning"] = "Force-completed with fallback content due to timeout"
     job_store.save(job_id, job)
-    
+
     print(f"🆘 Force-completed job {job_id} with fallback content")
-    
-    return {"status": "force_completed", "job_id": job_id}
+
+    # Return full course data so iOS can decode it directly
+    return {
+        "status": "force_completed",
+        "job_id": job_id,
+        "course": fallback_course
+    }
 
 
 @router.get("/{job_id}/result", response_model=CourseResult)
@@ -1117,7 +1128,7 @@ async def _generate_module_content(
         ],
         temperature=0.4,
         max_tokens=1200,
-        provider_order=["gemini-2.0-flash", "gpt-4o-mini"],
+        provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"],
     )
 
     raw = ai_response.get("content", "")

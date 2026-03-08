@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     # OpenAI Configuration (for conversations and TTS)
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key for ChatGPT and TTS")
     
+    # Runway Video Generation
+    runwayml_api_secret: Optional[str] = Field(default=None, description="Runway ML API secret for video generation")
+    
     # Dual AI System Configuration
     ai_brain_provider: str = Field(default="gemini", description="AI Brain provider for reasoning (gemini)")
     ai_conversation_provider: str = Field(default="openai", description="AI Conversation provider (openai)")

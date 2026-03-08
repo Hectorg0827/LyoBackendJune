@@ -25,7 +25,7 @@ async def test_streaming():
         # Use a specific provider order to force internal _stream_gemini
         async for chunk in ai_resilience_manager.stream_chat_completion(
             messages, 
-            provider_order=["gemini-2.0-flash"]
+            provider_order=["gemini-3.1-pro-preview-customtools"]
         ):
             chunk_count += 1
             if not first_chunk_time:

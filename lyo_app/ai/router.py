@@ -18,7 +18,7 @@ class MultimodalRouter(BaseAgent[RouterDecision]):
         super().__init__(
             name="multimodal_router",
             output_schema=RouterDecision,
-            model_name="gemini-2.0-flash",  # Stable Gemini 2.0 Flash
+            model_name="gemini-3.1-pro-preview-customtools",  # Stable Gemini 2.0 Flash
             temperature=0.1,  # Low temperature for deterministic behavior
             max_tokens=1024
         )

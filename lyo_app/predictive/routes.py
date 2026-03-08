@@ -533,3 +533,22 @@ async def get_predictive_insights(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get predictive insights"
         )
+
+
+@router.get("/content-recommendations")
+async def get_content_recommendations(
+    limit: int = 5,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get AI-powered content recommendations based on mastery gaps, spaced rep and struggle predictions."""
+    try:
+        from .content_recommender import recommend_content
+        recs = await recommend_content(db, current_user.id, limit=limit)
+        return {"recommendations": [r.to_dict() for r in recs]}
+    except Exception as e:
+        logger.error(f"Error getting content recommendations for user {current_user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get content recommendations"
+        )

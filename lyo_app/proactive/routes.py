@@ -248,3 +248,21 @@ async def update_notification_preferences(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update preferences"
         )
+
+
+@router.get("/rituals")
+async def get_rituals(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get personalized learning rituals for the authenticated user."""
+    try:
+        from .ritual_builder import build_rituals
+        rituals = await build_rituals(db, current_user.id)
+        return {"rituals": [r.to_dict() for r in rituals]}
+    except Exception as e:
+        logger.error(f"Error building rituals for user {current_user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build rituals"
+        )

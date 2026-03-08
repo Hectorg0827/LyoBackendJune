@@ -127,7 +127,7 @@ Use the Socratic method to facilitate deep understanding.
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
-            provider_order=["gemini-2.0-flash", "gpt-4o-mini", "gemini-2.0-pro"]  # Google Gemini models
+            provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini", "gemini-3.1-pro-preview-customtools"]  # Google Gemini models
         )
         
         # 6. Build updated conversation history to maintain state
@@ -231,7 +231,7 @@ async def generate_quiz_endpoint(
             messages=[{"role": "user", "content": quiz_prompt}],
             temperature=0.3,  # Lower temperature for consistency
             max_tokens=2000,
-            provider_order=["gemini-2.0-flash", "gemini-2.0-flash-lite"]  # Google Gemini models
+            provider_order=["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview-customtools"]  # Google Gemini models
         )
         
         # 3. Parse and validate the JSON from AI before sending to client
@@ -337,7 +337,7 @@ async def analyze_answer_endpoint(
             messages=[{"role": "user", "content": feedback_prompt}],
             temperature=0.6,  # Moderate temperature for personalized but consistent feedback
             max_tokens=500,
-            provider_order=["gemini-2.0-flash", "gemini-2.0-flash-lite"]  # Google Gemini models
+            provider_order=["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview-customtools"]  # Google Gemini models
         )
         
         logger.info(f"Answer analysis completed for user {current_user.id}")
@@ -923,7 +923,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
             messages=messages,
             temperature=0.7,
             max_tokens=1000,
-            provider_order=["gemini-2.0-flash", "gpt-4o-mini", "gpt-4o"]
+            provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini", "gpt-4o"]
         )
         
         # Extract content with fallback
@@ -937,6 +937,73 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
             context=request.context or "",
             ai_response=response_content
         )
+        
+        # Override mock AI Classroom widgets with REAL A2A Orchestrator data
+        import asyncio
+        for ct in content_types:
+            if ct.type == "course_roadmap":
+                try:
+                    from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
+                    from lyo_app.ai_agents.a2a.schemas import A2ACourseRequest, ArtifactType
+                    import re
+                    
+                    topic = request.message[:50] if request.message else "Learning"
+                    match = re.search(r"(?:course on|learn about|teach me) (.+)", request.message.lower())
+                    if match:
+                        topic = match.group(1).replace("please", "").replace("pls", "").strip().title()
+                    else:
+                        topic = ct.course_roadmap.topic if ct.course_roadmap else topic
+                        
+                    logger.info(f"Triggering REAL A2A orchestration for Course: {topic}")
+                    orchestrator = A2AOrchestrator()
+                    course_req = A2ACourseRequest(
+                        topic=topic,
+                        user_id="guest",
+                        level="beginner",
+                        duration_minutes=30
+                    )
+                    a2a_response = await asyncio.wait_for(orchestrator.generate_course(course_req), timeout=180.0)
+                    
+                    real_modules = []
+                    flat_modules = []
+                    for i, artifact in enumerate(a2a_response.output_artifacts):
+                        if artifact.type == ArtifactType.CURRICULUM_STRUCTURE and artifact.data:
+                            for j, mod in enumerate(artifact.data.get("modules", [])):
+                                t = mod.get("title", f"Module {j+1}")
+                                lesson_count = len(mod.get("lessons", [1]))
+                                real_modules.append(A2UIModulePayload(
+                                    title=t,
+                                    description=mod.get("description", ""),
+                                    lessons=[A2UILessonPayload(title=f"Lesson", duration="15 min")] * lesson_count
+                                ))
+                                flat_modules.append(CourseModulePayload(title=t, duration=f"{lesson_count * 15} min", isCompleted=False, isLocked=False))
+                    
+                    if real_modules:
+                        if ct.course_roadmap:
+                            ct.course_roadmap.title = f"Course: {topic}"
+                            ct.course_roadmap.topic = topic
+                            ct.course_roadmap.modules = real_modules
+                        ct.modules = flat_modules
+                        ct.totalModules = len(flat_modules)
+                        ct.completedModules = 0
+                        response_content = f"I've created a comprehensive course on {topic}! 🚀"
+                        
+                except Exception as e:
+                    logger.error(f"Failed to override mock course with A2A: {e}", exc_info=True)
+            elif ct.type == "quiz":
+                # Ensure valid Quiz format for iOS to prevent `unsupported Unknown Error`
+                ct.correctIndex = ct.correctIndex if ct.correctIndex is not None else 1
+                if ct.quiz and ct.quiz.questions:
+                    # Provide flat structure matching iOS Decodable for backward compat
+                    q = ct.quiz.questions[0]
+                    ct.question = q.question
+                    ct.options = q.options
+                    # Find index
+                    try:
+                        ct.correctIndex = q.options.index(q.correct_answer)
+                    except ValueError:
+                        ct.correctIndex = 1
+                response_content = "Here's a quick quiz to test your knowledge! 🧠"
         
         # Build updated history
         updated_history = []
@@ -1055,7 +1122,7 @@ Include practical examples and clear explanations."""
             messages=[{"role": "user", "content": course_prompt}],
             temperature=0.7,
             max_tokens=4000,
-            provider_order=["gemini-2.0-flash", "gpt-4o-mini", "gemini-2.0-pro"]
+            provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini", "gemini-3.1-pro-preview-customtools"]
         )
         
         # Check for fallback response (AI service unavailable)

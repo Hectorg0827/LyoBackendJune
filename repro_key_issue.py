@@ -24,7 +24,7 @@ async def test_agent_init():
         agent = BaseAgent(
             name="TestAgent",
             output_schema=MockOutput,
-            model_name="gemini-2.0-flash"
+            model_name="gemini-3.1-pro-preview-customtools"
         )
         
         print(f"DEBUG: Agent available: {agent.is_available}")

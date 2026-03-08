@@ -92,7 +92,7 @@ class ExerciseValidator:
             try:
                 genai.configure(api_key=api_key)
                 self.model = genai.GenerativeModel(
-                    "gemini-2.0-flash",
+                    "gemini-3.1-pro-preview-customtools",
                     generation_config={
                         "temperature": 0.3,
                         "max_output_tokens": 1024,
@@ -204,7 +204,7 @@ class ExerciseValidator:
 
 Question: {context.question}
 Expected Answer: {context.expected_answer}
-Student's Answer: {user_answer}
+Member's Answer: {user_answer}
 
 Evaluate on:
 1. Correctness (0-100%)
@@ -437,7 +437,7 @@ HINTS: [if incorrect, provide hint]"""
             prompt = f"""Grade this essay response.
 
 Question/Prompt: {context.question}
-Student's Essay: {user_answer}
+Member's Essay: {user_answer}
 
 Grading Rubric:
 {rubric}

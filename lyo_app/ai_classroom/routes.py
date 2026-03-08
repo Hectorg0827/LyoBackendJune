@@ -24,7 +24,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .intent_detector import get_intent_detector, ChatIntent
+from .intent_detector import get_intent_detector, ChatIntent, IntentType
+from lyo_app.ai_agents.schemas import AgentContext
+from lyo_app.ai_agents.multi_agent_v2.review_agent import WeeklyReviewAgent
+from lyo_app.evolution.reflection_service import ReflectionPayload, process_reflection
 from .conversation_flow import (
     get_conversation_manager,
     ConversationManager,
@@ -343,6 +346,96 @@ async def _create_minimal_graph_course(
     level: str = "beginner",
 ) -> GraphCourse:
     """Create a minimal playable graph course (linear graph) for iOS playback."""
+    # ── Generate real AI narration for each node ──
+    try:
+        from lyo_app.ai_agents.ai_resilience_manager import ai_resilience_manager
+        import json as _json
+
+        narration_prompt = (
+            f"You are an expert educator creating a short micro-lesson on \"{topic}\" "
+            f"for a {level} student.\n\n"
+            "Return ONLY valid JSON with these keys:\n"
+            "{\n"
+            '  "hook": "A 1-2 sentence engaging hook that draws the student in (15-25 words)",\n'
+            '  "lesson": "A clear 3-4 sentence explanation of the core concept (40-60 words)",\n'
+            '  "quiz_prompt": "A question testing understanding of the concept",\n'
+            '  "quiz_options": [\n'
+            '    {"id": "a", "label": "...", "is_correct": false, "feedback": "..."},\n'
+            '    {"id": "b", "label": "...", "is_correct": true, "feedback": "..."},\n'
+            '    {"id": "c", "label": "...", "is_correct": false, "feedback": "..."}\n'
+            "  ],\n"
+            '  "quiz_explanation": "Brief explanation of the correct answer",\n'
+            '  "summary": "A 1-2 sentence recap and encouragement (15-25 words)"\n'
+            "}"
+        )
+
+        ai_response = await ai_resilience_manager.chat_completion(
+            messages=[{"role": "user", "content": narration_prompt}],
+            provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+            temperature=0.7,
+        )
+
+        raw = ai_response.get("content", "")
+        # Strip markdown fences if present
+        if "```" in raw:
+            raw = raw.split("```json")[-1].split("```")[0] if "```json" in raw else raw.split("```")[1].split("```")[0]
+        ai_data = _json.loads(raw.strip())
+
+        hook_narration = ai_data.get("hook", f"Welcome! Today we are going to learn {topic}. Ready to begin?")
+        lesson_narration = ai_data.get("lesson", f"Let us start with the basics of {topic}.")
+        quiz_prompt = ai_data.get("quiz_prompt", f"Quick check: which statement best matches the main idea of {topic}?")
+        quiz_options_raw = ai_data.get("quiz_options", None)
+        quiz_explanation = ai_data.get("quiz_explanation", f"{topic} is best understood as a structured concept you can apply.")
+        summary_narration = ai_data.get("summary", f"Great job. You learned the basics of {topic}.")
+
+        if quiz_options_raw and isinstance(quiz_options_raw, list):
+            quiz_options = []
+            for opt in quiz_options_raw:
+                quiz_options.append({
+                    "id": opt.get("id", "x"),
+                    "label": opt.get("label", "Option"),
+                    "is_correct": bool(opt.get("is_correct", False)),
+                    "feedback": opt.get("feedback", ""),
+                    "misconception_tag": opt.get("misconception_tag"),
+                })
+        else:
+            quiz_options = None
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"AI narration failed for minimal graph course, using template: {e}")
+        hook_narration = f"Welcome! Today we are going to learn {topic}. Ready to begin?"
+        lesson_narration = f"Let us start with the basics of {topic}. Here is the core idea, in simple terms..."
+        quiz_prompt = f"Quick check: which statement best matches the main idea of {topic}?"
+        quiz_options = None
+        quiz_explanation = f"{topic} is best understood as a structured concept you can apply."
+        summary_narration = f"Great job. You learned the basics of {topic}. Next we can go deeper or practice."
+
+    # Fallback quiz options
+    if quiz_options is None:
+        quiz_options = [
+            {
+                "id": "a",
+                "label": "It is a random fact with no structure.",
+                "is_correct": False,
+                "feedback": "Not quite -- there is a core principle behind it.",
+                "misconception_tag": "no_structure",
+            },
+            {
+                "id": "b",
+                "label": "It is a structured concept that explains how something works.",
+                "is_correct": True,
+                "feedback": "Exactly -- nice work.",
+                "misconception_tag": None,
+            },
+            {
+                "id": "c",
+                "label": "It only applies in one narrow edge case.",
+                "is_correct": False,
+                "feedback": "Usually it is broader than that.",
+                "misconception_tag": "too_narrow",
+            },
+        ]
+
     course = GraphCourse(
         title=f"{topic} ({level})",
         description=f"An interactive course on {topic}.",
@@ -355,13 +448,13 @@ async def _create_minimal_graph_course(
         is_template=False,
     )
     db.add(course)
-    await db.flush()  # ensure course.id exists
+    await db.flush()
 
     hook_node = LearningNode(
         course_id=course.id,
         node_type=NodeType.HOOK.value,
         content={
-            "narration": f"Welcome! Today we’re going to learn {topic}. Ready to begin?",
+            "narration": hook_narration,
             "visual_prompt": f"A clean, modern educational title card about {topic}",
             "keywords": [topic],
             "audio_mood": "calm",
@@ -374,7 +467,7 @@ async def _create_minimal_graph_course(
         course_id=course.id,
         node_type=NodeType.NARRATIVE.value,
         content={
-            "narration": f"Let’s start with the basics of {topic}. Here’s the core idea, in simple terms...",
+            "narration": lesson_narration,
             "visual_prompt": f"A concept diagram explaining the basics of {topic}",
             "keywords": [topic, "basics"],
             "audio_mood": "calm",
@@ -387,32 +480,10 @@ async def _create_minimal_graph_course(
         course_id=course.id,
         node_type=NodeType.INTERACTION.value,
         content={
-            "prompt": f"Quick check: which statement best matches the main idea of {topic}?",
+            "prompt": quiz_prompt,
             "interaction_type": "multiple_choice",
-            "options": [
-                {
-                    "id": "a",
-                    "label": "It’s a random fact with no structure.",
-                    "is_correct": False,
-                    "feedback": "Not quite—there’s a core principle behind it.",
-                    "misconception_tag": "no_structure",
-                },
-                {
-                    "id": "b",
-                    "label": "It’s a structured concept that explains how something works.",
-                    "is_correct": True,
-                    "feedback": "Exactly—nice work.",
-                    "misconception_tag": None,
-                },
-                {
-                    "id": "c",
-                    "label": "It only applies in one narrow edge case.",
-                    "is_correct": False,
-                    "feedback": "Usually it’s broader than that.",
-                    "misconception_tag": "too_narrow",
-                },
-            ],
-            "explanation": f"{topic} is best understood as a structured concept you can apply.",
+            "options": quiz_options,
+            "explanation": quiz_explanation,
             "visual_prompt": f"A simple quiz card about {topic}",
         },
         sequence_order=2,
@@ -422,7 +493,7 @@ async def _create_minimal_graph_course(
         course_id=course.id,
         node_type=NodeType.SUMMARY.value,
         content={
-            "narration": f"Great job. You learned the basics of {topic}. Next we can go deeper or practice.",
+            "narration": summary_narration,
             "visual_prompt": f"A clean summary card with key points about {topic}",
             "keywords": [topic, "summary"],
             "audio_mood": "calm",
@@ -465,6 +536,7 @@ async def _create_minimal_graph_course(
     await db.commit()
     await db.refresh(course)
     return course
+
 
 @router.get("/health")
 async def classroom_health():
@@ -596,6 +668,42 @@ async def classroom_chat(
 
     message_lower = request.message.lower()
     
+    # === NEW: OS Evolution Special Intents Backdoor ===
+    if detected_intent:
+        user_id_int = current_user.id if (current_user.id != "guest_session" and isinstance(current_user.id, int)) else 0
+        
+        if detected_intent.intent_type == IntentType.WEEKLY_REVIEW:
+            # Route to executive coach instead of normal QA
+            review_agent = WeeklyReviewAgent()
+            agent_ctx = AgentContext(session_id=session.session_id, user_id=user_id_int, session=db)
+            review_response = await review_agent.execute(agent_ctx, user_message=request.message)
+            
+            # Record it in the session
+            session.add_message("user", request.message, intent=detected_intent)
+            session.add_message("assistant", review_response.content)
+            
+            return ChatResponse(
+                session_id=session.session_id,
+                content=review_response.content,
+                response_type="text",
+                state=session.state.value,
+                intent=detected_intent.to_dict()
+            )
+            
+        elif detected_intent.intent_type == IntentType.REFLECT and user_id_int > 0:
+            # We don't fully block chat, but we intercept the structured intent to background process it
+            payload = ReflectionPayload(
+                user_id=user_id_int,
+                skill_ids=[], # TODO: Extract from current context if applicable
+                confidence_rating=3, # Default mid, can parse from sentiment later
+                difficulty_rating=3,
+                emotional_state="frustrated" if "frustrat" in message_lower else "flow",
+                qualitative_notes=request.message
+            )
+            # Fire and forget into the compound loop
+            background_tasks.add_task(process_reflection, db, payload)
+    # ==================================================
+    
     # Enhanced course detection to handle multiple formats:
     # 1. Direct: "Create a course on Python"
     # 2. iOS System Prompt: "SYSTEM:\n...Create a structured learning course for: Python"
@@ -726,7 +834,7 @@ async def classroom_chat(
 
     else:
         # Get User Context (skip for guest users)
-        user_context = "student"  # Default context
+        user_context = "member"  # Default context
         if current_user.id != "guest_session" and isinstance(current_user.id, int):
             try:
                 user_context = await context_engine.get_user_context(
@@ -736,7 +844,7 @@ async def classroom_chat(
                 )
             except Exception as e:
                 logger.warning(f"Context engine failed for user {current_user.id}: {e}")
-                user_context = "student"
+                user_context = "member"
 
         # Default AI classroom behavior
         response = await manager.process_message(

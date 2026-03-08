@@ -224,12 +224,12 @@ class RemediationService:
         """Build the LLM prompt for remediation generation."""
         content = node.content or {}
         
-        prompt = f"""You are an expert tutor helping a student who just got a question wrong.
+        prompt = f"""You are an expert tutor helping a member who just got a question wrong.
 
 ORIGINAL QUESTION:
 {content.get('prompt', 'Unknown question')}
 
-STUDENT'S CONTEXT:
+MEMBER'S CONTEXT:
 - Mastery level: {mastery_context.get('mastery_score', 0.5):.0%}
 - Attempts on this concept: {mastery_context.get('attempts', 0)}
 - Learning trend: {mastery_context.get('trend', 'stable')}
@@ -243,7 +243,7 @@ STUDENT'S CONTEXT:
         
         prompt += """
 YOUR TASK:
-Generate a new, DIFFERENT explanation using a fresh analogy. The student didn't understand the first explanation, so use a completely different approach.
+Generate a new, DIFFERENT explanation using a fresh analogy. The member didn't understand the first explanation, so use a completely different approach.
 
 OUTPUT FORMAT (JSON):
 {
@@ -253,7 +253,7 @@ OUTPUT FORMAT (JSON):
     "follow_up_hint": "A hint that might help without giving away the answer"
 }
 
-Be encouraging but not condescending. Use everyday examples the student can relate to.
+Be encouraging but not condescending. Use everyday examples the member can relate to.
 """
         return prompt
     

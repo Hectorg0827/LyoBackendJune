@@ -145,7 +145,10 @@ async def init_db() -> None:
     """Initialize the database by creating all tables."""
     async with engine.begin() as conn:
         # Enable pgvector extension
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        try:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception:
+            pass # SQLite doesn't support extensions this way
 
         # Import all models here to ensure they are registered
         from lyo_app.auth.models import User  # noqa: F401
@@ -176,6 +179,8 @@ async def init_db() -> None:
         await _ensure_learner_states_schema(conn)
         await _ensure_learner_mastery_schema(conn)
         await _ensure_refresh_tokens_table(conn)
+        await _ensure_courses_schema(conn)
+        await _ensure_lessons_schema(conn)
         logger.info("Database models registered successfully")
 
 
@@ -460,6 +465,107 @@ async def _ensure_refresh_tokens_table(conn) -> None:
             logger.info("✅ Table/Index created successfully")
         except Exception as e:
             logger.error(f"❌ Failed to create refresh_tokens table: {e}")
+
+async def _ensure_courses_schema(conn) -> None:
+    def _get_table_info(sync_conn):
+        dialect_name = sync_conn.dialect.name
+        inspector = inspect(sync_conn)
+        has_table = inspector.has_table("courses")
+        column_names = set()
+        if has_table:
+            column_names = {col["name"] for col in inspector.get_columns("courses")}
+        return dialect_name, has_table, column_names
+
+    try:
+        dialect_name, has_table, column_names = await conn.run_sync(_get_table_info)
+    except Exception as e:
+        logger.warning(f"⚠️ courses schema inspection failed: {e}")
+        return
+
+    if not has_table:
+        return
+
+    ddl_statements: list[str] = []
+
+    if "embedding" not in column_names:
+        if dialect_name == "postgresql":
+            ddl_statements.append("ALTER TABLE courses ADD COLUMN embedding vector(768)")
+        else:
+            ddl_statements.append("ALTER TABLE courses ADD COLUMN embedding TEXT")
+
+    if "interests" not in column_names:
+        type_str = "JSONB" if dialect_name == "postgresql" else "TEXT"
+        ddl_statements.append(f"ALTER TABLE courses ADD COLUMN interests {type_str}")
+
+    if "target_duration_hours" not in column_names:
+        type_str = "DOUBLE PRECISION" if dialect_name == "postgresql" else "REAL"
+        ddl_statements.append(f"ALTER TABLE courses ADD COLUMN target_duration_hours {type_str}")
+
+    if "estimated_duration_hours" not in column_names:
+        type_str = "DOUBLE PRECISION" if dialect_name == "postgresql" else "REAL"
+        ddl_statements.append(f"ALTER TABLE courses ADD COLUMN estimated_duration_hours {type_str}")
+
+    if "generation_metadata" not in column_names:
+        type_str = "JSONB" if dialect_name == "postgresql" else "TEXT"
+        ddl_statements.append(f"ALTER TABLE courses ADD COLUMN generation_metadata {type_str}")
+        
+    if "summary" not in column_names:
+        ddl_statements.append("ALTER TABLE courses ADD COLUMN summary TEXT")
+
+    for stmt in ddl_statements:
+        try:
+            await conn.execute(text(stmt))
+        except Exception as e:
+            logger.error(f"❌ Failed applying courses schema patch: {e}")
+
+async def _ensure_lessons_schema(conn) -> None:
+    def _get_table_info(sync_conn):
+        dialect_name = sync_conn.dialect.name
+        inspector = inspect(sync_conn)
+        has_table = inspector.has_table("lessons")
+        column_names = set()
+        if has_table:
+            column_names = {col["name"] for col in inspector.get_columns("lessons")}
+        return dialect_name, has_table, column_names
+
+    try:
+        dialect_name, has_table, column_names = await conn.run_sync(_get_table_info)
+    except Exception:
+        return
+
+    if not has_table:
+        return
+
+    ddl_statements: list[str] = []
+
+    if "embedding" not in column_names:
+        if dialect_name == "postgresql":
+            ddl_statements.append("ALTER TABLE lessons ADD COLUMN embedding vector(768)")
+        else:
+            ddl_statements.append("ALTER TABLE lessons ADD COLUMN embedding TEXT")
+            
+    if "summary" not in column_names:
+        ddl_statements.append("ALTER TABLE lessons ADD COLUMN summary TEXT")
+        
+    if "ai_summary" not in column_names:
+        ddl_statements.append("ALTER TABLE lessons ADD COLUMN ai_summary TEXT")
+        
+    if "estimated_duration_minutes" not in column_names:
+        type_str = "DOUBLE PRECISION" if dialect_name == "postgresql" else "REAL"
+        ddl_statements.append(f"ALTER TABLE lessons ADD COLUMN estimated_duration_minutes {type_str}")
+        
+    if "difficulty_score" not in column_names:
+        type_str = "DOUBLE PRECISION" if dialect_name == "postgresql" else "REAL"
+        ddl_statements.append(f"ALTER TABLE lessons ADD COLUMN difficulty_score {type_str}")
+        
+    if "generation_prompt" not in column_names:
+        ddl_statements.append("ALTER TABLE lessons ADD COLUMN generation_prompt TEXT")
+        
+    for stmt in ddl_statements:
+        try:
+            await conn.execute(text(stmt))
+        except Exception as e:
+            logger.error(f"❌ Failed applying lessons patch: {e}")
 
 
 

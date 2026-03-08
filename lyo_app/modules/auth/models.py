@@ -18,7 +18,7 @@ from lyo_app.core.database_v2 import Base
 
 class UserRole(str, Enum):
     """User roles for RBAC."""
-    STUDENT = "student"
+    MEMBER = "member"
     TEACHER = "teacher"
     GUARDIAN = "guardian"
     ADMIN = "admin"
@@ -44,10 +44,10 @@ class User(Base):
     bio = Column(Text, nullable=True)
     
     # RBAC - stored as JSON array for multiple roles (SQLite compatible)
-    roles = Column(JSON, default=["student"], nullable=False)
+    roles = Column(JSON, default=["member"], nullable=False)
     
     # Privacy settings
-    is_private = Column(Boolean, default=True)  # Default private for students
+    is_private = Column(Boolean, default=True)  # Default private for members
     
     # Authentication metadata
     last_login = Column(DateTime(timezone=True), nullable=True)
@@ -115,21 +115,21 @@ class User(Base):
         """Check if user is teacher."""
         return self.has_role(UserRole.TEACHER)
     
-    def is_student(self) -> bool:
-        """Check if user is student."""
-        return self.has_role(UserRole.STUDENT)
+    def is_member(self) -> bool:
+        """Check if user is member."""
+        return self.has_role(UserRole.MEMBER)
     
     def can_dm(self, other_user: "User") -> bool:
         """Check if user can direct message another user."""
-        # Students can only DM teachers, guardians, and admins
-        if self.is_student():
+        # Members can only DM teachers, guardians, and admins
+        if self.is_member():
             return other_user.is_teacher() or other_user.is_admin()
         
         # Teachers and admins can DM anyone
         if self.is_teacher() or self.is_admin():
             return True
         
-        # Guardians can DM their students and teachers
+        # Guardians can DM their members and teachers
         return True
     
     def __repr__(self):

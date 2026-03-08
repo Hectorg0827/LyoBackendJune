@@ -15,6 +15,8 @@ class IntentType(str, Enum):
     QUIZ_ONLY = "quiz_only"  # Just generate quiz/assessment
     LESSON_SERIES = "lesson_series"  # Series of related lessons
     STUDY_GUIDE = "study_guide"  # Summary/study guide
+    REFLECT = "reflect"          # Qualitative reflection on learning
+    WEEKLY_REVIEW = "weekly_review"  # Meta-review of learning trajectory
 
 
 @dataclass
@@ -55,6 +57,19 @@ class SmartRouter:
         "practice problems", "exercises only"
     ]
     
+    # Keywords that indicate self-reflection
+    REFLECT_KEYWORDS = [
+        "reflect", "how i did", "my performance", "this was hard",
+        "this was easy", "i'm confused", "feedback on my learning",
+        "i feel", "frustrated", "bored"
+    ]
+    
+    # Keywords that indicate macro trajectory review
+    REVIEW_KEYWORDS = [
+        "weekly review", "my progress", "my goals", "how am i doing overall",
+        "trajectory", "overall summary"
+    ]
+    
     @classmethod
     def detect_intent(cls, user_request: str) -> DetectedIntent:
         """
@@ -67,6 +82,30 @@ class SmartRouter:
             DetectedIntent with type, confidence, and suggested configuration
         """
         request_lower = user_request.lower()
+        
+        # Check for weekly review
+        if any(kw in request_lower for kw in cls.REVIEW_KEYWORDS):
+            return DetectedIntent(
+                intent_type=IntentType.WEEKLY_REVIEW,
+                confidence=0.95,
+                reasoning="Request explicitly asks for a macro review of progress.",
+                suggested_config={
+                    "focus_on_review": True,
+                    "use_flash_model": False
+                }
+            )
+            
+        # Check for self-reflection
+        if any(kw in request_lower for kw in cls.REFLECT_KEYWORDS):
+            return DetectedIntent(
+                intent_type=IntentType.REFLECT,
+                confidence=0.90,
+                reasoning="Request indicates qualitative self-reflection or feedback.",
+                suggested_config={
+                    "focus_on_reflection": True,
+                    "use_flash_model": True
+                }
+            )
         
         # Check for quick explainer indicators
         if any(kw in request_lower for kw in cls.EXPLAINER_KEYWORDS):
@@ -183,23 +222,26 @@ async def generate_quick_explainer(topic: str) -> Dict[str, Any]:
     Keep it accessible and engaging.
     """
     
-    # Call Gemini directly (bypassing full pipeline)
-    import google.generativeai as genai
+    from lyo_app.core.ai_resilience import ai_resilience_manager
+    import asyncio
     
-    model = genai.GenerativeModel(
-        model_name=model_config.model_name,
-        generation_config={
-            "temperature": 0.7,
-            "max_output_tokens": 800
-        }
+    if not ai_resilience_manager.session:
+        await ai_resilience_manager.initialize()
+        
+    ai_response = await asyncio.wait_for(
+        ai_resilience_manager.chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800,
+            provider_order=[model_config.model_name, "gemini-1.5-flash", "gpt-4o-mini"]
+        ),
+        timeout=30.0
     )
-    
-    response = await model.generate_content_async(prompt)
     
     return {
         "type": "quick_explainer",
         "topic": topic,
-        "explanation": response.text,
+        "explanation": ai_response.get("content", ""),
         "model_used": model_config.model_name,
         "estimated_cost": 0.002  # Much cheaper than full course
     }

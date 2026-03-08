@@ -60,6 +60,16 @@ class RouterEntity(BaseModel):
     image_context: Optional[str] = None  # short description: "graph of parabola y=x^2"
     audio_signals: Optional[Dict[str, Any]] = None  # e.g. {"stress":0.7,"urgency":0.8}
 
+    @field_validator("extracted_from", mode="before")
+    @classmethod
+    def coerce_to_list(cls, v: Any) -> Any:
+        """Gemini sometimes returns a plain string e.g. 'TEXT' instead of ['TEXT']."""
+        if isinstance(v, str):
+            return [v]
+        if v is None:
+            return []
+        return v
+
 
 class RouterDecision(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -145,7 +155,7 @@ class LyoPlan(BaseModel):
     artifacts_to_create: List[ArtifactType] = Field(default_factory=list)
     safety_constraints: List[str] = Field(default_factory=list)
     grounding_required: bool = True
-    suggested_model: str = "gemini-2.0-flash"
+    suggested_model: str = "gemini-3.1-pro-preview-customtools"
 
 
 # --- Layer C: Executor / UI Block Schemas ---

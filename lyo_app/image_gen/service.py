@@ -147,55 +147,53 @@ class GeneratedImage:
     prompt_used: str
 
 
-from runware import Runware, IImageInference
+import base64
+import vertexai
+from vertexai.preview.vision_models import ImageGenerationModel
 
 class ImageService:
     """
     AI Image Generation Service for Educational Content
     
     Features:
-    - Runware integration for ultra-fast, high-quality images
+    - Google Imagen 3 integration for high-quality, precise educational imagery
     - Educational prompt templates for various content types
     - Automatic style optimization for learning materials
     - Smart caching for performance
-    - Multiple sizes for different use cases
+    - Multiple block sizes mapping to aspect ratios
     """
     
     def __init__(self, config: Optional[ImageConfig] = None):
         self.config = config or ImageConfig()
-        self._runware: Optional[Runware] = None
+        self._model: Optional[ImageGenerationModel] = None
         self._cache: Dict[str, CachedImage] = {}
         self._initialized = False
         
     async def initialize(self):
-        """Initialize image service"""
+        """Initialize image service with Vertex AI"""
         if self._initialized:
             return
             
-        api_key = get_secret("RUNWARE_API_KEY", os.getenv("RUNWARE_API_KEY", ""))
-        if not api_key:
-            logger.warning("Runware API key not found - Image generation will fail")
+        project_id = get_secret("GOOGLE_CLOUD_PROJECT", os.getenv("GOOGLE_CLOUD_PROJECT", ""))
+        location = get_secret("GOOGLE_CLOUD_LOCATION", os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
+        
+        if project_id:
+            vertexai.init(project=project_id, location=location)
         else:
-            self.config.api_key = api_key
+            logger.warning("GOOGLE_CLOUD_PROJECT not found - Vertex AI will fall back to default credentials.")
+            vertexai.init()
             
         # Create cache directory
         cache_path = Path(self.config.cache_dir)
         cache_path.mkdir(parents=True, exist_ok=True)
         
-        self._runware = Runware(api_key=self.config.api_key)
-        await self._runware.connect()
-        
+        self._model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
         self._initialized = True
-        logger.info("Image Generation Service initialized with Runware (SDK webSockets)")
+        logger.info("Image Generation Service initialized with Google Imagen 3 (imagen-3.0-generate-002) via Vertex AI")
         
     async def close(self):
         """Cleanup resources"""
-        if self._runware:
-            try:
-                await self._runware.disconnect()
-            except Exception:
-                pass
-            self._runware = None
+        self._model = None
         self._initialized = False
         
     def _get_cache_key(self, prompt: str, size: str, quality: str, style: str) -> str:
@@ -233,7 +231,7 @@ class ImageService:
             additional_context: Extra instructions
             
         Returns:
-            Optimized prompt for DALL-E 3
+            Optimized prompt for Imagen 3
         """
         template = EDUCATIONAL_PROMPTS.get(content_type, EDUCATIONAL_PROMPTS["concept_diagram"])
         prompt = template.format(topic=topic)
@@ -255,23 +253,20 @@ class ImageService:
         n: int = 1
     ) -> GeneratedImage:
         """
-        Generate an image using Runware
+        Generate an image using Google Imagen 3 via Vertex AI
         
         Args:
             prompt: Description of the image to generate
-            size: Image dimensions
-            quality: standard or hd (mapped to inference steps)
+            size: Image dimensions (mapped to aspect_ratio)
+            quality: standard or hd
             style: vivid or natural
             n: Number of images
             
         Returns:
-            GeneratedImage with URL and metadata
+            GeneratedImage with URL (data URI) and metadata
         """
         if not self._initialized:
             await self.initialize()
-            
-        if not self.config.api_key:
-            raise ValueError("Runware API key not configured")
             
         size = size or self.config.default_size
         quality = quality or self.config.default_quality
@@ -290,39 +285,40 @@ class ImageService:
                 prompt_used=prompt
             )
             
-        # Map dimensions based on size requested
-        dimensions = size.value.split("x")
-        width = int(dimensions[0])
-        height = int(dimensions[1])
-        
-        # We usually do 20-30 steps for standard/fast generation with Runware
-        steps = 30 if quality == ImageQuality.HD else 20
-        
-        try:
-            request_image = IImageInference(
-                positivePrompt=prompt,
-                model="runwayml/stable-diffusion-v1-5", # Default fast model, can be made configurable
-                numberResults=n,
-                height=height,
-                width=width,
-                steps=steps,
-                CFGScale=7
-            )
+        # Map size enum to aspect ratio for Imagen 3
+        aspect_ratio = "1:1"
+        if size == ImageSize.LANDSCAPE:
+            aspect_ratio = "16:9"
+        elif size == ImageSize.PORTRAIT:
+            aspect_ratio = "9:16"
             
-            images = await self._runware.imageInference(requestImage=request_image)
+        try:
+            loop = asyncio.get_running_loop()
+            
+            def do_generate():
+                return self._model.generate_images(
+                    prompt=prompt,
+                    number_of_images=n,
+                    output_mime_type="image/jpeg",
+                    aspect_ratio=aspect_ratio,
+                    # Optional: person_generation="allow_adult" if needed depending on org policy.
+                )
+            
+            images = await loop.run_in_executor(None, do_generate)
             
             if not images:
-                raise Exception("No images returned from Runware")
+                raise Exception("No images returned from Imagen 3")
                 
-            url = images[0].imageURL
-            revised_prompt = prompt # Runware SDK doesn't natively return revised prompts here
+            b64_data = base64.b64encode(images[0]._image_bytes).decode("utf-8")
+            url = f"data:image/jpeg;base64,{b64_data}"
+            revised_prompt = prompt # Imagen accepts prompts directly without typical implicit revision unless safety kicks in.
             
         except Exception as e:
-            raise Exception(f"Image generation error: {str(e)}")
+            raise Exception(f"Imagen 3 Generation error: {str(e)}")
         
         # Cache result
         self._cache[cache_key] = CachedImage(
-            file_path="",  # URL-based caching
+            file_path="",  # Embedded data URI, no local file
             url=url,
             created_at=datetime.now(),
             prompt_hash=cache_key,
@@ -330,7 +326,7 @@ class ImageService:
             revised_prompt=revised_prompt
         )
         
-        logger.info(f"Image generated: {size.value}, style={style.value}")
+        logger.info(f"Image generated via Imagen 3: {size.value}, style={style.value}")
         
         return GeneratedImage(
             url=url,

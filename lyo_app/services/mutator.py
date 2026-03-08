@@ -37,7 +37,7 @@ class FollowUpMutator:
         # We use a higher-tier model for mutations to ensure precision
         response = await self.model_manager.generate_with_retry(
             prompt=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.1-pro-preview-customtools",
             temperature=0.2 # Low temperature for structural updates
         )
         

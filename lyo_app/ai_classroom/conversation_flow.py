@@ -704,10 +704,10 @@ async def _ai_chat_handler(message: str, context: List[Dict], user_context: str 
         # Dynamic System Prompt based on Context
         base_prompt = "You are Lyo, an expert AI tutor. "
         
-        if "student" in user_context:
+        if "member" in user_context:
             system_content = (
                 base_prompt + 
-                "The user is a STUDENT. Focus on clear explanations, exam preparation, and academic concepts. "
+                "The user is a MEMBER. Focus on clear explanations, exam preparation, and academic concepts. "
                 "Break down complex topics into study-friendly chunks. Use analogies suitable for coursework."
             )
         elif "professional" in user_context:

@@ -34,9 +34,9 @@
     "database": "healthy",
     "ai": {
       "models": {
-        "gemini-2.5-flash": {"configured": true},
-        "gemini-2.5-pro": {"configured": true},
-        "gemini-2.0-flash-lite": {"configured": true}
+        "gemini-3.1-pro-preview-customtools": {"configured": true},
+        "gemini-3.1-pro-preview-customtools": {"configured": true},
+        "gemini-3.1-pro-preview-customtools": {"configured": true}
       }
     }
   }

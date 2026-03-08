@@ -24,7 +24,7 @@ async def test_chat_endpoint():
         # Setup AI Resilience Manager mock
         mock_ai_manager.chat_completion = AsyncMock(return_value={
             "content": "Hello! I am Lyo.",
-            "model": "gemini-2.5-flash"
+            "model": "gemini-3.1-pro-preview-customtools"
         })
         
         # Import the router handler
