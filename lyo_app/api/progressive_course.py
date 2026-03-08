@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import json
 from typing import Dict, Any, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 from lyo_app.auth.dependencies import get_current_user_or_guest
 from lyo_app.cache.job_store import get_job_store
 from lyo_app.api.v2.courses import _generate_module_content, _build_fallback_module, TIMEOUT_MODULE_GENERATION
+from lyo_app.core.ai_resilience import ai_resilience_manager
 
 # Let's import the full course truth fetcher
 from lyo_app.api.v2.courses import get_course_result
@@ -77,33 +79,88 @@ async def start_course_generation(
 
 
 async def generate_instant_payload(topic: str, level: str) -> dict:
-    """Single fast AI call — must return in < 3 seconds
-    Using a fast deterministic builder to guarantee <3s delivery while real modules build.
     """
-    await asyncio.sleep(0.5) # Simulate fast network hop
-    
-    # Generate generic relevant titles for Phase A instant perception
+    Fast AI call (<3 sec) — uses Gemini Flash to produce a real, topic-specific
+    course syllabus and structured preview.  Falls back to deterministic titles
+    only if AI is unavailable so delivery is always guaranteed.
+    """
+    # --- AI path (primary) ---
+    try:
+        if not ai_resilience_manager.session:
+            await ai_resilience_manager.initialize()
+
+        system_prompt = (
+            "You are an expert curriculum designer. "
+            "Given a topic and learner level, respond ONLY with valid JSON — no markdown fences, no extra text. "
+            "Schema: "
+            '{"title": string, "objective": string, "syllabus": [string x8], '
+            '"module_preview": {"module_index": 1, "module_title": string, '
+            '"lesson_preview": {"title": string, "summary": string, "mini_practice": [string x2]}}}'
+            "\nRules: syllabus must have EXACTLY 8 specific, pedagogically-ordered module titles "
+            "that are directly relevant to the topic (not generic like 'Core Concepts'). "
+            "Each title should be a specific concept the learner will master."
+        )
+        user_prompt = f"Topic: {topic}\nLevel: {level}"
+
+        ai_response = await asyncio.wait_for(
+            ai_resilience_manager.chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=600,
+                provider_order=["gemini-2.0-flash", "gpt-4o-mini"],
+            ),
+            timeout=5.0,
+        )
+
+        raw = ai_response.get("content", "")
+        # Strip markdown fences if present
+        if "```" in raw:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            raw = raw[start:end] if start != -1 and end > start else raw
+
+        payload = json.loads(raw)
+
+        # Validate required fields
+        syllabus = payload.get("syllabus", [])
+        if not isinstance(syllabus, list) or len(syllabus) < 4:
+            raise ValueError("Invalid syllabus from AI")
+
+        print(f"✅ AI instant payload generated for '{topic}': {len(syllabus)} modules")
+        return payload
+
+    except Exception as e:
+        print(f"⚠️  AI instant payload failed ({e}), using deterministic fallback")
+
+    # --- Deterministic fallback (backup) ---
+    topic_cap = topic.title()
     syllabus = [
-        f"Introduction to {topic}",
-        "Core Concepts and Fundamentals",
-        "Deep Dive into Mechanics",
-        "Real-World Applications",
-        f"Mastering {topic}"
+        f"What is {topic_cap}? A First Look",
+        f"Core Terminology and Key Concepts",
+        f"How {topic_cap} Works Under the Hood",
+        f"Practical {topic_cap}: Real-World Examples",
+        f"Common Patterns and Best Practices",
+        f"Troubleshooting and Avoiding Mistakes",
+        f"Advanced {topic_cap} Techniques",
+        f"Putting It All Together: {topic_cap} Mastery",
     ]
-    
+
     return {
-        "title": f"The Ultimate {topic.title()} Guide",
-        "objective": f"Learn {topic} from scratch and build real world skills.",
+        "title": f"Complete Guide to {topic_cap}",
+        "objective": f"Master {topic} from foundational principles to advanced real-world application.",
         "syllabus": syllabus,
         "module_preview": {
             "module_index": 1,
             "module_title": syllabus[0],
             "lesson_preview": {
-                "title": "Welcome & Overview",
-                "summary": f"In this first lesson, we will cover the basics of {topic}.",
+                "title": "Welcome & What You'll Learn",
+                "summary": f"A fast-paced introduction to {topic}: what it is, why it matters, and where we're headed.",
                 "mini_practice": [
-                    "What is your primary goal?",
-                    "How much do you already know?"
+                    f"In one sentence, what do you already know about {topic}?",
+                    "What specific outcome do you want from this course?"
                 ]
             }
         }
@@ -150,6 +207,14 @@ async def generate_modules_progressively(job_id: str, course_id: str, topic: str
             # Inject required struct fields for progressive UI
             module_content["index"] = idx
             module_content["state"] = "ready"
+            # iOS ProgressiveModule uses "summary" — backend AI uses "description"
+            # Ensure both keys exist so either iOS version can decode it
+            if "summary" not in module_content or not module_content.get("summary"):
+                module_content["summary"] = module_content.get("description", "")
+            # Normalize each lesson: iOS ProgressiveLesson uses "summary" for the short desc
+            for lesson in module_content.get("lessons", []):
+                if "summary" not in lesson or not lesson.get("summary"):
+                    lesson["summary"] = lesson.get("content", "")[:200]  # first 200 chars as preview
             
             # Store completed module
             job.setdefault("results", {})[str(idx)] = module_content
@@ -218,6 +283,13 @@ async def get_module(
     module = job.get("results", {}).get(str(module_index))
     if not module:
         raise HTTPException(status_code=404, detail="Module not found or not ready")
+
+    # Ensure iOS-compatible field names on every response
+    if "summary" not in module or not module.get("summary"):
+        module["summary"] = module.get("description", "")
+    for lesson in module.get("lessons", []):
+        if "summary" not in lesson or not lesson.get("summary"):
+            lesson["summary"] = lesson.get("content", "")[:200]
     
     return module
 

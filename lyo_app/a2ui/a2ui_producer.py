@@ -364,36 +364,35 @@ class A2UIProducer:
         return A2UIComponent(type=A2UIElementType.CARD, props=A2UIProps(), children=[inner])
 
     def _render_quiz(self, quiz: NormalizedQuiz) -> A2UIComponent:
-        """Render a quiz component."""
-        children = []
+        """
+        Render a quiz component.
+        Uses QUIZ_MCQ type directly so iOS A2UIQuizMCQRenderer handles it natively,
+        including answer selection, scoring, and XP awarding.
+        Options are serialized as iOS A2UIQuizOption objects: {id, text, is_correct}.
+        """
+        correct_index = next(
+            (i for i, opt in enumerate(quiz.options) if opt.is_correct), 0
+        )
+        # Build options as iOS-compatible A2UIQuizOption dicts
+        option_dicts = [
+            {
+                "id": str(i),
+                "text": opt.text,
+                "is_correct": opt.is_correct,
+            }
+            for i, opt in enumerate(quiz.options)
+        ]
 
-        children.append(self.gen.text(
-            content="🧠 Quiz",
-            font_size=18,
-            font_weight="bold",
-            color="#FFFFFF",
-        ))
-
-        # Question
-        children.append(self.gen.text(
-            content=quiz.question,
-            font_size=16,
-            color="#FFFFFF",
-        ))
-
-        # Options as buttons
-        option_buttons = []
-        for i, opt in enumerate(quiz.options):
-            option_buttons.append(self.gen.button(
-                title=f"{chr(65 + i)}. {opt.text}",
-                action=f"quiz_answer_{i}",
-                style="outline",
-            ))
-
-        children.append(self.gen.vstack(option_buttons, spacing=8))
-
-        inner = self.gen.vstack(children, spacing=12, padding_horizontal=16, padding_vertical=16)
-        return A2UIComponent(type=A2UIElementType.CARD, props=A2UIProps(), children=[inner])
+        props = A2UIProps(
+            question=quiz.question or "Which of the following is correct?",
+            options=option_dicts,
+            correct_answer=correct_index,          # iOS CodingKey "correct_answer"
+            correct_answer_index=correct_index,    # legacy field
+            title="Quick Check",
+            body=quiz.explanation or "",
+            explanation=quiz.explanation or "",
+        )
+        return A2UIComponent(type=A2UIElementType.QUIZ_MCQ, props=props)
 
     def _render_study_plan(self, plan: NormalizedStudyPlan) -> A2UIComponent:
         """Render a study plan component."""

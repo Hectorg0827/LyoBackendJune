@@ -378,7 +378,7 @@ class ChatResponse(BaseModel):
     success: bool = Field(default=True, description="Whether request succeeded")
     error: Optional[str] = Field(None, description="Error message if failed")
     user_profile: Optional[Dict[str, Any]] = Field(None, description="User learning profile summary")
-    ui_component: Optional[List[Dict[str, Any]]] = Field(None, description="List of A2UI Components for frontend rendering")
+    ui_component: Optional[Dict[str, Any]] = Field(None, description="A2UIComponent dict for frontend rendering")
     
 @router.post("/", response_model=ChatResponse)
 async def chat(
@@ -520,25 +520,34 @@ When a user asks to create a course, briefly confirm the topic and ask about the
             raise ValueError("Empty response from AI")
 
         # ============================================================
-        # A2UI: Generate Enhanced Response with Better Formatting
+        # A2UI: Wrap ALL responses in A2UIComponent for rich rendering
         # ============================================================
-        ui_component_json = None
-
-        # Check if this is a learning-related response that could benefit from A2UI
+        # Always produce a TEXT component as baseline; upgrade to richer types
+        # when intent warrants it. Format matches A2UIComponent on iOS so that
+        # A2IPayloadMapper.mapFromJSON can decode it as [A2UIComponent].
         message_lower = request.message.lower()
 
-        if any(word in message_lower for word in ["explain", "what is", "how does", "tell me about"]):
-            # Generate explanation UI
-            topic = request.message
-            explanation_ui = chat_a2ui_service.generate_explanation_ui(response_text, topic)
+        if any(word in message_lower for word in ["explain", "what is", "how does", "tell me about", "describe"]):
+            explanation_ui = chat_a2ui_service.generate_explanation_ui(response_text, request.message)
             if explanation_ui:
                 ui_component_json = serialize_ui(explanation_ui)
 
-        elif any(word in message_lower for word in ["help", "guide", "steps", "how to"]):
-            # Generate welcome/help UI
-            welcome_ui = chat_a2ui_service.generate_welcome_ui(current_user.name if hasattr(current_user, 'name') else "there")
+        elif any(word in message_lower for word in ["help", "guide", "steps", "how to", "getting started"]):
+            welcome_ui = chat_a2ui_service.generate_welcome_ui(
+                current_user.name if hasattr(current_user, "name") else "there"
+            )
             if welcome_ui:
                 ui_component_json = serialize_ui(welcome_ui)
+
+        # Fallback: plain TEXT component if nothing richer was generated
+        if not ui_component_json:
+            ui_component_json = {
+                "type": "TEXT",
+                "props": {
+                    "text": response_text,
+                    "body": response_text,
+                }
+            }
 
         # Check if the AI result contains artifacts (populated by Orchestrator or Agents)
         artifacts_data = result.get("artifacts", [])
@@ -575,7 +584,7 @@ When a user asks to create a course, briefly confirm the topic and ask about the
                     logger.warning(f"Failed to translate artifact: {e}")
 
         latency_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Chat response generated in {latency_ms}ms with {'A2UI component' if ui_component_json else 'text only'}")
+        logger.info(f"Chat response generated in {latency_ms}ms with A2UI component (type={ui_component_json.get('type') if ui_component_json else 'none'})")
 
         return ChatResponse(
             response=response_text,
@@ -583,7 +592,7 @@ When a user asks to create a course, briefly confirm the topic and ask about the
             success=True,
             error=None,
             user_profile=user_profile_summary,
-            ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
+            ui_component=ui_component_json  # Direct A2UIComponent dict, not a list
         )
         
     except Exception as e:

@@ -265,7 +265,12 @@ class A2UIProps(BaseModel):
     
     # Quiz
     question: Optional[str] = None
-    options: Optional[List[str]] = None
+    # options can be List[str] (legacy) or List[Dict] (iOS A2UIQuizOption format)
+    # iOS expects objects: [{"id": "0", "text": "...", "is_correct": bool}]
+    options: Optional[List[Any]] = None
+    # iOS decodes "correct_answer" via CodingKey (JSONDecoder convertFromSnakeCase maps it)
+    correct_answer: Optional[Any] = Field(None, alias="correct_answer")
+    # Keep legacy field for backwards compat with older backend callers
     correct_answer_index: Optional[int] = Field(None, alias="correctAnswerIndex")
     explanation: Optional[str] = None
     
