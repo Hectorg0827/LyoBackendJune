@@ -46,6 +46,7 @@ celery_app.conf.update(
         "lyo_app.tasks.memory_synthesis.*": {"queue": "memory"},
         "lyo_app.tasks.proactive_engagement.*": {"queue": "engagement"},
         "lyo_app.tasks.calendar_sync.*": {"queue": "calendar"},
+        "lyo_app.evolution.intervention_worker.*": {"queue": "engagement"},
     },
     task_queues=(
         Queue("lyo_tasks", routing_key="lyo_tasks"),
@@ -102,8 +103,18 @@ celery_app.conf.update(
             "schedule": crontab(hour=3, minute=0),  # 3 AM UTC
             "options": {"queue": "memory"}
         },
+
+        # Autonomous Intervention - daily at 2 AM
+        "check-trajectory-drops-daily": {
+            "task": "lyo_app.evolution.intervention_worker.check_trajectory_drops",
+            "schedule": crontab(hour=2, minute=0),  # 2 AM UTC
+            "options": {"queue": "engagement"}
+        },
     },
 )
+
+# Imported here to ensure tasks are registered
+import lyo_app.evolution.intervention_worker
 
 # Worker event handlers
 @worker_ready.connect

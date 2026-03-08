@@ -34,6 +34,8 @@ from lyo_app.ai_agents.multi_agent_v2.model_manager import (
     ModelTier,
     TaskComplexity
 )
+from lyo_app.core.ai_resilience import ai_resilience_manager
+from lyo_app.ai_agents.multi_agent_v2.tools.registry import tool_registry
 from .schemas import (
     AgentCard,
     AgentCapability,
@@ -47,6 +49,7 @@ from .schemas import (
     EventType,
     A2AMessage,
     MessageRole,
+    AgentAction,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,9 +258,37 @@ class A2ABaseAgent(ABC, Generic[T]):
             ))
         
         try:
+            # Fetch Global OS Context if user_id is provided
+            os_context = ""
+            if task_input.user_id:
+                try:
+                    from lyo_app.ai_agents.multi_agent_v2.agents.context_builder import global_context_builder
+                    
+                    db = kwargs.get("db")
+                    user_id_int = int(task_input.user_id)
+                    if db:
+                        os_context = await global_context_builder.build_os_context(user_id_int, db)
+                    else:
+                        from lyo_app.core.database import AsyncSessionLocal
+                        async with AsyncSessionLocal() as session:
+                            os_context = await global_context_builder.build_os_context(user_id_int, session)
+                            
+                    kwargs["global_os_context"] = os_context
+                except Exception as e:
+                    logger.warning(f"Failed to fetch global OS context: {e}")
+
             # Build prompt
             prompt = self.build_prompt(task_input, **kwargs)
             system_prompt = self.get_system_prompt()
+            
+            
+            # 2a. Inject Tool Definitions if agency is requested or enabled
+            available_tools = tool_registry.list_tools()
+            if available_tools:
+                tools_desc = "\n".join([f"- {t.name}: {t.description}" for t in available_tools])
+                agency_prompt = f"\n\n### OS AGENCY TOOLS ###\nYou have access to the following OS tools. If you want to perform an action, include an 'actions' list in your JSON response with the tool name and required parameters.\n{tools_desc}"
+                system_prompt = f"{system_prompt}{agency_prompt}"
+
             
             # Emit thinking event if requested
             if task_input.include_thinking and emit_event:
@@ -289,6 +320,40 @@ class A2ABaseAgent(ABC, Generic[T]):
                 data=result.model_dump() if hasattr(result, 'model_dump') else result,
                 created_by=self.name
             )
+
+            # 3. Process Autonomous Actions (Agency)
+            actions = getattr(result, 'actions', [])
+            if actions:
+                if emit_event:
+                    await emit_event(StreamingEvent(
+                        event_type=EventType.TASK_PROGRESS,
+                        task_id=task_input.task_id,
+                        agent_name=self.name,
+                        message=f"Executing {len(actions)} OS actions..."
+                    ))
+                
+                for action in actions:
+                    # If action is a dict (from raw JSON) or AgentAction model
+                    tool_name = action.tool_name if hasattr(action, 'tool_name') else action.get('tool_name')
+                    params = action.parameters if hasattr(action, 'parameters') else action.get('parameters', {})
+                    
+                    logger.info(f"[{self.name}] OS Agency: Triggering {tool_name} for user {task_input.user_id}")
+                    
+                    # Execute tool (passing db if available)
+                    tool_res = await tool_registry.execute_tool(
+                        tool_name=tool_name,
+                        user_id=int(task_input.user_id) if task_input.user_id else 0,
+                        db=kwargs.get("db"),
+                        **params
+                    )
+                    
+                    if emit_event:
+                        await emit_event(StreamingEvent(
+                            event_type=EventType.TASK_PROGRESS,
+                            task_id=task_input.task_id,
+                            agent_name=self.name,
+                            message=f"Action '{tool_name}' result: {tool_res.message}"
+                        ))
             
             # Emit artifact created event
             if emit_event:
@@ -386,19 +451,29 @@ class A2ABaseAgent(ABC, Generic[T]):
                         message=f"Retry attempt {attempt + 1}/{self.max_retries}"
                     ))
                 
-                # Call the model
-                full_prompt = f"{system_prompt}\n\n{prompt}"
+                # Ensure resilience manager is initialized
+                if not ai_resilience_manager.session:
+                    await ai_resilience_manager.initialize()
                 
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        self.model.generate_content,
-                        full_prompt
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ]
+                
+                # Use resilient manager instead of raw blocking SDK call
+                ai_response = await asyncio.wait_for(
+                    ai_resilience_manager.chat_completion(
+                        messages=messages,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                        provider_order=[self.model_name, "gemini-2.5-flash", "gpt-4o-mini"]
                     ),
                     timeout=self.timeout_seconds
                 )
                 
                 # Extract JSON from response
-                raw_text = response.text.strip()
+                raw_text = ai_response.get("content", "").strip()
+                tokens_used = ai_response.get("usage", {}).get("total_tokens", 0)
                 
                 # Clean markdown code blocks if present
                 if raw_text.startswith("```"):
@@ -420,8 +495,7 @@ class A2ABaseAgent(ABC, Generic[T]):
                         if isinstance(inner_data, dict):
                             try:
                                 result = self.output_schema.model_validate(inner_data)
-                                if hasattr(response, 'usage_metadata'):
-                                    result._tokens_used = getattr(response.usage_metadata, 'total_token_count', 0)
+                                result._tokens_used = tokens_used
                                 logger.info(f"[{self.name}] Successfully validated inner data from '{single_key}'")
                                 return result
                             except ValidationError as inner_e:
@@ -432,9 +506,8 @@ class A2ABaseAgent(ABC, Generic[T]):
                     
                     result = self.output_schema.model_validate(data)
                     
-                    # Store token count if available
-                    if hasattr(response, 'usage_metadata'):
-                        result._tokens_used = getattr(response.usage_metadata, 'total_token_count', 0)
+                    # Store token count
+                    result._tokens_used = tokens_used
                     
                     return result
                     

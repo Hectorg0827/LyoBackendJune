@@ -28,7 +28,7 @@ def _get_gemini_model():
     genai.configure(api_key=api_key)
     logger.info(f"✅ Gemini executor model initialised (key ending ...{api_key[-4:]})")
     return genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-3.1-pro-preview-customtools",
         generation_config={"temperature": 0.7, "max_output_tokens": 2048},
     )
 
@@ -45,7 +45,7 @@ def _get_json_gemini_model():
         return None
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-3.1-pro-preview-customtools",
         generation_config={
             "temperature": 0.5,
             "max_output_tokens": 2048,
@@ -125,12 +125,24 @@ USER QUESTION:
 {original_request}
 """
         try:
-            response = await self._gemini.generate_content_async(prompt)
-            generated = response.text.strip() if response.text else None
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            if not ai_resilience_manager.session:
+                await ai_resilience_manager.initialize()
+                
+            messages = [{"role": "user", "content": prompt}]
+            ai_response = await asyncio.wait_for(
+                ai_resilience_manager.chat_completion(
+                    messages=messages,
+                    provider_order=["gemini-1.5-flash", "gpt-4o-mini"]
+                ),
+                timeout=30.0
+            )
+            
+            generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
             if generated:
                 return generated
         except Exception as e:
-            logger.error(f"Gemini text generation failed: {e}", exc_info=True)
+            logger.error(f"Text generation failed: {e}", exc_info=True)
 
         return static_content or "I'm sorry, I encountered an issue generating a response. Please try again."
 
@@ -329,8 +341,14 @@ USER QUESTION:
                 ]
             }
         
-        prompt = f"""Generate a structured course outline in JSON format for this request: "{original_request}"
-Return ONLY valid JSON with this exact structure:
+        prompt = f"""You are the Lyo Course Architect. You must always respond in two parts:
+ * A friendly, supportive text explanation.
+ * A delimiter: ---a2ui_JSON---
+ * A single A2UI JSON object containing the course structure.
+   Constraint: If a quick explanation is enough, the JSON part should be an empty list [].
+
+Generate a structured course outline for this request: "{original_request}"
+After the delimiter, return ONLY valid JSON with this exact structure:
 {{
     "title": "Course Title",
     "topic": "main topic",
@@ -341,21 +359,35 @@ Return ONLY valid JSON with this exact structure:
         {{"title": "Lesson Title", "description": "1-sentence description", "type": "reading|exercise|quiz", "duration": "X min"}}
     ]
 }}
-Include 4-6 lessons. Keep descriptions short. Return ONLY JSON, no markdown."""
+Include 4-6 lessons. Keep descriptions short."""
         
         try:
-            # Use the JSON-mode model — response_mime_type="application/json" guarantees
-            # valid JSON output without markdown fences. No need to strip ``` or run
-            # heuristic cleanup that can silently corrupt nested structures.
-            json_model = self._gemini_json or self._gemini
-            response = await json_model.generate_content_async(prompt)
-            text = response.text.strip() if response.text else None
+            # Use the standard model since Gemini 3.1 excels at dual-output text+JSON in one pass
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            if not ai_resilience_manager.session:
+                await ai_resilience_manager.initialize()
+            
+            ai_response = await asyncio.wait_for(
+                ai_resilience_manager.chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                ),
+                timeout=45.0
+            )
+            text = ai_response.get("content", "").strip() if ai_response.get("content") else None
+            
             if text:
-                # If JSON mode was NOT available (fell back to text model), still clean fences
-                if text.startswith("```"):
-                    text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                    text = text.rsplit("```", 1)[0]
-                return json.loads(text)
+                json_part = text
+                if "---a2ui_JSON---" in text:
+                    parts = text.split("---a2ui_JSON---")
+                    friendly_text = parts[0].strip()
+                    context["final_text"] = friendly_text  # Set text for GENERATE_TEXT step
+                    json_part = parts[1].strip()
+                
+                if json_part.startswith("```"):
+                    json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part[3:]
+                    json_part = json_part.rsplit("```", 1)[0]
+                return json.loads(json_part)
         except Exception as e:
             logger.error(f"Course data generation failed: {e}", exc_info=True)
         
@@ -415,9 +447,19 @@ Return ONLY valid JSON with this exact structure:
 Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clear."""
 
         try:
-            json_model = self._gemini_json or self._gemini
-            response = await json_model.generate_content_async(prompt)
-            text = response.text.strip() if response.text else None
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            if not ai_resilience_manager.session:
+                await ai_resilience_manager.initialize()
+            
+            ai_response = await asyncio.wait_for(
+                ai_resilience_manager.chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                    response_format={"type": "json_object"} if self._gemini_json else None
+                ),
+                timeout=45.0
+            )
+            text = ai_response.get("content", "").strip() if ai_response.get("content") else None
             if text:
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -448,8 +490,14 @@ Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clea
                 }
             }
 
-        prompt = f"""Generate a 3-question quiz about: "{original_request}"
-Return ONLY valid JSON with this exact structure:
+        prompt = f"""You are the Lyo Course Architect. You must always respond in two parts:
+ * A friendly, supportive text explanation.
+ * A delimiter: ---a2ui_JSON---
+ * A single A2UI JSON object containing the quiz data.
+   Constraint: If a quick explanation is enough, the JSON part should be an empty list [].
+
+Generate a 3-question quiz about: "{original_request}"
+After the delimiter, return ONLY valid JSON with this exact structure:
 {{
     "title": "Quiz title",
     "total_questions": 3,
@@ -465,14 +513,31 @@ Return ONLY valid JSON with this exact structure:
 Make options plausible but with one clear correct answer. correct_answer is the 0-based index."""
 
         try:
-            json_model = self._gemini_json or self._gemini
-            response = await json_model.generate_content_async(prompt)
-            text = response.text.strip() if response.text else None
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            if not ai_resilience_manager.session:
+                await ai_resilience_manager.initialize()
+            
+            ai_response = await asyncio.wait_for(
+                ai_resilience_manager.chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                ),
+                timeout=45.0
+            )
+            text = ai_response.get("content", "").strip() if ai_response.get("content") else None
+            
             if text:
-                if text.startswith("```"):
-                    text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                    text = text.rsplit("```", 1)[0]
-                return json.loads(text)
+                json_part = text
+                if "---a2ui_JSON---" in text:
+                    parts = text.split("---a2ui_JSON---")
+                    friendly_text = parts[0].strip()
+                    context["final_text"] = friendly_text
+                    json_part = parts[1].strip()
+                    
+                if json_part.startswith("```"):
+                    json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part[3:]
+                    json_part = json_part.rsplit("```", 1)[0]
+                return json.loads(json_part)
         except Exception as e:
             logger.error(f"Quiz data generation failed: {e}", exc_info=True)
 

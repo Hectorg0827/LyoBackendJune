@@ -5,6 +5,7 @@ Handles conversational AI interactions with user profile personalization
 
 import logging
 import time
+import asyncio
 import re
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -48,16 +49,67 @@ def detect_ai_classroom_intent(message: str) -> str:
         return "general_learning"
 
 async def generate_ai_classroom_course(message: str, user) -> Optional[Dict[str, Any]]:
-    """Generate course using AI Classroom system and return course data for A2UI"""
+    """Generate course using real AI pipeline and return course data for A2UI"""
     try:
         # Extract topic from message
         topic = extract_learning_topic(message)
         if not topic:
             return None
 
-        # Mock course generation for now (replace with actual AI Classroom integration)
-        # This would normally call the AI Classroom course generation service
-        course_data = {
+        logger.info(f"🚀 Generating real AI course for topic: {topic}")
+
+        # Use the AI resilience manager to generate a structured course outline
+        prompt = f"""You are the Lyo Course Architect. Generate a structured course outline.
+
+Topic: {topic}
+Return ONLY valid JSON with this exact structure:
+{{
+    "id": "course_<unique_number>",
+    "title": "Course Title",
+    "description": "2-3 sentence description of the course",
+    "subject": "{topic}",
+    "grade_band": "Beginner|Intermediate|Advanced",
+    "estimated_minutes": <number>,
+    "total_nodes": <number between 8 and 20>,
+    "thumbnail_url": null,
+    "learning_objectives": [
+        "Objective 1",
+        "Objective 2",
+        "Objective 3"
+    ],
+    "lessons": [
+        {{"title": "Lesson Title", "description": "What this lesson covers", "duration_minutes": <number>}}
+    ]
+}}
+Include 4-8 lessons. Make the course comprehensive and engaging."""
+
+        response = await ai_resilience_manager.chat_completion(
+            messages=[
+                {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+        )
+
+        raw = response.get("content", "").strip()
+
+        # Strip markdown code fences
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            raw = raw.rsplit("```", 1)[0].strip()
+
+        import json
+        course_data = json.loads(raw)
+        logger.info(f"✅ AI generated course: {course_data.get('title', topic)}")
+        return course_data
+
+    except Exception as e:
+        logger.error(f"AI course generation failed: {e} — using fallback")
+        # Minimal fallback so the flow doesn't break
+        topic = extract_learning_topic(message) or message[:60]
+        return {
             'id': f"course_{hash(topic) % 10000}",
             'title': f"Learn {topic.title()}",
             'description': f"A comprehensive course covering all aspects of {topic}",
@@ -67,11 +119,6 @@ async def generate_ai_classroom_course(message: str, user) -> Optional[Dict[str,
             'total_nodes': 12,
             'thumbnail_url': None
         }
-        return course_data
-
-    except Exception as e:
-        logger.error(f"Failed to generate AI Classroom course: {e}")
-        return None
 
 def extract_learning_topic(message: str) -> Optional[str]:
     """Extract learning topic from user message"""
@@ -95,16 +142,76 @@ def extract_learning_topic(message: str) -> Optional[str]:
     return None
 
 async def get_user_learning_progress(user_id: str, course_id: str = None) -> Dict[str, Any]:
-    """Get user's learning progress for A2UI display"""
-    # Mock progress data (replace with actual AI Classroom progress tracking)
-    return {
-        'course_title': 'Python Fundamentals',
-        'current_node': 7,
-        'total_nodes': 12,
-        'current_node_title': 'Functions and Modules',
-        'next_node_title': 'Object-Oriented Programming',
-        'motivation_message': "You're doing great! Only 5 more lessons to complete the course."
-    }
+    """Get user's learning progress from the database."""
+    try:
+        from lyo_app.core.database import AsyncSessionLocal
+        from lyo_app.ai_classroom.models import GraphCourse, LearningNode
+        from sqlalchemy import select, func
+
+        async with AsyncSessionLocal() as db:
+            # Find the user's most recent active course
+            query = select(GraphCourse).where(
+                GraphCourse.created_by == user_id
+            ).order_by(GraphCourse.updated_at.desc()).limit(1)
+
+            if course_id:
+                query = select(GraphCourse).where(GraphCourse.id == course_id)
+
+            result = await db.execute(query)
+            course = result.scalar_one_or_none()
+
+            if not course:
+                return {
+                    'course_title': 'No active course',
+                    'current_node': 0,
+                    'total_nodes': 0,
+                    'current_node_title': '',
+                    'next_node_title': '',
+                    'motivation_message': "Start a new course to begin learning!"
+                }
+
+            # Count total nodes
+            total_result = await db.execute(
+                select(func.count(LearningNode.id)).where(
+                    LearningNode.course_id == course.id
+                )
+            )
+            total_nodes = int(total_result.scalar() or 0)
+
+            # Get ordered nodes for position info
+            nodes_result = await db.execute(
+                select(LearningNode).where(
+                    LearningNode.course_id == course.id
+                ).order_by(LearningNode.sequence_order)
+            )
+            nodes = nodes_result.scalars().all()
+
+            current_node = max(1, course.version)  # Approximate progress indicator
+            current_title = nodes[min(current_node - 1, len(nodes) - 1)].content.get("narration", "")[:60] if nodes else ""
+            next_title = nodes[min(current_node, len(nodes) - 1)].content.get("narration", "")[:60] if nodes and current_node < len(nodes) else "Course complete!"
+
+            remaining = max(0, total_nodes - current_node)
+            motivation = f"You're doing great! {'Only ' + str(remaining) + ' more lessons to go.' if remaining > 0 else 'Almost there!'}"
+
+            return {
+                'course_title': course.title,
+                'current_node': current_node,
+                'total_nodes': total_nodes,
+                'current_node_title': current_title,
+                'next_node_title': next_title,
+                'motivation_message': motivation
+            }
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch real progress for user {user_id}: {e}")
+        return {
+            'course_title': 'Loading...',
+            'current_node': 0,
+            'total_nodes': 0,
+            'current_node_title': '',
+            'next_node_title': '',
+            'motivation_message': "Keep learning — you're doing great!"
+        }
 
 
 # ============================================================
@@ -142,6 +249,18 @@ def detect_course_creation_intent(message: str) -> Optional[Dict[str, str]]:
 # ============================================================
 # TRANSLATION LAYER (A2A -> A2UI)
 # ============================================================
+
+def serialize_ui(component) -> Optional[Dict[str, Any]]:
+    """Safely serialize an A2UI component to a dictionary (not a string) for iOS decoding."""
+    if not component:
+        return None
+    if hasattr(component, "to_dict"):
+        return component.to_dict()
+    if hasattr(component, "model_dump"):
+        return component.model_dump(by_alias=False, exclude_none=True)
+    if hasattr(component, "dict"):
+        return component.dict(by_alias=False, exclude_none=True)
+    return None
 
 def translate_artifact_to_ui_component(artifact: Artifact) -> Optional[Dict[str, Any]]:
     """
@@ -301,8 +420,11 @@ async def chat(
                     duration_minutes=30
                 )
                 
-                # Generate course (non-streaming for now)
-                a2a_response = await orchestrator.generate_course(course_request)
+                # Generate course (non-streaming for now, with safety timeout)
+                a2a_response = await asyncio.wait_for(
+                    orchestrator.generate_course(course_request),
+                    timeout=120.0
+                )
                 
                 # Extract artifacts
                 artifacts = a2a_response.output_artifacts
@@ -328,7 +450,7 @@ async def chat(
 
                 # Generate proper A2UI component
                 course_ui = chat_a2ui_service.generate_course_creation_ui(course_data)
-                ui_component_json = course_ui.to_json() if course_ui else None
+                ui_component_json = serialize_ui(course_ui)
 
                 # Build response text with A2UI formatting
                 response_text = f"🎓 **Course Created: {course_intent['topic'].title()}**\n\nI've designed a comprehensive learning experience for you! The course includes {len(course_data['lessons'])} lessons covering all the essential concepts.\n\n✨ *Tap below to explore your personalized course*"
@@ -410,13 +532,13 @@ When a user asks to create a course, briefly confirm the topic and ask about the
             topic = request.message
             explanation_ui = chat_a2ui_service.generate_explanation_ui(response_text, topic)
             if explanation_ui:
-                ui_component_json = explanation_ui.to_json()
+                ui_component_json = serialize_ui(explanation_ui)
 
         elif any(word in message_lower for word in ["help", "guide", "steps", "how to"]):
             # Generate welcome/help UI
             welcome_ui = chat_a2ui_service.generate_welcome_ui(current_user.name if hasattr(current_user, 'name') else "there")
             if welcome_ui:
-                ui_component_json = welcome_ui.to_json()
+                ui_component_json = serialize_ui(welcome_ui)
 
         # Check if the AI result contains artifacts (populated by Orchestrator or Agents)
         artifacts_data = result.get("artifacts", [])
@@ -438,7 +560,7 @@ When a user asks to create a course, briefly confirm the topic and ask about the
                         if translated.get("type") == "course_roadmap":
                             course_data = translated["course_roadmap"]
                             course_ui = chat_a2ui_service.generate_course_creation_ui(course_data)
-                            ui_component_json = course_ui.to_json() if course_ui else None
+                            ui_component_json = serialize_ui(course_ui)
                         elif translated.get("type") == "quiz":
                             quiz_data = translated["quiz"]
                             quiz_ui = chat_a2ui_service.generate_quiz_ui({
@@ -447,7 +569,7 @@ When a user asks to create a course, briefly confirm the topic and ask about the
                                 "total_questions": len(quiz_data.get("questions", [])),
                                 "question": quiz_data.get("questions", [{}])[0] if quiz_data.get("questions") else {}
                             })
-                            ui_component_json = quiz_ui.to_json() if quiz_ui else None
+                            ui_component_json = serialize_ui(quiz_ui)
                         break
                 except Exception as e:
                     logger.warning(f"Failed to translate artifact: {e}")
@@ -509,7 +631,7 @@ async def chat_test(request: ChatRequest):
 
             # Generate proper A2UI component
             course_ui = chat_a2ui_service.generate_course_creation_ui(course_data)
-            ui_component_json = course_ui.to_json() if course_ui else None
+            ui_component_json = serialize_ui(course_ui)
 
             # Build response text
             response_text = f"🎓 **Course Created: {course_intent['topic'].title()}**\n\nI've designed a comprehensive learning experience for you! The course includes {len(course_data['lessons'])} lessons covering all the essential concepts.\n\n✨ *Tap below to explore your personalized course*"
@@ -537,7 +659,7 @@ async def chat_test(request: ChatRequest):
             explanation_ui = chat_a2ui_service.generate_explanation_ui(
                 f"Here's an explanation of {request.message}", request.message
             )
-            ui_component_json = explanation_ui.to_json() if explanation_ui else None
+            ui_component_json = serialize_ui(explanation_ui)
 
             return ChatResponse(
                 response=f"Let me explain {request.message} for you!",
@@ -551,7 +673,7 @@ async def chat_test(request: ChatRequest):
         # Help requests
         elif any(word in message_lower for word in ["help", "guide", "steps", "how to", "getting started"]):
             welcome_ui = chat_a2ui_service.generate_welcome_ui("Test User")
-            ui_component_json = welcome_ui.to_json() if welcome_ui else None
+            ui_component_json = serialize_ui(welcome_ui)
 
             return ChatResponse(
                 response="Hi there! I'm Lyo, your AI learning assistant. Here are some things I can help you with:",
@@ -575,7 +697,7 @@ async def chat_test(request: ChatRequest):
                 }
             }
             quiz_ui = chat_a2ui_service.generate_quiz_ui(quiz_data)
-            ui_component_json = quiz_ui.to_json() if quiz_ui else None
+            ui_component_json = serialize_ui(quiz_ui)
 
             return ChatResponse(
                 response="Here's a quick quiz to help personalize your learning!",
@@ -692,7 +814,11 @@ async def chat_v2(
                             duration_minutes=30
                         )
 
-                        a2a_response = await orchestrator.generate_course(course_request)
+                        # Generate course with safety timeout
+                        a2a_response = await asyncio.wait_for(
+                            orchestrator.generate_course(course_request),
+                            timeout=120.0
+                        )
 
                         # Convert A2A artifacts to legacy format for UI factory
                         course_data = {

@@ -22,7 +22,8 @@ class RAGService:
         Retrieves relevant content chunks based on semantic similarity.
         """
         if not self._db:
-            async with get_db_session() as session:
+            session = await get_db_session()
+            async with session:
                 return await self._execute_search(session, query, limit, filters)
         else:
             return await self._execute_search(self._db, query, limit, filters)
@@ -37,8 +38,10 @@ class RAGService:
             logger.warning(f"Embedding generation failed, falling back to keyword search: {e}")
             query_vector = None
         
-        if not query_vector:
-            logger.warning("Failed to generate embedding, falling back to keyword search")
+        # Check dialect: SQLite does not support pgvector operators
+        dialect = db.bind.dialect.name if db.bind else db.get_bind().dialect.name
+        if dialect == "sqlite":
+            logger.warning("SQLite dialect detected, falling back to keyword search since pgvector is not supported")
             return await self._execute_keyword_search(db, query, limit)
             
         # 2. Semantic Search (Courses) using Cosine Distance (<-> operator)

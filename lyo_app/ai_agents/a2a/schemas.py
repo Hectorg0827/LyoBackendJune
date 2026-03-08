@@ -54,6 +54,8 @@ class ArtifactType(str, Enum):
     VOICE_SCRIPTS = "voice_scripts"
     COURSE_MODULE = "course_module"
     TEXT_CONTENT = "text_content"
+    JSON_DATA = "json_data"
+    ACTION_PLAN = "action_plan"
 
 
 
@@ -74,9 +76,12 @@ class EventType(str, Enum):
     CONTENT_CHUNK = "content_chunk"
     THINKING = "thinking"
     
-    # Agent-level events
+    # Agent & Task level events
     AGENT_STARTED = "agent_started"
     AGENT_COMPLETED = "agent_completed"
+    TASK_STARTED = "task_started"
+    TASK_COMPLETED = "task_completed"
+    TASK_FAILED = "task_failed"
 
 
 class MessageRole(str, Enum):
@@ -251,7 +256,10 @@ class TaskInput(BaseModel):
     # Artifacts from previous agents in pipeline
     input_artifacts: List[Artifact] = Field(default_factory=list)
     
-    # Context
+    # Contextual data for trigger-based agents
+    context: Optional[str] = Field(None, description="Event context or trigger details")
+    
+    # Context identification
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     language: str = Field(default="en")
@@ -303,6 +311,23 @@ class TaskOutput(BaseModel):
     
     # Quality summary
     overall_quality_score: Optional[float] = None
+
+
+# ============================================================
+# AGENT ACTIONS (Agency & Tool Calling)
+# ============================================================
+
+class AgentAction(BaseModel):
+    """
+    Explicit action requested by an agent to be executed by the OS.
+    Maps to the Tool Integration Hub in Phase 5.
+    """
+    tool_name: str = Field(..., description="Name of the tool to execute", alias="tool")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the tool")
+    rationale: Optional[str] = Field(None, description="Agent's reasoning for this action")
+
+    class Config:
+        populate_by_name = True
 
 
 # ============================================================

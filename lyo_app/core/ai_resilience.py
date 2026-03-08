@@ -137,9 +137,9 @@ class AIResilienceManager:
             self.openai_client = AsyncOpenAI(api_key=openai_key)
             
         self.models = {
-            "gemini-2.0-flash": AIModelConfig(
+            "gemini-3.1-pro-preview-customtools": AIModelConfig(
                 name="Google Gemini 2.0 Flash",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview-customtools:generateContent",
                 api_key=gemini_key,
                 max_tokens=4000,
                 priority=1,
@@ -153,9 +153,9 @@ class AIResilienceManager:
                 priority=1,
                 capabilities=["chat", "fast", "conversational"],
             ),
-            "gemini-2.0-pro": AIModelConfig(
+            "gemini-3.1-pro-preview-customtools": AIModelConfig(
                 name="Google Gemini 2.0 Pro",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro:generateContent",
+                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview-customtools:generateContent",
                 api_key=gemini_key,
                 max_tokens=8000,
                 priority=2,
@@ -457,7 +457,7 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-2.0-flash"]  # Default
+            return ["gemini-3.1-pro-preview-customtools"]  # Default
         
         last_message = messages[-1].get("content", "")
         total_chars = sum(len(m.get("content", "")) for m in messages)
@@ -481,11 +481,11 @@ class AIResilienceManager:
         # - Complex patterns or long context -> 2.0-pro (most capable)
         # - Otherwise -> 2.0-flash (balanced)
         if len(last_message) < 100 and (is_simple or max_tokens < 256):
-            return ["gpt-4o-mini", "gemini-2.0-flash"]
+            return ["gpt-4o-mini", "gemini-3.1-pro-preview-customtools"]
         elif is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-2.0-pro", "gpt-4o"]
+            return ["gemini-3.1-pro-preview-customtools", "gpt-4o"]
         else:
-            return ["gemini-2.0-flash", "gpt-4o-mini"]
+            return ["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"]
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:

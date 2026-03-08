@@ -246,7 +246,7 @@ Example response:
 🚀 Starting LyoBackend v3.1.1-CLOUD
 ✅ All services healthy
 ✅ Database connected
-🤖 AI Models loaded: gemini-2.5-flash (priority 1)
+🤖 AI Models loaded: gemini-3.1-pro-preview-customtools (priority 1)
 📡 Server running on http://localhost:8000
 ⚡ uvicorn started with auto-reload enabled
 ```

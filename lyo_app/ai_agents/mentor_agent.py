@@ -24,7 +24,7 @@ from .orchestrator import ai_orchestrator, ModelType, TaskComplexity
 from .websocket_manager import connection_manager
 from lyo_app.models.enhanced import User
 from lyo_app.stack.schemas import StackCardPayload, StackItemType
-from lyo_app.services.memory_synthesis import memory_synthesis_service
+# from lyo_app.services.memory_synthesis import memory_synthesis_service
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class ConversationContext:
         
         context_parts.append("Recent conversation:")
         for msg in recent_messages:
-            role_label = "Student" if msg["role"] == "user" else "Mentor"
+            role_label = "Member" if msg["role"] == "user" else "Mentor"
             context_parts.append(f"{role_label}: {msg['content'][:100]}...")
         
         return "\n".join(context_parts)
@@ -138,7 +138,7 @@ class MentorPersonality:
             prompt_parts.extend([
                 "- Be extra patient and break concepts into very small steps",
                 "- Use lots of encouragement and positive reinforcement",
-                "- Avoid overwhelming the student with too much information"
+                "- Avoid overwhelming the member with too much information"
             ])
         elif user_state == "bored":
             prompt_parts.extend([
@@ -194,7 +194,7 @@ class AIMentor:
         self.teaching_strategies = {
             "explain_concept": "Break down the concept into fundamental parts and build understanding step by step",
             "provide_examples": "Give concrete, relatable examples that illustrate the concept clearly",
-            "ask_questions": "Use Socratic questioning to guide the student to discover the answer",
+            "ask_questions": "Use Socratic questioning to guide the member to discover the answer",
             "analogies": "Use analogies and metaphors to connect new concepts to familiar ideas",
             "practice_problems": "Provide practice exercises to reinforce understanding",
             "real_world_connections": "Show how the concept applies in real-world situations"
@@ -223,6 +223,7 @@ class AIMentor:
             convo.user_profile = user_profile
 
         # Get persistent memory - THE KEY TO FEELING INDISPENSABLE
+        from lyo_app.services.memory_synthesis import memory_synthesis_service
         persistent_memory = await memory_synthesis_service.get_memory_for_prompt(user_id, db)
 
         # Get user's engagement state for adaptive response
@@ -242,7 +243,7 @@ class AIMentor:
 ## Current Session Context:
 {context_summary}
 
-## Student's Message:
+## Member's Message:
 "{message}"
 
 ## Instructions:
@@ -501,7 +502,7 @@ Strategy for this response: {strategy_instruction}
 Conversation context:
 {context_summary}
 
-Student's current message: "{message}"
+Member's current message: "{message}"
 
 Provide a helpful, educational response that matches your personality and the specified strategy. Keep responses conversational, encouraging, and appropriately detailed for the context.
 """
@@ -546,12 +547,12 @@ Provide a helpful, educational response that matches your personality and the sp
         instructions = {
             "explain_concept": "Provide a clear, step-by-step explanation of the concept. Use simple language and build understanding gradually.",
             "provide_examples": "Give concrete, relatable examples that illustrate the concept clearly. Use real-world applications when possible.",
-            "guided_support": "Help the student work through their confusion by asking guiding questions and providing hints rather than direct answers.",
+            "guided_support": "Help the member work through their confusion by asking guiding questions and providing hints rather than direct answers.",
             "patient_explanation": "Be extra patient and break down complex ideas into very simple steps. Use lots of encouragement.",
             "calming_support": "Address any frustration or stress first, then gently guide back to learning. Be very supportive and understanding.",
-            "engaging_challenge": "Provide more stimulating content that challenges the student intellectually. Introduce advanced concepts or interesting applications.",
-            "exploration_encouragement": "Encourage the student's curiosity by expanding on their interests and suggesting related topics to explore.",
-            "conversational_support": "Provide a natural, conversational response that addresses the student's message directly and helpfully."
+            "engaging_challenge": "Provide more stimulating content that challenges the member intellectually. Introduce advanced concepts or interesting applications.",
+            "exploration_encouragement": "Encourage the member's curiosity by expanding on their interests and suggesting related topics to explore.",
+            "conversational_support": "Provide a natural, conversational response that addresses the member's message directly and helpfully."
         }
         
         return instructions.get(strategy, "Provide a helpful and educational response.")
@@ -573,27 +574,27 @@ Provide a helpful, educational response that matches your personality and the sp
         # Create reason-specific prompts
         reason_prompts = {
             "struggling_detected": f"""
-The student appears to be struggling (confidence: {confidence:.1f}). 
+The member appears to be struggling (confidence: {confidence:.1f}). 
 Generate a supportive, encouraging message that offers help without being overwhelming.
 Focus on reassurance and offering specific assistance.
 """,
             "frustrated_detected": f"""
-The student seems frustrated (confidence: {confidence:.1f}).
+The member seems frustrated (confidence: {confidence:.1f}).
 Generate a calming, empathetic message that acknowledges their feelings and offers gentle support.
 Help them refocus and provide a different approach.
 """,
             "bored_detected": f"""
-The student appears to be bored or disengaged (confidence: {confidence:.1f}).
+The member appears to be bored or disengaged (confidence: {confidence:.1f}).
 Generate an engaging message that introduces more interesting content or challenges.
 Spark their curiosity and motivation.
 """,
             "curious_detected": f"""
-The student is showing curiosity and engagement (confidence: {confidence:.1f}).
+The member is showing curiosity and engagement (confidence: {confidence:.1f}).
 Generate an encouraging message that feeds their curiosity and suggests interesting directions to explore.
 """
         }
         
-        base_prompt = reason_prompts.get(reason, f"The student needs a check-in based on: {reason}")
+        base_prompt = reason_prompts.get(reason, f"The member needs a check-in based on: {reason}")
         
         # Get conversation context
         context_summary = conversation.get_context_summary()
@@ -602,7 +603,7 @@ Generate an encouraging message that feeds their curiosity and suggests interest
         full_prompt = f"""
 {persona_prompt}
 
-Context: You are proactively reaching out to a student based on AI analysis of their learning behavior.
+Context: You are proactively reaching out to a member based on AI analysis of their learning behavior.
 
 {base_prompt}
 
@@ -612,7 +613,7 @@ Previous conversation context:
 Recommendations from AI analysis: {', '.join(recommendations) if recommendations else 'None'}
 
 Generate a brief, caring, proactive message (2-3 sentences) that feels natural and helpful, not robotic. 
-The student hasn't asked for help - you're reaching out because you care about their learning.
+The member hasn't asked for help - you're reaching out because you care about their learning.
 """
         
         # Generate response

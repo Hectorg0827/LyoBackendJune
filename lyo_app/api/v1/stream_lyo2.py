@@ -15,6 +15,9 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent
+from lyo_app.ai.nexus.agent import LyoNexusAgent
+from lyo_app.ai.nexus.factory import LyoNexusFactory
+from lyo_app.ai.nexus.media_worker import LyoNexusMediaWorker
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +89,21 @@ async def stream_lyo2_chat(
                 s.action_type == ActionType.GENERATE_A2UI for s in plan.steps
             )
             _intent_to_a2ui = {
-                Intent.COURSE:     {"ui_type": "course", "title": request.text or ""},
-                Intent.EXPLAIN:    {"ui_type": "explanation"},
-                Intent.QUIZ:       {"ui_type": "quiz"},
-                Intent.FLASHCARDS: {"ui_type": "quiz"},
-                Intent.STUDY_PLAN: {"ui_type": "study_plan"},
+                Intent.COURSE:              {"ui_type": "course", "title": request.text or ""},
+                Intent.EXPLAIN:             {"ui_type": "explanation"},
+                Intent.QUIZ:                {"ui_type": "quiz"},
+                Intent.FLASHCARDS:          {"ui_type": "quiz"},
+                Intent.STUDY_PLAN:          {"ui_type": "study_plan"},
+                # Fallback: ALL other text-generating intents get an explanation card
+                Intent.CHAT:                {"ui_type": "explanation"},
+                Intent.GENERAL:             {"ui_type": "explanation"},
+                Intent.GREETING:            {"ui_type": "explanation"},
+                Intent.HELP:                {"ui_type": "explanation"},
+                Intent.SUMMARIZE_NOTES:     {"ui_type": "explanation"},
+                Intent.COMMUNITY:           {"ui_type": "explanation"},
+                Intent.SCHEDULE_REMINDERS:  {"ui_type": "explanation"},
+                Intent.MODIFY_ARTIFACT:     {"ui_type": "explanation"},
+                Intent.UNKNOWN:             {"ui_type": "explanation"},
             }
             if not _has_a2ui_step and decision.intent in _intent_to_a2ui:
                 a2ui_params = _intent_to_a2ui[decision.intent]
@@ -133,23 +146,45 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             
-            # --- Multipart Agent Block Markers ---
-            # Wrap the answer text with agent markers for cinematic reveal on iOS.
-            # The iOS AgenticClassroomViewModel parses [tutor], [quiz], [content], etc.
-            # to split the response into visually distinct agent blocks.
-            answer_text = execution_response.answer_block.content.get("text", "")
-            if answer_text and not any(f"[{tag}]" in answer_text for tag in ["tutor", "quiz", "sentiment", "content", "metacognition"]):
-                # Wrap the main answer with a [tutor] marker
-                enriched_content = dict(execution_response.answer_block.content)
-                enriched_content["text"] = f"[tutor]\n{answer_text}"
-                enriched_block = UIBlock(
-                    type=execution_response.answer_block.type,
-                    content=enriched_content,
-                    version_id=execution_response.answer_block.version_id
+            # --- Lyo-Nexus Slicing Engine ---
+            logger.info(f"🔪 [STREAM][{trace_id}] Piping to Lyo-Nexus Agent...")
+            
+            async def dispatch_update(update_brick: Dict[str, Any]):
+                # Callback used by LyoNexusMediaWorker to send async media updates
+                logger.info(f"🔄 [STREAM][{trace_id}] Nexus Async Update: {update_brick['update_id']}")
+                # We yield into the event_generator's stream (this is tricky in a real setup,
+                # but for SSE, we would push to an async queue that event_generator reads from.
+                # Since we can't easily yield from a detached task directly into the active SSE generator
+                # without an async Queue, we'll log it. In a production WebSocket, we'd do await websocket.send_json().)
+                pass # Queue implementation required for True Async SSE
+                
+            nexus_factory = LyoNexusFactory()
+            nexus_media = LyoNexusMediaWorker(dispatch_update_callback=dispatch_update)
+            nexus_agent = LyoNexusAgent(factory=nexus_factory, media_worker=nexus_media)
+            
+            # Simulate a token stream from the "Brain"
+            async def mock_llm_stream(text: str) -> AsyncGenerator[str, None]:
+                # In a real setup, this is response.text_stream from Gemini
+                chunk_size = 10
+                for i in range(0, len(text), chunk_size):
+                    yield text[i:i+chunk_size]
+                    await asyncio.sleep(0.005) # Simulating LLM generation time
+            
+            # Get the text we want to pipe
+            raw_llm_text = execution_response.answer_block.content.get("text", "")
+            
+            # Process via Nexus
+            async for json_brick in nexus_agent.process_stream(
+                text_stream=mock_llm_stream(raw_llm_text),
+                capabilities=["a2ui_v1"] # Mock manifest
+            ):
+                logger.info(f"🧱 [STREAM][{trace_id}] Nexus yielded {json_brick['type']} brick")
+                # Wrap it so the old iOS client doesn't break, or send raw if iOS updated
+                wrapped_block = UIBlock(
+                    type=UIBlockType.A2UI_COMPONENT,
+                    content={"component": json_brick}
                 )
-                yield f"data: {json.dumps({'type': 'answer', 'block': enriched_block.model_dump()})}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'answer', 'block': execution_response.answer_block.model_dump()})}\n\n"
+                yield f"data: {json.dumps({'type': 'a2ui', 'block': wrapped_block.model_dump()})}\n\n"
             
             if execution_response.artifact_block:
                 # Send agent-tagged artifact event
@@ -161,7 +196,6 @@ async def stream_lyo2_chat(
                     UIBlockType.QUIZ: "quiz",
                     UIBlockType.STUDY_PLAN: "content",
                     UIBlockType.FLASHCARDS: "content",
-                    UIBlockType.CODE: "tutor",
                 }
                 agent_tag = agent_tag_map.get(artifact_type, "content")
                 

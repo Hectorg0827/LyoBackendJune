@@ -1,37 +1,32 @@
 import asyncio
 import os
 import sys
-from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+# Add directory to path to allow importing lyo_app
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-load_dotenv()
-load_dotenv(".env.production")
+from lyo_app.image_gen.service import ImageService, ImageConfig
 
-from lyo_app.image_gen.service import ImageService, ImageSize
-
-async def test_service():
-    print("Testing ImageService with Runware Integration...")
-    service = None
+async def test_init():
+    print("Testing ImageService initialization...")
+    # Provide a dummy project ID so it initializes vertex ai cleanly
+    os.environ["GOOGLE_CLOUD_PROJECT"] = "dummy-project"
+    service = ImageService(ImageConfig())
+    
+    # We only test initialization so it doesn't incur real API charges or require auth token
     try:
-        service = ImageService()
         await service.initialize()
+        print("Initialization successful!")
         
-        print("\nRequesting an image generation via the service...")
-        result = await service.generate(
-            prompt="A majestic library in the clouds, ethereal lighting, concept art, highly detailed",
-            size=ImageSize.SQUARE
-        )
-        
-        print("\nSuccess! Result:")
-        print(f"URL: {result.url}")
-        print(f"Size Used: {result.size}")
-        
+        # Test prompt builder
+        prompt = service.build_educational_prompt("Photosynthesis", "concept_diagram")
+        assert "Photosynthesis" in prompt
+        assert "IMPORTANT: This is for educational purposes" in prompt
+        print("Prompt builder works!")
     except Exception as e:
-        print(f"Exception occurred: {e}")
-    finally:
-        if service:
-            await service.close()
+        print(f"Failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    asyncio.run(test_service())
+    asyncio.run(test_init())

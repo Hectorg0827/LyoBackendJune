@@ -49,6 +49,11 @@ try:
 except ImportError:
     pass
 
+# Skills OS models
+from lyo_app.skills.models import Skill, SkillEdge, SkillTag  # noqa: F401
+from lyo_app.evolution.goals_models import UserGoal, GoalSkillMapping, GoalProgressSnapshot  # noqa: F401
+from lyo_app.events.models import LearningEvent  # noqa: F401
+
 target_metadata = Base.metadata
 
 # Get database URL from environment, but convert async URL to sync for alembic

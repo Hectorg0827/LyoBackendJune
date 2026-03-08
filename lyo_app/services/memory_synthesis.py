@@ -18,7 +18,7 @@ from sqlalchemy import select, func, desc, and_
 
 from lyo_app.auth.models import User
 from lyo_app.ai_agents.models import MentorInteraction, UserEngagementState
-from lyo_app.ai_agents.orchestrator import ai_orchestrator, TaskComplexity, ModelType
+# from lyo_app.ai_agents.orchestrator import ai_orchestrator, TaskComplexity, ModelType
 from lyo_app.personalization.models import LearnerState, LearnerMastery, SpacedRepetitionSchedule
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ Create a concise memory profile (max 300 words) that captures:
 4. **Strengths**: What topics/skills come easily to them?
 5. **Struggle Points**: What concepts do they find difficult? What analogies helped?
 6. **Recent Progress**: What breakthroughs or wins have they had recently?
-7. **Personal Context**: Any relevant life context (student, professional, time constraints, etc.)
+7. **Personal Context**: Any relevant life context (member, professional, time constraints, etc.)
 
 Write in second person ("You prefer...", "You've shown...") so the AI tutor can reference it naturally.
 Be specific and actionable. Avoid generic statements.
@@ -216,7 +216,7 @@ Be specific and actionable. Avoid generic statements.
             return self._get_default_memory()
 
         return f"""
-## About This Student (from our previous sessions):
+## About This Member (from our previous sessions):
 {user.user_context_summary}
 
 ## How to Use This Memory:
@@ -437,7 +437,7 @@ Be specific and actionable. Avoid generic statements.
         parts.append("### Recent Conversation:")
         for inter in interactions[-10:]:  # Last 10 messages
             if inter.user_message:
-                parts.append(f"Student: {inter.user_message[:200]}")
+                parts.append(f"Member: {inter.user_message[:200]}")
             parts.append(f"Mentor: {inter.mentor_response[:200]}")
 
         # Learner state
@@ -535,6 +535,8 @@ Be specific and actionable. Avoid generic statements.
         )
 
         try:
+            from lyo_app.ai_agents.orchestrator import ai_orchestrator, TaskComplexity, ModelType
+            
             response = await ai_orchestrator.generate_response(
                 prompt=prompt,
                 task_complexity=TaskComplexity.MEDIUM,
@@ -578,8 +580,8 @@ Be specific and actionable. Avoid generic statements.
     def _get_default_memory(self) -> str:
         """Return default memory for new users."""
         return """
-## About This Student:
-This is a new student. No previous interaction history available yet.
+## About This Member:
+This is a new member. No previous interaction history available yet.
 
 ## How to Approach:
 - Start by understanding their learning goals
@@ -638,6 +640,16 @@ This is a new student. No previous interaction history available yet.
         if "struggle_point" in by_category:
             parts.append("\n**Challenging Areas:**")
             for i in by_category["struggle_point"]:
+                parts.append(f"- {i.content}")
+
+        if "emotional_pattern" in by_category:
+            parts.append("\n**Emotional Patterns:**")
+            for i in by_category["emotional_pattern"]:
+                parts.append(f"- {i.content}")
+
+        if "topic_interest" in by_category:
+            parts.append("\n**Learning Interests:**")
+            for i in by_category["topic_interest"]:
                 parts.append(f"- {i.content}")
 
         return "\n".join(parts)

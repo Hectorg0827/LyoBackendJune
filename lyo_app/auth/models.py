@@ -65,9 +65,9 @@ class User(Base):
     )
     # locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
-    # AI Personalization - DISABLED: columns don't exist in production DB
-    # learning_profile: Mapped[Optional[dict]] = mapped_column(JSON)  # Inferred traits e.g. {"visual_score": 8}
-    # user_context_summary: Mapped[Optional[str]] = mapped_column(Text)  # AI summary of user context
+    # AI Personalization
+    learning_profile: Mapped[Optional[dict]] = mapped_column(JSON)  # Inferred traits e.g. {"visual_score": 8}
+    user_context_summary: Mapped[Optional[str]] = mapped_column(Text)  # AI summary of user context
     
     # Multi-Tenant SaaS support
     # organization_id: Mapped[Optional[int]] = mapped_column(

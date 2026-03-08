@@ -26,8 +26,13 @@ from lyo_app.personalization.models import SpacedRepetitionSchedule
 logger = logging.getLogger(__name__)
 
 # Database setup
-DATABASE_URL = getattr(settings, "DATABASE_URL", "postgresql+asyncpg://lyo_user:lyo_password@localhost:5432/lyo_db")
-SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("postgresql://", "postgresql+psycopg2://")
+# Use lowercase matching the Settings class
+DATABASE_URL = getattr(settings, "database_url", "sqlite+aiosqlite:///./lyo_app_dev.db")
+
+if "sqlite" in DATABASE_URL:
+    SYNC_DATABASE_URL = DATABASE_URL.replace("+aiosqlite", "")
+else:
+    SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("postgresql://", "postgresql+psycopg2://")
 
 sync_engine = create_engine(SYNC_DATABASE_URL)
 SyncSessionLocal = sessionmaker(bind=sync_engine)

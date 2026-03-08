@@ -14,6 +14,7 @@ from .schemas import (
     PersonalizationStateUpdate, KnowledgeTraceRequest, 
     NextActionRequest, NextActionResponse, ActionType, MasteryProfile
 )
+from lyo_app.evolution.recommendation_engine import get_next_upgrade
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +80,32 @@ class DeepKnowledgeTracer:
         learning_delta = self.learning_rate * (performance - prior)
         forgetting_delta = self.forgetting_rate * (0.5 - prior)
         
+        # Affect-responsive weighting (Live Context)
+        # Fetch current affect from LearnerState
+        state_result = await db.execute(select(LearnerState).where(LearnerState.user_id == user_id))
+        state = state_result.scalar_one_or_none()
+        
+        affect_multiplier = 1.0
+        uncertainty_multiplier = 0.95
+        
+        if state:
+            if state.current_affect == AffectState.FLOW:
+                affect_multiplier = 1.5 # Boost signal in flow
+                uncertainty_multiplier = 0.85 # Stronger confidence gain
+            elif state.current_affect == AffectState.FRUSTRATED:
+                affect_multiplier = 0.5 # Weaker signal when frustrated (might be lucky guess or cognitive overload)
+                uncertainty_multiplier = 1.1 # Increase uncertainty
+            elif state.current_affect == AffectState.BORED:
+                affect_multiplier = 0.8 # Lower engagement
+        
+        learning_delta *= affect_multiplier
+
         # Update mastery
         new_mastery = prior + learning_delta - forgetting_delta
         mastery.mastery_level = max(0.0, min(1.0, new_mastery))
         
-        # Update uncertainty (decreases with more data)
-        mastery.uncertainty = max(0.1, mastery.uncertainty * 0.95)
+        # Update uncertainty (decreases with more data, but modulated by affect)
+        mastery.uncertainty = max(0.1, min(1.0, mastery.uncertainty * uncertainty_multiplier))
         
         # Update timing
         mastery.last_seen = datetime.utcnow()
@@ -381,6 +402,25 @@ class PersonalizationEngine:
                 difficulty="medium",
                 reason=["new_learner", "building_baseline"]
             )
+        
+        # === PHASE 2: NEXT BEST UPGRADE ===
+        # Proactively check the evolution engine to see if there is a trajectory upgrade
+        try:
+            user_id_int = int(request.learner_id)
+            upgrade = await get_next_upgrade(db, user_id_int)
+            if upgrade and upgrade.priority_score > 0.6:
+                return NextActionResponse(
+                    action=ActionType.PRACTICE_QUESTION if upgrade.recommended_action == "quick_practice" else ActionType.EXPLANATION,
+                    difficulty="medium",
+                    reason=[upgrade.reason],
+                    metadata={
+                        "is_upgrade": True,
+                        "upgrade_data": upgrade.to_dict()
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Failed to fetch next upgrade for user {request.learner_id}: {e}")
+        # ==================================
         
         # Decision logic based on state
         reasons = []

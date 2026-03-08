@@ -159,10 +159,11 @@ from lyo_app.ai_agents.multi_agent_v2.pipeline import (
     PipelineError,
     JobManager,
     JobStatus,
-    CourseGenerationJob,
-    PipelineGates,
     GateResult
 )
+
+# OS Agency
+from . import tools
 
 __all__ = [
     # Schemas
@@ -219,7 +220,8 @@ __all__ = [
     "JobStatus",
     "CourseGenerationJob",
     "PipelineGates",
-    "GateResult"
+    "GateResult",
+    "tools"
 ]
 
 __version__ = "2.1.0"  # Updated for multi-model support

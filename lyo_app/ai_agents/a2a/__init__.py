@@ -48,16 +48,23 @@ from .schemas import (
 )
 
 # Base Agent Class
+print("1", flush=True)
 from .base import A2ABaseAgent, A2AAgentMetrics
 
 # Specialized Agents
+print("2", flush=True)
 from .pedagogy_agent import PedagogyAgent, PedagogyOutput
+print("3", flush=True)
 from .cinematic_director_agent import CinematicDirectorAgent, CinematicOutput
+print("4", flush=True)
 from .qa_checker_agent import QACheckerAgent, QAOutput
+print("5", flush=True)
 from .visual_director_agent import VisualDirectorAgent, VisualDirectorOutput
+print("6", flush=True)
 from .voice_agent import VoiceAgent, VoiceAgentOutput
 
 # Orchestrator
+print("7", flush=True)
 from .orchestrator import (
     A2AOrchestrator,
     PipelineConfig,
@@ -69,6 +76,7 @@ from .orchestrator import (
 )
 
 # Routes
+print("8", flush=True)
 from .routes import router as a2a_router, discovery_router, include_a2a_routes
 
 __all__ = [

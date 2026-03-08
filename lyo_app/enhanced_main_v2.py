@@ -224,6 +224,10 @@ def create_app() -> FastAPI:
     
     app.mount("/api/v2", v2_router)
     
+    # Mount Progressive Course endpoints at root (/course/generate)
+    from lyo_app.api.progressive_course import router as progressive_router
+    app.include_router(progressive_router, tags=["progressive"])
+    
     # Root endpoint
     @app.get("/")
     async def root():
