@@ -20,7 +20,7 @@ class MultimodalRouter(BaseAgent[RouterDecision]):
             output_schema=RouterDecision,
             model_name="gemini-3.1-pro-preview-customtools",  # Stable Gemini 2.0 Flash
             temperature=0.1,  # Low temperature for deterministic behavior
-            max_tokens=1024
+            max_tokens=4096
         )
 
     def get_system_prompt(self) -> str:
@@ -34,6 +34,7 @@ Lyo is an Outcome Engine for learning.
 - QUIZ: User wants to be tested on a topic.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.
+- TEST_PREP: User has an upcoming test or exam and needs to prepare for it. Use this instead of STUDY_PLAN when an actual exam/test is mentioned.
 - SUMMARIZE_NOTES: User has provided notes and wants a summary.
 - SCHEDULE_REMINDERS: User wants to set study reminders.
 - COMMUNITY: User wants to interact with the learning community.
@@ -133,6 +134,10 @@ YOU MUST RESPOND ONLY WITH JSON.
             _flashcard_kws = [
                 "flashcard", "flash card", "make cards", "create cards",
             ]
+            _test_prep_kws = [
+                "test prep", "prepare for a test", "have a test", "i have an exam",
+                "upcoming test", "midterm", "final exam", "have a midterm"
+            ]
 
             if any(kw in combined for kw in _course_kws):
                 fallback_intent = "COURSE"
@@ -148,6 +153,9 @@ YOU MUST RESPOND ONLY WITH JSON.
                 fallback_tier = "MEDIUM"
             elif any(kw in text_lower for kw in _summarize_kws):
                 fallback_intent = "SUMMARIZE_NOTES"
+                fallback_tier = "MEDIUM"
+            elif any(kw in text_lower for kw in _test_prep_kws):
+                fallback_intent = "TEST_PREP"
                 fallback_tier = "MEDIUM"
             else:
                 fallback_intent = "EXPLAIN"

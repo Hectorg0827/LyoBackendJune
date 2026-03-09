@@ -11,6 +11,7 @@ from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
 from lyo_app.chat.a2ui_integration import ChatA2UIService
 from lyo_app.a2ui.a2ui_producer import a2ui_producer
+from lyo_app.integrations.calendar_integration import calendar_service, CalendarEvent, EventCategory
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,34 @@ USER QUESTION:
                     if a2ui_result.get("a2ui_component"):
                         execution_context["a2ui_blocks"].append(a2ui_result["a2ui_component"])
                 
+            elif step.action_type == ActionType.CALENDAR_SYNC:
+                logger.info(f"📅 [EXECUTOR] Syncing Test Prep plan to calendar...")
+                execution_context["final_text"] += "\n\nI've generated a study plan, scheduled sessions in your calendar, and set up reminders!"
+                
+                # We enqueue the tasks securely in the background
+                try:
+                    from lyo_app.tasks.calendar_sync import sync_test_prep_to_calendar_task
+                    from lyo_app.tasks.notifications import send_push_notification_task
+                    
+                    # 1. Dispatch Calendar Sync Task
+                    sync_test_prep_to_calendar_task.delay(
+                        user_id=user_id,
+                        subject=step.parameters.get("subject", "Test"),
+                        topics=step.parameters.get("topics", []),
+                        test_date=step.parameters.get("test_date", ""),
+                        plan_details=step.parameters.get("plan_details", {})
+                    )
+                    
+                    # 2. Dispatch Push Notification Task
+                    send_push_notification_task.delay(
+                        user_id=user_id,
+                        title="New Study Plan Created! 📚",
+                        body="Your Test Prep schedule has been synced to your calendar.",
+                        data={"type": "study_plan", "action": "view_calendar"}
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to queue Calendar/Push tasks: {e}")
+                
             elif step.action_type == ActionType.GENERATE_TEXT:
                 # Final text generation step — call Gemini with all context
                 execution_context["final_text"] = await self._generate_text(
@@ -258,6 +287,7 @@ USER QUESTION:
             "QUIZ":       ["Explain Answers", "Try Harder", "New Topic"],
             "FLASHCARDS": ["Start Review", "More Cards", "Quiz Me"],
             "STUDY_PLAN": ["Start Now", "Modify Plan", "Create Course"],
+            "TEST_PREP":  ["Start Studying", "Upload Notes", "Take a Quiz"],
             "SUMMARIZE_NOTES": ["Deep Dive", "Quiz Me", "Flashcards"],
             "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
             "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
