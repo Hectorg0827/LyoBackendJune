@@ -18,6 +18,7 @@ from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, Unified
 from lyo_app.ai.nexus.agent import LyoNexusAgent
 from lyo_app.ai.nexus.factory import LyoNexusFactory
 from lyo_app.ai.nexus.media_worker import LyoNexusMediaWorker
+from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ router = APIRouter()
 
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
+test_prep_agent = TestPrepAgent()
 
 @router.post("/chat/stream")
 async def stream_lyo2_chat(
@@ -69,6 +71,20 @@ async def stream_lyo2_chat(
                 logger.info(f"🤔 [STREAM][{trace_id}] Needs clarification: {decision.clarification_question}")
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
                 return
+                
+            # Intercept TEST_PREP intent to gather structured details
+            if decision.intent == Intent.TEST_PREP:
+                logger.info(f"📚 [STREAM][{trace_id}] Analyzing Test Prep intent...")
+                prep_result = await test_prep_agent.analyze_test_prep(request)
+                if prep_result.success and prep_result.data:
+                    data = prep_result.data
+                    if data.missing_critical_info and data.follow_up_question:
+                        # Yield a clarification if critical info is missing
+                        logger.info(f"🤔 [STREAM][{trace_id}] Test Prep needs clarification: missing {data.missing_critical_info}")
+                        yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
+                        return
+                    # Optionally attach extracted data back to the request for the planner
+                    request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
 
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning...")
@@ -94,6 +110,7 @@ async def stream_lyo2_chat(
                 Intent.QUIZ:                {"ui_type": "quiz"},
                 Intent.FLASHCARDS:          {"ui_type": "quiz"},
                 Intent.STUDY_PLAN:          {"ui_type": "study_plan"},
+                Intent.TEST_PREP:           {"ui_type": "study_plan"},
                 # Fallback: ALL other text-generating intents get an explanation card
                 Intent.CHAT:                {"ui_type": "explanation"},
                 Intent.GENERAL:             {"ui_type": "explanation"},

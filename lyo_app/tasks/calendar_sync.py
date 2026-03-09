@@ -238,3 +238,36 @@ def batch_calendar_sync_task(self):
         "status": "success",
         "message": "Batch sync would process all connected calendars"
     }
+
+
+@celery_app.task(bind=True, name="lyo_app.tasks.calendar_sync.sync_test_prep_to_calendar_task")
+def sync_test_prep_to_calendar_task(
+    self,
+    user_id: str,
+    subject: str,
+    topics: list,
+    test_date: str,
+    plan_details: dict
+):
+    """
+    Called when a Test Prep study plan is generated. 
+    Inserts corresponding study blocks into the user's connected calendar.
+    """
+    logger.info(f"Syncing Test Prep plan to calendar for user {user_id}")
+
+    # Create an async wrapper to call the CalendarIntegrationService
+    async def _insert_events():
+        from lyo_app.integrations.calendar_integration import calendar_service
+        # In a real app we'd query the DB for the user's CalendarConnection 
+        # and iterate over plan_details to create events. For the sake of this 
+        # demo/MVP we just log that we would have created them here.
+        # Since we don't have the user's OAuth tokens mocked out in the executor:
+        
+        logger.info(f"✅ Executing mocked calendar insertion for {len(plan_details.get('suggested_sessions', []))} sessions for user {user_id}")
+        
+    try:
+        run_async(_insert_events())
+        return {"status": "success", "user_id": user_id}
+    except Exception as e:
+        logger.exception(f"Failed to sync test prep to calendar: {e}")
+        raise

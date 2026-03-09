@@ -297,7 +297,7 @@ CRITICAL RULES:
         
         return cleaned
     
-    async def _call_model(self, prompt: str, attempt: int = 1) -> str:
+    async def _call_model(self, prompt: str, attempt: int = 1, media_attachments: List[Dict[str, Any]] = None) -> str:
         """Call the model with retry logic"""
         if not self._available:
             raise RuntimeError(f"Agent {self.name} is not available (no API key)")
@@ -311,7 +311,12 @@ CRITICAL RULES:
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
                 
-            messages = [{"role": "user", "content": prompt}]
+            if media_attachments:
+                # Construct multimodal payload
+                content = [{"type": "text", "text": prompt}] + media_attachments
+                messages = [{"role": "user", "content": content}]
+            else:
+                messages = [{"role": "user", "content": prompt}]
             
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
@@ -377,8 +382,11 @@ CRITICAL RULES:
                         current_prompt = f"{system_prompt}\n\n{schema_prompt}\n\n{fallback}"
                         logger.info(f"Agent {self.name}: Using fallback prompt")
                 
+                # Support passing media (images/audio) to the model if provided
+                media_attachments = kwargs.get("media_attachments", [])
+                
                 # Call model
-                raw_response = await self._call_model(current_prompt, attempt)
+                raw_response = await self._call_model(current_prompt, attempt, media_attachments)
                 
                 # Clean and parse response
                 cleaned = self._clean_response(raw_response)
