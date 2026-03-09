@@ -11,6 +11,7 @@ from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
 from lyo_app.chat.a2ui_integration import ChatA2UIService
 from lyo_app.a2ui.a2ui_producer import a2ui_producer
+from lyo_app.a2ui.a2ui_compiler import a2ui_compiler
 from lyo_app.integrations.calendar_integration import calendar_service, CalendarEvent, EventCategory
 
 logger = logging.getLogger(__name__)
@@ -303,29 +304,34 @@ USER QUESTION:
         context: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """
-        Generate A2UI components via the A2UIProducer chokepoint.
+        Generate A2UI components via the A2UIProducer/Compiler chokepoint.
         
-        The Producer guarantees:
-        - Valid A2UI component output (never None, never malformed)
-        - iOS-compatible open_classroom payload shape
-        - Sub-millisecond rendering (pure Python, no LLM in this stage)
+        When settings.enable_a2ui_v2 is True, uses the v2 compiler which
+        produces components with semantic `variant` fields (22-primitive system).
+        Otherwise falls back to the legacy A2UIProducer.
         
         Returns dict with:
           {"a2ui_component": A2UIComponent, "open_classroom": {...}} — for courses
           {"a2ui_component": A2UIComponent}                          — for other types
         """
+        use_v2 = getattr(settings, "enable_a2ui_v2", False)
+        producer = a2ui_compiler if use_v2 else a2ui_producer
+        # v2 methods are compile_*, v1 methods are produce_*
+        prefix = "compile" if use_v2 else "produce"
+
         try:
             topic = step_params.get("title", original_request[:80])
             
             if ui_type == "course":
-                # Generate course data via Gemini, then pass through producer
                 course_data = await self._generate_course_data(original_request, step_params, context)
-                result = a2ui_producer.produce_course(course_data, topic=topic)
+                method = getattr(producer, f"{prefix}_course")
+                result = method(course_data, topic=topic)
                 return result
                     
             elif ui_type == "quiz":
                 quiz_data = step_params.get("quiz_data") or await self._generate_quiz_data(original_request, context)
-                component = a2ui_producer.produce_quiz(quiz_data)
+                method = getattr(producer, f"{prefix}_quiz")
+                component = method(quiz_data)
                 return {"a2ui_component": component}
                     
             elif ui_type == "study_plan":
@@ -334,21 +340,23 @@ USER QUESTION:
                     "milestones": [],
                     "duration": "2 weeks"
                 }
-                component = a2ui_producer.produce_study_plan(plan_data, topic=topic)
+                method = getattr(producer, f"{prefix}_study_plan")
+                component = method(plan_data, topic=topic)
                 return {"a2ui_component": component}
                 
             else:  # "explanation" or any other type
-                # If we already have generated text, use it; otherwise generate
                 content = context.get("final_text", "")
                 if not content:
                     content = await self._generate_text(original_request, context, step_params)
                     context["final_text"] = content
-                component = a2ui_producer.produce_explanation(content, topic=topic)
+                method = getattr(producer, f"{prefix}_explanation")
+                component = method(content, topic=topic)
                 return {"a2ui_component": component}
                 
         except Exception as e:
             logger.error(f"A2UI generation failed for ui_type={ui_type}: {e}", exc_info=True)
-            error_component = a2ui_producer.produce_error(f"Content generation failed")
+            error_method = getattr(producer, f"{prefix}_error")
+            error_component = error_method(f"Content generation failed")
             return {"a2ui_component": error_component}
 
     async def _generate_course_data(
