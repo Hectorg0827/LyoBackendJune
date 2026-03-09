@@ -19,6 +19,8 @@ from lyo_app.ai.nexus.agent import LyoNexusAgent
 from lyo_app.ai.nexus.factory import LyoNexusFactory
 from lyo_app.ai.nexus.media_worker import LyoNexusMediaWorker
 from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
+from lyo_app.core.config import settings
+from lyo_app.a2ui.a2ui_compiler import lyo_response_builder
 
 logger = logging.getLogger(__name__)
 
@@ -228,9 +230,23 @@ async def stream_lyo2_chat(
                 yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
             
             # Send A2UI component blocks (rich interactive UI)
+            use_v2 = getattr(settings, "enable_a2ui_v2", False)
             for a2ui_block in execution_response.a2ui_blocks:
-                logger.info(f"🎨 [STREAM][{trace_id}] Sending a2ui event")
+                logger.info(f"🎨 [STREAM][{trace_id}] Sending a2ui event (v2={use_v2})")
                 yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
+
+                # ── v2: Also emit a lyo_ui event with LyoResponse envelope ──
+                if use_v2:
+                    comp_dict = a2ui_block.content.get("component") if a2ui_block.content else None
+                    if comp_dict:
+                        lyo_resp = lyo_response_builder.build(
+                            ui=None,  # raw dict, not A2UIComponent
+                            request_id=trace_id,
+                            conversation_id=trace_id,
+                        )
+                        # Attach the raw component with variant directly
+                        lyo_resp["ui"] = comp_dict
+                        yield f"data: {json.dumps({'type': 'lyo_ui', 'response': lyo_resp})}\n\n"
             
             # Send open_classroom payload (course creation trigger)
             # Safety net: if the COURSE pipeline ran but produce_course() returned
@@ -287,8 +303,36 @@ async def stream_lyo2_chat(
                     }
                 }
                 yield f"data: {json.dumps({'type': 'open_classroom', 'block': oc_block})}\n\n"
+
+                # ── v2: Also emit lyo_command event ──
+                if use_v2:
+                    cmd = lyo_response_builder.build_command(
+                        "open_classroom",
+                        execution_response.open_classroom_payload
+                    )
+                    lyo_resp = lyo_response_builder.build(
+                        command=cmd,
+                        request_id=trace_id,
+                        conversation_id=trace_id,
+                    )
+                    yield f"data: {json.dumps({'type': 'lyo_command', 'response': lyo_resp})}\n\n"
                 
             yield f"data: {json.dumps({'type': 'actions', 'blocks': [b.model_dump() for b in execution_response.next_actions]})}\n\n"
+
+            # ── v2: Also emit lyo_suggestions event ──
+            if use_v2:
+                v2_suggestions = []
+                for action_block in execution_response.next_actions:
+                    if action_block.content and "actions" in action_block.content:
+                        for label in action_block.content["actions"]:
+                            v2_suggestions.append({"text": label})
+                if v2_suggestions:
+                    lyo_resp = lyo_response_builder.build(
+                        suggestions=v2_suggestions,
+                        request_id=trace_id,
+                        conversation_id=trace_id,
+                    )
+                    yield f"data: {json.dumps({'type': 'lyo_suggestions', 'response': lyo_resp})}\n\n"
             
             # Completion signal
             yield "data: [DONE]\n\n"

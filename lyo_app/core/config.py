@@ -196,6 +196,9 @@ class Settings(BaseSettings):
     image_optimization_quality: int = Field(default=85, description="Image optimization quality (1-100)")
     max_image_size: int = Field(default=5 * 1024 * 1024, description="Max image size in bytes")
     
+    # A2UI v2 Feature Flag
+    enable_a2ui_v2: bool = Field(default=False, description="Enable A2UI v2 compiler (22-primitive system)")
+    
     # API Enhancement
     api_rate_limit_per_minute: int = Field(default=100, description="API rate limit per minute")
     api_burst_limit: int = Field(default=20, description="API burst limit")

@@ -329,6 +329,7 @@ class A2UIMetadata(BaseModel):
 class A2UIComponent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: A2UIElementType
+    variant: Optional[str] = None  # v2 semantic variant (e.g. "course", "mcq", "heading")
     props: A2UIProps = Field(default_factory=A2UIProps)
     children: Optional[List['A2UIComponent']] = None
     actions: Optional[List[A2UIAction]] = None
