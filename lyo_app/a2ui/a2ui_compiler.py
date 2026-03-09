@@ -47,6 +47,13 @@ from lyo_app.a2ui.extractors import (
     extract_quiz,
     extract_study_plan,
 )
+from lyo_app.ai.schemas.lyo2_v2 import (
+    validate_lyo_response,
+    validate_lyo_component,
+    get_lyo_response_json_schema,
+    LyoResponseSchema,
+    LyoUIComponentSchema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -544,6 +551,75 @@ class LyoResponseBuilder:
         if payload:
             cmd["payload"] = payload
         return cmd
+
+
+# ──────────────────────────────────────────────────────────────
+# LLM Structured Output Helpers
+# ──────────────────────────────────────────────────────────────
+
+def validate_llm_response(raw: Dict[str, Any]) -> Optional[LyoResponseSchema]:
+    """
+    Validate a raw LLM structured-output dict against the v2 schema.
+    Returns the validated model or None if validation fails.
+    """
+    try:
+        return validate_lyo_response(raw)
+    except Exception as e:
+        logger.warning("LLM v2 response validation failed: %s", e)
+        return None
+
+
+def validate_llm_component(raw: Dict[str, Any]) -> Optional[LyoUIComponentSchema]:
+    """
+    Validate a raw LLM component dict against the v2 schema.
+    Returns the validated model or None if validation fails.
+    """
+    try:
+        return validate_lyo_component(raw)
+    except Exception as e:
+        logger.warning("LLM v2 component validation failed: %s", e)
+        return None
+
+
+def get_v2_system_prompt_schema() -> str:
+    """
+    Returns a compact JSON Schema string suitable for injection into
+    the LLM system prompt.  This tells the LLM exactly what shape
+    to return when producing structured UI.
+    """
+    import json
+    schema = get_lyo_response_json_schema()
+    return json.dumps(schema, indent=2)
+
+
+def get_v2_system_prompt_fragment() -> str:
+    """
+    Returns a natural-language + schema fragment to inject into the
+    LLM system prompt for A2UI v2 structured output.
+    """
+    import json
+    schema = get_lyo_response_json_schema()
+    compact = json.dumps(schema, separators=(",", ":"))
+
+    return f"""
+## A2UI v2 Structured Output
+
+When the user asks to learn something, create a course, take a quiz, study,
+or any other educational task, respond with a JSON object matching this schema:
+
+{compact}
+
+### Key Rules:
+1. `message` is ALWAYS required — a plain-text response renderable standalone.
+2. `ui` is optional — add it when structured UI helps (courses, quizzes, plans).
+3. Use the 22-primitive type system: text, media, divider, input, button,
+   container, card, list, nav, quiz, quizResult, course, flashcard, plan,
+   tracker, assignment, document, progress, aiBubble, social, alert, skeleton.
+4. `variant` narrows the type (e.g. type=text, variant=heading).
+5. Keep component trees shallow — max 4 levels of nesting.
+6. Use `content` for text/labels, `data` for domain payloads (quiz options, etc.).
+7. `children` are only for layout/container/card/list primitives.
+"""
 
 
 # Module-level singleton
