@@ -372,6 +372,7 @@ USER QUESTION:
                 "description": f"A course about {topic}",
                 "difficulty": "Beginner",
                 "estimated_duration": "2-3 hours",
+                "objectives": [f"Understand {topic}", f"Apply {topic} concepts", f"Master {topic} foundations"],
                 "lessons": [
                     {"title": "Introduction", "description": f"Getting started with {topic}", "type": "reading", "duration": "15 min"},
                     {"title": "Core Concepts", "description": f"Key ideas in {topic}", "type": "reading", "duration": "20 min"},
@@ -379,25 +380,21 @@ USER QUESTION:
                 ]
             }
         
-        prompt = f"""You are the Lyo Course Architect. You must always respond in two parts:
- * A friendly, supportive text explanation.
- * A delimiter: ---a2ui_JSON---
- * A single A2UI JSON object containing the course structure.
-   Constraint: If a quick explanation is enough, the JSON part should be an empty list [].
+        prompt = f"""You are a course architect. Generate a structured learning course for: "{original_request}"
 
-Generate a structured course outline for this request: "{original_request}"
-After the delimiter, return ONLY valid JSON with this exact structure:
+Return ONLY valid JSON, no markdown fences, no explanation:
 {{
     "title": "Course Title",
     "topic": "main topic",
-    "description": "2-sentence description",
+    "description": "2-sentence course description",
     "difficulty": "Beginner|Intermediate|Advanced",
     "estimated_duration": "X hours",
+    "objectives": ["Objective 1", "Objective 2", "Objective 3"],
     "lessons": [
         {{"title": "Lesson Title", "description": "1-sentence description", "type": "reading|exercise|quiz", "duration": "X min"}}
     ]
 }}
-Include 4-6 lessons. Keep descriptions short."""
+Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
         
         try:
             # Use the standard model since Gemini 3.1 excels at dual-output text+JSON in one pass
@@ -415,17 +412,12 @@ Include 4-6 lessons. Keep descriptions short."""
             text = ai_response.get("content", "").strip() if ai_response.get("content") else None
             
             if text:
-                json_part = text
-                if "---a2ui_JSON---" in text:
-                    parts = text.split("---a2ui_JSON---")
-                    friendly_text = parts[0].strip()
-                    context["final_text"] = friendly_text  # Set text for GENERATE_TEXT step
-                    json_part = parts[1].strip()
-                
-                if json_part.startswith("```"):
-                    json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part[3:]
-                    json_part = json_part.rsplit("```", 1)[0]
-                return json.loads(json_part)
+                # Strip markdown fences if the model wraps the JSON anyway
+                stripped = text.strip()
+                if stripped.startswith("```"):
+                    stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped[3:]
+                    stripped = stripped.rsplit("```", 1)[0].strip()
+                return json.loads(stripped)
         except Exception as e:
             logger.error(f"Course data generation failed: {e}", exc_info=True)
         
@@ -437,6 +429,7 @@ Include 4-6 lessons. Keep descriptions short."""
             "description": f"A comprehensive course about {topic}",
             "difficulty": "Beginner",
             "estimated_duration": "2 hours",
+            "objectives": [f"Understand {topic}", f"Apply {topic} concepts", f"Master {topic} foundations"],
             "lessons": [
                 {"title": "Introduction", "description": f"Getting started with {topic}", "type": "reading", "duration": "15 min"},
                 {"title": "Key Concepts", "description": f"Understanding the fundamentals", "type": "reading", "duration": "20 min"},
@@ -528,14 +521,10 @@ Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clea
                 }
             }
 
-        prompt = f"""You are the Lyo Course Architect. You must always respond in two parts:
- * A friendly, supportive text explanation.
- * A delimiter: ---a2ui_JSON---
- * A single A2UI JSON object containing the quiz data.
-   Constraint: If a quick explanation is enough, the JSON part should be an empty list [].
-
+        prompt = f"""You are the Lyo Course Architect. 
 Generate a 3-question quiz about: "{original_request}"
-After the delimiter, return ONLY valid JSON with this exact structure:
+
+Return ONLY valid JSON, no markdown fences, no explanation, with this exact structure:
 {{
     "title": "Quiz title",
     "total_questions": 3,
@@ -565,16 +554,10 @@ Make options plausible but with one clear correct answer. correct_answer is the 
             text = ai_response.get("content", "").strip() if ai_response.get("content") else None
             
             if text:
-                json_part = text
-                if "---a2ui_JSON---" in text:
-                    parts = text.split("---a2ui_JSON---")
-                    friendly_text = parts[0].strip()
-                    context["final_text"] = friendly_text
-                    json_part = parts[1].strip()
-                    
+                json_part = text.strip()
                 if json_part.startswith("```"):
                     json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part[3:]
-                    json_part = json_part.rsplit("```", 1)[0]
+                    json_part = json_part.rsplit("```", 1)[0].strip()
                 return json.loads(json_part)
         except Exception as e:
             logger.error(f"Quiz data generation failed: {e}", exc_info=True)

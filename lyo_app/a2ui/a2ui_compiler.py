@@ -63,15 +63,15 @@ logger = logging.getLogger(__name__)
 # iOS reads component.variant to decide v2 rendering.
 # ══════════════════════════════════════════════════════════════
 
-_PRIM_TEXT = A2UIElementType.TEXT
-_PRIM_CARD = A2UIElementType.CARD
-_PRIM_VSTACK = A2UIElementType.VSTACK
-_PRIM_HSTACK = A2UIElementType.HSTACK
-_PRIM_BUTTON = A2UIElementType.ACTION_BUTTON
-_PRIM_DIVIDER = A2UIElementType.DIVIDER
-_PRIM_SKELETON = A2UIElementType.SKELETON
-_PRIM_QUIZ = A2UIElementType.QUIZ_MCQ
-_PRIM_PROGRESS = A2UIElementType.PROGRESS_BAR
+_PRIM_TEXT = "text"
+_PRIM_CARD = "card"
+_PRIM_VSTACK = "container"
+_PRIM_HSTACK = "container"
+_PRIM_BUTTON = "button"
+_PRIM_DIVIDER = "divider"
+_PRIM_SKELETON = "skeleton"
+_PRIM_QUIZ = "quiz"
+_PRIM_PROGRESS = "progress"
 
 
 class A2UICompiler:
