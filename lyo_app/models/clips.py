@@ -56,6 +56,7 @@ class Clip(Base):
     # Relationships
     user = relationship("User", back_populates="clips")
     likes = relationship("ClipLike", back_populates="clip", cascade="all, delete-orphan")
+    saves = relationship("ClipSave", back_populates="clip", cascade="all, delete-orphan")
     
     def to_dict(self) -> dict:
         """Convert clip to dictionary for API responses."""
@@ -90,7 +91,7 @@ class Clip(Base):
             "likeCount": self.like_count,
             "shareCount": self.share_count,
             "isLiked": False,  # Will be set by the API based on current user
-            "isSaved": False,  # Will be set by the API
+            "isSaved": False,  # Will be set by the API based on current user
             "authorName": author_name,
             "authorAvatarURL": author_avatar,
             "isPublic": self.is_public,
@@ -109,6 +110,20 @@ class ClipLike(Base):
     
     # Relationships
     clip = relationship("Clip", back_populates="likes")
+    user = relationship("User")
+
+
+class ClipSave(Base):
+    """Track which users saved/bookmarked which clips."""
+    __tablename__ = "clip_saves"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    clip_id = Column(Integer, ForeignKey("clips.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    clip = relationship("Clip", back_populates="saves")
     user = relationship("User")
 
 

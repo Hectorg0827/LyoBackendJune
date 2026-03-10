@@ -13,7 +13,7 @@ from sqlalchemy import select, func, desc
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.core.database import get_async_session
-from lyo_app.models.clips import Clip, ClipLike, ClipView
+from lyo_app.models.clips import Clip, ClipLike, ClipView, ClipSave
 
 import logging
 
@@ -233,6 +233,14 @@ async def get_discover_clips(
             like_result = await db.execute(like_query)
             clip_dict["isLiked"] = like_result.scalar() is not None
             
+            # Check if user saved this clip
+            save_query = select(ClipSave).where(
+                ClipSave.clip_id == clip.id,
+                ClipSave.user_id == current_user.id
+            )
+            save_result = await db.execute(save_query)
+            clip_dict["isSaved"] = save_result.scalar() is not None
+            
             clip_dicts.append(clip_dict)
         
         return ClipsListResponse(
@@ -285,6 +293,14 @@ async def get_clip(
         )
         like_result = await db.execute(like_query)
         clip_dict["isLiked"] = like_result.scalar() is not None
+        
+        # Check if user saved this clip
+        save_query = select(ClipSave).where(
+            ClipSave.clip_id == clip.id,
+            ClipSave.user_id == current_user.id
+        )
+        save_result = await db.execute(save_query)
+        clip_dict["isSaved"] = save_result.scalar() is not None
         
         return ClipResponse(
             success=True,
@@ -556,6 +572,123 @@ async def generate_course_from_clip(
         raise
     except Exception as e:
         logger.error(f"Error generating course from clip {clip_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+@router.post("/{clip_id}/save")
+async def toggle_clip_save(
+    clip_id: int,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle save status for a clip."""
+    try:
+        # Check clip exists
+        clip_query = select(Clip).where(Clip.id == clip_id)
+        clip_result = await db.execute(clip_query)
+        clip = clip_result.scalar_one_or_none()
+        
+        if not clip:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clip not found"
+            )
+        
+        # Check if already saved
+        save_query = select(ClipSave).where(
+            ClipSave.clip_id == clip_id,
+            ClipSave.user_id == current_user.id
+        )
+        save_result = await db.execute(save_query)
+        existing_save = save_result.scalar_one_or_none()
+        
+        if existing_save:
+            # Unsave
+            await db.delete(existing_save)
+            is_saved = False
+        else:
+            # Save
+            new_save = ClipSave(clip_id=clip_id, user_id=current_user.id)
+            db.add(new_save)
+            is_saved = True
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "isSaved": is_saved
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error toggling save for clip {clip_id}: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.get("/saved", response_model=ClipsListResponse)
+async def get_saved_clips(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get clips saved by the current user."""
+    try:
+        offset = (page - 1) * per_page
+        
+        # Join with ClipSave
+        query = (
+            select(Clip)
+            .join(ClipSave, Clip.id == ClipSave.clip_id)
+            .where(ClipSave.user_id == current_user.id)
+            .order_by(desc(ClipSave.created_at))
+            .offset(offset)
+            .limit(per_page)
+        )
+        
+        # Count total
+        count_query = select(func.count()).select_from(ClipSave).where(
+            ClipSave.user_id == current_user.id
+        )
+        
+        total_result = await db.execute(count_query)
+        total = total_result.scalar() or 0
+        
+        result = await db.execute(query)
+        clips = result.scalars().all()
+        
+        # Populate isLiked and isSaved (which is always true here)
+        clip_dicts = []
+        for clip in clips:
+            clip_dict = clip.to_dict()
+            clip_dict["isSaved"] = True
+            
+            # Check isLiked
+            like_query = select(ClipLike).where(
+                ClipLike.clip_id == clip.id,
+                ClipLike.user_id == current_user.id
+            )
+            like_result = await db.execute(like_query)
+            clip_dict["isLiked"] = like_result.scalar() is not None
+            
+            clip_dicts.append(clip_dict)
+            
+        return ClipsListResponse(
+            success=True,
+            clips=clip_dicts,
+            total=total,
+            page=page,
+            perPage=per_page
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching saved clips: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)

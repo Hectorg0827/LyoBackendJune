@@ -24,6 +24,18 @@ from lyo_app.a2ui.a2ui_compiler import lyo_response_builder
 
 logger = logging.getLogger(__name__)
 
+import re as _re
+
+def _extract_course_topic(user_text: str) -> str:
+    topic = _re.sub(
+        r"^(create (a )?course (on|about|for)?|make (a )?course (on|about|for)?|"
+        r"build (a )?course (on|about|for)?|teach me( about| on)?|"
+        r"i want (a )?course (on|about)?|course on|course about|"
+        r"give me a course( on)?|a course on)\s*",
+        "", user_text.strip(), flags=_re.IGNORECASE,
+    ).strip()
+    return topic or user_text.strip()
+
 router = APIRouter()
 
 router_agent = MultimodalRouter()
@@ -65,6 +77,31 @@ async def stream_lyo2_chat(
                 
             decision = routing_response.decision
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
+            
+            if decision.intent == Intent.COURSE:
+                _topic = _extract_course_topic(request.text or "")
+                _preview_oc = {
+                    "course": {
+                        "id": str(uuid.uuid4()),
+                        "title": _topic.title() if _topic else "Your Course",
+                        "topic": _topic,
+                        "level": "beginner",
+                        "duration": "~30 min",
+                        "objectives": [
+                            f"Understand the core concepts of {_topic}",
+                            "Apply your knowledge with guided exercises",
+                            "Build skills through structured practice",
+                        ],
+                    }
+                }
+                yield f"data: {json.dumps({'type': 'open_classroom', 'block': {'type': 'OpenClassroomBlock', 'content': {'type': 'OPEN_CLASSROOM', **_preview_oc}}})}\n\n"
+                
+                # v2: emit lyo_command for iOS v2 pipeline
+                cmd = lyo_response_builder.build_command("open_classroom", _preview_oc)
+                lyo_resp = lyo_response_builder.build(command=cmd, request_id=trace_id, conversation_id=trace_id)
+                yield f"data: {json.dumps({'type': 'lyo_command', 'response': lyo_resp})}\n\n"
+                    
+                logger.info(f"🏫 [STREAM][{trace_id}] Fast course preview sent for: '{_topic[:60]}'")
             
             if decision.needs_clarification and decision.confidence > 0.3:
                 # Only ask for clarification if the router is reasonably confident
@@ -198,12 +235,14 @@ async def stream_lyo2_chat(
                 capabilities=["a2ui_v1"] # Mock manifest
             ):
                 logger.info(f"🧱 [STREAM][{trace_id}] Nexus yielded {json_brick['type']} brick")
-                # Wrap it so the old iOS client doesn't break, or send raw if iOS updated
-                wrapped_block = UIBlock(
-                    type=UIBlockType.A2UI_COMPONENT,
-                    content={"component": json_brick}
+                # v2: emit lyo_ui event with LyoResponse envelope
+                lyo_resp = lyo_response_builder.build(
+                    ui=None,
+                    request_id=trace_id,
+                    conversation_id=trace_id,
                 )
-                yield f"data: {json.dumps({'type': 'a2ui', 'block': wrapped_block.model_dump()})}\n\n"
+                lyo_resp["ui"] = json_brick
+                yield f"data: {json.dumps({'type': 'lyo_ui', 'response': lyo_resp})}\n\n"
             
             if execution_response.artifact_block:
                 # Send agent-tagged artifact event
@@ -229,24 +268,21 @@ async def stream_lyo2_chat(
                 )
                 yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
             
-            # Send A2UI component blocks (rich interactive UI)
-            use_v2 = getattr(settings, "enable_a2ui_v2", False)
+            # Send A2UI component blocks as v2 lyo_ui events
             for a2ui_block in execution_response.a2ui_blocks:
-                logger.info(f"🎨 [STREAM][{trace_id}] Sending a2ui event (v2={use_v2})")
-                yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
-
-                # ── v2: Also emit a lyo_ui event with LyoResponse envelope ──
-                if use_v2:
-                    comp_dict = a2ui_block.content.get("component") if a2ui_block.content else None
-                    if comp_dict:
-                        lyo_resp = lyo_response_builder.build(
-                            ui=None,  # raw dict, not A2UIComponent
-                            request_id=trace_id,
-                            conversation_id=trace_id,
-                        )
-                        # Attach the raw component with variant directly
-                        lyo_resp["ui"] = comp_dict
-                        yield f"data: {json.dumps({'type': 'lyo_ui', 'response': lyo_resp})}\n\n"
+                logger.info(f"🎨 [STREAM][{trace_id}] Sending lyo_ui event")
+                comp_dict = a2ui_block.content.get("component") if a2ui_block.content else None
+                if comp_dict:
+                    lyo_resp = lyo_response_builder.build(
+                        ui=None,
+                        request_id=trace_id,
+                        conversation_id=trace_id,
+                    )
+                    lyo_resp["ui"] = comp_dict
+                    yield f"data: {json.dumps({'type': 'lyo_ui', 'response': lyo_resp})}\n\n"
+                else:
+                    # Fallback: emit raw block for blocks without component dict
+                    yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
             
             # Send open_classroom payload (course creation trigger)
             # Safety net: if the COURSE pipeline ran but produce_course() returned
@@ -294,45 +330,32 @@ async def stream_lyo2_chat(
                 )
 
             if execution_response.open_classroom_payload:
-                logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
-                oc_block = {
-                    "type": "OpenClassroomBlock",
-                    "content": {
-                        "type": "OPEN_CLASSROOM",
-                        **execution_response.open_classroom_payload
-                    }
-                }
-                yield f"data: {json.dumps({'type': 'open_classroom', 'block': oc_block})}\n\n"
-
-                # ── v2: Also emit lyo_command event ──
-                if use_v2:
-                    cmd = lyo_response_builder.build_command(
-                        "open_classroom",
-                        execution_response.open_classroom_payload
-                    )
-                    lyo_resp = lyo_response_builder.build(
-                        command=cmd,
-                        request_id=trace_id,
-                        conversation_id=trace_id,
-                    )
-                    yield f"data: {json.dumps({'type': 'lyo_command', 'response': lyo_resp})}\n\n"
+                logger.info(f"🏫 [STREAM][{trace_id}] Sending lyo_command (open_classroom)")
+                # v2: emit lyo_command event only
+                cmd = lyo_response_builder.build_command(
+                    "open_classroom",
+                    execution_response.open_classroom_payload
+                )
+                lyo_resp = lyo_response_builder.build(
+                    command=cmd,
+                    request_id=trace_id,
+                    conversation_id=trace_id,
+                )
+                yield f"data: {json.dumps({'type': 'lyo_command', 'response': lyo_resp})}\n\n"
                 
-            yield f"data: {json.dumps({'type': 'actions', 'blocks': [b.model_dump() for b in execution_response.next_actions]})}\n\n"
-
-            # ── v2: Also emit lyo_suggestions event ──
-            if use_v2:
-                v2_suggestions = []
-                for action_block in execution_response.next_actions:
-                    if action_block.content and "actions" in action_block.content:
-                        for label in action_block.content["actions"]:
-                            v2_suggestions.append({"text": label})
-                if v2_suggestions:
-                    lyo_resp = lyo_response_builder.build(
-                        suggestions=v2_suggestions,
-                        request_id=trace_id,
-                        conversation_id=trace_id,
-                    )
-                    yield f"data: {json.dumps({'type': 'lyo_suggestions', 'response': lyo_resp})}\n\n"
+            # v2: emit lyo_suggestions event only
+            v2_suggestions = []
+            for action_block in execution_response.next_actions:
+                if action_block.content and "actions" in action_block.content:
+                    for label in action_block.content["actions"]:
+                        v2_suggestions.append({"text": label})
+            if v2_suggestions:
+                lyo_resp = lyo_response_builder.build(
+                    suggestions=v2_suggestions,
+                    request_id=trace_id,
+                    conversation_id=trace_id,
+                )
+                yield f"data: {json.dumps({'type': 'lyo_suggestions', 'response': lyo_resp})}\n\n"
             
             # Completion signal
             yield "data: [DONE]\n\n"
