@@ -149,3 +149,23 @@ class SpacedRepetitionSchedule(Base):
     
     # Relationships
     # learner = relationship("LearnerState", back_populates="repetition_schedules")
+from pgvector.sqlalchemy import Vector
+
+class MemoryInsight(Base):
+    """Discrete user insights for long-term RAG retrieval"""
+    __tablename__ = "memory_insights"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    
+    category = Column(String(50), index=True)  # learning_style, struggle_point, etc.
+    insight_text = Column(Text, nullable=False)
+    embedding = Column(Vector(768))  # Gemini-embedding-001 dimension
+    
+    confidence = Column(Float, default=1.0)
+    source_session_id = Column(String(100), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    def __repr__(self) -> str:
+        return f"<MemoryInsight(id={self.id}, user_id={self.user_id}, category='{self.category}')>"

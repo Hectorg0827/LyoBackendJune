@@ -257,11 +257,12 @@ class TaskInput(BaseModel):
     input_artifacts: List[Artifact] = Field(default_factory=list)
     
     # Contextual data for trigger-based agents
-    context: Optional[str] = Field(None, description="Event context or trigger details")
+    context: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Event context or trigger details")
     
     # Context identification
     user_id: Optional[str] = None
     session_id: Optional[str] = None
+    attachment_ids: List[str] = Field(default_factory=list)  # IDs of uploaded files (GCS/Firebase)
     language: str = Field(default="en")
     
     # Configuration
@@ -523,6 +524,7 @@ class A2ACourseRequest(BaseModel):
     # User context
     user_id: Optional[str] = None
     user_context: Optional[Dict[str, Any]] = Field(default=None, description="User preferences and context")
+    attachment_ids: List[str] = Field(default_factory=list)
     language: str = Field(default="en")
     
     # Limits

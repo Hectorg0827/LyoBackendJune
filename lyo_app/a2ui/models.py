@@ -348,6 +348,63 @@ class A2UIComponent(BaseModel):
             return self.model_dump(by_alias=False, exclude_none=True, mode="json")
         return self.dict(by_alias=False, exclude_none=True)
 
+    def to_v2_dict(self) -> dict:
+        """
+        Convert to v2 LyoUIComponent format (content/style instead of props).
+        Used for emitting lyo_ui SSE events.
+        """
+        v1 = self.to_dict()
+        props = v1.get("props", {})
+        
+        # Build v2 structure
+        v2 = {
+            "id": v1.get("id"),
+            "type": v1.get("type"),
+            "variant": v1.get("variant"),
+        }
+        
+        # Map props -> content
+        content = {}
+        for k in ["text", "title", "subtitle", "body", "label", "placeholder", "hint", "icon", "image_url", "video_url"]:
+            if k in props:
+                # Video/Audio URL special mapping
+                if k == "video_url":
+                    content["media_url"] = props[k]
+                else:
+                    content[k] = props[k]
+        if content:
+            v2["content"] = content
+            
+        # Map props -> style
+        style = {}
+        style_map = {
+            "foreground_color": "foreground",
+            "background_color": "background",
+            "spacing": "spacing",
+            "borderRadius": "radius",
+            "font_size": "font_size",
+            "font_weight": "font_weight",
+            "alignment": "alignment",
+            "opacity": "opacity"
+        }
+        for v1_k, v2_k in style_map.items():
+            if v1_k in props:
+                style[v2_k] = props[v1_k]
+        if style:
+            v2["style"] = style
+            
+        # Map children recursively
+        if v1.get("children"):
+            v2["children"] = [child.to_v2_dict() if hasattr(child, "to_v2_dict") else child for child in self.children]
+            
+        # Domain data (the rest of props)
+        known_props = set(list(content.keys()) + list(style_map.keys()) + ["video_url"])
+        data = {k: v for k, v in props.items() if k not in known_props}
+        if data:
+            v2["data"] = data
+            
+        return v2
+
     def to_json(self) -> str:
         """Convert to JSON string for iOS consumption."""
         if hasattr(self, "model_dump_json"):

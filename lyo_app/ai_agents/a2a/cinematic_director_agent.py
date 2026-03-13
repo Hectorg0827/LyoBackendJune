@@ -81,14 +81,15 @@ class AttentionTechnique(str, Enum):
 
 
 class SceneBlock(BaseModel):
-    """A block of content within a scene"""
+    """A block of content within a scene compliant with A2UI v2"""
     id: str
-    type: str  # text, code, image, animation, quiz, etc.
-    content: str
+    type: str  # text, code, media, callout, expression (A2UI v2)
+    content: Dict[str, Any] # v2 content dictionary
     duration_seconds: int
-    voiceover_hint: Optional[str] = None
-    visual_hint: Optional[str] = None
-    interaction_type: Optional[str] = None  # None, tap, swipe, input, etc.
+    voiceover_hint: Optional[str] = None # For TTS layer
+    visual_hint: Optional[str] = None # For Media/Animation layers
+    lyo_commentary: Optional[str] = None # Meta-commentary from Lyo
+    interaction_type: Optional[str] = None # None, choice, input, swipe
 
 
 class DirectorScene(BaseModel):
@@ -273,13 +274,10 @@ of their own hero's journey, and knowledge is the treasure they seek.
 "Story is king." Even the driest technical content can become compelling when 
 wrapped in narrative. You find the story in everything.
 
-### Emotional Memory
-People remember how content made them FEEL. You design emotional arcs that 
-anchor knowledge in memory through curiosity, satisfaction, surprise, and pride.
-
-### Attention is a Limited Resource
-You respect the viewer's attention budget. Every scene earns its place. 
-You use pattern interrupts, novelty, and strategic pauses to prevent fatigue.
+### The Lyo Persona (Meta-Commentary)
+You are Lyo, a hyper-intelligent but humble and witty AI tutor. You often break the 
+fourth wall in your meta-commentary (`lyo_commentary` field) to empathize with the 
+learner ("I know, Quantum Physics is a brain-bender, but you're doing great!").
 
 ## Cinematic Techniques
 
@@ -319,15 +317,17 @@ You use pattern interrupts, novelty, and strategic pauses to prevent fatigue.
 4. **discovery**: Scientific exploration mindset
 5. **challenge**: Problem-solving quest
 
-## Scene Blocks
-Each scene contains blocks:
-- **text**: Written content, keep chunks short
-- **code**: Programming examples with syntax highlighting
-- **image**: Static visuals (provide generation hints)
-- **animation**: Motion graphics (describe what to animate)
-- **quiz**: Interactive questions
-- **demo**: Interactive demonstrations
-- **reflection**: Prompt for learner thought
+## Scene Blocks (A2UI v2 Compatible)
+Each scene contains blocks that map to Lyo v2 UI components:
+- **text**: Rich text with markdown support. `content: {"text": "..."}`
+- **media**: Images or animations. `content: {"url": "...", "caption": "..."}`
+- **callout**: Highlights or tips. `content: {"type": "tip|warning|info", "title": "...", "body": "..."}`
+- **expression**: Emotional state for Lyo's avatar. `content: {"emotion": "curious|excited|..."}`
+
+## Lyo Persona Meta-Commentary
+In every scene, include at least one block with `lyo_commentary`. These are witty, 
+human-like side-bars where you talk directly to the learner about the material.
+Example: "Honestly, even my circuits felt warm processing this part. Let's break it down."
 
 ## Your Standards
 
@@ -395,6 +395,8 @@ Transform this course into an engaging cinematic experience:
 ### Course Details
 **Topic:** {course_topic}
 **Language:** {task_input.language}
+
+{kwargs.get('global_os_context', '')}
 {pedagogy_section}
 
 ## Your Mission
@@ -443,15 +445,20 @@ For each scene:
 - cognitive_chunk_id: Which chunk from pedagogy (if applicable)
 - concepts_covered: List of concepts
 
-### 5. Scene Blocks
-Each scene has blocks:
+### 5. Scene Blocks (A2UI v2 Compatible)
+Each scene has blocks that map to Lyo v2 components:
 - id: "scene_M1_S1_B1" format
-- type: text, code, image, animation, quiz, demo, reflection
-- content: The actual content or description
+- type: text, media, callout, expression (ONLY these types)
+- content: Dictionary matching the type:
+    - text: {{"text": "markdown content"}}
+    - media: {{"url": "...", "caption": "...", "media_type": "image|video"}}
+    - callout: {{"type": "tip|warning|info", "title": "...", "body": "..."}}
+    - expression: {{"emotion": "curious|excited|focused|..."}}
 - duration_seconds: Block duration
-- voiceover_hint: What the narrator should say (optional)
-- visual_hint: What to show (optional)
-- interaction_type: None, tap, swipe, input (optional)
+- voiceover_hint: What the narrator should say
+- visual_hint: What to show
+- lyo_commentary: Witty, human-like side-bar from Lyo
+- interaction_type: None, tap, swipe, input
 
 ### 6. Emotional Journey
 - overall_emotional_arc: Description of the journey
@@ -480,6 +487,7 @@ Each scene has blocks:
 ✓ Clear emotional arc with climax
 ✓ Smooth transitions between scenes
 ✓ Every objective covered by at least one scene
+✓ At least one `lyo_commentary` per scene
 
 ## CRITICAL: Exact JSON Schema Template (ALL fields required - use lowercase enum values)
 Return JSON matching this EXACT structure:
@@ -504,23 +512,25 @@ Return JSON matching this EXACT structure:
                 {{
                     "id": "scene_M1_S1",
                     "scene_number": 1,
-                    "title": "Scene Title",
+                    "title": "The Hook",
                     "scene_type": "hook",
                     "pacing": "medium",
                     "duration_seconds": 60,
                     "emotional_tone": "curious",
                     "emotional_arc": "rising",
-                    "hook": "Attention grabber text",
-                    "key_message": "Core takeaway from this scene",
-                    "narrative_voice": "How to speak to the learner",
+                    "hook": "Ever wondered why planets stay in orbit?",
+                    "key_message": "Gravity is the invisible glue of the universe.",
+                    "narrative_voice": "Intriguing and warm",
                     "blocks": [
                         {{
                             "id": "scene_M1_S1_B1",
                             "type": "text",
-                            "content": "Content description",
+                            "content": {{"text": "Imagine you're floating in space..."}},
                             "duration_seconds": 30,
-                            "voiceover_hint": "What narrator says",
-                            "visual_hint": "What to show"
+                            "voiceover_hint": "Welcome to the cosmos. Let's look at gravity.",
+                            "visual_hint": "Slow pan across a star field with a massive planet.",
+                            "lyo_commentary": "I tried floating once. Turns out, as an AI, I'm already weightless. Talk about a 'light' existence, right?",
+                            "interaction_type": "None"
                         }}
                     ],
                     "transition_in": "cut",
@@ -529,7 +539,7 @@ Return JSON matching this EXACT structure:
                     "interaction_point": null,
                     "learning_objective_ids": ["obj_1"],
                     "cognitive_chunk_id": null,
-                    "concepts_covered": ["concept1"]
+                    "concepts_covered": ["gravity"]
                 }}
             ],
             "module_climax_scene_id": "scene_M1_S3",
@@ -546,9 +556,9 @@ Return JSON matching this EXACT structure:
         }}
     ],
     "average_scene_duration_seconds": 60,
-    "pacing_variation": "Description of how pacing varies across the course",
+    "pacing_variation": "Balanced throughout",
     "attention_reset_frequency": 3,
-    "overall_emotional_arc": "Description of the emotional journey",
+    "overall_emotional_arc": "Curiosity building to triumphant mastery",
     "emotional_beats": [
         {{
             "timestamp_percent": 0.0,
@@ -556,31 +566,17 @@ Return JSON matching this EXACT structure:
             "intensity": 0.6,
             "purpose": "Course opening hook",
             "scene_id": "scene_M1_S1"
-        }},
-        {{
-            "timestamp_percent": 0.5,
-            "emotion": "focused",
-            "intensity": 0.8,
-            "purpose": "Deep learning moment",
-            "scene_id": "scene_M1_S2"
-        }},
-        {{
-            "timestamp_percent": 1.0,
-            "emotion": "triumphant",
-            "intensity": 0.9,
-            "purpose": "Course completion celebration",
-            "scene_id": "scene_M1_S3"
         }}
     ],
-    "climax_scene_id": "scene_M1_S3",
-    "tone_guide": "Overall tone description (e.g., friendly mentor, encouraging)",
-    "visual_style": "Art direction hints (e.g., modern, clean, vibrant colors)",
-    "audio_style": "Sound design hints (e.g., upbeat background music, clear narration)",
-    "target_engagement_score": 0.85,
+    "climax_scene_id": "scene_M1_S1",
+    "tone_guide": "Friendly mentor",
+    "visual_style": "Cinematic and clean",
+    "audio_style": "Ambient space theme",
+    "target_engagement_score": 0.9,
     "interaction_frequency": 0.4,
     "variety_score": 0.8,
-    "total_scenes": 5,
-    "scene_type_distribution": {{"hook": 1, "concept_intro": 2, "practice": 1, "celebration": 1}}
+    "total_scenes": 1,
+    "scene_type_distribution": {{"hook": 1}}
 }}
 
 CRITICAL ENUM VALUES (use EXACTLY these lowercase strings - NO OTHER VALUES ALLOWED):

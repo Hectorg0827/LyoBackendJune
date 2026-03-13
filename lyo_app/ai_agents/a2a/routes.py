@@ -103,7 +103,22 @@ AGENT_CARD = {
             "description": "Socratic-style tutoring",
             "inputModes": ["text"],
             "outputModes": ["text"]
+        },
+        {
+            "id": "researcher",
+            "name": "Researcher",
+            "description": "Deep-dive discovery and fact-gathering",
+            "inputModes": ["text"],
+            "outputModes": ["application/json"]
         }
+    ],
+    "agents": [
+        {"name": "researcher", "role": "Knowledge Scout"},
+        {"name": "pedagogy", "role": "Learning Designer"},
+        {"name": "cinematic_director", "role": "Content Director"},
+        {"name": "visual_director", "role": "Visual Designer"},
+        {"name": "voice_agent", "role": "Voice Specialist"},
+        {"name": "qa_checker", "role": "Quality Guardian"}
     ]
 }
 

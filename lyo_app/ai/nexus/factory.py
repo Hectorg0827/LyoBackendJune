@@ -37,9 +37,9 @@ class LyoNexusFactory:
         return {
             "id": brick_id,
             "parent_id": parent_id,
-            "type": "Text",
+            "type": "text",
             "order": order,
-            "content": text
+            "content": {"text": text}
         }
 
     def create_media_placeholder(
@@ -60,10 +60,11 @@ class LyoNexusFactory:
         return {
             "id": brick_id,
             "parent_id": parent_id,
-            "type": "Image",
+            "type": "media",
+            "variant": "image",
             "status": "loading",
             "order": order,
-            "query": query, # Metadata for debugging
+            "content": {"placeholder": query}, # Metadata for debugging
             "url": None
         }
 
@@ -78,4 +79,24 @@ class LyoNexusFactory:
         return {
             "update_id": brick_id,
             **update_payload
+        }
+
+    def create_emotion_brick(
+        self,
+        emotion: str,
+        capabilities: List[str],
+        parent_id: str,
+        order: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Creates an Emotion brick to sync vocal and visual affect.
+        """
+        brick_id = f"emo_{uuid.uuid4().hex[:8]}"
+        
+        return {
+            "id": brick_id,
+            "parent_id": parent_id,
+            "type": "emotion",
+            "order": order,
+            "content": {"text": emotion}
         }

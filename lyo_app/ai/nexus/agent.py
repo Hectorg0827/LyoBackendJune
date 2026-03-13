@@ -25,10 +25,12 @@ class LyoNexusAgent:
         # 1. Double newlines (paragraphs)
         # 2. Markdown headers (sections)
         # 3. Media tags: <media_req: something>
+        # 4. Emotion markers: [WARM], [EXCITED], etc.
         self._boundary_pattern = re.compile(
-            r'(\n\n|^#+ |<media_req:[^>]+>)'
+            r'(\n\n|^#+ |<media_req:[^>]+>|\[[A-Z_]+\])'
         )
         self._media_tag_pattern = re.compile(r'<media_req:\s*([^>]+)>')
+        self._emotion_pattern = re.compile(r'^\[([A-Z_]+)\]$')
 
     async def process_stream(
         self, 
@@ -86,8 +88,6 @@ class LyoNexusAgent:
                         if placeholder_brick:
                             yield placeholder_brick
                             
-                            # 2. Dispatch background generation worker
-                            update_id = placeholder_brick.get("id")
                             asyncio.create_task(
                                 self.media_worker.dispatch_media_generation(
                                     query=media_query,
@@ -95,6 +95,22 @@ class LyoNexusAgent:
                                     media_type="image" # Defaulting for now
                                 )
                             )
+                
+                # Handle the boundary itself if it's an emotion marker
+                if boundary_text.startswith("[") and boundary_text.endswith("]"):
+                    emotion_match = self._emotion_pattern.search(boundary_text)
+                    if emotion_match:
+                        emotion_key = emotion_match.group(1).lower()
+                        chunk_index += 1
+                        
+                        emotion_brick = self.factory.create_emotion_brick(
+                            emotion=emotion_key,
+                            capabilities=capabilities,
+                            parent_id=parent_id,
+                            order=chunk_index
+                        )
+                        if emotion_brick:
+                            yield emotion_brick
                 
                 # Empty the processed portion from the tank
                 self._buffer = self._buffer[boundary_end:]

@@ -21,6 +21,8 @@ from lyo_app.ai.nexus.media_worker import LyoNexusMediaWorker
 from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 from lyo_app.core.config import settings
 from lyo_app.a2ui.a2ui_compiler import lyo_response_builder
+from lyo_app.services.proactive_engagement import proactive_engagement_service
+from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -60,22 +62,70 @@ async def stream_lyo2_chat(
         start_time = time.time()
         
         try:
-            # 1. Send initial skeleton blocks immediately
-            logger.info(f"📡 [STREAM][{trace_id}] Sending skeleton event")
-            yield f"data: {json.dumps({'type': 'skeleton', 'blocks': ['answer', 'artifact']})}\n\n"
+            collected_bricks = []
+            
+            skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
+            collected_bricks.append(skeleton_brick)
+            yield f"data: {json.dumps(skeleton_brick)}\n\n"
             await asyncio.sleep(0.01) # Yield to event loop
+            
+            # 2. Performance & Cache Layer (New for Phase 17)
+            # Ensure optimizer is ready
+            await ai_performance_optimizer.initialize()
+            
+            # Optimize request based on system load
+            opt_data = await ai_performance_optimizer.optimize_request(
+                agent_type=request.forced_intent.value if request.forced_intent else "general",
+                request_data=request.model_dump()
+            )
+            
+            # Check for cached full response (Skip remaining layers if hit)
+            cache_key = opt_data.get("cache_key")
+            cached_full_resp = await ai_performance_optimizer.cache_manager.get("full_response", key=cache_key)
+            if cached_full_resp:
+                logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
+                for brick in cached_full_resp:
+                    yield f"data: {json.dumps(brick)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            # Apply optimized config (e.g. reduced tokens if memory is high)
+            opt_config = opt_data.get("processing_config", {})
             
             # 2. Layer A: Routing
             logger.info(f"🔍 [STREAM][{trace_id}] Starting Routing...")
             r_start = time.time()
-            try:
-                routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
-            except asyncio.TimeoutError:
-                logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Routing phase timed out'})}\n\n"
-                return
+            
+            if request.forced_intent:
+                logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
+                decision = RouterDecision(
+                    intent=request.forced_intent,
+                    confidence=1.0,
+                    needs_clarification=False,
+                    suggested_tier="MEDIUM"
+                )
+            else:
+                try:
+                    # 2b. Fetch Proactive Nudges (New for Phase 16)
+                    proactive_context = ""
+                    try:
+                        nudges = await proactive_engagement_service.get_pending_nudges_for_user(current_user.id, db)
+                        if nudges:
+                            proactive_context = "\n**Proactive System Nudges (Incorporate these into your greeting if relevant):**\n"
+                            for n in nudges:
+                                proactive_context += f"- [{n.nudge_type}] {n.title}: {n.message}\n"
+                            # Append to request text for the router/planner/executor to see
+                            request.text = f"[Proactive Context: {proactive_context}]\n" + (request.text or "")
+                    except Exception as ne:
+                        logger.warning(f"Failed to fetch proactive nudges: {ne}")
+
+                    routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
+                    decision = routing_response.decision
+                except asyncio.TimeoutError:
+                    logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
+                    return
                 
-            decision = routing_response.decision
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
             
             if decision.intent == Intent.COURSE:
@@ -99,7 +149,9 @@ async def stream_lyo2_chat(
                 # v2: emit lyo_command for iOS v2 pipeline
                 cmd = lyo_response_builder.build_command("open_classroom", _preview_oc)
                 lyo_resp = lyo_response_builder.build(command=cmd, request_id=trace_id, conversation_id=trace_id)
-                yield f"data: {json.dumps({'type': 'lyo_command', 'response': lyo_resp})}\n\n"
+                brick_data = {"type": "lyo_command", "response": lyo_resp}
+                collected_bricks.append(brick_data)
+                yield f"data: {json.dumps(brick_data)}\n\n"
                     
                 logger.info(f"🏫 [STREAM][{trace_id}] Fast course preview sent for: '{_topic[:60]}'")
             
@@ -132,7 +184,7 @@ async def stream_lyo2_chat(
                 plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=35.0)
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 35s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Planning phase timed out'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                 return
             
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
@@ -197,7 +249,7 @@ async def stream_lyo2_chat(
                 )
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Execution timed out after 60s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Execution phase timed out'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                 return
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
@@ -229,20 +281,32 @@ async def stream_lyo2_chat(
             # Get the text we want to pipe
             raw_llm_text = execution_response.answer_block.content.get("text", "")
             
+            # Optimize final response text (Phase 17)
+            raw_llm_text = await ai_performance_optimizer.optimize_response(
+                agent_type=decision.intent.value,
+                response=raw_llm_text,
+                context={
+                    "user_id": current_user.id,
+                    "intent": decision.intent.value,
+                    "current_mood": "neutral" # To be integrated with AffectState
+                }
+            )
+            
             # Process via Nexus
             async for json_brick in nexus_agent.process_stream(
                 text_stream=mock_llm_stream(raw_llm_text),
                 capabilities=["a2ui_v1"] # Mock manifest
             ):
                 logger.info(f"🧱 [STREAM][{trace_id}] Nexus yielded {json_brick['type']} brick")
-                # v2: emit lyo_ui event with LyoResponse envelope
                 lyo_resp = lyo_response_builder.build(
                     ui=None,
                     request_id=trace_id,
                     conversation_id=trace_id,
                 )
                 lyo_resp["ui"] = json_brick
-                yield f"data: {json.dumps({'type': 'lyo_ui', 'response': lyo_resp})}\n\n"
+                brick_data = {"type": "lyo_ui", "response": lyo_resp}
+                collected_bricks.append(brick_data)
+                yield f"data: {json.dumps(brick_data)}\n\n"
             
             if execution_response.artifact_block:
                 # Send agent-tagged artifact event
@@ -341,7 +405,9 @@ async def stream_lyo2_chat(
                     request_id=trace_id,
                     conversation_id=trace_id,
                 )
-                yield f"data: {json.dumps({'type': 'lyo_command', 'response': lyo_resp})}\n\n"
+                brick_data = {"type": "lyo_command", "response": lyo_resp}
+                collected_bricks.append(brick_data)
+                yield f"data: {json.dumps(brick_data)}\n\n"
                 
             # v2: emit lyo_suggestions event only
             v2_suggestions = []
@@ -355,8 +421,23 @@ async def stream_lyo2_chat(
                     request_id=trace_id,
                     conversation_id=trace_id,
                 )
-                yield f"data: {json.dumps({'type': 'lyo_suggestions', 'response': lyo_resp})}\n\n"
+                brick_data = {"type": "lyo_suggestions", "response": lyo_resp}
+                collected_bricks.append(brick_data)
+                yield f"data: {json.dumps(brick_data)}\n\n"
             
+            # --- Cache the full response (Phase 17) ---
+            if 'cache_key' in locals() and cache_key and collected_bricks:
+                try:
+                    await ai_performance_optimizer.cache_manager.set(
+                        "full_response", 
+                        key=cache_key, 
+                        value=collected_bricks,
+                        expire=3600 * 12 # Cache for 12 hours
+                    )
+                    logger.info(f"💾 [STREAM][{trace_id}] Persisted full response to cache.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Cache save failed: {e}")
+
             # Completion signal
             yield "data: [DONE]\n\n"
             logger.info(f"🏁 [STREAM][{trace_id}] Total session time: {time.time()-start_time:.2f}s")

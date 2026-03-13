@@ -535,7 +535,8 @@ class LyoResponseBuilder:
         if message is not None:
             response["message"] = message
         if ui is not None:
-            response["ui"] = ui.to_dict()
+            # Shift to v2 format for LyoResponse envelopes
+            response["ui"] = ui.to_v2_dict() if hasattr(ui, "to_v2_dict") else ui.to_dict()
         if command is not None:
             response["command"] = command
         if suggestions is not None:
