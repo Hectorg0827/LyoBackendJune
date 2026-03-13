@@ -494,6 +494,80 @@ async def chat(
 Be conversational, helpful, and educational. Use emojis sparingly for warmth.
 Format responses with markdown for readability. Keep responses concise but informative.
 
+### SMART BLOCKS CAPABILITIES
+When appropriate, use the following interactive blocks to enhance learning.
+ALWAYS use the `:::block_type` syntax. Do NOT use these blocks inside code fences.
+
+1. QUIZ (Check understanding)
+:::quiz
+question: [The question]
+options: [Option A], [Option B], [Option C], [Option D]
+answer: [The exact text of the correct option]
+explanation: [Brief explanation of why it's correct]
+:::
+
+2. FLASHCARD (Define terms or concepts)
+:::flashcard
+front: [Term or question]
+back: [Definition or answer]
+:::
+
+3. FLASHCARD SET (Multiple flashcards)
+:::flashcard_set
+title: [Set Title]
+cards:
+- front: [Term 1]
+  back: [Def 1]
+- front: [Term 2]
+  back: [Def 2]
+:::
+
+4. PROGRESS (Show lesson progress)
+:::progress
+completed: [Number]
+total: [Number]
+label: [Context label, e.g., 'Chapter 1 Progress']
+:::
+
+5. SUMMARY (Key takeaways)
+:::summary
+title: [Title]
+points: [Point 1], [Point 2], [Point 3]
+:::
+
+6. IMAGE (Visualize concepts)
+:::image
+query: [Search query for the image]
+caption: [Description of what the image shows]
+:::
+
+7. CINEMATIC HOOK (Narrative Intro & Hype)
+:::cinematic_hook
+title: [Title]
+hook: [A compelling one-sentence narrative hook]
+visual_description: [Cinematic visual description]
+cta: [Call to Action, e.g., 'EXPLORE NOW']
+:::
+
+8. TEST PREP (Exam Setup & Information Collection)
+:::test_prep
+topic: [Exam Topic]
+courses: ["Course A", "Course B"]
+date: [ISO8601 Date or null]
+description: [Short description of the exam]
+:::
+
+9. STUDY PLAN (Structured Reminders & Sessions)
+:::study_plan
+title: Study Plan for [Topic]
+exam_date: [ISO8601 Date]
+sessions:
+- title: [Session Title]
+  desc: [Description]
+  duration: [Minutes]
+  date: [ISO8601 Date]
+:::
+
 When a user asks to create a course, briefly confirm the topic and ask about their preferred level (beginner/intermediate/advanced) if you don't know it yet.
 
 {profile_context}
@@ -518,6 +592,15 @@ When a user asks to create a course, briefly confirm the topic and ask about the
 
         if not response_text:
             raise ValueError("Empty response from AI")
+
+        # ============================================================
+        # PROACTIVE ENGAGEMENT: Scan for Study Plans/Lessons
+        # ============================================================
+        try:
+            from lyo_app.services.proactive_dispatcher import proactive_dispatcher
+            proactive_dispatcher.extract_and_schedule_from_text(current_user.id, response_text)
+        except Exception as e:
+            logger.error(f"Proactive dispatcher failed: {e}")
 
         # ============================================================
         # A2UI: Wrap ALL responses in A2UIComponent for rich rendering

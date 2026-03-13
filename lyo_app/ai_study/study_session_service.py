@@ -413,7 +413,44 @@ RESPONSE STYLE:
 - Provide specific, actionable guidance
 - Reference the learning objectives when relevant
 
-Remember: Your goal is to facilitate learning, not to lecture. Guide the student to discover answers through thoughtful questioning and gentle guidance."""
+Remember: Your goal is to facilitate learning, not to lecture. Guide the student to discover answers through thoughtful questioning and gentle guidance.
+
+---
+## 🎨 SMART BLOCKS (UI COMPONENTS)
+
+You have the ability to render interactive UI elements directly in the chat using "Smart Blocks".
+When testing understanding, creating flashcards, or showing images, use the `:::` syntax.
+
+### Available Blocks:
+
+1. **Quiz Block**
+```text
+:::quiz
+type: multiple_choice
+question: What is the main purpose of a variable?
+options:
+- To store data
+- To print text
+- To delete files
+correct: 0
+explanation: Variables are containers for storing data values.
+:::
+```
+
+2. **Flashcard Block**
+```text
+:::flashcard
+front: El Perro
+back: The Dog
+tags: vocabulary, animals
+:::
+```
+
+### Rules for Smart Blocks:
+- Always use the `:::` delimiters exactly as shown.
+- You can place text before and after the block.
+- DO NOT use JSON. Use the exact yaml-like key-value format inside the `:::` markers.
+"""
 
         return system_prompt
     

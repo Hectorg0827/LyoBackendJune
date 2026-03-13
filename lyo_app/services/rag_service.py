@@ -1,8 +1,9 @@
 import logging
 from typing import List, Dict, Any, Optional
-from sqlalchemy import select, or_, text
+from sqlalchemy import select, or_, text, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.learning.models import Course, Lesson
+from lyo_app.personalization.models import MemoryInsight
 from lyo_app.core.database import get_db_session
 from lyo_app.services.embedding_service import embedding_service
 
@@ -122,3 +123,54 @@ class RAGService:
             
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
+
+    async def retrieve_user_memory(self, user_id: int, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Retrieves relevant personal insights for a user using vector search.
+        """
+        if not self._db:
+            session = await get_db_session()
+            async with session:
+                return await self._execute_user_memory_search(session, user_id, query, limit)
+        else:
+            return await self._execute_user_memory_search(self._db, user_id, query, limit)
+
+    async def _execute_user_memory_search(self, db: AsyncSession, user_id: int, query: str, limit: int) -> List[Dict[str, Any]]:
+        try:
+            query_vector = await embedding_service.embed_query(query)
+            if not query_vector:
+                return []
+        except Exception as e:
+            logger.error(f"Failed to generate query embedding for user memory: {e}")
+            return []
+
+        # Check dialect
+        dialect = db.bind.dialect.name if db.bind else db.get_bind().dialect.name
+        if dialect == "sqlite":
+            # Fallback to simple keyword search for SQLite
+            stmt = select(MemoryInsight).where(
+                and_(
+                    MemoryInsight.user_id == user_id,
+                    MemoryInsight.insight_text.ilike(f"%{query}%")
+                )
+            ).limit(limit)
+        else:
+            # Semantic search using pgvector
+            stmt = select(MemoryInsight).where(
+                MemoryInsight.user_id == user_id
+            ).order_by(
+                MemoryInsight.embedding.cosine_distance(query_vector)
+            ).limit(limit)
+
+        result = await db.execute(stmt)
+        insights = result.scalars().all()
+
+        return [
+            {
+                "category": insight.category,
+                "insight": insight.insight_text,
+                "confidence": insight.confidence,
+                "created_at": insight.created_at.isoformat()
+            }
+            for insight in insights
+        ]

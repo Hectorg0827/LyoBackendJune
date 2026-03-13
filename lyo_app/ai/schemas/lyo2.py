@@ -116,7 +116,9 @@ class RouterRequest(BaseModel):
     user_id: str
     text: Optional[str] = None
     media: List[MediaRef] = Field(default_factory=list)
+    attachment_ids: List[str] = Field(default_factory=list)  # Explicit IDs from MediaPickerService
     active_artifact: Optional[ActiveArtifactContext] = None
+    forced_intent: Optional[Intent] = None
     state_summary: Dict[str, Any] = Field(default_factory=dict)  # curated learning state head
     conversation_history: List[ConversationTurn] = Field(
         default_factory=list,
@@ -176,6 +178,8 @@ class UIBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
     type: UIBlockType
     content: Dict[str, Any]
+    title: Optional[str] = None
+    priority: int = 0
     version_id: Optional[str] = None
 
 

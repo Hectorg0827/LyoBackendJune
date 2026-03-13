@@ -99,59 +99,44 @@ def send_push_notification_task(
     data: Optional[Dict[str, Any]] = None
 ):
     """
-    Send push notification to all user devices.
+    Send push notification to all user devices using PushNotificationService.
     """
-    db = get_sync_db()
-    
+    from lyo_app.services.push_notifications import push_service, PushNotification
+    import asyncio
+
+    # Helper to run async in sync Celery (copied from proactive_engagement.py if needed, 
+    # or just use a simple local loop here)
+    def run_async(coro):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
     try:
-        # Get user's active push devices
-        devices = db.query(PushDevice).filter(
-            PushDevice.user_id == uuid.UUID(user_id),
-            PushDevice.active == True
-        ).all()
+        notification = PushNotification(
+            title=title,
+            message=body,
+            data=data
+        )
         
-        if not devices:
-            logger.info(f"No active push devices found for user {user_id}")
-            return
+        # User ID is passed as string from dispatcher, convert to int for service if needed
+        # (Assuming the service expects int based on earlier implementation)
+        try:
+            u_id = int(user_id)
+        except ValueError:
+            # Maybe it's a UUID? Check if we can handle it
+            u_id = str(user_id) 
+
+        sent_count = run_async(push_service.send_to_user(u_id, notification))
         
-        sent_count = 0
-        failed_count = 0
-        
-        for device in devices:
-            try:
-                # For now, just log the notification
-                # In production, use actual APNs/FCM service
-                logger.info(f"Sending push notification to device {device.device_token[:10]}...")
-                
-                if device.platform == "ios":
-                    # Use APNs for iOS
-                    success = True  # Simulate success
-                elif device.platform == "android":
-                    # Use FCM for Android
-                    success = True  # Simulate success
-                else:
-                    success = False
-                
-                if success:
-                    sent_count += 1
-                    device.last_used = datetime.utcnow()
-                else:
-                    failed_count += 1
-                    
-            except Exception as e:
-                logger.error(f"Failed to send notification to device {device.id}: {e}")
-                failed_count += 1
-        
-        db.commit()
-        
-        logger.info(f"Push notifications sent: {sent_count} success, {failed_count} failed")
+        logger.info(f"Task sent {sent_count} notifications to user {user_id}")
+        return {"status": "success", "sent_count": sent_count}
         
     except Exception as e:
         logger.exception(f"Failed to send push notifications for user {user_id}")
-        raise
-    
-    finally:
-        db.close()
+        raise self.retry(exc=e, countdown=60, max_retries=3)
 
 
 @celery_app.task(bind=True)

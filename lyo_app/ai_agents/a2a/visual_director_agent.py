@@ -366,6 +366,10 @@ Always consider:
 "Step-by-step visual of [process], showing [stages], infographic style,
 numbered sequence, clear arrows, [color scheme], professional"
 
+### Cinematic Hook Visual
+"High-impact, cinematic visual for [Topic] hook, showing [Key Narrative Moment], 
+epic composition, dramatic lighting, [Visual Style], [Mood], 4K, concept art style"
+
 ### Technical Diagram
 "Technical diagram of [system], showing [components], blueprint style,
 labeled parts, clean lines, engineering aesthetic"

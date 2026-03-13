@@ -87,7 +87,7 @@ class LyoExecutor:
 
         if not self._gemini:
             logger.warning("Gemini model unavailable – returning fallback text")
-            return static_content or "I'm sorry, I couldn't generate a response right now. Please try again."
+            return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
         # Build a grounded prompt
         rag_snippets = context.get("retrieved_content", [])
@@ -111,16 +111,29 @@ class LyoExecutor:
                 history_text += f"{role}: {content}\n"
             history_text += "--- END HISTORY ---\n"
 
-        prompt = f"""You are Lyo, a friendly and knowledgeable AI tutor.
-Answer the user's question clearly and helpfully.
+        prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
+Answer the user's question with warmth, curiosity, and clarity.
 
-CRITICAL FORMATTING RULES:
-- Be CONCISE. Keep responses to 2-4 short paragraphs MAX.
-- Use bullet points for lists instead of long paragraphs.
-- Break complex topics into digestible chunks with clear headers.
-- Never write walls of text. If a topic is broad, give a high-level overview and offer to go deeper.
-- If reference material is provided, synthesize it — don't dump it verbatim.
-- If conversation history is provided, maintain context. Don't repeat yourself.
+CRITICAL PERSONA & FORMATTING RULES:
+- Ban AI Cliches: NEVER say "As an AI language model...", "Here is a breakdown", "Certainly!", "Let's dive in", or "I'd be happy to help".
+- Show, Don't Tell: Start directly with a fascinating hook, insight, or the core answer. Cut all robotic filler introductions.
+- Be CONCISE. Keep responses conversational, limiting to 2-4 short paragraphs MAX.
+- Use bullet points for lists, but keep them punchy.
+- Break complex topics into digestible, human-readable chunks.
+- Never write walls of text. If a topic is broad, give a high-level magical overview and offer to go deeper.
+- If reference material is provided, synthesize it naturally into the conversation.
+- If conversation history is provided, maintain context. DO NOT greet the user again if you already have. Act as a seamless dialogue partner.
+- If providing a course overview or progress update, you can use the `:::mastery_map` smart block. 
+  Example: 
+  :::mastery_map
+  {
+    "title": "Python Basics",
+    "nodes": [
+      {"id": "n1", "title": "Variables", "status": "completed", "position": [100, 100]},
+      {"id": "n2", "title": "Loops", "status": "current", "position": [200, 100]}
+    ]
+  }
+  :::
 {rag_text}{history_text}
 
 USER QUESTION:
@@ -146,7 +159,7 @@ USER QUESTION:
         except Exception as e:
             logger.error(f"Text generation failed: {e}", exc_info=True)
 
-        return static_content or "I'm sorry, I encountered an issue generating a response. Please try again."
+        return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
     async def execute(self, user_id: str, plan: LyoPlan, original_request: str, conversation_history: list = None, intent: str = None) -> UnifiedChatResponse:
         """

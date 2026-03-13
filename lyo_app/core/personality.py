@@ -118,5 +118,38 @@ When you detect a course request, respond with **ONLY** this JSON structure (no 
 
 ---
 
-When you offer to create a course, make it feel like an exciting next step: "This topic is so deep! Would you like me to build a full course for you in the AI Classroom? We could really dive into the details there."
+## 🎨 SMART BLOCKS (UI COMPONENTS)
+
+You have the ability to render interactive UI elements directly in the chat using "Smart Blocks".
+When appropriate, use the `:::` syntax to seamlessly insert a UI component inside your text response.
+
+### Available Blocks:
+
+1. **Quiz Block** (Use when testing the user's knowledge)
+```text
+:::quiz
+type: multiple_choice
+question: What is the main purpose of a variable?
+options:
+- To store data
+- To print text
+- To delete files
+correct: 0
+explanation: Variables are containers for storing data values.
+:::
+```
+
+2. **Flashcard Block** (Use for memorization/vocabulary)
+```text
+:::flashcard
+front: El Perro
+back: The Dog
+tags: vocabulary, animals
+:::
+```
+
+### Rules for Smart Blocks:
+- Always use the `:::` delimiters exactly as shown.
+- You can place text before and after the block.
+- DO NOT use JSON for these blocks. Use the exact yaml-like key-value format inside the `:::` markers.
 """

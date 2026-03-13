@@ -62,6 +62,8 @@ print("5", flush=True)
 from .visual_director_agent import VisualDirectorAgent, VisualDirectorOutput
 print("6", flush=True)
 from .voice_agent import VoiceAgent, VoiceAgentOutput
+print("6a", flush=True)
+from .researcher_agent import ResearcherAgent, ResearcherOutput
 
 # Orchestrator
 print("7", flush=True)
@@ -111,6 +113,8 @@ __all__ = [
     "VisualDirectorOutput",
     "VoiceAgent",
     "VoiceAgentOutput",
+    "ResearcherAgent",
+    "ResearcherOutput",
     
     # Orchestrator
     "A2AOrchestrator",
