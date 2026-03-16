@@ -267,11 +267,11 @@ class A2ABaseAgent(ABC, Generic[T]):
                     db = kwargs.get("db")
                     user_id_int = int(task_input.user_id)
                     if db:
-                        os_context = await global_context_builder.build_os_context(user_id_int, db)
+                        os_context = await global_context_builder.build_os_context(user_id_int, db, query=task_input.user_message)
                     else:
                         from lyo_app.core.database import AsyncSessionLocal
                         async with AsyncSessionLocal() as session:
-                            os_context = await global_context_builder.build_os_context(user_id_int, session)
+                            os_context = await global_context_builder.build_os_context(user_id_int, session, query=task_input.user_message)
                             
                     kwargs["global_os_context"] = os_context
                 except Exception as e:

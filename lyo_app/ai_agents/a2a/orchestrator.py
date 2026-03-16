@@ -22,6 +22,9 @@ from enum import Enum
 from datetime import datetime
 import json
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .schemas import (
     AgentCard,
@@ -40,6 +43,7 @@ from .cinematic_director_agent import CinematicDirectorAgent, CinematicOutput
 from .qa_checker_agent import QACheckerAgent, QAOutput
 from .visual_director_agent import VisualDirectorAgent, VisualDirectorOutput
 from .voice_agent import VoiceAgent, VoiceAgentOutput
+from .researcher_agent import ResearcherAgent, ResearcherOutput
 
 
 # ============================================================
@@ -49,6 +53,7 @@ from .voice_agent import VoiceAgent, VoiceAgentOutput
 class PipelinePhase(str, Enum):
     """Phases of the A2A course generation pipeline"""
     INITIALIZATION = "initialization"
+    RESEARCH = "research"
     PEDAGOGY = "pedagogy"
     CINEMATIC = "cinematic"
     VISUAL = "visual"
@@ -165,9 +170,11 @@ class A2AOrchestrator:
         self.visual_agent = VisualDirectorAgent()
         self.voice_agent = VoiceAgent()
         self.qa_agent = QACheckerAgent()
+        self.researcher_agent = ResearcherAgent()
         
         # Agent registry
         self._agents = {
+            "researcher": self.researcher_agent,
             "pedagogy": self.pedagogy_agent,
             "cinematic_director": self.cinematic_agent,
             "visual_director": self.visual_agent,
@@ -182,14 +189,19 @@ class A2AOrchestrator:
         # Progress weights for each phase
         self._phase_weights = {
             PipelinePhase.INITIALIZATION: 0.05,
+            PipelinePhase.RESEARCH: 0.10,
             PipelinePhase.PEDAGOGY: 0.15,
-            PipelinePhase.CINEMATIC: 0.25,
+            PipelinePhase.CINEMATIC: 0.20,
             PipelinePhase.VISUAL: 0.15,
             PipelinePhase.VOICE: 0.15,
-            PipelinePhase.QA_CHECK: 0.15,
+            PipelinePhase.QA_CHECK: 0.10,
             PipelinePhase.ASSEMBLY: 0.05,
             PipelinePhase.FINALIZATION: 0.05,
         }
+        
+        # Redis client for state persistence
+        from lyo_app.core.redis_client import redis_client
+        self.redis = redis_client
     
     # ========================
     # PUBLIC API
@@ -315,6 +327,9 @@ class A2AOrchestrator:
         # Phase 1: Initialization
         await self._run_phase(PipelinePhase.INITIALIZATION, self._initialize)
         
+        # Phase 1.5: Research
+        await self._run_phase(PipelinePhase.RESEARCH, self._run_research)
+        
         # Phase 2: Pedagogy
         if self.config.enable_pedagogy:
             await self._run_phase(PipelinePhase.PEDAGOGY, self._run_pedagogy)
@@ -347,11 +362,11 @@ class A2AOrchestrator:
     async def _run_pipeline_streaming(self) -> AsyncGenerator[StreamingEvent, None]:
         """Execute pipeline with streaming events."""
         state = self._current_state
-        
+        # Phases to execute sequentially
         phases = [
             (PipelinePhase.INITIALIZATION, self._initialize, True),
+            (PipelinePhase.RESEARCH, self._run_research, True),
             (PipelinePhase.PEDAGOGY, self._run_pedagogy, self.config.enable_pedagogy),
-            (PipelinePhase.CINEMATIC, self._run_cinematic, self.config.enable_cinematic),
         ]
         
         # Sequential phases first
@@ -359,6 +374,41 @@ class A2AOrchestrator:
             if enabled:
                 async for event in self._run_phase_streaming(phase, executor):
                     yield event
+                    
+        # Cinematic with Quality Gate (Phase 22)
+        if self.config.enable_cinematic:
+            async for event in self._run_phase_streaming(PipelinePhase.CINEMATIC, self._run_cinematic):
+                yield event
+            
+            # Quality Gate for Cinematic
+            if self.config.enable_qa and state.request.quality_tier != "fast":
+                yield StreamingEvent(
+                    type=EventType.PHASE_PROGRESS,
+                    task_id=state.pipeline_id,
+                    phase=PipelinePhase.QA_CHECK.value,
+                    agent_name="qa_checker",
+                    message="Performing quality assurance on cinematic structure..."
+                )
+                
+                qa_result = await self._run_qa_for_phase(PipelinePhase.CINEMATIC)
+                if qa_result.get("approval_status") == "needs_revision":
+                    critical_issues = qa_result.get("issues", [])
+                    feedback_str = "; ".join([i.get("description", "") for i in critical_issues])
+                    
+                    yield StreamingEvent(
+                        type=EventType.PHASE_PROGRESS,
+                        task_id=state.pipeline_id,
+                        phase=PipelinePhase.CINEMATIC.value,
+                        agent_name="orchestrator",
+                        message=f"QA requested revisions: {feedback_str}. Regenerating..."
+                    )
+                    
+                    # Rerun with feedback
+                    async for event in self._run_phase_streaming(
+                        PipelinePhase.CINEMATIC, 
+                        lambda: self._run_cinematic(feedback=feedback_str)
+                    ):
+                        yield event
         
         # Parallel visual + voice
         if self.config.parallel_visual_voice and (self.config.enable_visual or self.config.enable_voice):
@@ -383,6 +433,7 @@ class A2AOrchestrator:
         async for event in self._run_phase_streaming(PipelinePhase.FINALIZATION, self._finalize):
             yield event
         
+        state = self._current_state
         state.final_status = TaskStatus.COMPLETED
     
     async def _run_phase(
@@ -426,6 +477,9 @@ class A2AOrchestrator:
             result.status = PhaseStatus.FAILED
             result.error = str(e)
             raise
+        finally:
+            # Auto-persist state after every phase (success or failure)
+            await self._save_state()
         
         return result
     
@@ -483,6 +537,24 @@ class A2AOrchestrator:
                 data={"duration_ms": result.duration_ms},
                 message=f"Completed {phase.value} in {elapsed:.1f}s"
             )
+
+            # 🌊 NEW: Emit ARTIFACT_CREATED for significant results
+            if result.output and phase in [PipelinePhase.PEDAGOGY, PipelinePhase.CINEMATIC, PipelinePhase.VISUAL, PipelinePhase.VOICE]:
+                artifact_type = self._phase_to_artifact_type(phase)
+                artifact = Artifact(
+                    type=artifact_type,
+                    name=f"{phase.value}_output",
+                    data=result.output,
+                    created_by=agent_name
+                )
+                yield StreamingEvent(
+                    type=EventType.ARTIFACT_CREATED,
+                    task_id=state.pipeline_id,
+                    phase=phase.value,
+                    agent_name=agent_name,
+                    artifact=artifact,
+                    message=f"Generated {artifact_type.value} artifact"
+                )
             
         except Exception as e:
             result.status = PhaseStatus.FAILED
@@ -591,6 +663,32 @@ class A2AOrchestrator:
             "estimated_minutes": estimated_minutes
         }
     
+    async def _run_research(self) -> Dict[str, Any]:
+        """Run research phase."""
+        state = self._current_state
+        
+        task_input = TaskInput(
+            task_id=f"{state.pipeline_id}_research",
+            requesting_agent="orchestrator",
+            user_message=state.request.topic,
+            attachment_ids=state.request.attachment_ids,
+            context={
+                "user_level": state.request.difficulty,
+                "language": state.request.language
+            }
+        )
+        
+        output = await self.researcher_agent.execute(task_input)
+        
+        # Record handoff
+        self._record_handoff(
+            from_agent="orchestrator",
+            to_agent="researcher",
+            artifact_type=ArtifactType.JSON_DATA
+        )
+        
+        return output.dict() if hasattr(output, 'dict') else output
+    
     async def _run_pedagogy(self) -> Dict[str, Any]:
         """Run pedagogy analysis phase."""
         state = self._current_state
@@ -616,7 +714,7 @@ class A2AOrchestrator:
         
         return output.dict() if hasattr(output, 'dict') else output
     
-    async def _run_cinematic(self) -> Dict[str, Any]:
+    async def _run_cinematic(self, feedback: Optional[str] = None) -> Dict[str, Any]:
         """Run cinematic direction phase."""
         state = self._current_state
         
@@ -644,7 +742,8 @@ class A2AOrchestrator:
         
         output = await self.cinematic_agent.execute(
             task_input,
-            pedagogy_output=pedagogy_output
+            pedagogy_output=pedagogy_output,
+            feedback=feedback
         )
         
         self._record_handoff(
@@ -768,6 +867,65 @@ class A2AOrchestrator:
         )
         
         return output.dict() if hasattr(output, 'dict') else output
+
+    async def _run_qa_for_phase(self, phase: PipelinePhase) -> Dict[str, Any]:
+        """Run QA specifically for a single phase output."""
+        state = self._current_state
+        phase_output = state.phase_results.get(phase.value).output if state.phase_results.get(phase.value) else None
+        
+        if not phase_output:
+            return {"approval_status": "approved", "issues": []}
+            
+        task_input = TaskInput(
+            task_id=f"{state.pipeline_id}_qa_{phase.value}",
+            requesting_agent="orchestrator",
+            user_message=state.request.topic,
+            context={"quality_tier": state.request.quality_tier}
+        )
+        
+        output = await self.qa_agent.execute(
+            task_input,
+            content_to_review={phase.value: phase_output}
+        )
+        
+        return output.dict() if hasattr(output, 'dict') else output
+
+    # ========================
+    # PERSISTENCE & RECOVERY (Phase 17)
+    # ========================
+
+    async def _save_state(self) -> None:
+        """Persist current pipeline state to Redis for resilience."""
+        if not self._current_state:
+            return
+            
+        try:
+            key = f"a2a:pipeline:{self._current_state.pipeline_id}"
+            # Use Pydantic model_dump for clean JSON serialization
+            state_data = self._current_state.model_dump(mode='json')
+            await self.redis.set(key, state_data, expire=3600 * 24) # 24h retention
+            logger.info(f"💾 [ORCHESTRATOR] Persisted state for {self._current_state.pipeline_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to persist pipeline state: {e}")
+
+    async def resume_pipeline(self, pipeline_id: str) -> bool:
+        """Attempt to resume a pipeline from persisted state."""
+        try:
+            key = f"a2a:pipeline:{pipeline_id}"
+            data = await self.redis.get(key)
+            if not data:
+                logger.error(f"❌ No state found for pipeline {pipeline_id}")
+                return False
+                
+            self._current_state = PipelineState(**data)
+            logger.info(f"🔄 [ORCHESTRATOR] Resumed pipeline {pipeline_id} at {self._current_state.current_phase}")
+            
+            # Continue execution from the current phase (Simplified view)
+            # In a full impl, we'd skip completed phases in _run_pipeline()
+            return True
+        except Exception as e:
+            logger.error(f"💥 Failed to resume pipeline {pipeline_id}: {e}")
+            return False
     
     async def _assemble(self) -> Dict[str, Any]:
         """Assemble all artifacts into final course."""

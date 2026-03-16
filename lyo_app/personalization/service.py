@@ -298,7 +298,22 @@ class PersonalizationEngine:
         try:
             # Import inside function to avoid circular dependencies
             from lyo_app.chat.models import ChatConversation, ChatMessage
+            from lyo_app.services.rag_service import RAGService
             from sqlalchemy.orm import load_only
+
+            # 1. Retrieval Augmented Personalization (New for Phase 14)
+            rag = RAGService(db)
+            # Use current_skill or learner_id as query for relevance
+            memory_query = current_skill if current_skill else "user learning profile"
+            relevant_insights = await rag.retrieve_user_memory(user_id=user_id, query=memory_query, limit=5)
+            
+            if relevant_insights:
+                parts.append("Relevant Context from Past Interactions:")
+                for insight in relevant_insights:
+                    parts.append(f"- [{insight['category']}] {insight['insight']}")
+
+            # 2. Chat Continuity
+            # Query conversations with only needed columns
 
             # Query conversations with only needed columns
             conv_result = await db.execute(
@@ -341,6 +356,10 @@ class PersonalizationEngine:
                 parts.append("Recent sessions:")
                 parts.extend(session_lines)
         except Exception as e:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
             logger.debug(f"Skipping chat continuity context: {e}")
 
         return "\n".join(parts).strip()

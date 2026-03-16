@@ -374,17 +374,44 @@ class AIResilienceManager:
         # Separate system messages from chat history
         for msg in messages:
             if msg["role"] == "system":
-                system_parts.append(msg["content"])
+                # Handle system message content which should be strings
+                if isinstance(msg["content"], str):
+                    system_parts.append(msg["content"])
+                elif isinstance(msg["content"], list):
+                    for item in msg["content"]:
+                        if item.get("type") == "text":
+                            system_parts.append(item["text"])
             else:
                 # Map 'user' to 'user' and everything else (assistant/model) to 'model'
                 role = "user" if msg["role"] == "user" else "model"
-                part = {"text": msg["content"]}
+                message_parts = []
+                
+                if isinstance(msg["content"], list):
+                    for item in msg["content"]:
+                        if item.get("type") == "text":
+                            message_parts.append({"text": item["text"]})
+                        elif item.get("type") == "image_uri":
+                            message_parts.append({
+                                "fileData": {
+                                    "mimeType": item.get("mime_type", "image/jpeg"),
+                                    "fileUri": item["uri"]
+                                }
+                            })
+                        elif item.get("type") == "image_base64":
+                            message_parts.append({
+                                "inlineData": {
+                                    "mimeType": item.get("mime_type", "image/jpeg"),
+                                    "data": item["data"]
+                                }
+                            })
+                else:
+                    message_parts.append({"text": str(msg["content"])})
                 
                 # Merge consecutive messages of same role (Gemini requirement)
                 if contents and contents[-1]["role"] == role:
-                    contents[-1]["parts"].append(part)
+                    contents[-1]["parts"].extend(message_parts)
                 else:
-                    contents.append({"role": role, "parts": [part]})
+                    contents.append({"role": role, "parts": message_parts})
                     
         payload = {
             "contents": contents,

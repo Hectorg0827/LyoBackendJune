@@ -1,5 +1,5 @@
 """
-Performance Caching System for A2UI and AI Classroom
+Performance Caching System for AI Classroom
 Implements Redis-based caching with lazy loading and performance optimizations
 """
 import redis
@@ -138,7 +138,6 @@ class CacheKeys:
     INTENT_DETECTION = "intent_detection"
     TOPIC_EXTRACTION = "topic_extraction"
     COURSE_GENERATION = "course_generation"
-    A2UI_COMPONENT = "a2ui_component"
 
 def cache_result(key_prefix: str, ttl: int = None, use_args: bool = True):
     """Decorator for caching function results"""

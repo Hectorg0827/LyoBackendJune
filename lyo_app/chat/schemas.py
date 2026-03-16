@@ -172,11 +172,11 @@ class StudyPlanResponse(BaseModel):
     sessions: List[StudySession]
     ctas: List[CTAItem] = Field(default_factory=list)
 # =============================================================================
-# A2UI OPEN_CLASSROOM SCHEMAS
+# OPEN_CLASSROOM SCHEMAS
 # =============================================================================
 
 class OpenClassroomCourse(BaseModel):
-    """Course data for OPEN_CLASSROOM A2UI payload"""
+    """Course data for OPEN_CLASSROOM payload"""
     id: Optional[str] = Field(None, description="Course ID")
     title: str = Field(..., description="Course title")
     topic: str = Field(..., description="Course topic")
@@ -187,82 +187,8 @@ class OpenClassroomCourse(BaseModel):
 
 
 class OpenClassroomPayload(BaseModel):
-    """Payload for OPEN_CLASSROOM A2UI command - triggers classroom navigation in iOS"""
+    """Payload for OPEN_CLASSROOM command - triggers classroom navigation in iOS"""
     course: OpenClassroomCourse
-
-
-# =============================================================================
-# MULTIMODAL GENERATIVE UI BLOCKS (A2UI PROTOCOL)
-# =============================================================================
-
-class A2UIMapBlock(BaseModel):
-    lat: float
-    lng: float
-    title: str
-    subtitle: Optional[str] = None
-
-class A2UIImageBlock(BaseModel):
-    url: str
-    alt_text: Optional[str] = None
-    aspect_ratio: Optional[float] = None
-
-class A2UIChartDataPoint(BaseModel):
-    label: str
-    value: float
-
-class A2UIChartBlock(BaseModel):
-    type: str = Field(description="bar or line")
-    data: List[A2UIChartDataPoint]
-    title: Optional[str] = None
-
-class A2UICodeBlock(BaseModel):
-    code: str
-    language: str
-
-class A2UIInteractiveCardBlock(BaseModel):
-    title: str
-    content: str
-    action_label: str
-    
-class A2UIFlashcardBlock(BaseModel):
-    front_text: str
-    back_text: str
-
-class A2UIMediaBlock(BaseModel):
-    url: str
-    media_type: str = Field(description="audio or video")
-
-class A2UIRichTextBlock(BaseModel):
-    markdown_content: str
-
-class A2UIFallbackBlock(BaseModel):
-    error_message: str
-    raw_data: Optional[str] = None
-
-class A2UISkeletonLoaderBlock(BaseModel):
-    expected_type: str
-
-class A2UIActionGroupBlock(BaseModel):
-    actions: List[Dict[str, str]]
-
-class A2UICarouselBlock(BaseModel):
-    items: List[Dict[str, Any]] # Nested blocks (List of A2UIBlockPayloads ideally, but kept flexible)
-
-class A2UIBlockPayload(BaseModel):
-    """Wrapper payload for any Generative UI Block type"""
-    type: str = Field(..., description="MAP_BLOCK, IMAGE_BLOCK, CHART_BLOCK, CODE_BLOCK, INTERACTIVE_CARD_BLOCK, FLASHCARD_BLOCK, MEDIA_BLOCK, RICH_TEXT_BLOCK, FALLBACK_BLOCK, SKELETON_LOADER_BLOCK, ACTION_GROUP_BLOCK, CAROUSEL_BLOCK")
-    map_data: Optional[A2UIMapBlock] = None
-    image_data: Optional[A2UIImageBlock] = None
-    chart_data: Optional[A2UIChartBlock] = None
-    code_data: Optional[A2UICodeBlock] = None
-    interactive_card_data: Optional[A2UIInteractiveCardBlock] = None
-    flashcard_data: Optional[A2UIFlashcardBlock] = None
-    media_data: Optional[A2UIMediaBlock] = None
-    rich_text_data: Optional[A2UIRichTextBlock] = None
-    fallback_data: Optional[A2UIFallbackBlock] = None
-    skeleton_loader_data: Optional[A2UISkeletonLoaderBlock] = None
-    action_group_data: Optional[A2UIActionGroupBlock] = None
-    carousel_data: Optional[A2UICarouselBlock] = None
 
 
 class ChatResponse(BaseModel):
@@ -293,7 +219,7 @@ class ChatResponse(BaseModel):
         None, serialization_alias="studyPlan", description="Study plan data when mode is 'test_prep'"
     )
     content_types: Optional[List[Dict[str, Any]]] = Field(
-        None, serialization_alias="contentTypes", description="A2UI content widgets"
+        None, serialization_alias="contentTypes", description="Content type widgets"
     )
     
     # Lyo Protocol Support (The Future)
@@ -301,15 +227,14 @@ class ChatResponse(BaseModel):
         None, serialization_alias="lyoBlocks", description="Lyo Protocol Blocks"
     )
 
-    # Full A2UI Component Support
+    # UI Component Support
     ui_component: Optional[Dict[str, Any]] = Field(
-        None, serialization_alias="uiComponent", description="Complete A2UI component tree"
+        None, serialization_alias="uiComponent", description="UI component tree"
     )
 
-    # A2UI Command fields (for OPEN_CLASSROOM, etc.)
-    type: Optional[str] = Field(None, description="A2UI action type (e.g., 'OPEN_CLASSROOM', 'MAP_BLOCK', etc)")
-    payload: Optional[OpenClassroomPayload] = Field(None, description="A2UI payload for classroom navigation")
-    block_payload: Optional[A2UIBlockPayload] = Field(None, description="A2UI generative block payload")
+    # Command fields (for OPEN_CLASSROOM, etc.)
+    type: Optional[str] = Field(None, description="Action type (e.g., 'OPEN_CLASSROOM', 'MAP_BLOCK', etc)")
+    payload: Optional[OpenClassroomPayload] = Field(None, description="Payload for classroom navigation")
     
     # Updated history
     conversation_history: List[ConversationHistoryItem] = Field(

@@ -17,6 +17,7 @@ class Intent(str, Enum):
     QUIZ = "QUIZ"
     FLASHCARDS = "FLASHCARDS"
     STUDY_PLAN = "STUDY_PLAN"
+    TEST_PREP = "TEST_PREP"
     SUMMARIZE_NOTES = "SUMMARIZE_NOTES"
     SCHEDULE_REMINDERS = "SCHEDULE_REMINDERS"
     COMMUNITY = "COMMUNITY"
@@ -115,7 +116,9 @@ class RouterRequest(BaseModel):
     user_id: str
     text: Optional[str] = None
     media: List[MediaRef] = Field(default_factory=list)
+    attachment_ids: List[str] = Field(default_factory=list)  # Explicit IDs from MediaPickerService
     active_artifact: Optional[ActiveArtifactContext] = None
+    forced_intent: Optional[Intent] = None
     state_summary: Dict[str, Any] = Field(default_factory=dict)  # curated learning state head
     conversation_history: List[ConversationTurn] = Field(
         default_factory=list,
@@ -139,7 +142,6 @@ class ActionType(str, Enum):
     SEARCH_WEB = "SEARCH_WEB"
     GENERATE_TEXT = "GENERATE_TEXT"
     GENERATE_AUDIO = "GENERATE_AUDIO"
-    GENERATE_A2UI = "GENERATE_A2UI"
 
 
 class PlannedAction(BaseModel):
@@ -168,13 +170,14 @@ class UIBlockType(str, Enum):
     CTA_ROW = "CTARow"
     SKELETON = "Skeleton"
     OPEN_CLASSROOM = "OpenClassroomBlock"
-    A2UI_COMPONENT = "A2UIComponent"
 
 
 class UIBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
     type: UIBlockType
     content: Dict[str, Any]
+    title: Optional[str] = None
+    priority: int = 0
     version_id: Optional[str] = None
 
 
@@ -183,7 +186,6 @@ class UnifiedChatResponse(BaseModel):
     answer_block: UIBlock  # TutorMessage
     artifact_block: Optional[UIBlock] = None
     next_actions: List[UIBlock] = Field(default_factory=list)  # CTA Row
-    a2ui_blocks: List[UIBlock] = Field(default_factory=list)  # A2UI component blocks
     open_classroom_payload: Optional[Dict[str, Any]] = None  # Course creation trigger
     audio_summary_url: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)

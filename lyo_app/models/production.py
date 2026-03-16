@@ -5,7 +5,7 @@ from lyo_app.core.database import Base
 from lyo_app.models.enhanced import (
     Course, Lesson, ContentItem as CourseItem, Task, 
     PushDevice, GamificationProfile as UserProfile,
-    CourseStatus, TaskState, ContentType
+    CourseStatus, TaskState, ContentType, PushPlatform
 )
 from lyo_app.gamification.models import Badge
 from lyo_app.feeds.models import FeedItem, FeedItemType
@@ -16,5 +16,6 @@ from lyo_app.auth.models import User
 __all__ = [
     "Base", "User", "Course", "Lesson", "CourseItem", "Task", 
     "PushDevice", "UserProfile", "Badge", "FeedItem",
-    "CourseStatus", "TaskState", "ContentType", "FeedItemType"
+    "CourseStatus", "TaskState", "ContentType", "FeedItemType",
+    "PushPlatform"
 ]

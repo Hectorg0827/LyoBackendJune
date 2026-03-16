@@ -285,6 +285,8 @@ Analyze and design the pedagogical foundation for this course:
 **Language:** {task_input.language}
 {context_section}
 
+{kwargs.get('global_os_context', '')}
+
 ## Your Task
 
 Create a comprehensive pedagogical analysis including:

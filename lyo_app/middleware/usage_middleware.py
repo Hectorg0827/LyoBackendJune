@@ -61,4 +61,19 @@ class UsageMiddleware(BaseHTTPMiddleware):
                 )
             )
             
+            # Phase 2: Report to Unified Analytics
+            from lyo_app.services.analytics_service import analytics_service
+            asyncio.create_task(
+                analytics_service.track_system_event(
+                    event_name="api_request",
+                    properties={
+                        "endpoint": request.url.path,
+                        "method": request.method,
+                        "status": response.status_code,
+                        "latency_ms": duration_ms
+                    },
+                    user_id=user_id
+                )
+            )
+            
         return response

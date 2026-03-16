@@ -285,6 +285,46 @@ class CalendarIntegrationService:
 
             return events
 
+    async def add_google_event(
+        self,
+        connection: 'CalendarConnection',
+        title: str,
+        start_time: datetime,
+        end_time: datetime,
+        description: str = "",
+        color_id: str = "9" # Blueish color for study
+    ) -> Optional[str]:
+        """
+        Create a new event in Google Calendar.
+        Returns the event ID if successful.
+        """
+        if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
+            connection = await self.refresh_google_token(connection)
+            
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://www.googleapis.com/calendar/v3/calendars/{connection.calendar_id}/events",
+                headers={"Authorization": f"Bearer {connection.access_token}"},
+                json={
+                    "summary": title,
+                    "description": description,
+                    "colorId": color_id,
+                    "start": {
+                        "dateTime": start_time.isoformat() + "Z"
+                    },
+                    "end": {
+                        "dateTime": end_time.isoformat() + "Z"
+                    }
+                }
+            )
+
+            if response.status_code not in (200, 201):
+                logger.error(f"Failed to create Google Calendar event: {response.text}")
+                return None
+                
+            data = response.json()
+            return data.get("id")
+
     def _parse_google_event(self, item: Dict[str, Any]) -> Optional[CalendarEvent]:
         """
         Parse a Google Calendar event into our format.

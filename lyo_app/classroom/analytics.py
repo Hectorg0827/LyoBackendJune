@@ -30,42 +30,22 @@ class LyoAnalyticsEvent(BaseModel):
     
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+from lyo_app.services.analytics_service import analytics_service
+
 @router.post("/event")
-async def track_analytics_event(event: LyoAnalyticsEvent, db: AsyncSession = Depends(get_db)):
+async def track_analytics_event(event: LyoAnalyticsEvent):
     """
     Ingest a telemetry event from the iOS app.
-    Inserts directly into the `classroom_interactions` table.
+    Uses the unified AnalyticsService for persistence and dispatching.
     """
-    try:
-        # 1. Log for immediate terminal visibility
-        log_msg = f"[ANALYTICS] {event.event_type.upper()} | Card: {event.card_id}"
-        
-        if event.event_type == "card_viewed":
-            log_msg += f" | Duration: {event.duration_seconds}s"
-        elif event.event_type == "quiz_answered":
-            log_msg += f" | Correct: {event.is_correct}"
-        elif event.event_type == "reflection_submitted":
-            log_msg += f" | Words: {event.word_count}"
-            
-        logger.info(log_msg)
-        
-        # 2. Persist to Database
-        # Note: In a fully authenticated session, we'd lookup `ClassroomSession` using a known session_id or user.
-        # For Sprint 5 tracking, we simply insert the core metrics.
-        interaction = ClassroomInteraction(
-            event_type=event.event_type,
-            card_id=event.card_id,
-            topic=event.topic,
-            duration_seconds=event.duration_seconds,
-            is_correct=event.is_correct,
-            word_count=event.word_count
-        )
-        
-        db.add(interaction)
-        await db.commit()
-        
-        return {"status": "success", "message": "Event logged seamlessly."}
-        
-    except Exception as e:
-        logger.error(f"Error logging analytics event: {e}")
-        raise HTTPException(status_code=500, detail="Failed to log analytics event")
+    # Simply delegate to the service
+    await analytics_service.track_interaction(
+        event_type=event.event_type,
+        card_id=event.card_id,
+        topic=event.topic,
+        duration_seconds=event.duration_seconds,
+        is_correct=event.is_correct,
+        word_count=event.word_count
+    )
+    
+    return {"status": "success", "message": "Event received and buffered for processing."}

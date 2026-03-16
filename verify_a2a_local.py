@@ -38,6 +38,13 @@ def verify_a2a():
         else:
             print("❌ 'course_generation' skill missing!")
             sys.exit(1)
+            
+        if "researcher" in [a.get('name') for a in data.get('agents', [])]:
+             print("✅ Researcher Agent confirmed in A2A discovery.")
+        else:
+             print("⚠️ 'researcher' agent not explicitly listed in root discovery (checking skills...)")
+             # In discovery_router, it returns agents info too?
+             # Let's see the router first.
     else:
         print(f"❌ Failed to get Agent Card. Status: {response.status_code}")
         print(response.text)

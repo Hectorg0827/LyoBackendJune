@@ -42,6 +42,7 @@ from lyo_app.core.database import get_async_session as get_db, AsyncSessionLocal
 from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
 from lyo_app.core.context_engine import ContextEngine
 from lyo_app.personalization.soft_skills import SoftSkillsService, SoftSkillAnalyzer
+from lyo_app.services.analytics_service import analytics_service
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,13 @@ async def upgrade_course_in_background(
                 existing_course.entry_node_id = all_nodes[0].id
             
             await db.commit()
+            
+            # Track success
+            await analytics_service.track_system_event(
+                "course_generation_success",
+                {"course_id": course_id, "topic": topic, "node_count": len(all_nodes)},
+                user_id=int(creator_id) if creator_id.isdigit() else None
+            )
             
             logger.info(f"✅ Background upgrade COMPLETE for {course_id}: {len(all_nodes)} nodes created")
         
@@ -784,6 +792,14 @@ async def classroom_chat(
                 user_context_dict=user_context_dict
             )
             
+            # Track event
+            background_tasks.add_task(
+                analytics_service.track_system_event,
+                "course_generation_started",
+                {"topic": topic, "level": "beginner", "instant": True},
+                user_id=current_user.id if isinstance(current_user.id, int) else None
+            )
+
             # Construct immediate response payload
             payload = {
                 "course": {
@@ -1043,142 +1059,6 @@ async def continue_learning(session_id: str):
         actions=response.actions,
         metadata=response.metadata
     )
-
-
-@router.get("/lesson/{lesson_id}/ui")
-async def get_lesson_ui(
-    lesson_id: str,
-    current_user: User = Depends(get_current_user_or_guest),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get A2UI component tree for a lesson.
-    
-    Returns server-driven UI that the iOS A2UIRenderer can render.
-    Uses the ClassroomA2UIGenerator to convert lesson content into
-    a rich component tree with hero banner, progress, parsed content, 
-    quiz sections, and navigation.
-    """
-    try:
-        from lyo_app.ai_classroom.graph_service import get_graph_service
-        from lyo_app.a2ui.classroom_generator import classroom_a2ui_generator
-    except ImportError as e:
-        logger.error(f"❌ Missing dependency for lesson UI: {e}")
-        raise HTTPException(status_code=503, detail=f"Lesson UI service unavailable: missing dependency")
-    
-    # Early validation: lesson_id must be a valid UUID (non-UUID IDs like
-    # "intro_1" are local placeholders from the iOS instant-course generator
-    # and don't exist in the database — querying PostgreSQL with them
-    # triggers a DataError before we can return a helpful 404).
-    import uuid as _uuid
-    try:
-        _uuid.UUID(lesson_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Lesson '{lesson_id}' is a local placeholder, not a server-side lesson. "
-                "Wait for the backend course generation to complete, then use the "
-                "UUID-based lesson IDs from the generated course."
-            )
-        )
-
-    try:
-        graph_service = get_graph_service(db)
-        
-        # Get the learning node
-        node = await graph_service.get_node(lesson_id)
-    except Exception as e:
-        err_name = type(e).__name__
-        logger.error(f"❌ Database error fetching lesson node '{lesson_id}': {err_name}: {e}")
-        # Distinguish between schema-missing and other DB errors
-        if "relation" in str(e).lower() or "table" in str(e).lower() or err_name == "ProgrammingError":
-            raise HTTPException(
-                status_code=503,
-                detail="Database unavailable or learning_nodes table missing. Run migrations first."
-            )
-        raise HTTPException(
-            status_code=503,
-            detail=f"Database error: {err_name}"
-        )
-
-    if not node:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Lesson node '{lesson_id}' not found. "
-                "The course may still be generating — try again in a few seconds, "
-                "or fetch the course's node list first via /api/v1/classroom/courses/{{course_id}}."
-            )
-        )
-    
-    try:
-        # Get course context for progress info
-        course = await graph_service.get_course_with_graph(node.course_id) if node.course_id else None
-        
-        # Extract content from node
-        content = node.content or {}
-        lesson_title = content.get("title") or content.get("narration", "")[:80] or f"Lesson {node.sequence_order + 1}"
-        lesson_content = content.get("narration", "") or content.get("text", "") or content.get("body", "")
-        module_title = course.title if course else "Course"
-        
-        # Calculate lesson position
-        total_lessons = len(course.nodes) if course else 1
-        lesson_number = node.sequence_order + 1
-        
-        # Extract quiz data from interaction nodes
-        quiz_data = None
-        if node.node_type in ("interaction", "INTERACTION"):
-            options = content.get("options", [])
-            if options:
-                # Find correct answer index
-                correct_index = 0
-                for i, opt in enumerate(options):
-                    if isinstance(opt, dict) and opt.get("is_correct"):
-                        correct_index = i
-                        break
-                    elif content.get("correct_answer") == (opt if isinstance(opt, str) else opt.get("text", "")):
-                        correct_index = i
-                        break
-                
-                quiz_data = {
-                    "question": content.get("prompt", content.get("question", "Check your understanding")),
-                    "options": [
-                        (opt if isinstance(opt, str) else opt.get("text", f"Option {i+1}"))
-                        for i, opt in enumerate(options)
-                    ],
-                    "correct_index": correct_index,
-                    "explanation": content.get("correct_feedback", content.get("explanation", ""))
-                }
-        
-        # Generate A2UI component tree
-        a2ui_component = classroom_a2ui_generator.generate_lesson_ui(
-            lesson_title=lesson_title,
-            lesson_content=lesson_content,
-            module_title=module_title,
-            lesson_number=lesson_number,
-            total_lessons=total_lessons,
-            has_next=(lesson_number < total_lessons),
-            has_previous=(lesson_number > 1),
-            quiz_data=quiz_data
-        )
-        
-        return {
-            "lessonId": lesson_id,
-            "a2ui": a2ui_component.to_dict(),
-            "metadata": {
-                "estimatedDuration": node.estimated_seconds,
-                "difficulty": course.difficulty if course else "intermediate",
-                "nodeType": node.node_type,
-                "courseId": node.course_id,
-                "courseTitle": course.title if course else None
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error building lesson UI for '{lesson_id}': {type(e).__name__}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to build lesson UI: {type(e).__name__}: {e}")
 
 
 @router.get("/suggestions")

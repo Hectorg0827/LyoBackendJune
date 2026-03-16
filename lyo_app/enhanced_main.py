@@ -559,13 +559,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Tenant routes not available: {e}")
 
-    # A2UI Server-Driven UI Routes
+
+    # Notebook & Highlighting Feature
     try:
-        from lyo_app.api.v1.a2ui_routes import router as a2ui_router
-        app.include_router(a2ui_router, prefix="/api/v1")
-        logger.info("✅ A2UI routes integrated - Server-driven UI for iOS active!")
+        from lyo_app.api.v1.notebook import router as notebook_router
+        app.include_router(notebook_router, prefix="/api/v1/notebook", tags=["notebook"])
+        logger.info("✅ Notebook routes integrated - Persistent highlights and notes active!")
     except ImportError as e:
-        logger.warning(f"A2UI routes not available: {e}")
+        logger.warning(f"Notebook routes not available: {e}")
 
     # ── Self-Evolution OS: Ambient Presence ──
     try:

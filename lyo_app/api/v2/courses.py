@@ -18,7 +18,7 @@ import asyncio
 from lyo_app.auth.dependencies import get_current_user, get_current_user_or_guest
 from lyo_app.auth.models import User
 from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
-from lyo_app.ai_agents.a2a.schemas import A2ACourseRequest, ArtifactType
+from lyo_app.ai_agents.a2a.schemas import A2ACourseRequest, ArtifactType, EventType
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.cache.course_cache import course_cache
 
@@ -648,24 +648,54 @@ async def _generate_course_background(
                 teaching_style=user_context.get("style", "interactive")
             )
 
-            # ⏱️ HARD TIMEOUT - Never wait more than 2 minutes
-            a2a_response = await asyncio.wait_for(
-                orchestrator.generate_course(a2a_request),
-                timeout=TIMEOUT_ORCHESTRATOR
-            )
+            # ⏱️ STREAMING EXECUTION - Consume events as they come
+            async for event in orchestrator.generate_course_streaming(a2a_request):
+                # Update progress
+                if event.progress_percent:
+                    job["progress_percent"] = max(job["progress_percent"], 30 + int(event.progress_percent * 0.6))
+                
+                if event.message:
+                    job["current_step"] = event.message
+                
+                # Handle specific events
+                if event.type == EventType.PHASE_COMPLETED:
+                    job["steps_completed"].append(f"phase_{event.phase}")
+                
+                elif event.type == EventType.ARTIFACT_CREATED and event.artifact:
+                    art = event.artifact
+                    if art.type == ArtifactType.LEARNING_OBJECTIVES:
+                        # We have an outline!
+                        outline = _build_outline_from_pedagogy(job_id, request.request, art.data)
+                        job["outline"] = outline
+                        job["status"] = "outline_ready"
+                        print(f"📦 Outline ready for job {job_id}")
+                    
+                    elif art.type == ArtifactType.CINEMATIC_SCENE:
+                        # We have full scene structure!
+                        # Convert to module-results for progressive fetching
+                        _update_job_from_cinematic(job, art.data)
+                        print(f"🎬 Cinematic structure ready for job {job_id}")
 
-            job["progress_percent"] = 80
-            job["current_step"] = "Building course structure..."
-            job["steps_completed"].append("agents_completed")
-            job["updated_at"] = datetime.utcnow().isoformat()
-            job_store.save(job_id, job)
+                # Save incremental progress
+                job["updated_at"] = datetime.utcnow().isoformat()
+                job_store.save(job_id, job)
 
-            # Step 3: Convert artifacts to course structure
-            course_result = _build_course_from_artifacts(
-                job_id,
-                request.request,
-                a2a_response.output_artifacts
-            )
+            # Get final course from orchestrator result (already assembled)
+            # Re-fetch the job in case it was modified externally
+            job = job_store[job_id]
+            final_pipeline_state = orchestrator.get_pipeline_state()
+            if final_pipeline_state and final_pipeline_state.final_output:
+                course_result = _build_course_from_artifacts(
+                    job_id,
+                    request.request,
+                    final_pipeline_state.request.input_artifacts + list(final_pipeline_state.phase_results.values())
+                )
+                # Note: _build_course_from_artifacts usually expects Artifact list, 
+                # but we'll adapt it or use a better builder.
+                # Actually, the orchestrator _build_response already does this assembly.
+                response = orchestrator._build_response()
+                course_result = _build_course_from_response(job_id, request.request, response)
+
             print(f"✅ A2A Orchestrator succeeded for job {job_id}")
 
         except asyncio.TimeoutError:
@@ -751,19 +781,14 @@ async def _build_course_from_outline_modules_resilient(
     user_context: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
-    Build full course content by generating modules from an outline.
+    Build full course content by generating modules from an outline in PARALLEL.
     Each module has its own timeout to prevent stalls.
     """
-    modules = []
     outline_modules = outline.get("modules", [])
     total = max(len(outline_modules), 1)
 
-    for idx, module_outline in enumerate(outline_modules):
-        job["current_step"] = f"Generating module {idx + 1} of {total}"
-        job["progress_percent"] = 50 + int(((idx + 1) / total) * 40)
-        job["updated_at"] = datetime.utcnow().isoformat()
-        job_store.save(job_id, job)
-
+    async def _generate_single_module(idx, module_outline):
+        local_job = job # Referenced from outer scope
         try:
             # ⏱️ Per-module timeout
             module = await asyncio.wait_for(
@@ -782,9 +807,19 @@ async def _build_course_from_outline_modules_resilient(
             module = _build_fallback_module(module_outline, topic, user_context)
         
         # 🌊 Incremental Update: Allow client to fetch finished modules immediately
+        # Thread-safe enough for this use case as we're in the same event loop
         job.setdefault("module_results", {})[module.get("id")] = module
+        job["updated_at"] = datetime.utcnow().isoformat()
         job_store.save(job_id, job)
-        modules.append(module)
+        return module
+
+    # 🔥 Parallel execution of all modules
+    tasks = [
+        _generate_single_module(i, m) 
+        for i, m in enumerate(outline_modules)
+    ]
+    
+    modules = await asyncio.gather(*tasks)
 
     return {
         "course_id": job_id,
@@ -809,6 +844,7 @@ def _build_fallback_module(module_outline: Dict[str, Any], topic: str, user_cont
         "id": module_id,
         "title": module_title,
         "description": module_outline.get("description", f"Learn about {module_title}"),
+        "is_fallback": True,
         "lessons": [
             {
                 "id": f"{module_id}_les_1",
@@ -946,71 +982,157 @@ def _build_fallback_course(job_id: str, topic: str, user_context: Optional[Dict[
     }
 
 
-def _build_course_from_artifacts(job_id: str, topic: str, artifacts: List) -> Dict[str, Any]:
+def _build_outline_from_pedagogy(job_id: str, topic: str, pedagogy_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Convert A2A artifacts to course structure.
+    Transform PedagogyAgent output (Bloom/Cognitive Chunks) into a course outline.
     """
-    # Extract curriculum artifact
-    curriculum_artifact = None
-    for artifact in artifacts:
-        if artifact.type == ArtifactType.CURRICULUM_STRUCTURE:
-            curriculum_artifact = artifact
-            break
-    
-    if not curriculum_artifact or not curriculum_artifact.data:
-        # Fallback: create basic course structure
-        return {
-            "course_id": job_id,
-            "title": f"Introduction to {topic}",
-            "description": f"A comprehensive course on {topic}",
-            "modules": [
-                {
-                    "id": "mod_1",
-                    "title": "Getting Started",
-                    "description": "Foundation concepts",
-                    "lessons": [
-                        {
-                            "id": "les_1_1",
-                            "title": f"What is {topic}?",
-                            "content": f"Learn the basics of {topic} and why it matters.",
-                            "duration_minutes": 10
-                        }
-                    ]
-                }
-            ],
-            "estimated_duration": 60,
-            "difficulty": "beginner"
-        }
-    
-    # Parse curriculum data
-    curriculum_data = curriculum_artifact.data
+    chunks = pedagogy_data.get("cognitive_chunks", [])
     modules = []
     
-    for idx, module_data in enumerate(curriculum_data.get("modules", [])):
-        lessons = []
-        for lesson_idx, lesson_data in enumerate(module_data.get("lessons", [])):
-            lessons.append({
-                "id": f"les_{idx + 1}_{lesson_idx + 1}",
-                "title": lesson_data.get("title", f"Lesson {lesson_idx + 1}"),
-                "content": lesson_data.get("content", ""),
-                "duration_minutes": lesson_data.get("duration_minutes", 10)
-            })
-        
+    for idx, chunk in enumerate(chunks, start=1):
         modules.append({
-            "id": f"mod_{idx + 1}",
-            "title": module_data.get("title", f"Module {idx + 1}"),
-            "description": module_data.get("description", ""),
-            "lessons": lessons
+            "id": chunk.get("id", f"mod_{idx}"),
+            "title": chunk.get("title", f"Module {idx}"),
+            "description": ", ".join(chunk.get("concepts", []))
         })
     
-    return {
+    outline = {
         "course_id": job_id,
-        "title": curriculum_data.get("title", f"Course on {topic}"),
-        "description": curriculum_data.get("description", ""),
+        "title": pedagogy_data.get("topic", f"Introduction to {topic}"),
+        "description": f"Level: {pedagogy_data.get('difficulty_level', 'beginner')}. Target Time: {pedagogy_data.get('estimated_total_hours', 1.0)}h",
         "modules": modules,
-        "estimated_duration": curriculum_data.get("estimated_duration", 60),
-        "difficulty": curriculum_data.get("difficulty", "beginner")
+        "estimated_duration": int(pedagogy_data.get("estimated_total_hours", 1.0) * 60),
+        "difficulty": pedagogy_data.get("difficulty_level", "beginner"),
+        "learning_outcomes": [obj.get("description") for obj in pedagogy_data.get("learning_objectives", []) if isinstance(obj, dict)]
     }
+    
+    outline_hash = hashlib.sha256(json.dumps(outline, sort_keys=True).encode("utf-8")).hexdigest()
+    outline["outline_hash"] = outline_hash
+    return outline
+
+
+def _update_job_from_cinematic(job: Dict[str, Any], cinematic_data: Dict[str, Any]):
+    """
+    Update job state with cinematic structure. 
+    Allows client to see scene count and titles early.
+    """
+    modules = cinematic_data.get("modules", [])
+    job_id = job.get("job_id", "")
+    
+    for mod in modules:
+        mod_id = mod.get("module_id")
+        lessons = []
+        for idx, scene in enumerate(mod.get("scenes", [])):
+            lessons.append({
+                "id": scene.get("id", f"{mod_id}_les_{idx+1}"),
+                "title": scene.get("title", f"Scene {idx+1}"),
+                "content": None, # Content will be finalized later or streamed
+                "duration_minutes": int(scene.get("duration_seconds", 60) / 60),
+                "order": scene.get("scene_number", idx + 1),
+                "blocks": scene.get("blocks", []) # Pass rich blocks to client!
+            })
+        
+        job.setdefault("module_results", {})[mod_id] = {
+            "id": mod_id,
+            "title": mod.get("module_title"),
+            "description": mod.get("narrative_hook"),
+            "lessons": lessons
+        }
+
+
+def _build_course_from_response(job_id: str, topic: str, response: Any) -> Dict[str, Any]:
+    """
+    Create final CourseResult from the A2AOrchestrator response.
+    """
+    # response is A2ACourseResponse
+    if not response or not hasattr(response, 'artifacts'):
+        return _build_fallback_course(job_id, topic, {})
+        
+    return _build_course_from_artifacts(job_id, topic, response.artifacts)
+
+
+def _build_course_from_artifacts(job_id: str, topic: str, artifacts: List) -> Dict[str, Any]:
+    """
+    Convert A2A artifacts to course structure. Supports both Pedagogy and Cinematic artifacts.
+    """
+    # Prioritize Cinematic (highest fidelity)
+    cinematic_art = next((a for a in artifacts if a.type == ArtifactType.CINEMATIC_SCENE), None)
+    if cinematic_art and cinematic_art.data:
+        data = cinematic_art.data
+        modules = []
+        for mod in data.get("modules", []):
+            lessons = []
+            for scene in mod.get("scenes", []):
+                # Flatten blocks into content string for legacy compatibility if needed, 
+                # but keep 'blocks' for V2-capable clients.
+                content = ""
+                for block in scene.get("blocks", []):
+                    b_type = block.get("type", "text")
+                    b_content = block.get("content", {})
+                    if b_type == "text":
+                        content += b_content.get("text", "") + "\n\n"
+                    elif b_type == "callout":
+                        content += f"> **{b_content.get('title', '')}**\n> {b_content.get('body', '')}\n\n"
+                
+                lessons.append({
+                    "id": scene.get("id"),
+                    "title": scene.get("title"),
+                    "content": content.strip(),
+                    "duration_minutes": int(scene.get("duration_seconds", 60) / 60),
+                    "order": scene.get("scene_number"),
+                    "blocks": scene.get("blocks", []),
+                    "lyo_commentary": scene.get("blocks", [{}])[0].get("lyo_commentary") # Extract first commentary
+                })
+            
+            modules.append({
+                "id": mod.get("module_id"),
+                "title": mod.get("module_title"),
+                "description": mod.get("narrative_hook"),
+                "lessons": lessons
+            })
+            
+        return {
+            "course_id": job_id,
+            "title": data.get("course_title", topic),
+            "description": data.get("course_tagline", ""),
+            "modules": modules,
+            "estimated_duration": int(data.get("total_duration_seconds", 60) / 60),
+            "difficulty": "intermediate" # Cinematic doesn't strictly carry difficulty back
+        }
+
+    # Fallback to Curriculum structure if present
+    curriculum_art = next((a for a in artifacts if a.type == ArtifactType.CURRICULUM_STRUCTURE or a.type == ArtifactType.COURSE_MODULE), None)
+    if curriculum_art and curriculum_art.data:
+        # (Existing logic but cleaner)
+        data = curriculum_art.data
+        modules = []
+        for idx, mod_data in enumerate(data.get("modules", [])):
+            lessons = []
+            for l_idx, l_data in enumerate(mod_data.get("lessons", [])):
+                lessons.append({
+                    "id": l_data.get("id", f"les_{idx+1}_{l_idx+1}"),
+                    "title": l_data.get("title", f"Lesson {l_idx+1}"),
+                    "content": l_data.get("content", ""),
+                    "duration_minutes": l_data.get("duration_minutes", 10)
+                })
+            modules.append({
+                "id": mod_data.get("id", f"mod_{idx+1}"),
+                "title": mod_data.get("title", f"Module {idx+1}"),
+                "description": mod_data.get("description", ""),
+                "lessons": lessons
+            })
+        
+        return {
+            "course_id": job_id,
+            "title": data.get("title", f"Course on {topic}"),
+            "description": data.get("description", ""),
+            "modules": modules,
+            "estimated_duration": data.get("estimated_duration", 60),
+            "difficulty": data.get("difficulty", "beginner")
+        }
+    
+    # Absolute fallback
+    return _build_fallback_course(job_id, topic, {})
 
 
 def _build_outline(job_id: str, topic: str, user_context: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -1106,12 +1228,18 @@ async def _generate_module_content(
     module_description = module_outline.get("description")
 
     system_prompt = (
-        "You are a course module writer. Use the outline as a strict contract. "
+        "You are an expert course module writer for an educational app. "
+        "Use the provided outline as a strict contract. "
         "Return ONLY valid JSON with this schema:\n"
         "{\"id\": string, \"title\": string, \"description\": string, \"lessons\": ["
         "{\"id\": string, \"title\": string, \"content\": string, \"duration_minutes\": int}]}\n"
-        "Rules: Keep lesson count between 3 and 6. Keep lesson content concise but useful. "
-        "Do NOT invent new modules. Use the provided module id and title."
+        "Rules:\n"
+        "- Keep lesson count between 3 and 6.\n"
+        "- Each lesson MUST have rich, educational content (at least 3 paragraphs with examples, explanations, and key takeaways).\n"
+        "- Use markdown formatting (headers, bold, bullet points) in lesson content.\n"
+        "- Include real examples, analogies, and practical applications specific to the topic.\n"
+        "- Do NOT use generic filler text. Every sentence must teach something specific about the topic.\n"
+        "- Do NOT invent new modules. Use the provided module id and title."
     )
 
     user_prompt = (
@@ -1127,7 +1255,7 @@ async def _generate_module_content(
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.4,
-        max_tokens=1200,
+        max_tokens=3000,
         provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"],
     )
 

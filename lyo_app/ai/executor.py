@@ -9,8 +9,7 @@ from lyo_app.services.artifact_service import ArtifactService
 from lyo_app.services.mutator import FollowUpMutator
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
-from lyo_app.chat.a2ui_integration import ChatA2UIService
-from lyo_app.a2ui.a2ui_producer import a2ui_producer
+from lyo_app.integrations.calendar_integration import calendar_service, CalendarEvent, EventCategory
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,7 @@ def _get_gemini_model():
     genai.configure(api_key=api_key)
     logger.info(f"✅ Gemini executor model initialised (key ending ...{api_key[-4:]})")
     return genai.GenerativeModel(
-        "gemini-3.1-pro-preview-customtools",
+        "gemini-2.5-flash",
         generation_config={"temperature": 0.7, "max_output_tokens": 2048},
     )
 
@@ -45,7 +44,7 @@ def _get_json_gemini_model():
         return None
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        "gemini-3.1-pro-preview-customtools",
+        "gemini-2.5-flash",
         generation_config={
             "temperature": 0.5,
             "max_output_tokens": 2048,
@@ -64,7 +63,6 @@ class LyoExecutor:
         self.rag = RAGService(db_session)
         self.artifacts = ArtifactService()
         self.mutator = FollowUpMutator()
-        self.a2ui_service = ChatA2UIService()
         self._db = db_session
         self._gemini = _get_gemini_model()
         # Separate model instance configured for guaranteed-valid JSON output.
@@ -85,7 +83,7 @@ class LyoExecutor:
 
         if not self._gemini:
             logger.warning("Gemini model unavailable – returning fallback text")
-            return static_content or "I'm sorry, I couldn't generate a response right now. Please try again."
+            return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
         # Build a grounded prompt
         rag_snippets = context.get("retrieved_content", [])
@@ -109,16 +107,29 @@ class LyoExecutor:
                 history_text += f"{role}: {content}\n"
             history_text += "--- END HISTORY ---\n"
 
-        prompt = f"""You are Lyo, a friendly and knowledgeable AI tutor.
-Answer the user's question clearly and helpfully.
+        prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
+Answer the user's question with warmth, curiosity, and clarity.
 
-CRITICAL FORMATTING RULES:
-- Be CONCISE. Keep responses to 2-4 short paragraphs MAX.
-- Use bullet points for lists instead of long paragraphs.
-- Break complex topics into digestible chunks with clear headers.
-- Never write walls of text. If a topic is broad, give a high-level overview and offer to go deeper.
-- If reference material is provided, synthesize it — don't dump it verbatim.
-- If conversation history is provided, maintain context. Don't repeat yourself.
+CRITICAL PERSONA & FORMATTING RULES:
+- Ban AI Cliches: NEVER say "As an AI language model...", "Here is a breakdown", "Certainly!", "Let's dive in", or "I'd be happy to help".
+- Show, Don't Tell: Start directly with a fascinating hook, insight, or the core answer. Cut all robotic filler introductions.
+- Be CONCISE. Keep responses conversational, limiting to 2-4 short paragraphs MAX.
+- Use bullet points for lists, but keep them punchy.
+- Break complex topics into digestible, human-readable chunks.
+- Never write walls of text. If a topic is broad, give a high-level magical overview and offer to go deeper.
+- If reference material is provided, synthesize it naturally into the conversation.
+- If conversation history is provided, maintain context. DO NOT greet the user again if you already have. Act as a seamless dialogue partner.
+- If providing a course overview or progress update, you can use the `:::mastery_map` smart block. 
+  Example: 
+  :::mastery_map
+  {
+    "title": "Python Basics",
+    "nodes": [
+      {"id": "n1", "title": "Variables", "status": "completed", "position": [100, 100]},
+      {"id": "n2", "title": "Loops", "status": "current", "position": [200, 100]}
+    ]
+  }
+  :::
 {rag_text}{history_text}
 
 USER QUESTION:
@@ -133,7 +144,7 @@ USER QUESTION:
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=messages,
-                    provider_order=["gemini-1.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
                 ),
                 timeout=30.0
             )
@@ -144,7 +155,7 @@ USER QUESTION:
         except Exception as e:
             logger.error(f"Text generation failed: {e}", exc_info=True)
 
-        return static_content or "I'm sorry, I encountered an issue generating a response. Please try again."
+        return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
     async def execute(self, user_id: str, plan: LyoPlan, original_request: str, conversation_history: list = None, intent: str = None) -> UnifiedChatResponse:
         """
@@ -156,7 +167,6 @@ USER QUESTION:
             "retrieved_content": [],
             "created_artifacts": [],
             "final_text": "",
-            "a2ui_blocks": [],
             "open_classroom_payload": None,
             "conversation_history": conversation_history or []
         }
@@ -190,21 +200,38 @@ USER QUESTION:
                 else:
                     logger.warning("UPDATE_ARTIFACT requested but no artifact_id found in plan")
                 
-            elif step.action_type == ActionType.GENERATE_A2UI:
-                # Generate rich A2UI components via the A2UIProducer chokepoint
-                ui_type = step.parameters.get("ui_type", "explanation")
-                a2ui_result = await self._generate_a2ui(
-                    ui_type=ui_type,
-                    original_request=original_request,
-                    step_params=step.parameters,
-                    context=execution_context
-                )
-                if a2ui_result:
-                    if a2ui_result.get("open_classroom"):
-                        execution_context["open_classroom_payload"] = a2ui_result["open_classroom"]
-                        logger.info(f"\u2705 open_classroom_payload set via A2UIProducer")
-                    if a2ui_result.get("a2ui_component"):
-                        execution_context["a2ui_blocks"].append(a2ui_result["a2ui_component"])
+            elif step.action_type == ActionType.GENERATE_TEXT and not execution_context["final_text"]:
+                    execution_context["final_text"] = await self._generate_text(
+                        original_request, execution_context, step.parameters
+                    )
+                
+            elif step.action_type == ActionType.CALENDAR_SYNC:
+                logger.info(f"📅 [EXECUTOR] Syncing Test Prep plan to calendar...")
+                execution_context["final_text"] += "\n\nI've generated a study plan, scheduled sessions in your calendar, and set up reminders!"
+                
+                # We enqueue the tasks securely in the background
+                try:
+                    from lyo_app.tasks.calendar_sync import sync_test_prep_to_calendar_task
+                    from lyo_app.tasks.notifications import send_push_notification_task
+                    
+                    # 1. Dispatch Calendar Sync Task
+                    sync_test_prep_to_calendar_task.delay(
+                        user_id=user_id,
+                        subject=step.parameters.get("subject", "Test"),
+                        topics=step.parameters.get("topics", []),
+                        test_date=step.parameters.get("test_date", ""),
+                        plan_details=step.parameters.get("plan_details", {})
+                    )
+                    
+                    # 2. Dispatch Push Notification Task
+                    send_push_notification_task.delay(
+                        user_id=user_id,
+                        title="New Study Plan Created! 📚",
+                        body="Your Test Prep schedule has been synced to your calendar.",
+                        data={"type": "study_plan", "action": "view_calendar"}
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to queue Calendar/Push tasks: {e}")
                 
             elif step.action_type == ActionType.GENERATE_TEXT:
                 # Final text generation step — call Gemini with all context
@@ -233,19 +260,10 @@ USER QUESTION:
                 content=latest_art.get("content"),
                 version_id=f"{latest_art['artifact_id']}_v{latest_art['version']}"
             )
-        # Build A2UI blocks list
-        a2ui_ui_blocks = []
-        for comp in execution_context.get("a2ui_blocks", []):
-            a2ui_ui_blocks.append(UIBlock(
-                type=UIBlockType.A2UI_COMPONENT,
-                content={"component": comp.to_dict() if hasattr(comp, 'to_dict') else comp}
-            ))
-            
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
             next_actions=self._contextual_actions(intent),
-            a2ui_blocks=a2ui_ui_blocks,
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={"latency_ms": 100}
         )
@@ -258,68 +276,13 @@ USER QUESTION:
             "QUIZ":       ["Explain Answers", "Try Harder", "New Topic"],
             "FLASHCARDS": ["Start Review", "More Cards", "Quiz Me"],
             "STUDY_PLAN": ["Start Now", "Modify Plan", "Create Course"],
+            "TEST_PREP":  ["Start Studying", "Upload Notes", "Take a Quiz"],
             "SUMMARIZE_NOTES": ["Deep Dive", "Quiz Me", "Flashcards"],
             "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
             "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
         }
         actions = _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
         return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions})]
-
-    async def _generate_a2ui(
-        self,
-        ui_type: str,
-        original_request: str,
-        step_params: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Generate A2UI components via the A2UIProducer chokepoint.
-        
-        The Producer guarantees:
-        - Valid A2UI component output (never None, never malformed)
-        - iOS-compatible open_classroom payload shape
-        - Sub-millisecond rendering (pure Python, no LLM in this stage)
-        
-        Returns dict with:
-          {"a2ui_component": A2UIComponent, "open_classroom": {...}} — for courses
-          {"a2ui_component": A2UIComponent}                          — for other types
-        """
-        try:
-            topic = step_params.get("title", original_request[:80])
-            
-            if ui_type == "course":
-                # Generate course data via Gemini, then pass through producer
-                course_data = await self._generate_course_data(original_request, step_params, context)
-                result = a2ui_producer.produce_course(course_data, topic=topic)
-                return result
-                    
-            elif ui_type == "quiz":
-                quiz_data = step_params.get("quiz_data") or await self._generate_quiz_data(original_request, context)
-                component = a2ui_producer.produce_quiz(quiz_data)
-                return {"a2ui_component": component}
-                    
-            elif ui_type == "study_plan":
-                plan_data = step_params.get("plan_data") or {
-                    "title": topic,
-                    "milestones": [],
-                    "duration": "2 weeks"
-                }
-                component = a2ui_producer.produce_study_plan(plan_data, topic=topic)
-                return {"a2ui_component": component}
-                
-            else:  # "explanation" or any other type
-                # If we already have generated text, use it; otherwise generate
-                content = context.get("final_text", "")
-                if not content:
-                    content = await self._generate_text(original_request, context, step_params)
-                    context["final_text"] = content
-                component = a2ui_producer.produce_explanation(content, topic=topic)
-                return {"a2ui_component": component}
-                
-        except Exception as e:
-            logger.error(f"A2UI generation failed for ui_type={ui_type}: {e}", exc_info=True)
-            error_component = a2ui_producer.produce_error(f"Content generation failed")
-            return {"a2ui_component": error_component}
 
     async def _generate_course_data(
         self, original_request: str, step_params: Dict[str, Any], context: Dict[str, Any]
@@ -334,6 +297,7 @@ USER QUESTION:
                 "description": f"A course about {topic}",
                 "difficulty": "Beginner",
                 "estimated_duration": "2-3 hours",
+                "objectives": [f"Understand {topic}", f"Apply {topic} concepts", f"Master {topic} foundations"],
                 "lessons": [
                     {"title": "Introduction", "description": f"Getting started with {topic}", "type": "reading", "duration": "15 min"},
                     {"title": "Core Concepts", "description": f"Key ideas in {topic}", "type": "reading", "duration": "20 min"},
@@ -341,25 +305,21 @@ USER QUESTION:
                 ]
             }
         
-        prompt = f"""You are the Lyo Course Architect. You must always respond in two parts:
- * A friendly, supportive text explanation.
- * A delimiter: ---a2ui_JSON---
- * A single A2UI JSON object containing the course structure.
-   Constraint: If a quick explanation is enough, the JSON part should be an empty list [].
+        prompt = f"""You are a course architect. Generate a structured learning course for: "{original_request}"
 
-Generate a structured course outline for this request: "{original_request}"
-After the delimiter, return ONLY valid JSON with this exact structure:
+Return ONLY valid JSON, no markdown fences, no explanation:
 {{
     "title": "Course Title",
     "topic": "main topic",
-    "description": "2-sentence description",
+    "description": "2-sentence course description",
     "difficulty": "Beginner|Intermediate|Advanced",
     "estimated_duration": "X hours",
+    "objectives": ["Objective 1", "Objective 2", "Objective 3"],
     "lessons": [
         {{"title": "Lesson Title", "description": "1-sentence description", "type": "reading|exercise|quiz", "duration": "X min"}}
     ]
 }}
-Include 4-6 lessons. Keep descriptions short."""
+Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
         
         try:
             # Use the standard model since Gemini 3.1 excels at dual-output text+JSON in one pass
@@ -377,17 +337,12 @@ Include 4-6 lessons. Keep descriptions short."""
             text = ai_response.get("content", "").strip() if ai_response.get("content") else None
             
             if text:
-                json_part = text
-                if "---a2ui_JSON---" in text:
-                    parts = text.split("---a2ui_JSON---")
-                    friendly_text = parts[0].strip()
-                    context["final_text"] = friendly_text  # Set text for GENERATE_TEXT step
-                    json_part = parts[1].strip()
-                
-                if json_part.startswith("```"):
-                    json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part[3:]
-                    json_part = json_part.rsplit("```", 1)[0]
-                return json.loads(json_part)
+                # Strip markdown fences if the model wraps the JSON anyway
+                stripped = text.strip()
+                if stripped.startswith("```"):
+                    stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped[3:]
+                    stripped = stripped.rsplit("```", 1)[0].strip()
+                return json.loads(stripped)
         except Exception as e:
             logger.error(f"Course data generation failed: {e}", exc_info=True)
         
@@ -399,6 +354,7 @@ Include 4-6 lessons. Keep descriptions short."""
             "description": f"A comprehensive course about {topic}",
             "difficulty": "Beginner",
             "estimated_duration": "2 hours",
+            "objectives": [f"Understand {topic}", f"Apply {topic} concepts", f"Master {topic} foundations"],
             "lessons": [
                 {"title": "Introduction", "description": f"Getting started with {topic}", "type": "reading", "duration": "15 min"},
                 {"title": "Key Concepts", "description": f"Understanding the fundamentals", "type": "reading", "duration": "20 min"},
@@ -412,7 +368,7 @@ Include 4-6 lessons. Keep descriptions short."""
         """Generate detailed lesson content using Gemini JSON mode.
 
         Returns a dict with body_sections, key_points, and has_quiz flag that
-        the iOS A2UI engine renders as a LessonContentView component.
+        the iOS LessonContentView component.
         """
         fallback = {
             "title": lesson_title,
@@ -490,14 +446,10 @@ Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clea
                 }
             }
 
-        prompt = f"""You are the Lyo Course Architect. You must always respond in two parts:
- * A friendly, supportive text explanation.
- * A delimiter: ---a2ui_JSON---
- * A single A2UI JSON object containing the quiz data.
-   Constraint: If a quick explanation is enough, the JSON part should be an empty list [].
-
+        prompt = f"""You are the Lyo Course Architect. 
 Generate a 3-question quiz about: "{original_request}"
-After the delimiter, return ONLY valid JSON with this exact structure:
+
+Return ONLY valid JSON, no markdown fences, no explanation, with this exact structure:
 {{
     "title": "Quiz title",
     "total_questions": 3,
@@ -527,16 +479,10 @@ Make options plausible but with one clear correct answer. correct_answer is the 
             text = ai_response.get("content", "").strip() if ai_response.get("content") else None
             
             if text:
-                json_part = text
-                if "---a2ui_JSON---" in text:
-                    parts = text.split("---a2ui_JSON---")
-                    friendly_text = parts[0].strip()
-                    context["final_text"] = friendly_text
-                    json_part = parts[1].strip()
-                    
+                json_part = text.strip()
                 if json_part.startswith("```"):
                     json_part = json_part.split("\n", 1)[1] if "\n" in json_part else json_part[3:]
-                    json_part = json_part.rsplit("```", 1)[0]
+                    json_part = json_part.rsplit("```", 1)[0].strip()
                 return json.loads(json_part)
         except Exception as e:
             logger.error(f"Quiz data generation failed: {e}", exc_info=True)

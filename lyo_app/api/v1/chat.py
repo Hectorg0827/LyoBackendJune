@@ -19,10 +19,6 @@ from lyo_app.auth.models import User
 from lyo_app.personalization.service import PersonalizationEngine
 from lyo_app.ai_agents.a2a.schemas import Artifact, ArtifactType, A2ACourseRequest
 from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
-from lyo_app.chat.a2ui_recursive import ChatResponseV2, UIComponent, migrate_legacy_content_types
-from lyo_app.chat.assembler import ResponseAssembler
-from lyo_app.chat.a2ui_integration import chat_a2ui_service
-from lyo_app.a2ui.a2ui_generator import a2ui
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +45,7 @@ def detect_ai_classroom_intent(message: str) -> str:
         return "general_learning"
 
 async def generate_ai_classroom_course(message: str, user) -> Optional[Dict[str, Any]]:
-    """Generate course using real AI pipeline and return course data for A2UI"""
+    """Generate course using real AI pipeline and return structured course data"""
     try:
         # Extract topic from message
         topic = extract_learning_topic(message)
@@ -247,27 +243,15 @@ def detect_course_creation_intent(message: str) -> Optional[Dict[str, str]]:
 
 
 # ============================================================
-# TRANSLATION LAYER (A2A -> A2UI)
+# TRANSLATION LAYER (A2A -> Frontend UI)
 # ============================================================
-
-def serialize_ui(component) -> Optional[Dict[str, Any]]:
-    """Safely serialize an A2UI component to a dictionary (not a string) for iOS decoding."""
-    if not component:
-        return None
-    if hasattr(component, "to_dict"):
-        return component.to_dict()
-    if hasattr(component, "model_dump"):
-        return component.model_dump(by_alias=False, exclude_none=True)
-    if hasattr(component, "dict"):
-        return component.dict(by_alias=False, exclude_none=True)
-    return None
 
 def translate_artifact_to_ui_component(artifact: Artifact) -> Optional[Dict[str, Any]]:
     """
-    Translates internal A2A Artifacts into A2UI (Frontend) Components.
+    Translates internal A2A Artifacts into Frontend UI Components.
     This acts as the Envelope / Adapter layer.
     
-    Returns a dictionary matching iOS A2UIContent structure:
+    Returns a dictionary matching iOS ContentType structure:
     {
         "type": "course_roadmap" | "quiz" | "visual_gallery" | ...,
         "course_roadmap": {...},  // For courseRoadmap type
@@ -378,7 +362,7 @@ class ChatResponse(BaseModel):
     success: bool = Field(default=True, description="Whether request succeeded")
     error: Optional[str] = Field(None, description="Error message if failed")
     user_profile: Optional[Dict[str, Any]] = Field(None, description="User learning profile summary")
-    ui_component: Optional[List[Dict[str, Any]]] = Field(None, description="List of A2UI Components for frontend rendering")
+    ui_component: Optional[Dict[str, Any]] = Field(None, description="UI component dict for frontend rendering")
     
 @router.post("/", response_model=ChatResponse)
 async def chat(
@@ -429,7 +413,7 @@ async def chat(
                 # Extract artifacts
                 artifacts = a2a_response.output_artifacts
                 
-                # Generate A2UI course UI using the proper service
+                # Build course data from artifacts
                 course_data = {
                     "title": f"Learn {course_intent['topic'].title()}",
                     "description": f"A comprehensive course on {course_intent['topic']}",
@@ -448,23 +432,26 @@ async def chat(
                                     "duration": f"{lesson.get('duration_minutes', 15)} min"
                                 })
 
-                # Generate proper A2UI component
-                course_ui = chat_a2ui_service.generate_course_creation_ui(course_data)
-                ui_component_json = serialize_ui(course_ui)
+                # Build course UI component from artifacts
+                ui_component_json = None
+                for artifact in artifacts:
+                    ui_component_json = translate_artifact_to_ui_component(artifact)
+                    if ui_component_json:
+                        break
 
-                # Build response text with A2UI formatting
+                # Build response text
                 response_text = f"🎓 **Course Created: {course_intent['topic'].title()}**\n\nI've designed a comprehensive learning experience for you! The course includes {len(course_data['lessons'])} lessons covering all the essential concepts.\n\n✨ *Tap below to explore your personalized course*"
 
                 latency_ms = int((time.time() - start_time) * 1000)
-                logger.info(f"A2A Course generated in {latency_ms}ms with A2UI component")
+                logger.info(f"A2A Course generated in {latency_ms}ms")
 
                 return ChatResponse(
                     response=response_text,
-                    model_used="A2A Multi-Agent Pipeline + A2UI",
+                    model_used="A2A Multi-Agent Pipeline",
                     success=True,
                     error=None,
                     user_profile=user_profile_summary,
-                    ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
+                    ui_component=[{"type": "ui_block", "component": ui_component_json}] if ui_component_json else None
                 )
                 
             except Exception as e:
@@ -494,6 +481,80 @@ async def chat(
 Be conversational, helpful, and educational. Use emojis sparingly for warmth.
 Format responses with markdown for readability. Keep responses concise but informative.
 
+### SMART BLOCKS CAPABILITIES
+When appropriate, use the following interactive blocks to enhance learning.
+ALWAYS use the `:::block_type` syntax. Do NOT use these blocks inside code fences.
+
+1. QUIZ (Check understanding)
+:::quiz
+question: [The question]
+options: [Option A], [Option B], [Option C], [Option D]
+answer: [The exact text of the correct option]
+explanation: [Brief explanation of why it's correct]
+:::
+
+2. FLASHCARD (Define terms or concepts)
+:::flashcard
+front: [Term or question]
+back: [Definition or answer]
+:::
+
+3. FLASHCARD SET (Multiple flashcards)
+:::flashcard_set
+title: [Set Title]
+cards:
+- front: [Term 1]
+  back: [Def 1]
+- front: [Term 2]
+  back: [Def 2]
+:::
+
+4. PROGRESS (Show lesson progress)
+:::progress
+completed: [Number]
+total: [Number]
+label: [Context label, e.g., 'Chapter 1 Progress']
+:::
+
+5. SUMMARY (Key takeaways)
+:::summary
+title: [Title]
+points: [Point 1], [Point 2], [Point 3]
+:::
+
+6. IMAGE (Visualize concepts)
+:::image
+query: [Search query for the image]
+caption: [Description of what the image shows]
+:::
+
+7. CINEMATIC HOOK (Narrative Intro & Hype)
+:::cinematic_hook
+title: [Title]
+hook: [A compelling one-sentence narrative hook]
+visual_description: [Cinematic visual description]
+cta: [Call to Action, e.g., 'EXPLORE NOW']
+:::
+
+8. TEST PREP (Exam Setup & Information Collection)
+:::test_prep
+topic: [Exam Topic]
+courses: ["Course A", "Course B"]
+date: [ISO8601 Date or null]
+description: [Short description of the exam]
+:::
+
+9. STUDY PLAN (Structured Reminders & Sessions)
+:::study_plan
+title: Study Plan for [Topic]
+exam_date: [ISO8601 Date]
+sessions:
+- title: [Session Title]
+  desc: [Description]
+  duration: [Minutes]
+  date: [ISO8601 Date]
+:::
+
 When a user asks to create a course, briefly confirm the topic and ask about their preferred level (beginner/intermediate/advanced) if you don't know it yet.
 
 {profile_context}
@@ -520,32 +581,22 @@ When a user asks to create a course, briefly confirm the topic and ask about the
             raise ValueError("Empty response from AI")
 
         # ============================================================
-        # A2UI: Generate Enhanced Response with Better Formatting
+        # PROACTIVE ENGAGEMENT: Scan for Study Plans/Lessons
         # ============================================================
-        ui_component_json = None
+        try:
+            from lyo_app.services.proactive_dispatcher import proactive_dispatcher
+            proactive_dispatcher.extract_and_schedule_from_text(current_user.id, response_text)
+        except Exception as e:
+            logger.error(f"Proactive dispatcher failed: {e}")
 
-        # Check if this is a learning-related response that could benefit from A2UI
-        message_lower = request.message.lower()
-
-        if any(word in message_lower for word in ["explain", "what is", "how does", "tell me about"]):
-            # Generate explanation UI
-            topic = request.message
-            explanation_ui = chat_a2ui_service.generate_explanation_ui(response_text, topic)
-            if explanation_ui:
-                ui_component_json = serialize_ui(explanation_ui)
-
-        elif any(word in message_lower for word in ["help", "guide", "steps", "how to"]):
-            # Generate welcome/help UI
-            welcome_ui = chat_a2ui_service.generate_welcome_ui(current_user.name if hasattr(current_user, 'name') else "there")
-            if welcome_ui:
-                ui_component_json = serialize_ui(welcome_ui)
-
+        # ============================================================
+        # Translate A2A artifacts to UI components if present
+        # ============================================================
         # Check if the AI result contains artifacts (populated by Orchestrator or Agents)
         artifacts_data = result.get("artifacts", [])
         if artifacts_data and isinstance(artifacts_data, list) and not ui_component_json:
             for art_data in artifacts_data:
                 try:
-                    # Ensure it's an Artifact model
                     if isinstance(art_data, dict):
                         artifact = Artifact(**art_data)
                     elif isinstance(art_data, Artifact):
@@ -553,29 +604,15 @@ When a user asks to create a course, briefly confirm the topic and ask about the
                     else:
                         continue
 
-                    # Attempt translation
                     translated = translate_artifact_to_ui_component(artifact)
                     if translated:
-                        # Convert to A2UI format
-                        if translated.get("type") == "course_roadmap":
-                            course_data = translated["course_roadmap"]
-                            course_ui = chat_a2ui_service.generate_course_creation_ui(course_data)
-                            ui_component_json = serialize_ui(course_ui)
-                        elif translated.get("type") == "quiz":
-                            quiz_data = translated["quiz"]
-                            quiz_ui = chat_a2ui_service.generate_quiz_ui({
-                                "title": quiz_data.get("title", "Quiz"),
-                                "current_question": 1,
-                                "total_questions": len(quiz_data.get("questions", [])),
-                                "question": quiz_data.get("questions", [{}])[0] if quiz_data.get("questions") else {}
-                            })
-                            ui_component_json = serialize_ui(quiz_ui)
+                        ui_component_json = translated
                         break
                 except Exception as e:
                     logger.warning(f"Failed to translate artifact: {e}")
 
         latency_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Chat response generated in {latency_ms}ms with {'A2UI component' if ui_component_json else 'text only'}")
+        logger.info(f"Chat response generated in {latency_ms}ms")
 
         return ChatResponse(
             response=response_text,
@@ -583,372 +620,11 @@ When a user asks to create a course, briefly confirm the topic and ask about the
             success=True,
             error=None,
             user_profile=user_profile_summary,
-            ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
+            ui_component=ui_component_json
         )
         
     except Exception as e:
         logger.error(f"Chat endpoint failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": True,
-                "message": f"Request could not be processed: {str(e)}" if not settings.is_production() else "Request could not be processed. Please try again.",
-                "category": "business_logic",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
-            }
-        )
-
-
-@router.post("/test", response_model=ChatResponse)
-async def chat_test(request: ChatRequest):
-    """
-    Test chat endpoint for development and testing.
-    Bypasses authentication and database dependencies.
-    """
-    start_time = time.time()
-    try:
-        # ============================================================
-        # STEP 1: Detect Course Creation Intent
-        # ============================================================
-        course_intent = detect_course_creation_intent(request.message)
-
-        if course_intent:
-            logger.info(f"🎓 Course creation detected: {course_intent['topic']}")
-
-            # Generate A2UI course UI using test data
-            course_data = {
-                "title": f"Learn {course_intent['topic'].title()}",
-                "description": f"A comprehensive course on {course_intent['topic']}",
-                "lessons": [
-                    {"title": "Introduction", "type": "video", "duration": "15 min"},
-                    {"title": "Core Concepts", "type": "interactive", "duration": "20 min"},
-                    {"title": "Advanced Topics", "type": "reading", "duration": "12 min"},
-                    {"title": "Practice & Review", "type": "quiz", "duration": "10 min"}
-                ],
-                "estimated_duration": "1 hour",
-                "difficulty": "Beginner"
-            }
-
-            # Generate proper A2UI component
-            course_ui = chat_a2ui_service.generate_course_creation_ui(course_data)
-            ui_component_json = serialize_ui(course_ui)
-
-            # Build response text
-            response_text = f"🎓 **Course Created: {course_intent['topic'].title()}**\n\nI've designed a comprehensive learning experience for you! The course includes {len(course_data['lessons'])} lessons covering all the essential concepts.\n\n✨ *Tap below to explore your personalized course*"
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            logger.info(f"Test course generated in {latency_ms}ms with A2UI component")
-
-            return ChatResponse(
-                response=response_text,
-                model_used="Test A2UI Generator",
-                success=True,
-                error=None,
-                user_profile={"test_user": True, "level": "beginner"},
-                ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
-            )
-
-        # ============================================================
-        # STEP 2: Other UI Types
-        # ============================================================
-
-        message_lower = request.message.lower()
-
-        # Explanation requests
-        if any(word in message_lower for word in ["explain", "what is", "how does", "tell me about"]):
-            explanation_ui = chat_a2ui_service.generate_explanation_ui(
-                f"Here's an explanation of {request.message}", request.message
-            )
-            ui_component_json = serialize_ui(explanation_ui)
-
-            return ChatResponse(
-                response=f"Let me explain {request.message} for you!",
-                model_used="Test A2UI Generator",
-                success=True,
-                error=None,
-                user_profile={"test_user": True, "level": "beginner"},
-                ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
-            )
-
-        # Help requests
-        elif any(word in message_lower for word in ["help", "guide", "steps", "how to", "getting started"]):
-            welcome_ui = chat_a2ui_service.generate_welcome_ui("Test User")
-            ui_component_json = serialize_ui(welcome_ui)
-
-            return ChatResponse(
-                response="Hi there! I'm Lyo, your AI learning assistant. Here are some things I can help you with:",
-                model_used="Test A2UI Generator",
-                success=True,
-                error=None,
-                user_profile={"test_user": True, "level": "beginner"},
-                ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
-            )
-
-        # Quiz requests
-        elif any(word in message_lower for word in ["quiz", "test", "questions"]):
-            quiz_data = {
-                "title": "Quick Knowledge Check",
-                "current_question": 1,
-                "total_questions": 3,
-                "question": {
-                    "question": "What is your current learning goal?",
-                    "options": ["Learn programming", "Improve math skills", "Study science", "Practice languages"],
-                    "correct_answer": 0
-                }
-            }
-            quiz_ui = chat_a2ui_service.generate_quiz_ui(quiz_data)
-            ui_component_json = serialize_ui(quiz_ui)
-
-            return ChatResponse(
-                response="Here's a quick quiz to help personalize your learning!",
-                model_used="Test A2UI Generator",
-                success=True,
-                error=None,
-                user_profile={"test_user": True, "level": "beginner"},
-                ui_component=[{"type": "a2ui", "component": ui_component_json}] if ui_component_json else None
-            )
-
-        # Default response
-        else:
-            return ChatResponse(
-                response=f"I understand you're asking about: {request.message}. Let me help you with that!",
-                model_used="Test A2UI Generator",
-                success=True,
-                error=None,
-                user_profile={"test_user": True, "level": "beginner"},
-                ui_component=None
-            )
-
-    except Exception as e:
-        logger.error(f"Test chat endpoint failed: {e}", exc_info=True)
-        return ChatResponse(
-            response="Sorry, I encountered an error. Please try again.",
-            model_used="Test A2UI Generator",
-            success=False,
-            error=str(e),
-            user_profile=None,
-            ui_component=None
-        )
-
-
-@router.post("/v2", response_model=ChatResponseV2)
-async def chat_v2(
-    request: ChatRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Enhanced chat endpoint with recursive A2UI support.
-    Provides unlimited UI composition capabilities via server-driven UI.
-    """
-    start_time = time.time()
-    assembler = ResponseAssembler()
-
-    try:
-        # Get personalization context
-        personalization = PersonalizationEngine()
-        profile_context = await personalization.build_prompt_context(db, str(current_user.id))
-        user_profile = await personalization.get_mastery_profile(db, str(current_user.id))
-        user_profile_summary = user_profile.model_dump() if user_profile else {}
-
-        # ============================================================
-        # STEP 1: Intent Detection & Specialized UI Generation
-        # ============================================================
-
-        message_lower = request.message.lower()
-        ui_layout = None
-
-        # Weather request example
-        if "weather" in message_lower:
-            weather_data = {
-                "location": "San Francisco, CA",
-                "temp": 72,
-                "feels_like": 75,
-                "condition": "Sunny",
-                "humidity": 65,
-                "wind_speed": 12
-            }
-            ui_layout = assembler.create_weather_ui(weather_data)
-            response_text = "Here's the current weather information for you!"
-
-        # AI Classroom Integration - Course & Learning Intents
-        elif any(word in message_lower for word in ["course", "learning plan", "curriculum", "teach me", "learn", "lesson"]):
-            # Detect specific AI Classroom intents
-            classroom_intent = detect_ai_classroom_intent(request.message)
-
-            if classroom_intent == "course_creation":
-                # Generate course using AI Classroom and display with A2UI
-                course_data = await generate_ai_classroom_course(request.message, current_user)
-                if course_data:
-                    ui_layout = assembler.create_course_preview_ui(course_data)
-                    response_text = f"I've created a personalized course for you! This course covers {course_data.get('subject', 'the topic')} and should take about {course_data.get('estimated_minutes', 60)} minutes to complete."
-
-            elif classroom_intent == "continue_learning":
-                # Show learning progress with A2UI
-                progress_data = await get_user_learning_progress(str(current_user.id))
-                ui_layout = assembler.create_learning_progress_ui(progress_data)
-                response_text = "Here's your current learning progress. Keep up the great work!"
-
-            elif classroom_intent == "course_completion":
-                # Show course completion celebration
-                completion_data = {
-                    'course_title': 'Python Fundamentals',
-                    'total_nodes': 12,
-                    'time_spent': 85,
-                    'score': 92
-                }
-                ui_layout = assembler.create_course_completion_ui(completion_data)
-                response_text = "🎉 Congratulations on completing your course!"
-
-            else:
-                # Fallback to existing A2A orchestrator for other course intents
-                course_intent = detect_course_creation_intent(request.message)
-                if course_intent:
-                    # Try A2A orchestrator
-                    try:
-                        orchestrator = A2AOrchestrator()
-                        course_request = A2ACourseRequest(
-                            topic=course_intent['topic'],
-                            user_id=str(current_user.id),
-                            level="beginner",
-                            duration_minutes=30
-                        )
-
-                        # Generate course with safety timeout
-                        a2a_response = await asyncio.wait_for(
-                            orchestrator.generate_course(course_request),
-                            timeout=120.0
-                        )
-
-                        # Convert A2A artifacts to legacy format for UI factory
-                        course_data = {
-                            "title": f"Course: {course_intent['topic']}",
-                            "description": f"Comprehensive learning path for {course_intent['topic']}",
-                            "total_modules": len(a2a_response.output_artifacts),
-                            "estimated_time": 2,
-                            "modules": []
-                        }
-
-                        for i, artifact in enumerate(a2a_response.output_artifacts):
-                            if artifact.type == ArtifactType.CURRICULUM_STRUCTURE and artifact.data:
-                                modules_data = artifact.data.get("modules", [])
-                                for j, module in enumerate(modules_data):
-                                    course_data["modules"].append({
-                                        "id": f"{i}_{j}",
-                                        "title": module.get("title", f"Module {j+1}"),
-                                        "description": module.get("description", ""),
-                                        "lessons": len(module.get("lessons", [])),
-                                        "duration": 45,
-                                        "status": "available"
-                                    })
-
-                        ui_layout = assembler.create_course_overview_ui(course_data)
-                        response_text = f"I've created a comprehensive course on {course_intent['topic']}! 🚀"
-
-                    except Exception as e:
-                        logger.warning(f"A2A orchestrator failed, using fallback: {e}")
-                        # Fallback course data
-                        course_data = {
-                            "title": f"Introduction to {course_intent['topic']}",
-                            "description": f"Master the fundamentals of {course_intent['topic']}",
-                            "total_modules": 3,
-                            "estimated_time": 2,
-                            "modules": [
-                                {"id": "1", "title": "Getting Started", "description": "Basic concepts and setup", "lessons": 5, "duration": 30},
-                                {"id": "2", "title": "Core Concepts", "description": "Deep dive into fundamentals", "lessons": 8, "duration": 45},
-                                {"id": "3", "title": "Advanced Topics", "description": "Advanced techniques and best practices", "lessons": 6, "duration": 40}
-                            ]
-                        }
-                        ui_layout = assembler.create_course_overview_ui(course_data)
-                        response_text = f"I've created a learning plan for {course_intent['topic']}!"
-
-        # Quiz/assessment request
-        elif any(word in message_lower for word in ["quiz", "test", "assessment", "practice"]):
-            quiz_data = {
-                "score": 8,
-                "total_questions": 10,
-                "questions": [
-                    {
-                        "question": "What is the capital of France?",
-                        "user_answer": "Paris",
-                        "correct_answer": "Paris",
-                        "user_correct": True,
-                        "explanation": "Paris has been the capital of France since 987 AD."
-                    },
-                    {
-                        "question": "What is 2 + 2?",
-                        "user_answer": "5",
-                        "correct_answer": "4",
-                        "user_correct": False,
-                        "explanation": "Basic arithmetic: 2 + 2 = 4"
-                    }
-                ]
-            }
-            ui_layout = assembler.create_quiz_results_ui(quiz_data)
-            response_text = "Here are your quiz results! You did great! 🎉"
-
-        # Study plan request
-        elif any(word in message_lower for word in ["study plan", "learning path", "schedule"]):
-            plan_data = {
-                "description": "Personalized study plan based on your goals",
-                "total_time": 180,
-                "difficulty_level": "Mixed",
-                "topics": [
-                    {"id": "1", "title": "Fundamentals", "description": "Core concepts", "estimated_time": 60, "difficulty": "easy"},
-                    {"id": "2", "title": "Advanced Concepts", "description": "Deep dive topics", "estimated_time": 90, "difficulty": "hard"},
-                    {"id": "3", "title": "Practice Projects", "description": "Hands-on application", "estimated_time": 30, "difficulty": "medium"}
-                ]
-            }
-            ui_layout = assembler.create_study_plan_ui(plan_data)
-            response_text = "I've created a personalized study plan for you! 📚"
-
-        # ============================================================
-        # STEP 2: Default AI Chat Response (if no specialized UI)
-        # ============================================================
-
-        if not ui_layout:
-            # Build messages for AI
-            messages = []
-            if request.conversation_history:
-                for msg in request.conversation_history:
-                    messages.append({"role": msg.role, "content": msg.content})
-            messages.append({"role": "user", "content": request.message})
-
-            # Add system context
-            system_content = f"""You are Lyo, a friendly AI learning assistant.
-Be conversational, helpful, and educational. Use emojis sparingly.
-Format responses with markdown. Keep responses concise but informative.
-
-{profile_context}"""
-
-            system_message = {"role": "system", "content": system_content}
-            messages.insert(0, system_message)
-
-            # Generate AI response
-            result = await ai_resilience_manager.chat_completion(
-                messages=messages,
-                temperature=0.7,
-                max_tokens=1500
-            )
-
-            response_text = result.get("content") or result.get("response") or result.get("text") or ""
-            if not response_text:
-                raise ValueError("Empty response from AI")
-
-        latency_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Chat V2 response generated in {latency_ms}ms with {'recursive UI' if ui_layout else 'text only'}")
-
-        return ChatResponseV2(
-            response=response_text,
-            ui_layout=ui_layout,
-            session_id=f"session_{current_user.id}_{int(time.time())}",
-            conversation_id=f"conv_{current_user.id}",
-            response_mode="enhanced",
-            content_types=None  # Legacy field for backward compatibility
-        )
-
-    except Exception as e:
-        logger.error(f"Chat V2 endpoint failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={

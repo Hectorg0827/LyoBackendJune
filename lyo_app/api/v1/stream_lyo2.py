@@ -15,16 +15,30 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent
-from lyo_app.ai.nexus.agent import LyoNexusAgent
-from lyo_app.ai.nexus.factory import LyoNexusFactory
-from lyo_app.ai.nexus.media_worker import LyoNexusMediaWorker
+from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
+from lyo_app.core.config import settings
+from lyo_app.services.proactive_engagement import proactive_engagement_service
+from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
 
 logger = logging.getLogger(__name__)
+
+import re as _re
+
+def _extract_course_topic(user_text: str) -> str:
+    topic = _re.sub(
+        r"^(create (a )?course (on|about|for)?|make (a )?course (on|about|for)?|"
+        r"build (a )?course (on|about|for)?|teach me( about| on)?|"
+        r"i want (a )?course (on|about)?|course on|course about|"
+        r"give me a course( on)?|a course on)\s*",
+        "", user_text.strip(), flags=_re.IGNORECASE,
+    ).strip()
+    return topic or user_text.strip()
 
 router = APIRouter()
 
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
+test_prep_agent = TestPrepAgent()
 
 @router.post("/chat/stream")
 async def stream_lyo2_chat(
@@ -44,23 +58,98 @@ async def stream_lyo2_chat(
         start_time = time.time()
         
         try:
-            # 1. Send initial skeleton blocks immediately
-            logger.info(f"📡 [STREAM][{trace_id}] Sending skeleton event")
-            yield f"data: {json.dumps({'type': 'skeleton', 'blocks': ['answer', 'artifact']})}\n\n"
+            collected_bricks = []
+            
+            skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
+            collected_bricks.append(skeleton_brick)
+            yield f"data: {json.dumps(skeleton_brick)}\n\n"
             await asyncio.sleep(0.01) # Yield to event loop
+            
+            # 2. Performance & Cache Layer (New for Phase 17)
+            # Ensure optimizer is ready
+            await ai_performance_optimizer.initialize()
+            
+            # Optimize request based on system load
+            opt_data = await ai_performance_optimizer.optimize_request(
+                agent_type=request.forced_intent.value if request.forced_intent else "general",
+                request_data=request.model_dump()
+            )
+            
+            # Check for cached full response (Skip remaining layers if hit)
+            cache_key = opt_data.get("cache_key")
+            cached_full_resp = await ai_performance_optimizer.cache_manager.get("full_response", key=cache_key)
+            if cached_full_resp:
+                logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
+                for brick in cached_full_resp:
+                    yield f"data: {json.dumps(brick)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            # Apply optimized config (e.g. reduced tokens if memory is high)
+            opt_config = opt_data.get("processing_config", {})
             
             # 2. Layer A: Routing
             logger.info(f"🔍 [STREAM][{trace_id}] Starting Routing...")
             r_start = time.time()
-            try:
-                routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
-            except asyncio.TimeoutError:
-                logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Routing phase timed out'})}\n\n"
-                return
+            
+            if request.forced_intent:
+                logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
+                decision = RouterDecision(
+                    intent=request.forced_intent,
+                    confidence=1.0,
+                    needs_clarification=False,
+                    suggested_tier="MEDIUM"
+                )
+            else:
+                try:
+                    # 2b. Fetch Proactive Nudges (New for Phase 16)
+                    proactive_context = ""
+                    try:
+                        nudges = await proactive_engagement_service.get_pending_nudges_for_user(current_user.id, db)
+                        if nudges:
+                            proactive_context = "\n**Proactive System Nudges (Incorporate these into your greeting if relevant):**\n"
+                            for n in nudges:
+                                proactive_context += f"- [{n.nudge_type}] {n.title}: {n.message}\n"
+                            # Append to request text for the router/planner/executor to see
+                            request.text = f"[Proactive Context: {proactive_context}]\n" + (request.text or "")
+                    except Exception as ne:
+                        logger.warning(f"Failed to fetch proactive nudges: {ne}")
+
+                    routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
+                    decision = routing_response.decision
+                except asyncio.TimeoutError:
+                    logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
+                    return
                 
-            decision = routing_response.decision
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
+            
+            if decision.intent == Intent.COURSE:
+                _topic = _extract_course_topic(request.text or "")
+                _preview_oc = {
+                    "course": {
+                        "id": str(uuid.uuid4()),
+                        "title": _topic.title() if _topic else "Your Course",
+                        "topic": _topic,
+                        "level": "beginner",
+                        "duration": "~30 min",
+                        "objectives": [
+                            f"Understand the core concepts of {_topic}",
+                            "Apply your knowledge with guided exercises",
+                            "Build skills through structured practice",
+                        ],
+                    }
+                }
+                yield f"data: {json.dumps({'type': 'open_classroom', 'block': {'type': 'OpenClassroomBlock', 'content': {'type': 'OPEN_CLASSROOM', **_preview_oc}}})}\n\n"
+                
+                # v2: emit lyo_command for iOS v2 pipeline
+                cmd = lyo_response_builder.build_command("open_classroom", _preview_oc)
+                lyo_resp = lyo_response_builder.build(command=cmd, request_id=trace_id, conversation_id=trace_id)
+                brick_data = {"type": "lyo_command", "response": lyo_resp}
+                collected_bricks.append(brick_data)
+                yield f"data: {json.dumps(brick_data)}\n\n"
+                    
+                logger.info(f"🏫 [STREAM][{trace_id}] Fast course preview sent for: '{_topic[:60]}'")
             
             if decision.needs_clarification and decision.confidence > 0.3:
                 # Only ask for clarification if the router is reasonably confident
@@ -69,6 +158,20 @@ async def stream_lyo2_chat(
                 logger.info(f"🤔 [STREAM][{trace_id}] Needs clarification: {decision.clarification_question}")
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
                 return
+                
+            # Intercept TEST_PREP intent to gather structured details
+            if decision.intent == Intent.TEST_PREP:
+                logger.info(f"📚 [STREAM][{trace_id}] Analyzing Test Prep intent...")
+                prep_result = await test_prep_agent.analyze_test_prep(request)
+                if prep_result.success and prep_result.data:
+                    data = prep_result.data
+                    if data.missing_critical_info and data.follow_up_question:
+                        # Yield a clarification if critical info is missing
+                        logger.info(f"🤔 [STREAM][{trace_id}] Test Prep needs clarification: missing {data.missing_critical_info}")
+                        yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
+                        return
+                    # Optionally attach extracted data back to the request for the planner
+                    request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
 
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning...")
@@ -77,44 +180,26 @@ async def stream_lyo2_chat(
                 plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=35.0)
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 35s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Planning phase timed out'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                 return
             
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
 
-            # ── Deterministic A2UI injection ──────────────────────────
-            # The LLM planner sometimes omits GENERATE_A2UI steps even
-            # when the intent clearly demands rich UI. Ensure one exists.
-            _has_a2ui_step = any(
-                s.action_type == ActionType.GENERATE_A2UI for s in plan.steps
+            # ── Ensure a GENERATE_TEXT step exists ─────────────────────
+            # The LLM planner sometimes omits GENERATE_TEXT steps.
+            # Ensure one exists so the executor always produces final_text.
+            _has_text_step = any(
+                s.action_type == ActionType.GENERATE_TEXT for s in plan.steps
             )
-            _intent_to_a2ui = {
-                Intent.COURSE:              {"ui_type": "course", "title": request.text or ""},
-                Intent.EXPLAIN:             {"ui_type": "explanation"},
-                Intent.QUIZ:                {"ui_type": "quiz"},
-                Intent.FLASHCARDS:          {"ui_type": "quiz"},
-                Intent.STUDY_PLAN:          {"ui_type": "study_plan"},
-                # Fallback: ALL other text-generating intents get an explanation card
-                Intent.CHAT:                {"ui_type": "explanation"},
-                Intent.GENERAL:             {"ui_type": "explanation"},
-                Intent.GREETING:            {"ui_type": "explanation"},
-                Intent.HELP:                {"ui_type": "explanation"},
-                Intent.SUMMARIZE_NOTES:     {"ui_type": "explanation"},
-                Intent.COMMUNITY:           {"ui_type": "explanation"},
-                Intent.SCHEDULE_REMINDERS:  {"ui_type": "explanation"},
-                Intent.MODIFY_ARTIFACT:     {"ui_type": "explanation"},
-                Intent.UNKNOWN:             {"ui_type": "explanation"},
-            }
-            if not _has_a2ui_step and decision.intent in _intent_to_a2ui:
-                a2ui_params = _intent_to_a2ui[decision.intent]
+            if not _has_text_step:
                 plan.steps.append(PlannedAction(
-                    action_type=ActionType.GENERATE_A2UI,
-                    description=f"Auto-injected A2UI step for intent {decision.intent}",
-                    parameters=a2ui_params,
+                    action_type=ActionType.GENERATE_TEXT,
+                    description=f"Auto-injected text generation for intent {decision.intent}",
+                    parameters={"content": None},
                 ))
                 logger.info(
-                    f"📌 [STREAM][{trace_id}] Injected GENERATE_A2UI step "
-                    f"(intent={decision.intent}, ui_type={a2ui_params['ui_type']})"
+                    f"📌 [STREAM][{trace_id}] Injected GENERATE_TEXT step "
+                    f"(intent={decision.intent})"
                 )
 
             # 4. Layer C: Execution (Simulated Streaming)
@@ -141,50 +226,37 @@ async def stream_lyo2_chat(
                 )
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Execution timed out after 60s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Execution phase timed out'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                 return
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             
-            # --- Lyo-Nexus Slicing Engine ---
-            logger.info(f"🔪 [STREAM][{trace_id}] Piping to Lyo-Nexus Agent...")
-            
-            async def dispatch_update(update_brick: Dict[str, Any]):
-                # Callback used by LyoNexusMediaWorker to send async media updates
-                logger.info(f"🔄 [STREAM][{trace_id}] Nexus Async Update: {update_brick['update_id']}")
-                # We yield into the event_generator's stream (this is tricky in a real setup,
-                # but for SSE, we would push to an async queue that event_generator reads from.
-                # Since we can't easily yield from a detached task directly into the active SSE generator
-                # without an async Queue, we'll log it. In a production WebSocket, we'd do await websocket.send_json().)
-                pass # Queue implementation required for True Async SSE
-                
-            nexus_factory = LyoNexusFactory()
-            nexus_media = LyoNexusMediaWorker(dispatch_update_callback=dispatch_update)
-            nexus_agent = LyoNexusAgent(factory=nexus_factory, media_worker=nexus_media)
-            
-            # Simulate a token stream from the "Brain"
-            async def mock_llm_stream(text: str) -> AsyncGenerator[str, None]:
-                # In a real setup, this is response.text_stream from Gemini
-                chunk_size = 10
-                for i in range(0, len(text), chunk_size):
-                    yield text[i:i+chunk_size]
-                    await asyncio.sleep(0.005) # Simulating LLM generation time
-            
-            # Get the text we want to pipe
+            # ── Emit plain-text answer event ─────────────────────────
             raw_llm_text = execution_response.answer_block.content.get("text", "")
             
-            # Process via Nexus
-            async for json_brick in nexus_agent.process_stream(
-                text_stream=mock_llm_stream(raw_llm_text),
-                capabilities=["a2ui_v1"] # Mock manifest
-            ):
-                logger.info(f"🧱 [STREAM][{trace_id}] Nexus yielded {json_brick['type']} brick")
-                # Wrap it so the old iOS client doesn't break, or send raw if iOS updated
-                wrapped_block = UIBlock(
-                    type=UIBlockType.A2UI_COMPONENT,
-                    content={"component": json_brick}
-                )
-                yield f"data: {json.dumps({'type': 'a2ui', 'block': wrapped_block.model_dump()})}\n\n"
+            # Optimize final response text (Phase 17)
+            raw_llm_text = await ai_performance_optimizer.optimize_response(
+                agent_type=decision.intent.value,
+                response=raw_llm_text,
+                context={
+                    "user_id": current_user.id,
+                    "intent": decision.intent.value,
+                    "current_mood": "neutral"
+                }
+            )
+            
+            if raw_llm_text:
+                answer_brick = {
+                    "type": "answer",
+                    "block": {
+                        "type": "TutorMessageBlock",
+                        "content": {"text": raw_llm_text},
+                        "priority": 0
+                    }
+                }
+                collected_bricks.append(answer_brick)
+                yield f"data: {json.dumps(answer_brick)}\n\n"
+                logger.info(f"📝 [STREAM][{trace_id}] Emitted answer event ({len(raw_llm_text)} chars)")
             
             if execution_response.artifact_block:
                 # Send agent-tagged artifact event
@@ -210,30 +282,12 @@ async def stream_lyo2_chat(
                 )
                 yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
             
-            # Send A2UI component blocks (rich interactive UI)
-            for a2ui_block in execution_response.a2ui_blocks:
-                logger.info(f"🎨 [STREAM][{trace_id}] Sending a2ui event")
-                yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
-            
             # Send open_classroom payload (course creation trigger)
-            # Safety net: if the COURSE pipeline ran but produce_course() returned
-            # None (e.g. Gemini course-data agent failed), synthesise a minimal
-            # payload from the request text so iOS classroom still opens.
             if (
                 execution_response.open_classroom_payload is None
                 and decision.intent == Intent.COURSE
             ):
-                import re as _re
-                topic_text = (request.text or "").strip()
-                # Strip leading imperative phrases to get the bare topic
-                topic_text = _re.sub(
-                    r"^(create (a )?course (on|about)?|make (a )?course (on|about)?|"
-                    r"build (a )?course (on|about)?|teach me (about|on)?|"
-                    r"i want (a )?course (on|about)?|course on|course about)\s*",
-                    "",
-                    topic_text,
-                    flags=_re.IGNORECASE,
-                ).strip() or topic_text
+                topic_text = _extract_course_topic(request.text or "")
                 fallback_oc = {
                     "course": {
                         "id": str(uuid.uuid4()),
@@ -248,10 +302,6 @@ async def stream_lyo2_chat(
                         ],
                     }
                 }
-                # Only use the fallback when produce_course() truly returned nothing.
-                # The executor already populates open_classroom_payload from
-                # a2ui_producer.produce_course(), so this branch only fires when
-                # that whole chain failed (e.g. Gemini course-data call error).
                 execution_response = execution_response.model_copy(
                     update={"open_classroom_payload": fallback_oc}
                 )
@@ -262,17 +312,46 @@ async def stream_lyo2_chat(
 
             if execution_response.open_classroom_payload:
                 logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
-                oc_block = {
-                    "type": "OpenClassroomBlock",
-                    "content": {
-                        "type": "OPEN_CLASSROOM",
-                        **execution_response.open_classroom_payload
+                oc_brick = {
+                    "type": "open_classroom",
+                    "block": {
+                        "type": "OpenClassroomBlock",
+                        "content": {
+                            "type": "OPEN_CLASSROOM",
+                            **execution_response.open_classroom_payload
+                        },
+                        "priority": 0
                     }
                 }
-                yield f"data: {json.dumps({'type': 'open_classroom', 'block': oc_block})}\n\n"
+                collected_bricks.append(oc_brick)
+                yield f"data: {json.dumps(oc_brick)}\n\n"
                 
-            yield f"data: {json.dumps({'type': 'actions', 'blocks': [b.model_dump() for b in execution_response.next_actions]})}\n\n"
+            # Emit v1 actions event
+            action_labels = []
+            for action_block in execution_response.next_actions:
+                if action_block.content and "actions" in action_block.content:
+                    action_labels.extend(action_block.content["actions"])
+            if action_labels:
+                actions_brick = {
+                    "type": "actions",
+                    "blocks": [{"type": "CTARow", "content": {"actions": action_labels}, "priority": 0}]
+                }
+                collected_bricks.append(actions_brick)
+                yield f"data: {json.dumps(actions_brick)}\n\n"
             
+            # --- Cache the full response (Phase 17) ---
+            if 'cache_key' in locals() and cache_key and collected_bricks:
+                try:
+                    await ai_performance_optimizer.cache_manager.set(
+                        "full_response", 
+                        key=cache_key, 
+                        value=collected_bricks,
+                        expire=3600 * 12 # Cache for 12 hours
+                    )
+                    logger.info(f"💾 [STREAM][{trace_id}] Persisted full response to cache.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Cache save failed: {e}")
+
             # Completion signal
             yield "data: [DONE]\n\n"
             logger.info(f"🏁 [STREAM][{trace_id}] Total session time: {time.time()-start_time:.2f}s")

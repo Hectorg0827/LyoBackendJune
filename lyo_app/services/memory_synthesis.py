@@ -9,6 +9,8 @@ The memory blob is a concise, structured summary that gets injected into every
 AI session, making the AI feel like it truly knows the user.
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -16,10 +18,11 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_
 
-from lyo_app.auth.models import User
-from lyo_app.ai_agents.models import MentorInteraction, UserEngagementState
-# from lyo_app.ai_agents.orchestrator import ai_orchestrator, TaskComplexity, ModelType
-from lyo_app.personalization.models import LearnerState, LearnerMastery, SpacedRepetitionSchedule
+from lyo_app.personalization.models import (
+    LearnerState, LearnerMastery, SpacedRepetitionSchedule, MemoryInsight as MemoryInsightDB
+)
+from lyo_app.services.embedding_service import embedding_service
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -69,31 +72,24 @@ class MemorySynthesisService:
     # Memory blob constraints
     MAX_SUMMARY_WORDS = 300
     MAX_INSIGHTS_PER_CATEGORY = 5
-    SYNTHESIS_PROMPT_TEMPLATE = """You are a memory synthesis AI. Your job is to create a concise, personal profile
-of a learner based on their interaction history. This profile will be used by an AI tutor to personalize
-every future interaction.
+## Memory Profile:"""
 
-## User Interaction Data:
+    INSIGHT_EXTRACTION_PROMPT = """You are a memory synthesis AI. Your job is to extract 3-5 discrete, high-value personal insights about a learner from their recent interactions.
+Each insight should be a single, impactful sentence that captures something non-obvious about their learning style, interests, emotional triggers, or personal context.
+
+## Interaction Data:
 {interaction_data}
 
-## Current Profile (if exists):
-{current_profile}
+## Output Format:
+Your output MUST be a JSON list of objects:
+[
+  {{"category": "learning_style", "insight": "You learn best when complex concepts are broken down into practical coding examples.", "confidence": 0.9}},
+  {{"category": "interest", "insight": "You are particularly motivated by building real-world applications for social good.", "confidence": 0.85}}
+]
 
-## Instructions:
-Create a concise memory profile (max 300 words) that captures:
+## Categories: learning_style, emotional_trigger, interest, struggle_point, success_pattern, personal_context
 
-1. **Learning Style**: How do they learn best? (visual, examples, step-by-step, etc.)
-2. **Communication Preference**: Do they prefer casual or formal? Quick answers or detailed explanations?
-3. **Emotional Patterns**: When do they get frustrated? What motivates them?
-4. **Strengths**: What topics/skills come easily to them?
-5. **Struggle Points**: What concepts do they find difficult? What analogies helped?
-6. **Recent Progress**: What breakthroughs or wins have they had recently?
-7. **Personal Context**: Any relevant life context (member, professional, time constraints, etc.)
-
-Write in second person ("You prefer...", "You've shown...") so the AI tutor can reference it naturally.
-Be specific and actionable. Avoid generic statements.
-
-## Memory Profile:"""
+## Insights:"""
 
     def __init__(self):
         self.insights_cache: Dict[int, List[MemoryInsight]] = {}
@@ -142,6 +138,14 @@ Be specific and actionable. Avoid generic statements.
             updated_memory = await self._generate_memory_synthesis(
                 interaction_data=interaction_data,
                 current_profile=current_memory
+            )
+
+            # Extract and save discrete insights (New for Phase 14)
+            await self._extract_and_save_discrete_insights(
+                user_id=user_id,
+                session_id=session_id,
+                interaction_data=interaction_data,
+                db=db
             )
 
             # Save updated memory
@@ -262,8 +266,9 @@ Be specific and actionable. Avoid generic statements.
 
     # ==================== Private Methods ====================
 
-    async def _get_user(self, user_id: int, db: AsyncSession) -> Optional[User]:
+    async def _get_user(self, user_id: int, db: AsyncSession):
         """Fetch user from database."""
+        from lyo_app.modules.auth.models import User
         result = await db.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
@@ -523,6 +528,68 @@ Be specific and actionable. Avoid generic statements.
 
         return "\n".join(parts)
 
+    async def _extract_and_save_discrete_insights(
+        self,
+        user_id: int,
+        session_id: str,
+        interaction_data: str,
+        db: AsyncSession
+    ):
+        """Extract discrete insights, vectorize them, and save to DB."""
+        try:
+            prompt = self.INSIGHT_EXTRACTION_PROMPT.format(interaction_data=interaction_data)
+            
+            from lyo_app.ai_agents.orchestrator import ai_orchestrator, TaskComplexity, ModelType
+            
+            response = await ai_orchestrator.generate_response(
+                prompt=prompt,
+                task_complexity=TaskComplexity.MEDIUM,
+                model_preference=ModelType.CLAUDE_3_5_SONNET,
+                max_tokens=500
+            )
+
+            content = ""
+            if hasattr(response, 'content'):
+                content = response.content.strip()
+            else:
+                content = str(response).strip()
+
+            # Clean and parse JSON
+            content = content.replace("```json", "").replace("```", "").strip()
+            insights_list = json.loads(content)
+
+            for item in insights_list:
+                category = item.get("category", "general")
+                text = item.get("insight", "")
+                confidence = item.get("confidence", 1.0)
+
+                if not text:
+                    continue
+
+                # Generate embedding
+                embedding = await embedding_service.embed_text(text)
+                if not embedding:
+                    logger.warning(f"Failed to generate embedding for insight: {text}")
+                    continue
+
+                # Create DB record
+                insight_record = MemoryInsightDB(
+                    user_id=user_id,
+                    category=category,
+                    insight_text=text,
+                    embedding=embedding,
+                    confidence=confidence,
+                    source_session_id=session_id
+                )
+                db.add(insight_record)
+
+            await db.commit()
+            logger.info(f"Extracted and saved {len(insights_list)} insights for user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to extract/save discrete insights: {e}")
+            await db.rollback()
+
     async def _generate_memory_synthesis(
         self,
         interaction_data: str,
@@ -562,6 +629,7 @@ Be specific and actionable. Avoid generic statements.
     ) -> bool:
         """Save updated memory to user record."""
         try:
+            from lyo_app.modules.auth.models import User
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
 

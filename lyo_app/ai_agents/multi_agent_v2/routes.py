@@ -338,7 +338,7 @@ async def run_course_generation(
 def convert_to_lyo_course(generated: GeneratedCourse) -> LyoCourse:
     """
     Converts a multi-agent GeneratedCourse into a LyoCourse (V2) 
-    compatible with the SwiftUI A2UI renderer.
+    compatible with the SwiftUI Lyo2 renderer.
     """
     lyo_modules = []
     

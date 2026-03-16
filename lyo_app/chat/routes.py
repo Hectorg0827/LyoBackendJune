@@ -55,8 +55,6 @@ from lyo_app.personalization.service import personalization_engine
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.core.context_engine import context_engine
 from lyo_app.core.personality import LYO_SYSTEM_PROMPT
-from lyo_app.chat.a2ui_integration import chat_a2ui_service
-from lyo_app.a2ui.a2ui_producer import a2ui_producer
 
 # A2A Imports
 from lyo_app.ai_agents.a2a.schemas import (
@@ -94,6 +92,7 @@ async def get_proactive_greeting(
             # Get Detailed Learning Context
             learner_context = await personalization_engine.build_prompt_context(db, str(current_user.id))
         except Exception as e:
+            await db.rollback()
             logger.warning(f"Failed to build context for greeting: {e}")
 
     # 2. Construct prompt
@@ -226,6 +225,7 @@ async def chat_endpoint(
                     context["learner_context"] = learner_context
                     context["learner_id"] = str(current_user.id)
             except Exception as e:
+                await db.rollback()
                 logger.warning(f"Personalization context unavailable: {e}")
                 
         # 3. Route the message (Now with full context)
@@ -268,6 +268,18 @@ async def chat_endpoint(
                     request.message, mode.value, agent_result
                 )
         
+        # FORCE ROLLBACK to clear any stealth failed transaction states (e.g., from personalization or cache logic)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+        # FORCE ROLLBACK to clear any stealth failed transaction states (e.g., from personalization or cache logic)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
         # 7. Get recent CTAs for deduplication
         recent_messages = await conversation_store.get_messages(
             db, conversation.id, limit=5
@@ -408,7 +420,7 @@ async def chat_endpoint(
                 "data": quick_explainer_data
             })
         
-        # A2UI variables for OPEN_CLASSROOM
+        # OPEN_CLASSROOM variables
         open_classroom_type = None
         open_classroom_payload = None
         
@@ -428,7 +440,7 @@ async def chat_endpoint(
                 "data": course_proposal_data
             })
             
-            # Build A2UI OPEN_CLASSROOM payload for iOS
+            # Build OPEN_CLASSROOM payload for iOS
             open_classroom_type = "OPEN_CLASSROOM"
             open_classroom_payload = OpenClassroomPayload(
                 course=OpenClassroomCourse(
@@ -451,35 +463,6 @@ async def chat_endpoint(
                  "data": study_plan_data
              })
 
-        # Generate A2UI component via A2UIProducer chokepoint
-        ui_component = None
-        try:
-            if mode == ChatMode.COURSE_PLANNER and course_data:
-                result = a2ui_producer.produce_course(course_data, topic=request.message)
-                ui_component = result.get("a2ui_component")
-                # Also set open_classroom payload from producer if not already set
-                if result.get("open_classroom") and not open_classroom_payload:
-                    open_classroom_payload = result["open_classroom"]
-                    open_classroom_type = "OPEN_CLASSROOM"
-            elif mode == ChatMode.PRACTICE and agent_result.get("quiz_data"):
-                ui_component = a2ui_producer.produce_quiz(agent_result["quiz_data"])
-            elif mode == ChatMode.QUICK_EXPLAINER:
-                topic = context.get("topic", "Topic")
-                ui_component = a2ui_producer.produce_explanation(
-                    assembled["response"], topic=topic
-                )
-            elif mode == ChatMode.NOTE_TAKER and agent_result.get("note_data"):
-                # Notes still use ChatA2UIService (no producer method yet)
-                ui_component = chat_a2ui_service.generate_note_ui(agent_result["note_data"])
-            else:
-                # General responses — produce an explanation card
-                ui_component = a2ui_producer.produce_explanation(
-                    assembled["response"], topic=request.message[:80]
-                )
-        except Exception as e:
-            logger.error(f"A2UI generation failed: {e}")
-            ui_component = a2ui_producer.produce_error("Failed to generate interface")
-
         response_obj = ChatResponse(
             response=assembled["response"],
             message_id=assistant_message.id,
@@ -490,7 +473,7 @@ async def chat_endpoint(
             course_proposal=course_proposal_data,
             study_plan=study_plan_data,
             content_types=content_types,
-            ui_component=None, # Filled below
+            ui_component=None,
             type=open_classroom_type,
             payload=open_classroom_payload,
             conversation_history=updated_history,
@@ -511,18 +494,6 @@ async def chat_endpoint(
                 )
             ] if assembled["response"] else [])
         )
-        
-        # Safe Serialization of UI Component (snake_case for iOS CodingKeys)
-        if ui_component:
-            if hasattr(ui_component, "to_dict"):
-                response_obj.ui_component = ui_component.to_dict()
-            elif hasattr(ui_component, "model_dump"):
-                response_obj.ui_component = ui_component.model_dump(by_alias=False, exclude_none=True)
-            elif hasattr(ui_component, "dict"):
-                 response_obj.ui_component = ui_component.dict(by_alias=False, exclude_none=True)
-            else:
-                 logger.warning(f"Could not serialize ui_component of type {type(ui_component)}")
-                 response_obj.ui_component = None
 
         return response_obj
         
@@ -621,6 +592,7 @@ async def chat_stream_endpoint(
                         context["learner_context"] = learner_context
                         context["learner_id"] = str(current_user.id)
                 except Exception as e:
+                    await db.rollback()
                     logger.warning(f"Personalization context unavailable: {e}")
             
             # 3. Route the message
