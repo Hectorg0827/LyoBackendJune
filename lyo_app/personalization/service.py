@@ -250,17 +250,26 @@ class PersonalizationEngine:
         """
         user_id = learner_id
 
-        state_result = await db.execute(
-            select(LearnerState).where(LearnerState.user_id == user_id)
-        )
-        state = state_result.scalar_one_or_none()
+        state = None
+        masteries = []
+        try:
+            state_result = await db.execute(
+                select(LearnerState).where(LearnerState.user_id == user_id)
+            )
+            state = state_result.scalar_one_or_none()
 
-        mastery_result = await db.execute(
-            select(LearnerMastery)
-            .where(LearnerMastery.user_id == user_id)
-            .order_by(desc(LearnerMastery.mastery_level))
-        )
-        masteries = mastery_result.scalars().all()
+            mastery_result = await db.execute(
+                select(LearnerMastery)
+                .where(LearnerMastery.user_id == user_id)
+                .order_by(desc(LearnerMastery.mastery_level))
+            )
+            masteries = mastery_result.scalars().all()
+        except Exception as e:
+            logger.warning(f"Failed to query learner state/mastery: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
         if not state and not masteries:
             return ""

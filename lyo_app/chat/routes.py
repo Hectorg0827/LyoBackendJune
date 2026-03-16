@@ -268,22 +268,35 @@ async def chat_endpoint(
                     request.message, mode.value, agent_result
                 )
         
-        # FORCE ROLLBACK to clear any stealth failed transaction states (e.g., from personalization or cache logic)
+        # FORCE ROLLBACK to clear any stealth failed transaction states
+        # (e.g., from personalization pgvector queries or cache logic)
         try:
             await db.rollback()
         except Exception:
             pass
 
-        # FORCE ROLLBACK to clear any stealth failed transaction states (e.g., from personalization or cache logic)
+        # 7. Get recent CTAs for deduplication (defensive: retry after rollback)
+        recent_messages = []
         try:
-            await db.rollback()
-        except Exception:
-            pass
-
-        # 7. Get recent CTAs for deduplication
-        recent_messages = await conversation_store.get_messages(
-            db, conversation.id, limit=5
-        )
+            recent_messages = await conversation_store.get_messages(
+                db, conversation.id, limit=5
+            )
+        except Exception as msg_err:
+            logger.warning(f"get_messages failed ({msg_err}), retrying after rollback")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            try:
+                recent_messages = await conversation_store.get_messages(
+                    db, conversation.id, limit=5
+                )
+            except Exception:
+                logger.warning("get_messages retry also failed, skipping CTA dedup")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
         recent_ctas = [msg.ctas or [] for msg in recent_messages]
         
         # 8. Assemble final response
@@ -334,8 +347,17 @@ async def chat_endpoint(
 
         # Execute saves sequentially to avoid SQLAlchemy session conflicts
         # (asyncio.gather with shared db session causes IllegalStateChangeError)
-        await save_user_message()
-        assistant_message = await save_assistant_message()
+        try:
+            await save_user_message()
+            assistant_message = await save_assistant_message()
+        except Exception as save_err:
+            logger.warning(f"Message save failed ({save_err}), retrying after rollback")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            await save_user_message()
+            assistant_message = await save_assistant_message()
         
         # 11. Record telemetry (await to avoid "transaction closed" errors)
         # Note: fire-and-forget with asyncio.create_task + db session causes errors
@@ -499,6 +521,10 @@ async def chat_endpoint(
         
     except Exception as e:
         logger.error(f"Chat endpoint error: {e}", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Chat processing failed: {str(e)}"

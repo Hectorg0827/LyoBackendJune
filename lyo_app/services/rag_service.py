@@ -162,8 +162,16 @@ class RAGService:
                 MemoryInsight.embedding.cosine_distance(query_vector)
             ).limit(limit)
 
-        result = await db.execute(stmt)
-        insights = result.scalars().all()
+        try:
+            result = await db.execute(stmt)
+            insights = result.scalars().all()
+        except Exception as e:
+            logger.warning(f"User memory search failed (table/pgvector may not exist): {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            return []
 
         return [
             {
