@@ -15,12 +15,8 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent
-from lyo_app.ai.nexus.agent import LyoNexusAgent
-from lyo_app.ai.nexus.factory import LyoNexusFactory
-from lyo_app.ai.nexus.media_worker import LyoNexusMediaWorker
 from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 from lyo_app.core.config import settings
-from lyo_app.a2ui.a2ui_compiler import lyo_response_builder
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
 
@@ -189,40 +185,21 @@ async def stream_lyo2_chat(
             
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
 
-            # ── Deterministic A2UI injection ──────────────────────────
-            # The LLM planner sometimes omits GENERATE_A2UI steps even
-            # when the intent clearly demands rich UI. Ensure one exists.
-            _has_a2ui_step = any(
-                s.action_type == ActionType.GENERATE_A2UI for s in plan.steps
+            # ── Ensure a GENERATE_TEXT step exists ─────────────────────
+            # The LLM planner sometimes omits GENERATE_TEXT steps.
+            # Ensure one exists so the executor always produces final_text.
+            _has_text_step = any(
+                s.action_type == ActionType.GENERATE_TEXT for s in plan.steps
             )
-            _intent_to_a2ui = {
-                Intent.COURSE:              {"ui_type": "course", "title": request.text or ""},
-                Intent.EXPLAIN:             {"ui_type": "explanation"},
-                Intent.QUIZ:                {"ui_type": "quiz"},
-                Intent.FLASHCARDS:          {"ui_type": "quiz"},
-                Intent.STUDY_PLAN:          {"ui_type": "study_plan"},
-                Intent.TEST_PREP:           {"ui_type": "study_plan"},
-                # Fallback: ALL other text-generating intents get an explanation card
-                Intent.CHAT:                {"ui_type": "explanation"},
-                Intent.GENERAL:             {"ui_type": "explanation"},
-                Intent.GREETING:            {"ui_type": "explanation"},
-                Intent.HELP:                {"ui_type": "explanation"},
-                Intent.SUMMARIZE_NOTES:     {"ui_type": "explanation"},
-                Intent.COMMUNITY:           {"ui_type": "explanation"},
-                Intent.SCHEDULE_REMINDERS:  {"ui_type": "explanation"},
-                Intent.MODIFY_ARTIFACT:     {"ui_type": "explanation"},
-                Intent.UNKNOWN:             {"ui_type": "explanation"},
-            }
-            if not _has_a2ui_step and decision.intent in _intent_to_a2ui:
-                a2ui_params = _intent_to_a2ui[decision.intent]
+            if not _has_text_step:
                 plan.steps.append(PlannedAction(
-                    action_type=ActionType.GENERATE_A2UI,
-                    description=f"Auto-injected A2UI step for intent {decision.intent}",
-                    parameters=a2ui_params,
+                    action_type=ActionType.GENERATE_TEXT,
+                    description=f"Auto-injected text generation for intent {decision.intent}",
+                    parameters={"content": None},
                 ))
                 logger.info(
-                    f"📌 [STREAM][{trace_id}] Injected GENERATE_A2UI step "
-                    f"(intent={decision.intent}, ui_type={a2ui_params['ui_type']})"
+                    f"📌 [STREAM][{trace_id}] Injected GENERATE_TEXT step "
+                    f"(intent={decision.intent})"
                 )
 
             # 4. Layer C: Execution (Simulated Streaming)
@@ -254,31 +231,7 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             
-            # --- Lyo-Nexus Slicing Engine ---
-            logger.info(f"🔪 [STREAM][{trace_id}] Piping to Lyo-Nexus Agent...")
-            
-            async def dispatch_update(update_brick: Dict[str, Any]):
-                # Callback used by LyoNexusMediaWorker to send async media updates
-                logger.info(f"🔄 [STREAM][{trace_id}] Nexus Async Update: {update_brick['update_id']}")
-                # We yield into the event_generator's stream (this is tricky in a real setup,
-                # but for SSE, we would push to an async queue that event_generator reads from.
-                # Since we can't easily yield from a detached task directly into the active SSE generator
-                # without an async Queue, we'll log it. In a production WebSocket, we'd do await websocket.send_json().)
-                pass # Queue implementation required for True Async SSE
-                
-            nexus_factory = LyoNexusFactory()
-            nexus_media = LyoNexusMediaWorker(dispatch_update_callback=dispatch_update)
-            nexus_agent = LyoNexusAgent(factory=nexus_factory, media_worker=nexus_media)
-            
-            # Simulate a token stream from the "Brain"
-            async def mock_llm_stream(text: str) -> AsyncGenerator[str, None]:
-                # In a real setup, this is response.text_stream from Gemini
-                chunk_size = 10
-                for i in range(0, len(text), chunk_size):
-                    yield text[i:i+chunk_size]
-                    await asyncio.sleep(0.005) # Simulating LLM generation time
-            
-            # Get the text we want to pipe
+            # ── Emit plain-text answer event ─────────────────────────
             raw_llm_text = execution_response.answer_block.content.get("text", "")
             
             # Optimize final response text (Phase 17)
@@ -288,25 +241,22 @@ async def stream_lyo2_chat(
                 context={
                     "user_id": current_user.id,
                     "intent": decision.intent.value,
-                    "current_mood": "neutral" # To be integrated with AffectState
+                    "current_mood": "neutral"
                 }
             )
             
-            # Process via Nexus
-            async for json_brick in nexus_agent.process_stream(
-                text_stream=mock_llm_stream(raw_llm_text),
-                capabilities=["a2ui_v1"] # Mock manifest
-            ):
-                logger.info(f"🧱 [STREAM][{trace_id}] Nexus yielded {json_brick['type']} brick")
-                lyo_resp = lyo_response_builder.build(
-                    ui=None,
-                    request_id=trace_id,
-                    conversation_id=trace_id,
-                )
-                lyo_resp["ui"] = json_brick
-                brick_data = {"type": "lyo_ui", "response": lyo_resp}
-                collected_bricks.append(brick_data)
-                yield f"data: {json.dumps(brick_data)}\n\n"
+            if raw_llm_text:
+                answer_brick = {
+                    "type": "answer",
+                    "block": {
+                        "type": "TutorMessageBlock",
+                        "content": {"text": raw_llm_text},
+                        "priority": 0
+                    }
+                }
+                collected_bricks.append(answer_brick)
+                yield f"data: {json.dumps(answer_brick)}\n\n"
+                logger.info(f"📝 [STREAM][{trace_id}] Emitted answer event ({len(raw_llm_text)} chars)")
             
             if execution_response.artifact_block:
                 # Send agent-tagged artifact event
@@ -332,41 +282,12 @@ async def stream_lyo2_chat(
                 )
                 yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
             
-            # Send A2UI component blocks as v2 lyo_ui events
-            for a2ui_block in execution_response.a2ui_blocks:
-                logger.info(f"🎨 [STREAM][{trace_id}] Sending lyo_ui event")
-                comp_dict = a2ui_block.content.get("component") if a2ui_block.content else None
-                if comp_dict:
-                    lyo_resp = lyo_response_builder.build(
-                        ui=None,
-                        request_id=trace_id,
-                        conversation_id=trace_id,
-                    )
-                    lyo_resp["ui"] = comp_dict
-                    yield f"data: {json.dumps({'type': 'lyo_ui', 'response': lyo_resp})}\n\n"
-                else:
-                    # Fallback: emit raw block for blocks without component dict
-                    yield f"data: {json.dumps({'type': 'a2ui', 'block': a2ui_block.model_dump()})}\n\n"
-            
             # Send open_classroom payload (course creation trigger)
-            # Safety net: if the COURSE pipeline ran but produce_course() returned
-            # None (e.g. Gemini course-data agent failed), synthesise a minimal
-            # payload from the request text so iOS classroom still opens.
             if (
                 execution_response.open_classroom_payload is None
                 and decision.intent == Intent.COURSE
             ):
-                import re as _re
-                topic_text = (request.text or "").strip()
-                # Strip leading imperative phrases to get the bare topic
-                topic_text = _re.sub(
-                    r"^(create (a )?course (on|about)?|make (a )?course (on|about)?|"
-                    r"build (a )?course (on|about)?|teach me (about|on)?|"
-                    r"i want (a )?course (on|about)?|course on|course about)\s*",
-                    "",
-                    topic_text,
-                    flags=_re.IGNORECASE,
-                ).strip() or topic_text
+                topic_text = _extract_course_topic(request.text or "")
                 fallback_oc = {
                     "course": {
                         "id": str(uuid.uuid4()),
@@ -381,10 +302,6 @@ async def stream_lyo2_chat(
                         ],
                     }
                 }
-                # Only use the fallback when produce_course() truly returned nothing.
-                # The executor already populates open_classroom_payload from
-                # a2ui_producer.produce_course(), so this branch only fires when
-                # that whole chain failed (e.g. Gemini course-data call error).
                 execution_response = execution_response.model_copy(
                     update={"open_classroom_payload": fallback_oc}
                 )
@@ -394,36 +311,33 @@ async def stream_lyo2_chat(
                 )
 
             if execution_response.open_classroom_payload:
-                logger.info(f"🏫 [STREAM][{trace_id}] Sending lyo_command (open_classroom)")
-                # v2: emit lyo_command event only
-                cmd = lyo_response_builder.build_command(
-                    "open_classroom",
-                    execution_response.open_classroom_payload
-                )
-                lyo_resp = lyo_response_builder.build(
-                    command=cmd,
-                    request_id=trace_id,
-                    conversation_id=trace_id,
-                )
-                brick_data = {"type": "lyo_command", "response": lyo_resp}
-                collected_bricks.append(brick_data)
-                yield f"data: {json.dumps(brick_data)}\n\n"
+                logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
+                oc_brick = {
+                    "type": "open_classroom",
+                    "block": {
+                        "type": "OpenClassroomBlock",
+                        "content": {
+                            "type": "OPEN_CLASSROOM",
+                            **execution_response.open_classroom_payload
+                        },
+                        "priority": 0
+                    }
+                }
+                collected_bricks.append(oc_brick)
+                yield f"data: {json.dumps(oc_brick)}\n\n"
                 
-            # v2: emit lyo_suggestions event only
-            v2_suggestions = []
+            # Emit v1 actions event
+            action_labels = []
             for action_block in execution_response.next_actions:
                 if action_block.content and "actions" in action_block.content:
-                    for label in action_block.content["actions"]:
-                        v2_suggestions.append({"text": label})
-            if v2_suggestions:
-                lyo_resp = lyo_response_builder.build(
-                    suggestions=v2_suggestions,
-                    request_id=trace_id,
-                    conversation_id=trace_id,
-                )
-                brick_data = {"type": "lyo_suggestions", "response": lyo_resp}
-                collected_bricks.append(brick_data)
-                yield f"data: {json.dumps(brick_data)}\n\n"
+                    action_labels.extend(action_block.content["actions"])
+            if action_labels:
+                actions_brick = {
+                    "type": "actions",
+                    "blocks": [{"type": "CTARow", "content": {"actions": action_labels}, "priority": 0}]
+                }
+                collected_bricks.append(actions_brick)
+                yield f"data: {json.dumps(actions_brick)}\n\n"
             
             # --- Cache the full response (Phase 17) ---
             if 'cache_key' in locals() and cache_key and collected_bricks:

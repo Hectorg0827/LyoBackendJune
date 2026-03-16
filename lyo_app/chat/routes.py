@@ -94,6 +94,7 @@ async def get_proactive_greeting(
             # Get Detailed Learning Context
             learner_context = await personalization_engine.build_prompt_context(db, str(current_user.id))
         except Exception as e:
+            await db.rollback()
             logger.warning(f"Failed to build context for greeting: {e}")
 
     # 2. Construct prompt
@@ -226,6 +227,7 @@ async def chat_endpoint(
                     context["learner_context"] = learner_context
                     context["learner_id"] = str(current_user.id)
             except Exception as e:
+                await db.rollback()
                 logger.warning(f"Personalization context unavailable: {e}")
                 
         # 3. Route the message (Now with full context)
@@ -621,6 +623,7 @@ async def chat_stream_endpoint(
                         context["learner_context"] = learner_context
                         context["learner_id"] = str(current_user.id)
                 except Exception as e:
+                    await db.rollback()
                     logger.warning(f"Personalization context unavailable: {e}")
             
             # 3. Route the message
