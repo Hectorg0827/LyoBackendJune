@@ -19,7 +19,7 @@ from lyo_app.chat.models import ChatMode, ChipAction
 from lyo_app.chat.templates import PromptTemplates, CTATemplates, SYSTEM_PROMPTS
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.core.lyo_protocol import (
-    LyoBlock, BlockType, SemanticRole, PresentationHint, A2UICinematic
+    LyoBlock, BlockType, SemanticRole, PresentationHint
 )
 
 logger = logging.getLogger(__name__)
@@ -551,7 +551,7 @@ class GeneralAgent(BaseAgent):
         # Call AI
         response_text, metadata = await self.call_ai(messages)
 
-        # We no longer extract A2UI JSON blocks here. 
+        # Smart Block syntax (:::type) is natively part of the text.
         # The new Smart Block syntax (:::type) is natively part of the text.
         
         return {
@@ -560,7 +560,7 @@ class GeneralAgent(BaseAgent):
             "chips": self.get_chips(),
             "lyo_blocks": [],
             "type": None,
-            "block_payload": None,
+            
             **metadata
         }
 

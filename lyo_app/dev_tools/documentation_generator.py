@@ -91,9 +91,9 @@ class DocumentationGenerator:
         return {
             "name": "Lyo Learning Platform",
             "version": "1.0.0",
-            "description": "Advanced AI-powered learning platform with recursive A2UI components",
+            "description": "Advanced AI-powered learning platform with recursive Lyo2 components",
             "features": [
-                "Recursive A2UI Component System",
+                "Recursive Lyo2 Component System",
                 "Real-time Learning Synchronization",
                 "Adaptive Learning Engine",
                 "Advanced Interactive Components",
@@ -111,11 +111,11 @@ class DocumentationGenerator:
     def _generate_architecture_docs(self) -> Dict[str, Any]:
         """Generate architecture documentation"""
         return {
-            "overview": "Server-driven UI architecture with recursive A2UI components",
+            "overview": "Server-driven UI architecture with recursive Lyo2 components",
             "layers": {
                 "presentation": {
                     "description": "SwiftUI-based iOS client with recursive component rendering",
-                    "components": ["A2UIRecursiveRenderer", "AdvancedA2UIRenderer"],
+                    "components": ["Lyo2RecursiveRenderer", "AdvancedLyo2Renderer"],
                     "responsibilities": ["UI Rendering", "User Interaction", "Real-time Updates"]
                 },
                 "api": {
@@ -125,7 +125,7 @@ class DocumentationGenerator:
                 },
                 "business_logic": {
                     "description": "Core learning and adaptation logic",
-                    "components": ["Adaptive Learning Engine", "A2UI Factory", "Response Assembler"],
+                    "components": ["Adaptive Learning Engine", "Lyo2 Factory", "Response Assembler"],
                     "responsibilities": ["Learning Analytics", "Component Creation", "Content Adaptation"]
                 },
                 "data": {
@@ -135,7 +135,7 @@ class DocumentationGenerator:
                 }
             },
             "design_patterns": {
-                "factory": "A2UI component creation",
+                "factory": "Lyo2 component creation",
                 "observer": "Real-time event handling",
                 "adapter": "Legacy component migration",
                 "strategy": "Adaptive learning algorithms"
@@ -143,7 +143,7 @@ class DocumentationGenerator:
             "data_flow": [
                 "User interaction triggers API request",
                 "Request processed by business logic",
-                "Components generated via A2UI Factory",
+                "Components generated via Lyo2 Factory",
                 "Response assembled with caching",
                 "Real-time updates via WebSocket",
                 "SwiftUI renders recursive components"
@@ -154,7 +154,7 @@ class DocumentationGenerator:
         """Generate comprehensive component documentation"""
         components = []
 
-        # Basic A2UI Components
+        # Basic Lyo2 Components
         basic_components = [
             {
                 "name": "VStackComponent",
@@ -166,7 +166,7 @@ class DocumentationGenerator:
                     "children": {"type": "array", "description": "Child components"}
                 },
                 "examples": [
-                    'A2UIFactory.vstack(\n    A2UIFactory.text("Title", style="headline"),\n    A2UIFactory.button("Action", "action_id"),\n    spacing=16\n)'
+                    'Lyo2Factory.vstack(\n    Lyo2Factory.text("Title", style="headline"),\n    Lyo2Factory.button("Action", "action_id"),\n    spacing=16\n)'
                 ]
             },
             {
@@ -180,7 +180,7 @@ class DocumentationGenerator:
                     "alignment": {"type": "string", "enum": ["leading", "center", "trailing"], "description": "Text alignment"}
                 },
                 "examples": [
-                    'A2UIFactory.text("Hello World", style="title", color="#0066CC")'
+                    'Lyo2Factory.text("Hello World", style="title", color="#0066CC")'
                 ]
             },
             {
@@ -194,7 +194,7 @@ class DocumentationGenerator:
                     "is_disabled": {"type": "boolean", "default": False, "description": "Disabled state"}
                 },
                 "examples": [
-                    'A2UIFactory.button("Save", "save_action", variant="primary")'
+                    'Lyo2Factory.button("Save", "save_action", variant="primary")'
                 ]
             }
         ]
@@ -214,7 +214,7 @@ class DocumentationGenerator:
                     "track_progress": {"type": "boolean", "default": True, "description": "Enable progress tracking"}
                 },
                 "examples": [
-                    'A2UIFactory.video_player(\n    "https://example.com/lesson.mp4",\n    title="Python Basics",\n    chapters=[{"timestamp": 0, "title": "Introduction"}]\n)'
+                    'Lyo2Factory.video_player(\n    "https://example.com/lesson.mp4",\n    title="Python Basics",\n    chapters=[{"timestamp": 0, "title": "Introduction"}]\n)'
                 ]
             },
             {
@@ -230,7 +230,7 @@ class DocumentationGenerator:
                     "auto_grade": {"type": "boolean", "default": False, "description": "Enable auto-grading"}
                 },
                 "examples": [
-                    'A2UIFactory.code_sandbox(\n    "python",\n    "Hello World Exercise",\n    \'print("Hello, World!")\'\n)'
+                    'Lyo2Factory.code_sandbox(\n    "python",\n    "Hello World Exercise",\n    \'print("Hello, World!")\'\n)'
                 ]
             },
             {
@@ -245,7 +245,7 @@ class DocumentationGenerator:
                     "voice_enabled": {"type": "boolean", "default": False, "description": "Enable voice chat"}
                 },
                 "examples": [
-                    'A2UIFactory.collaboration_space(\n    "Study Group",\n    collaboration_types=["real_time_editing", "whiteboard"]\n)'
+                    'Lyo2Factory.collaboration_space(\n    "Study Group",\n    collaboration_types=["real_time_editing", "whiteboard"]\n)'
                 ]
             }
         ]
@@ -269,7 +269,7 @@ class DocumentationGenerator:
             APIEndpointDoc(
                 path="/api/v1/chat/v2",
                 method="POST",
-                description="Generate AI chat response with A2UI components",
+                description="Generate AI chat response with Lyo2 components",
                 parameters={
                     "message": {"type": "string", "required": True, "description": "User message"},
                     "session_id": {"type": "string", "description": "Session identifier"},
@@ -342,8 +342,8 @@ class DocumentationGenerator:
 
         # Key modules to document
         module_paths = [
-            "lyo_app/chat/a2ui_recursive.py",
-            "lyo_app/chat/advanced_a2ui_components.py",
+            "lyo_app/chat/lyo2_recursive.py",
+            "lyo_app/chat/advanced_lyo2_components.py",
             "lyo_app/ai_classroom/realtime_sync.py",
             "lyo_app/ai_classroom/adaptive_learning.py",
             "lyo_app/cache/performance_cache.py"
@@ -428,8 +428,8 @@ class DocumentationGenerator:
                     "coverage": "100%"
                 },
                 {
-                    "name": "Advanced A2UI Components",
-                    "file": "test_advanced_a2ui_components.py",
+                    "name": "Advanced Lyo2 Components",
+                    "file": "test_advanced_lyo2_components.py",
                     "description": "Tests video, coding, and collaboration components",
                     "coverage": "100%"
                 }
@@ -491,13 +491,13 @@ class DocumentationGenerator:
         """Generate comprehensive examples"""
         return {
             "basic_usage": {
-                "description": "Basic A2UI component creation",
+                "description": "Basic Lyo2 component creation",
                 "code": '''
 # Create a simple learning card
-learning_card = A2UIFactory.card(
-    A2UIFactory.text("Welcome to Python", style="title"),
-    A2UIFactory.text("Let's start learning!", style="body"),
-    A2UIFactory.button("Begin", "start_learning"),
+learning_card = Lyo2Factory.card(
+    Lyo2Factory.text("Welcome to Python", style="title"),
+    Lyo2Factory.text("Let's start learning!", style="body"),
+    Lyo2Factory.button("Begin", "start_learning"),
     title="Getting Started"
 )
 
@@ -509,9 +509,9 @@ ui_json = learning_card.model_dump()
                 "description": "Advanced interactive components",
                 "code": '''
 # Create a complete learning experience
-learning_ui = A2UIFactory.vstack(
+learning_ui = Lyo2Factory.vstack(
     # Video lesson
-    A2UIFactory.video_player(
+    Lyo2Factory.video_player(
         "https://example.com/python-intro.mp4",
         title="Python Introduction",
         chapters=[
@@ -521,7 +521,7 @@ learning_ui = A2UIFactory.vstack(
     ),
 
     # Interactive coding exercise
-    A2UIFactory.code_sandbox(
+    Lyo2Factory.code_sandbox(
         language="python",
         title="Try it yourself",
         initial_code="name = input('What is your name?')\\nprint(f'Hello, {name}!')",
@@ -529,7 +529,7 @@ learning_ui = A2UIFactory.vstack(
     ),
 
     # Collaboration space
-    A2UIFactory.collaboration_space(
+    Lyo2Factory.collaboration_space(
         title="Discussion",
         collaboration_types=["real_time_editing", "chat"]
     ),
@@ -573,7 +573,7 @@ recommendations = await adaptive_engine.get_recommendations("student_123")
                 "version": "1.0.0",
                 "date": "2024-01-21",
                 "changes": [
-                    "✅ Recursive A2UI Component System",
+                    "✅ Recursive Lyo2 Component System",
                     "✅ Real-time Learning Synchronization",
                     "✅ Adaptive Learning Engine",
                     "✅ Advanced Interactive Components",
@@ -620,7 +620,7 @@ Generated on: {docs['generated_at']}
 
         markdown_content += """
 
-## A2UI Components
+## Lyo2 Components
 
 ### Basic Components
 """
@@ -689,7 +689,7 @@ Generated on: {docs['generated_at']}
 ### Test Coverage
 - Performance Optimizations: 100%
 - AI Classroom Features: 100%
-- Advanced A2UI Components: 100%
+- Advanced Lyo2 Components: 100%
 - Quality Assurance: 100%
 
 ### Quality Gates
@@ -704,9 +704,9 @@ Generated on: {docs['generated_at']}
 
 ```python
 # Create a simple learning card
-learning_card = A2UIFactory.card(
-    A2UIFactory.text("Welcome to Python", style="title"),
-    A2UIFactory.button("Begin", "start_learning"),
+learning_card = Lyo2Factory.card(
+    Lyo2Factory.text("Welcome to Python", style="title"),
+    Lyo2Factory.button("Begin", "start_learning"),
     title="Getting Started"
 )
 ```
@@ -715,10 +715,10 @@ learning_card = A2UIFactory.card(
 
 ```python
 # Complete learning experience
-learning_ui = A2UIFactory.vstack(
-    A2UIFactory.video_player("https://example.com/lesson.mp4", "Python Intro"),
-    A2UIFactory.code_sandbox("python", "Exercise", "print('Hello!')"),
-    A2UIFactory.collaboration_space("Discussion"),
+learning_ui = Lyo2Factory.vstack(
+    Lyo2Factory.video_player("https://example.com/lesson.mp4", "Python Intro"),
+    Lyo2Factory.code_sandbox("python", "Exercise", "print('Hello!')"),
+    Lyo2Factory.collaboration_space("Discussion"),
     spacing=20
 )
 ```
@@ -805,7 +805,7 @@ python -m uvicorn lyo_app.main:app --reload
 <body>
     <div class="header">
         <h1>🚀 Lyo Learning Platform Documentation</h1>
-        <p>Advanced AI-powered learning platform with recursive A2UI components</p>
+        <p>Advanced AI-powered learning platform with recursive Lyo2 components</p>
         <small>Generated: {docs['generated_at']}</small>
     </div>
 
@@ -832,7 +832,7 @@ python -m uvicorn lyo_app.main:app --reload
     </div>
 
     <div class="section">
-        <h2>🧩 A2UI Components</h2>
+        <h2>🧩 Lyo2 Components</h2>
         {''.join(f'''
         <div class="component">
             <h4>{component.name}</h4>
@@ -859,9 +859,9 @@ python -m uvicorn lyo_app.main:app --reload
             <h4>Basic Component Creation</h4>
             <div class="code">
 # Create a simple learning card
-learning_card = A2UIFactory.card(
-    A2UIFactory.text("Welcome to Python", style="title"),
-    A2UIFactory.button("Begin", "start_learning"),
+learning_card = Lyo2Factory.card(
+    Lyo2Factory.text("Welcome to Python", style="title"),
+    Lyo2Factory.button("Begin", "start_learning"),
     title="Getting Started"
 )
             </div>
@@ -871,10 +871,10 @@ learning_card = A2UIFactory.card(
             <h4>Advanced Learning Experience</h4>
             <div class="code">
 # Complete learning UI with video, coding, and collaboration
-learning_ui = A2UIFactory.vstack(
-    A2UIFactory.video_player("lesson.mp4", "Python Intro"),
-    A2UIFactory.code_sandbox("python", "Exercise", "print('Hello!')"),
-    A2UIFactory.collaboration_space("Discussion"),
+learning_ui = Lyo2Factory.vstack(
+    Lyo2Factory.video_player("lesson.mp4", "Python Intro"),
+    Lyo2Factory.code_sandbox("python", "Exercise", "print('Hello!')"),
+    Lyo2Factory.collaboration_space("Discussion"),
     spacing=20
 )
             </div>
@@ -934,7 +934,7 @@ Responsibilities: {', '.join(layer_info['responsibilities'])}
 
         pdf_content += """
 ===============================================================================
-A2UI COMPONENT REFERENCE
+Lyo2 COMPONENT REFERENCE
 ===============================================================================
 """
 
@@ -997,14 +997,14 @@ END OF DOCUMENTATION
     def _create_component_validator(self):
         """Create component validation script"""
         return {
-            "name": "A2UI Component Validator",
-            "description": "Validates A2UI component structure and properties",
+            "name": "Lyo2 Component Validator",
+            "description": "Validates Lyo2 component structure and properties",
             "script": '''
 import json
 from typing import Dict, Any
 
-def validate_a2ui_component(component: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate A2UI component structure"""
+def validate_lyo2_component(component: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate Lyo2 component structure"""
     errors = []
     warnings = []
 
@@ -1050,7 +1050,7 @@ async def run_all_tests():
     test_files = [
         "test_performance_optimizations.py",
         "test_enhanced_ai_classroom.py",
-        "test_advanced_a2ui_components.py",
+        "test_advanced_lyo2_components.py",
         "test_comprehensive_quality_assurance.py"
     ]
 
@@ -1104,7 +1104,7 @@ class LyoAPIClient:
         self.session = requests.Session()
 
     def chat_v2(self, message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """Send chat message and get A2UI response"""
+        """Send chat message and get Lyo2 response"""
         payload = {"message": message}
         if session_id:
             payload["session_id"] = session_id

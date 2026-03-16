@@ -27,7 +27,7 @@ def _get_gemini_model():
     genai.configure(api_key=api_key)
     logger.info(f"✅ Gemini executor model initialised (key ending ...{api_key[-4:]})")
     return genai.GenerativeModel(
-        "gemini-3.1-pro-preview-customtools",
+        "gemini-2.5-flash",
         generation_config={"temperature": 0.7, "max_output_tokens": 2048},
     )
 
@@ -44,7 +44,7 @@ def _get_json_gemini_model():
         return None
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        "gemini-3.1-pro-preview-customtools",
+        "gemini-2.5-flash",
         generation_config={
             "temperature": 0.5,
             "max_output_tokens": 2048,
@@ -144,7 +144,7 @@ USER QUESTION:
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=messages,
-                    provider_order=["gemini-1.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
                 ),
                 timeout=30.0
             )
@@ -200,10 +200,7 @@ USER QUESTION:
                 else:
                     logger.warning("UPDATE_ARTIFACT requested but no artifact_id found in plan")
                 
-            elif step.action_type == ActionType.GENERATE_A2UI:
-                # A2UI has been removed — treat as a GENERATE_TEXT fallback
-                logger.info(f"⏩ [EXECUTOR] GENERATE_A2UI step encountered — delegating to text generation")
-                if not execution_context["final_text"]:
+            elif step.action_type == ActionType.GENERATE_TEXT and not execution_context["final_text"]:
                     execution_context["final_text"] = await self._generate_text(
                         original_request, execution_context, step.parameters
                     )
@@ -267,7 +264,6 @@ USER QUESTION:
             answer_block=answer_block,
             artifact_block=artifact_block,
             next_actions=self._contextual_actions(intent),
-            a2ui_blocks=[],
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={"latency_ms": 100}
         )
@@ -372,7 +368,7 @@ Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
         """Generate detailed lesson content using Gemini JSON mode.
 
         Returns a dict with body_sections, key_points, and has_quiz flag that
-        the iOS A2UI engine renders as a LessonContentView component.
+        the iOS LessonContentView component.
         """
         fallback = {
             "title": lesson_title,

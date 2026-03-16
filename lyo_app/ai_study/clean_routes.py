@@ -532,12 +532,12 @@ def _generate_fallback_quiz(question_count: int, quiz_type: str) -> List[QuizQue
 
 
 # ============================================================================
-# A2UI WIDGET DETECTION LOGIC
+# WIDGET DETECTION LOGIC
 # ============================================================================
 
-def _detect_a2ui_widgets(message: str, context: str, ai_response: str) -> List["ContentTypePayload"]:
+def _detect_widgets(message: str, context: str, ai_response: str) -> List["ContentTypePayload"]:
     """
-    Detect which A2UI widgets to render based on message context, intent, AND AI response.
+    Detect which widgets to render based on message context, intent, AND AI response.
     
     This function analyzes:
     1. User's message for intent keywords
@@ -598,31 +598,31 @@ def _detect_a2ui_widgets(message: str, context: str, ai_response: str) -> List["
     course_mode = "mode=course" in context_lower
     
     if course_mode or course_in_message or course_in_response:
-        # Build nested structure for iOS A2UIContent
-        roadmap = A2UICourseRoadmapPayload(
+        # Build nested structure for iOS Content
+        roadmap = CourseRoadmapPayload(
             title="Course Roadmap",
             topic=message[:50] if message else "Learning",  # Extract topic from message
             level="beginner",
             modules=[
-                A2UIModulePayload(
+                ModulePayload(
                     title="Introduction",
                     description="Getting started with the basics",
-                    lessons=[A2UILessonPayload(title="Welcome", duration="5 min")]
+                    lessons=[LessonPayload(title="Welcome", duration="5 min")]
                 ),
-                A2UIModulePayload(
+                ModulePayload(
                     title="Core Concepts",
                     description="Understanding the fundamentals",
-                    lessons=[A2UILessonPayload(title="Key Ideas", duration="15 min")]
+                    lessons=[LessonPayload(title="Key Ideas", duration="15 min")]
                 ),
-                A2UIModulePayload(
+                ModulePayload(
                     title="Practice",
                     description="Apply what you've learned",
-                    lessons=[A2UILessonPayload(title="Exercises", duration="20 min")]
+                    lessons=[LessonPayload(title="Exercises", duration="20 min")]
                 ),
-                A2UIModulePayload(
+                ModulePayload(
                     title="Assessment",
                     description="Test your knowledge",
-                    lessons=[A2UILessonPayload(title="Quiz", duration="10 min")]
+                    lessons=[LessonPayload(title="Quiz", duration="10 min")]
                 )
             ]
         )
@@ -679,10 +679,10 @@ def _detect_a2ui_widgets(message: str, context: str, ai_response: str) -> List["
     
     if quiz_mode or quiz_in_message or quiz_in_response:
         # Build nested quiz structure for iOS
-        quiz_payload = A2UIQuizPayload(
+        quiz_payload = QuizPayload(
             title="Quick Quiz",
             questions=[
-                A2UIQuizQuestionPayload(
+                QuizQuestionPayload(
                     question="What is the primary benefit of using variables in programming?",
                     options=[
                         "A) They make code run faster",
@@ -715,7 +715,7 @@ def _detect_a2ui_widgets(message: str, context: str, ai_response: str) -> List["
     # ============================================================================
     # SUGGESTIONS Widget (FALLBACK)
     # Always add smart suggestions if no other interactive widget was added
-    # This ensures every response has an A2UI component for engagement
+    # This ensures every response has an component for engagement
     # ============================================================================
     if not added_interactive_widget:
         # Generate contextual suggestions based on message
@@ -767,7 +767,7 @@ class ChatRequest(BaseModel):
 
 
 # ============================================================================
-# A2UI CONTENT TYPE MODELS (iOS Compatible)
+# CONTENT TYPE MODELS (iOS Compatible)
 # ============================================================================
 
 class TopicOptionPayload(BaseModel):
@@ -790,26 +790,26 @@ class CourseModulePayload(BaseModel):
     class Config:
         populate_by_name = True
 
-# Nested structures for iOS A2UI compatibility
-class A2UILessonPayload(BaseModel):
+# Nested structures for iOS compatibility
+class LessonPayload(BaseModel):
     """Lesson for nested course roadmap"""
     title: str
     duration: str = "10 min"
 
-class A2UIModulePayload(BaseModel):
+class ModulePayload(BaseModel):
     """Module with lessons for nested course roadmap"""
     title: str
     description: str = ""
-    lessons: List[A2UILessonPayload] = []
+    lessons: List[LessonPayload] = []
 
-class A2UICourseRoadmapPayload(BaseModel):
+class CourseRoadmapPayload(BaseModel):
     """Nested course roadmap structure for iOS"""
     title: str
     topic: str
     level: str = "beginner"
-    modules: List[A2UIModulePayload] = []
+    modules: List[ModulePayload] = []
 
-class A2UIQuizQuestionPayload(BaseModel):
+class QuizQuestionPayload(BaseModel):
     """Quiz question for iOS"""
     question: str
     options: List[str]
@@ -818,10 +818,10 @@ class A2UIQuizQuestionPayload(BaseModel):
     class Config:
         populate_by_name = True
 
-class A2UIQuizPayload(BaseModel):
+class QuizPayload(BaseModel):
     """Nested quiz structure for iOS"""
     title: str
-    questions: List[A2UIQuizQuestionPayload] = []
+    questions: List[QuizQuestionPayload] = []
 
 class FlashcardPayload(BaseModel):
     """Flashcard for flashcard widget"""
@@ -831,7 +831,7 @@ class FlashcardPayload(BaseModel):
 
 class ContentTypePayload(BaseModel):
     """
-    A2UI content type union - iOS Compatible
+    Content type union - iOS Compatible
     
     Type values use snake_case for iOS compatibility:
     - text, processing, topic_selection, course_roadmap, flashcards, quiz, suggestions
@@ -849,7 +849,7 @@ class ContentTypePayload(BaseModel):
     topics: Optional[List[TopicOptionPayload]] = None
     
     # Course roadmap widget - NESTED structure for iOS
-    course_roadmap: Optional[A2UICourseRoadmapPayload] = None
+    course_roadmap: Optional[CourseRoadmapPayload] = None
     # Also keep flat format for backwards compatibility
     modules: Optional[List[CourseModulePayload]] = None
     totalModules: Optional[int] = None
@@ -859,7 +859,7 @@ class ContentTypePayload(BaseModel):
     cards: Optional[List[FlashcardPayload]] = None
     
     # Quiz widget - NESTED structure for iOS
-    quiz: Optional[A2UIQuizPayload] = None
+    quiz: Optional[QuizPayload] = None
     # Also keep flat format for backwards compatibility
     question: Optional[str] = None
     options: Optional[List[str]] = None
@@ -874,9 +874,9 @@ class ContentTypePayload(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    """Enhanced chat response with A2UI content types"""
+    """Enhanced chat response with content types"""
     response: str = Field(..., description="AI response text")
-    ui_component: List[ContentTypePayload] = Field(default_factory=list, serialization_alias="uiComponent", description="A2UI widget payloads")
+    ui_component: List[ContentTypePayload] = Field(default_factory=list, serialization_alias="uiComponent", description="Widget payloads")
     conversationHistory: List[ConversationMessage] = Field(..., description="Updated conversation history")
 
     class Config:
@@ -891,7 +891,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
     
     Simple chat interface for quick AI interactions.
     Used by iOS app for course generation and general AI chat.
-    Now with A2UI widget support!
+    Now with widget support!
     """
     try:
         # Ensure AI manager is initialized
@@ -930,9 +930,9 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
         response_content = ai_response.get("content", ai_response.get("response", "I apologize, but I couldn't generate a response. Please try again."))
         
         # ============================================================================
-        # A2UI WIDGET DETECTION
+        # WIDGET DETECTION
         # ============================================================================
-        content_types = _detect_a2ui_widgets(
+        content_types = _detect_widgets(
             message=request.message,
             context=request.context or "",
             ai_response=response_content
@@ -971,10 +971,10 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
                             for j, mod in enumerate(artifact.data.get("modules", [])):
                                 t = mod.get("title", f"Module {j+1}")
                                 lesson_count = len(mod.get("lessons", [1]))
-                                real_modules.append(A2UIModulePayload(
+                                real_modules.append(ModulePayload(
                                     title=t,
                                     description=mod.get("description", ""),
-                                    lessons=[A2UILessonPayload(title=f"Lesson", duration="15 min")] * lesson_count
+                                    lessons=[LessonPayload(title=f"Lesson", duration="15 min")] * lesson_count
                                 ))
                                 flat_modules.append(CourseModulePayload(title=t, duration=f"{lesson_count * 15} min", isCompleted=False, isLocked=False))
                     
@@ -1014,7 +1014,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
         updated_history.append(ConversationMessage(role="user", content=request.message))
         updated_history.append(ConversationMessage(role="assistant", content=response_content))
         
-        logger.info(f"Public chat completed with {len(content_types)} A2UI widgets")
+        logger.info(f"Public chat completed with {len(content_types)} widgets")
         
         return ChatResponse(
             response=response_content,

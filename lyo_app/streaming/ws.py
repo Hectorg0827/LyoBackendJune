@@ -1,6 +1,6 @@
 
 """
-Real-time WebSocket Manager for A2UI
+Real-time WebSocket Manager
 Handles bi-directional state synchronization and streaming UI updates.
 """
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class ConnectionManager:
     """
-    Manages WebSocket connections for A2UI sessions.
+    Manages WebSocket connections for streaming sessions.
     
     Responsibilities:
     1. Connection Lifecycle (Connect/Disconnect)
@@ -85,10 +85,10 @@ class ConnectionManager:
     async def stream_ui_update(self, session_id: str, stream_id: str, chunk: str):
         """
         Push a partial UI update (e.g. text token) to a specific component.
-        Matches A2UIStreamService on iOS.
+        Matches StreamService on iOS.
         """
         message = {
-            "type": "a2ui_stream_update",
+            "type": "stream_update",
             "streamId": stream_id,
             "chunk": chunk,
             "timestamp": datetime.now().isoformat()

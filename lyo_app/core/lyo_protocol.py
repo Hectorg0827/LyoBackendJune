@@ -47,16 +47,9 @@ class ImagePayload(BaseModel):
     url: HttpUrl
     caption: Optional[str] = None
 
-class A2UICinematic(BaseModel):
-    kind: Literal["cinematic"] = "cinematic"
-    title: str
-    subtitle: Optional[str] = None
-    mood: str
-    videoUrl: Optional[str] = None
-
 # Discriminated Union Container
 BlockContent = Annotated[
-    Union[ConceptPayload, QuizPayload, ImagePayload, A2UICinematic],
+    Union[ConceptPayload, QuizPayload, ImagePayload],
     Field(discriminator="kind")
 ]
 

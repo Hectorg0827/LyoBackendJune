@@ -81,9 +81,9 @@ class AttentionTechnique(str, Enum):
 
 
 class SceneBlock(BaseModel):
-    """A block of content within a scene compliant with A2UI v2"""
+    """A block of content within a scene compliant with Lyo v2"""
     id: str
-    type: str  # text, code, media, callout, expression (A2UI v2)
+    type: str  # text, code, media, callout, expression (Lyo v2)
     content: Dict[str, Any] # v2 content dictionary
     duration_seconds: int
     voiceover_hint: Optional[str] = None # For TTS layer
@@ -317,7 +317,7 @@ learner ("I know, Quantum Physics is a brain-bender, but you're doing great!").
 4. **discovery**: Scientific exploration mindset
 5. **challenge**: Problem-solving quest
 
-## Scene Blocks (A2UI v2 Compatible)
+## Scene Blocks (Lyo v2 Compatible)
 Each scene contains blocks that map to Lyo v2 UI components:
 - **text**: Rich text with markdown support. `content: {"text": "..."}`
 - **media**: Images or animations. `content: {"url": "...", "caption": "..."}`
@@ -445,7 +445,7 @@ For each scene:
 - cognitive_chunk_id: Which chunk from pedagogy (if applicable)
 - concepts_covered: List of concepts
 
-### 5. Scene Blocks (A2UI v2 Compatible)
+### 5. Scene Blocks (Lyo v2 Compatible)
 Each scene has blocks that map to Lyo v2 components:
 - id: "scene_M1_S1_B1" format
 - type: text, media, callout, expression (ONLY these types)

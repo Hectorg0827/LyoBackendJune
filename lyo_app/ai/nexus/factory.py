@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class LyoNexusFactory:
     """
     Factory responsible for taking raw strings and wrapping them 
-    in strictly formatted A2UI v0.9 JSON Bricks.
+    in strictly formatted Lyo v0.9 JSON Bricks.
     Enforces Adjacency List formatting (id, parent_id, order).
     """
     
@@ -27,7 +27,7 @@ class LyoNexusFactory:
         Creates a fundamental Text brick.
         """
         # Capability check
-        if "a2ui_v1" not in capabilities:
+        if "lyo_v1" not in capabilities:
             # Fallback for completely unsupported clients?
             # In a strict bouncer model, maybe we drop or convert
             pass
