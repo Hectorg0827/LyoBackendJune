@@ -356,6 +356,10 @@ class PersonalizationEngine:
                 parts.append("Recent sessions:")
                 parts.extend(session_lines)
         except Exception as e:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
             logger.debug(f"Skipping chat continuity context: {e}")
 
         return "\n".join(parts).strip()

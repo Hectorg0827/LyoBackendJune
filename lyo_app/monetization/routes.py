@@ -20,6 +20,7 @@ from lyo_app.monetization.google_provider import (
 from lyo_app.monetization.stripe_service import stripe_service, iap_service, SubscriptionPlan
 from lyo_app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
+from lyo_app.services.analytics_service import analytics_service
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,12 @@ async def get_subscription_plans():
         plans=plans,
         stripe_publishable_key=stripe_service.publishable_key
     )
+    
+    # Track event
+    from fastapi import BackgroundTasks
+    # Note: BackgroundTasks not in deps currently, would need to add to route args if we want it.
+    # For now, just fire and forget if possible or wait.
+    await analytics_service.track_system_event("paywall_plans_requested", {})
 
 
 @router.post("/checkout", response_model=CreateCheckoutResponse)
@@ -211,6 +218,12 @@ async def create_checkout_session(
     
     if not result:
         raise HTTPException(status_code=500, detail="Failed to create checkout session")
+    
+    await analytics_service.track_system_event(
+        "checkout_session_created",
+        {"plan": request.plan, "session_id": result.get("session_id")},
+        user_id=current_user.id
+    )
     
     return CreateCheckoutResponse(**result)
 
@@ -292,19 +305,21 @@ async def verify_apple_purchase(
     """
     result = await iap_service.verify_apple_receipt(request.receipt_data)
     
-    if result.get("valid"):
-        # Activate subscription for user
-        # await monetization_service.upgrade_to_premium(db, current_user)  # TODO: Service doesn't exist
-        
-        logger.info(f"Apple purchase verified for user {current_user.id}: {result.get('product_id')}")
-        
-        return {
+        response = {
             "valid": True,
             "product_id": result.get("product_id"),
             "environment": result.get("environment"),
             "is_trial": result.get("is_trial", False),
             "subscription_activated": True
         }
+        
+        await analytics_service.track_system_event(
+            "subscription_verified",
+            {"platform": "apple", "product_id": result.get("product_id")},
+            user_id=current_user.id
+        )
+        
+        return response
     
     raise HTTPException(
         status_code=400,

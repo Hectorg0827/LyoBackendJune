@@ -42,6 +42,7 @@ from lyo_app.core.database import get_async_session as get_db, AsyncSessionLocal
 from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
 from lyo_app.core.context_engine import ContextEngine
 from lyo_app.personalization.soft_skills import SoftSkillsService, SoftSkillAnalyzer
+from lyo_app.services.analytics_service import analytics_service
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,13 @@ async def upgrade_course_in_background(
                 existing_course.entry_node_id = all_nodes[0].id
             
             await db.commit()
+            
+            # Track success
+            await analytics_service.track_system_event(
+                "course_generation_success",
+                {"course_id": course_id, "topic": topic, "node_count": len(all_nodes)},
+                user_id=int(creator_id) if creator_id.isdigit() else None
+            )
             
             logger.info(f"✅ Background upgrade COMPLETE for {course_id}: {len(all_nodes)} nodes created")
         
@@ -784,6 +792,14 @@ async def classroom_chat(
                 user_context_dict=user_context_dict
             )
             
+            # Track event
+            background_tasks.add_task(
+                analytics_service.track_system_event,
+                "course_generation_started",
+                {"topic": topic, "level": "beginner", "instant": True},
+                user_id=current_user.id if isinstance(current_user.id, int) else None
+            )
+
             # Construct immediate response payload
             payload = {
                 "course": {

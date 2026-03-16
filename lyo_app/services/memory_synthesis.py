@@ -9,6 +9,8 @@ The memory blob is a concise, structured summary that gets injected into every
 AI session, making the AI feel like it truly knows the user.
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -264,8 +266,9 @@ Your output MUST be a JSON list of objects:
 
     # ==================== Private Methods ====================
 
-    async def _get_user(self, user_id: int, db: AsyncSession) -> Optional[User]:
+    async def _get_user(self, user_id: int, db: AsyncSession):
         """Fetch user from database."""
+        from lyo_app.modules.auth.models import User
         result = await db.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
@@ -626,6 +629,7 @@ Your output MUST be a JSON list of objects:
     ) -> bool:
         """Save updated memory to user record."""
         try:
+            from lyo_app.modules.auth.models import User
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
 

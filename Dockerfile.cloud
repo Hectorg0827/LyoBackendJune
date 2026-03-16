@@ -59,4 +59,4 @@ ENV PORT=8080
 EXPOSE 8080
 
 # Start application - simplified for debugging
-CMD ["bash", "-c", "mkdir -p /tmp/prometheus_multiproc_dir && exec gunicorn lyo_app.enhanced_main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:${PORT} -w ${WORKERS:-1} --timeout 300 --graceful-timeout 120"]
+CMD ["bash", "-c", "mkdir -p /tmp/prometheus_multiproc_dir && exec gunicorn lyo_app.enhanced_main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:${PORT} -w ${WORKERS:-1} --timeout 600 --graceful-timeout 120"]
