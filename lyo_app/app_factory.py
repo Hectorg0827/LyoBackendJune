@@ -30,7 +30,6 @@ from .routers import calendar
 from .routers import hooks
 from .routers import sync
 from .routers import clips
-from .routers import a2ui
 from .community.routes import router as community_router
 from .classroom.routes import router as classroom_router
 from .classroom.analytics import router as classroom_analytics_router
@@ -308,7 +307,6 @@ def create_app() -> FastAPI:
         (hooks.router, "/api/v1", "Behavioral Hooks"),
         (sync.router, "/api/v1", "Multi-Device Sync"),
         (clips.router, "/api/v1", "Educational Clips"),  # NEW: Clips router
-        (a2ui.router, "/api/v1", "A2UI Real-time Engine"), # NEW: A2UI router
         (classroom_router, "/api/v1", "Lyo Classroom Streams"), # NEW: Classroom router
         (classroom_analytics_router, "/api/v1/classroom/analytics", "Classroom Analytics"), # Sprint 4: Analytics
         (community_router, "/api/v1/community", "Community Hub"),

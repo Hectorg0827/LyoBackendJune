@@ -142,7 +142,6 @@ class ActionType(str, Enum):
     SEARCH_WEB = "SEARCH_WEB"
     GENERATE_TEXT = "GENERATE_TEXT"
     GENERATE_AUDIO = "GENERATE_AUDIO"
-    GENERATE_A2UI = "GENERATE_A2UI"
 
 
 class PlannedAction(BaseModel):
@@ -171,7 +170,6 @@ class UIBlockType(str, Enum):
     CTA_ROW = "CTARow"
     SKELETON = "Skeleton"
     OPEN_CLASSROOM = "OpenClassroomBlock"
-    A2UI_COMPONENT = "A2UIComponent"
 
 
 class UIBlock(BaseModel):
@@ -188,7 +186,6 @@ class UnifiedChatResponse(BaseModel):
     answer_block: UIBlock  # TutorMessage
     artifact_block: Optional[UIBlock] = None
     next_actions: List[UIBlock] = Field(default_factory=list)  # CTA Row
-    a2ui_blocks: List[UIBlock] = Field(default_factory=list)  # A2UI component blocks
     open_classroom_payload: Optional[Dict[str, Any]] = None  # Course creation trigger
     audio_summary_url: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)

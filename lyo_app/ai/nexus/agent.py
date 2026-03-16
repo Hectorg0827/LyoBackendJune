@@ -7,14 +7,14 @@ logger = logging.getLogger(__name__)
 
 class LyoNexusAgent:
     """
-    Independent middleware agent for A2UI v0.9.
+    Independent middleware agent for Lyo v0.9.
     Takes a raw text stream from the "Brain" (Primary LLM), semantics-slices it,
     and yields complete JSON components (Adjacency List Bricks).
     """
     
     def __init__(self, factory, media_worker):
         """
-        :param factory: Converts text/tags into validated A2UI JSON dicts.
+        :param factory: Converts text/tags into validated JSON dicts.
         :param media_worker: Asynchronous worker for handling <media_req: ...>
         """
         self.factory = factory

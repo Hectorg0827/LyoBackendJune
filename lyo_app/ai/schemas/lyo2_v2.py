@@ -1,5 +1,5 @@
 """
-LLM Structured-Output Schemas for A2UI v2 (22-primitive system).
+LLM Structured-Output Schemas for Lyo2 v2 (22-primitive system).
 
 These Pydantic models define the JSON Schema that is injected into the LLM
 system prompt for structured output / tool-calling.  The LLM fills these
@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
-# Primitive enum (mirrors iOS A2UIPrimitive)
+# Primitive enum (mirrors iOS LyoPrimitive)
 # ---------------------------------------------------------------------------
 
 class LyoPrimitive(str, Enum):
