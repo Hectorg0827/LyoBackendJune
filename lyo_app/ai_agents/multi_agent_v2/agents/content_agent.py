@@ -9,6 +9,8 @@ This agent operates in PARALLEL mode - it can generate multiple lessons concurre
 
 from typing import Optional, Dict, Any, List
 import asyncio
+import logging
+import time
 from dataclasses import dataclass
 
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
@@ -52,6 +54,8 @@ class ContentCreatorAgent(BaseAgent[LessonContent]):
     - This agent can process multiple lessons in parallel
     - Use generate_lessons_parallel() for batch processing
     """
+
+    _logger = logging.getLogger(__name__)
     
     def __init__(self):
         super().__init__(
@@ -244,8 +248,18 @@ Respond with the complete JSON structure only."""
         context: LessonGenerationContext
     ) -> LessonContent:
         """Generate content for a single lesson"""
+        t0 = time.perf_counter()
         prompt = self.build_prompt(context)
-        return await self.execute(prompt)
+        result = await self.execute(prompt)
+        elapsed = time.perf_counter() - t0
+        self._logger.info(
+            "📊 [CONTENT_AGENT] lesson=%s type=%s duration_min=%d latency=%.2fs",
+            context.lesson_outline.title,
+            context.lesson_outline.lesson_type.value,
+            context.lesson_outline.duration_minutes,
+            elapsed,
+        )
+        return result
     
     async def generate_lessons_parallel(
         self,
@@ -254,17 +268,8 @@ Respond with the complete JSON structure only."""
     ) -> List[LessonContent]:
         """
         Generate multiple lessons in parallel with concurrency limit.
-        
-        This is the key optimization - we don't need to wait for
-        sequential lesson generation.
-        
-        Args:
-            contexts: List of lesson generation contexts
-            max_concurrent: Maximum concurrent generations
-            
-        Returns:
-            List of generated lesson contents (in same order as contexts)
         """
+        t0 = time.perf_counter()
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def generate_with_semaphore(ctx: LessonGenerationContext) -> LessonContent:
@@ -284,6 +289,11 @@ Respond with the complete JSON structure only."""
                 ) from result
             processed_results.append(result)
         
+        elapsed = time.perf_counter() - t0
+        self._logger.info(
+            "📊 [CONTENT_AGENT] batch complete lessons=%d concurrency=%d total=%.2fs",
+            len(contexts), max_concurrent, elapsed,
+        )
         return processed_results
     
     def get_fallback_prompt(

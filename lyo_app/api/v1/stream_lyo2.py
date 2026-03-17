@@ -4,7 +4,7 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,34 @@ from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgen
 from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
+from lyo_app.ai.schemas.smart_block import SmartBlock, SmartBlockType, QuizOption, MasteryNode
 
 logger = logging.getLogger(__name__)
 
+
 import re as _re
+
+# --- Minimal lyo_response_builder for v2 lyo_command events ---
+class _LyoResponseBuilder:
+    def build_command(self, action, payload=None):
+        return {
+            "action": action,
+            "payload": payload or {}
+        }
+
+    def build(self, command, request_id=None, conversation_id=None):
+        # Matches LyoResponseSchema in lyo2_v2.py
+        return {
+            "version": "2.0",
+            "message": "",
+            "ui": None,
+            "command": command,
+            "suggestions": [],
+            "request_id": request_id,
+            "conversation_id": conversation_id
+        }
+
+lyo_response_builder = _LyoResponseBuilder()
 
 def _extract_course_topic(user_text: str) -> str:
     topic = _re.sub(
@@ -33,6 +57,49 @@ def _extract_course_topic(user_text: str) -> str:
         "", user_text.strip(), flags=_re.IGNORECASE,
     ).strip()
     return topic or user_text.strip()
+
+def _to_smart_blocks(
+    answer_text: Optional[str],
+    artifact: Optional[UIBlock],
+) -> list[dict]:
+    """Convert legacy UIBlock answer + artifact into SmartBlock dicts.
+
+    Returns a list of serialised SmartBlocks so older clients can ignore
+    the ``smart_blocks`` event while newer clients consume it.
+    """
+    blocks: list[SmartBlock] = []
+
+    if answer_text:
+        blocks.append(SmartBlock.text(answer_text))
+
+    if artifact is not None:
+        content = artifact.content or {}
+        if artifact.type == UIBlockType.QUIZ:
+            options = [
+                QuizOption(id=str(i), text=o.get("text", o) if isinstance(o, dict) else str(o))
+                for i, o in enumerate(content.get("options", []))
+            ]
+            blocks.append(SmartBlock.quiz(
+                question=content.get("question", ""),
+                options=options,
+                correct_index=content.get("correct_index", 0),
+                explanation=content.get("explanation"),
+            ))
+        elif artifact.type == UIBlockType.FLASHCARDS:
+            cards = content.get("cards", [])
+            for card in cards:
+                blocks.append(SmartBlock.flashcard(
+                    front=card.get("front", ""),
+                    back=card.get("back", ""),
+                ))
+        elif artifact.type == UIBlockType.STUDY_PLAN:
+            blocks.append(SmartBlock.text(
+                content.get("plan", json.dumps(content, default=str)),
+                subtype="summary",
+            ))
+
+    return [b.model_dump() for b in blocks]
+
 
 router = APIRouter()
 
@@ -282,6 +349,14 @@ async def stream_lyo2_chat(
                 )
                 yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
             
+            # ── Emit SmartBlocks event (v2 unified format) ──────────
+            smart_block_dicts = _to_smart_blocks(raw_llm_text, execution_response.artifact_block)
+            if smart_block_dicts:
+                sb_brick = {"type": "smart_blocks", "blocks": smart_block_dicts}
+                collected_bricks.append(sb_brick)
+                yield f"data: {json.dumps(sb_brick)}\n\n"
+                logger.info(f"🧱 [STREAM][{trace_id}] Emitted {len(smart_block_dicts)} smart_blocks")
+
             # Send open_classroom payload (course creation trigger)
             if (
                 execution_response.open_classroom_payload is None

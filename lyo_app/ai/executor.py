@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import json
+import time
 import uuid
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
@@ -119,22 +121,25 @@ CRITICAL PERSONA & FORMATTING RULES:
 - Never write walls of text. If a topic is broad, give a high-level magical overview and offer to go deeper.
 - If reference material is provided, synthesize it naturally into the conversation.
 - If conversation history is provided, maintain context. DO NOT greet the user again if you already have. Act as a seamless dialogue partner.
-- If providing a course overview or progress update, you can use the `:::mastery_map` smart block. 
-  Example: 
+- If providing a course overview or progress update, you can use the `:::mastery_map` smart block.
+  Example:
   :::mastery_map
-  {
-    "title": "Python Basics",
-    "nodes": [
-      {"id": "n1", "title": "Variables", "status": "completed", "position": [100, 100]},
-      {"id": "n2", "title": "Loops", "status": "current", "position": [200, 100]}
-    ]
-  }
+  title: Python Basics
+  nodes:
+  - title: Variables
+    status: completed
+    mastery: 100%
+  - title: Loops
+    status: in_progress
+    mastery: 50%
   :::
 {rag_text}{history_text}
 
 USER QUESTION:
 {original_request}
 """
+        t0 = time.perf_counter()
+        provider_used = "unknown"
         try:
             from lyo_app.core.ai_resilience import ai_resilience_manager
             if not ai_resilience_manager.session:
@@ -144,16 +149,23 @@ USER QUESTION:
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=messages,
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-3.1-pro-preview-customtools", "gemini-2.5-flash", "gpt-4o-mini"]
                 ),
                 timeout=30.0
             )
+            provider_used = ai_response.get("provider", "unknown")
             
             generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
+            elapsed = time.perf_counter() - t0
             if generated:
+                logger.info(
+                    "📊 [EXECUTOR] text_gen provider=%s chars=%d latency=%.2fs prompt_len=%d",
+                    provider_used, len(generated), elapsed, len(prompt),
+                )
                 return generated
         except Exception as e:
-            logger.error(f"Text generation failed: {e}", exc_info=True)
+            elapsed = time.perf_counter() - t0
+            logger.error(f"Text generation failed after {elapsed:.2f}s: {e}", exc_info=True)
 
         return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
@@ -163,6 +175,7 @@ USER QUESTION:
         conversation_history: list of {"role": ..., "content": ...} dicts for multi-turn context.
         intent: the router's classified intent (e.g. EXPLAIN, QUIZ, COURSE) for contextual suggestions.
         """
+        exec_start = time.perf_counter()
         execution_context = {
             "retrieved_content": [],
             "created_artifacts": [],
@@ -171,7 +184,9 @@ USER QUESTION:
             "conversation_history": conversation_history or []
         }
         
+        step_timings = []
         for step in plan.steps:
+            step_start = time.perf_counter()
             logger.info(f"Executing step: {step.description} ({step.action_type})")
             
             if step.action_type == ActionType.RAG_RETRIEVE:
@@ -238,6 +253,16 @@ USER QUESTION:
                 execution_context["final_text"] = await self._generate_text(
                     original_request, execution_context, step.parameters
                 )
+
+            step_elapsed = time.perf_counter() - step_start
+            step_timings.append((step.action_type.value if hasattr(step.action_type, 'value') else str(step.action_type), step_elapsed))
+
+        total_elapsed = time.perf_counter() - exec_start
+        timing_summary = " | ".join(f"{name}={t:.2f}s" for name, t in step_timings)
+        logger.info(
+            "📊 [EXECUTOR] execute complete intent=%s steps=%d total=%.2fs [ %s ]",
+            intent or "unknown", len(plan.steps), total_elapsed, timing_summary,
+        )
 
         # Construct UnifiedChatResponse
         answer_block = UIBlock(
@@ -330,7 +355,7 @@ Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-3.1-pro-preview-customtools", "gemini-2.5-flash", "gpt-4o-mini"]
                 ),
                 timeout=45.0
             )
@@ -410,7 +435,7 @@ Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clea
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                    provider_order=["gemini-3.1-pro-preview-customtools", "gemini-2.5-flash", "gpt-4o-mini"],
                     response_format={"type": "json_object"} if self._gemini_json else None
                 ),
                 timeout=45.0
@@ -472,7 +497,7 @@ Make options plausible but with one clear correct answer. correct_answer is the 
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-3.1-pro-preview-customtools", "gemini-2.5-flash", "gpt-4o-mini"]
                 ),
                 timeout=45.0
             )
