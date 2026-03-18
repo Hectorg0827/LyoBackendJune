@@ -14,13 +14,104 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
-from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent
+from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision
 from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
 
+# Simple response builder to fix missing import
+class LyoResponseBuilder:
+    @staticmethod
+    def build_command(command_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "type": command_type,
+            "payload": payload
+        }
+
+    @staticmethod
+    def build(command: Dict[str, Any], request_id: str, conversation_id: str) -> Dict[str, Any]:
+        return {
+            "command": command,
+            "request_id": request_id,
+            "conversation_id": conversation_id,
+            "timestamp": time.time()
+        }
+
+lyo_response_builder = LyoResponseBuilder()
+
 logger = logging.getLogger(__name__)
+
+def safe_json_serialize(data: Any, event_type: str = "unknown") -> str:
+    """
+    Safely serialize data to JSON string with comprehensive error handling.
+
+    This prevents iOS crashes from __SwiftValue serialization errors by:
+    1. Using default=str to handle non-serializable types
+    2. Double-encoding to ensure final output is JSON-safe
+    3. Providing detailed error logging for debugging
+
+    Args:
+        data: The data to serialize
+        event_type: Description of the event type for error logging
+
+    Returns:
+        JSON string that is guaranteed to be iOS-safe
+
+    Raises:
+        ValueError: If data cannot be made JSON-safe even with fallbacks
+    """
+    try:
+        # First pass: Convert problematic types to strings
+        intermediate = json.loads(json.dumps(data, default=str))
+
+        # Second pass: Final JSON serialization
+        result = json.dumps(intermediate)
+
+        logger.debug(f"✅ Safe JSON serialization successful for {event_type}")
+        return result
+
+    except (TypeError, ValueError, OverflowError) as e:
+        logger.error(f"❌ JSON serialization failed for {event_type}: {e}")
+        logger.error(f"Problematic data type: {type(data)}")
+        logger.error(f"Problematic data sample: {str(data)[:200]}")
+
+        # Ultimate fallback: return a safe error message
+        fallback = {
+            "type": "serialization_error",
+            "message": f"Data serialization failed for {event_type}",
+            "error": str(e),
+            "timestamp": time.time()
+        }
+
+        try:
+            return json.dumps(fallback)
+        except Exception as fallback_error:
+            logger.critical(f"💥 Even fallback serialization failed: {fallback_error}")
+            raise ValueError(f"Complete JSON serialization failure: {fallback_error}")
+
+def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
+    """
+    Yield a Server-Sent Event with guaranteed JSON safety.
+
+    Args:
+        event_type: The SSE event type
+        data: The event data payload
+
+    Returns:
+        SSE-formatted string ready for streaming
+    """
+    try:
+        safe_json = safe_json_serialize(data, event_type)
+        return f"data: {safe_json}\n\n"
+    except ValueError as e:
+        logger.error(f"Failed to create safe SSE event for {event_type}: {e}")
+        # Return a safe error event
+        error_data = {
+            "type": "error",
+            "message": f"Event serialization failed: {event_type}"
+        }
+        return f"data: {json.dumps(error_data)}\n\n"
 
 import re as _re
 
@@ -62,7 +153,7 @@ async def stream_lyo2_chat(
             
             skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
             collected_bricks.append(skeleton_brick)
-            yield f"data: {json.dumps(skeleton_brick)}\n\n"
+            yield yield_safe_sse_event("skeleton", skeleton_brick)
             await asyncio.sleep(0.01) # Yield to event loop
             
             # 2. Performance & Cache Layer (New for Phase 17)
@@ -140,14 +231,19 @@ async def stream_lyo2_chat(
                         ],
                     }
                 }
-                yield f"data: {json.dumps({'type': 'open_classroom', 'block': {'type': 'OpenClassroomBlock', 'content': {'type': 'OPEN_CLASSROOM', **_preview_oc}}})}\n\n"
+                oc_event_data = {'type': 'open_classroom', 'block': {'type': 'OpenClassroomBlock', 'content': {'type': 'OPEN_CLASSROOM', **_preview_oc}}}
+                yield yield_safe_sse_event("open_classroom_preview", oc_event_data)
                 
                 # v2: emit lyo_command for iOS v2 pipeline
-                cmd = lyo_response_builder.build_command("open_classroom", _preview_oc)
-                lyo_resp = lyo_response_builder.build(command=cmd, request_id=trace_id, conversation_id=trace_id)
-                brick_data = {"type": "lyo_command", "response": lyo_resp}
-                collected_bricks.append(brick_data)
-                yield f"data: {json.dumps(brick_data)}\n\n"
+                try:
+                    cmd = lyo_response_builder.build_command("open_classroom", _preview_oc)
+                    lyo_resp = lyo_response_builder.build(command=cmd, request_id=trace_id, conversation_id=trace_id)
+                    brick_data = {"type": "lyo_command", "response": lyo_resp}
+                    collected_bricks.append(brick_data)
+                    yield yield_safe_sse_event("lyo_command", brick_data)
+                except (TypeError, ValueError) as e:
+                    logger.error(f"JSON serialization error for lyo_command: {e}")
+                    # Continue without this brick
                     
                 logger.info(f"🏫 [STREAM][{trace_id}] Fast course preview sent for: '{_topic[:60]}'")
             
@@ -255,7 +351,7 @@ async def stream_lyo2_chat(
                     }
                 }
                 collected_bricks.append(answer_brick)
-                yield f"data: {json.dumps(answer_brick)}\n\n"
+                yield yield_safe_sse_event("answer", answer_brick)
                 logger.info(f"📝 [STREAM][{trace_id}] Emitted answer event ({len(raw_llm_text)} chars)")
             
             if execution_response.artifact_block:
@@ -280,7 +376,10 @@ async def stream_lyo2_chat(
                     content=tagged_content,
                     version_id=artifact.version_id
                 )
-                yield f"data: {json.dumps({'type': 'artifact', 'block': tagged_artifact.model_dump()})}\n\n"
+
+                # Safe JSON serialization using the new helper
+                artifact_event_data = {'type': 'artifact', 'block': tagged_artifact.model_dump()}
+                yield yield_safe_sse_event("artifact", artifact_event_data)
             
             # Send open_classroom payload (course creation trigger)
             if (
