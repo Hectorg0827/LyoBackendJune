@@ -18,8 +18,8 @@ from lyo_app.core.config import settings
 from lyo_app.auth.dependencies import get_current_user, get_db
 from lyo_app.auth.models import User
 from lyo_app.personalization.service import PersonalizationEngine
-from lyo_app.ai_agents.a2a.schemas import Artifact, ArtifactType, A2ACourseRequest
-from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
+from lyo_app.ai_agents.a2a.schemas import Artifact, ArtifactType
+from lyo_app.ai.unified_course_schema import UnifiedCourse
 
 logger = logging.getLogger(__name__)
 
@@ -400,69 +400,42 @@ async def chat(
         
         if course_intent:
             logger.info(f"🎓 Course creation detected: {course_intent['topic']}")
-            
-            # Use A2A Orchestrator for course generation
+
+            # Use Multi-Agent v2 Pipeline for course generation.
+            # It has proper state management, Redis persistence, QA gates,
+            # and returns a strongly-typed GeneratedCourse.
             try:
-                orchestrator = A2AOrchestrator()
-                course_request = A2ACourseRequest(
-                    topic=course_intent['topic'],
-                    user_id=str(current_user.id),
-                    level="beginner",  # Could be detected from message or profile
-                    duration_minutes=30
+                from lyo_app.ai_agents.multi_agent_v2 import (
+                    CourseGenerationPipeline, PipelineConfig
                 )
-                
-                # Generate course (non-streaming for now, with safety timeout)
-                a2a_response = await asyncio.wait_for(
-                    orchestrator.generate_course(course_request),
-                    timeout=120.0
+
+                pipeline = CourseGenerationPipeline(config=PipelineConfig())
+                generated = await asyncio.wait_for(
+                    pipeline.generate_course(
+                        user_request=f"Create a comprehensive course on: {course_intent['topic']}",
+                        user_context={"user_id": str(current_user.id)},
+                    ),
+                    timeout=120.0,
                 )
-                
-                # Extract artifacts
-                artifacts = a2a_response.output_artifacts
-                
-                # Build course data from artifacts
-                course_data = {
-                    "title": f"Learn {course_intent['topic'].title()}",
-                    "description": f"A comprehensive course on {course_intent['topic']}",
-                    "lessons": []
-                }
 
-                # Extract lessons from artifacts
-                for artifact in artifacts:
-                    if artifact.type == ArtifactType.CURRICULUM_STRUCTURE and artifact.data:
-                        modules = artifact.data.get("modules", [])
-                        for module in modules:
-                            for lesson in module.get("lessons", []):
-                                course_data["lessons"].append({
-                                    "title": lesson.get("title", "Lesson"),
-                                    "type": "reading",
-                                    "duration": f"{lesson.get('duration_minutes', 15)} min"
-                                })
-
-                # Build course UI component from artifacts
-                ui_component_json = None
-                for artifact in artifacts:
-                    ui_component_json = translate_artifact_to_ui_component(artifact)
-                    if ui_component_json:
-                        break
-
-                # Build response text
-                response_text = f"🎓 **Course Created: {course_intent['topic'].title()}**\n\nI've designed a comprehensive learning experience for you! The course includes {len(course_data['lessons'])} lessons covering all the essential concepts.\n\n✨ *Tap below to explore your personalized course*"
+                unified = UnifiedCourse.from_generated_course(generated)
+                ui_component_json = unified.to_ui_block()
+                response_text = unified.to_chat_response_text()
 
                 latency_ms = int((time.time() - start_time) * 1000)
-                logger.info(f"A2A Course generated in {latency_ms}ms")
+                logger.info(f"Multi-Agent v2 course generated in {latency_ms}ms")
 
                 return ChatResponse(
                     response=response_text,
-                    model_used="A2A Multi-Agent Pipeline",
+                    model_used="Multi-Agent v2 Pipeline",
                     success=True,
                     error=None,
                     user_profile=user_profile_summary,
-                    ui_component=[{"type": "ui_block", "component": ui_component_json}] if ui_component_json else None
+                    ui_component=[{"type": "ui_block", "component": ui_component_json}],
                 )
-                
+
             except Exception as e:
-                logger.error(f"A2A course generation failed: {e}", exc_info=True)
+                logger.error(f"Multi-Agent v2 course generation failed: {e}", exc_info=True)
                 # Fall through to regular chat completion
                 pass
         

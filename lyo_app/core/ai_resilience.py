@@ -154,13 +154,13 @@ class AIResilienceManager:
                 priority=1,
                 capabilities=["chat", "fast", "conversational"],
             ),
-            "gemini-3.1-pro-preview-customtools": AIModelConfig(
-                name="Google Gemini 2.0 Pro",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview-customtools:generateContent",
+            "gemini-3.1-pro": AIModelConfig(
+                name="Google Gemini 3.1 Pro (Complex)",
+                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro:generateContent",
                 api_key=gemini_key,
                 max_tokens=8000,
                 priority=2,
-                capabilities=["chat", "creative"],
+                capabilities=["chat", "complex", "creative"],
             ),
             "gpt-4o": AIModelConfig(
                 name="OpenAI GPT-4o",
@@ -485,33 +485,33 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-3.1-pro-preview-customtools"]  # Default
-        
+            return ["gemini-3.1-pro-preview-customtools"]  # Default (fast)
+
         last_message = messages[-1].get("content", "")
         total_chars = sum(len(m.get("content", "")) for m in messages)
-        
-        # Simple query indicators
+
+        # Simple query indicators -> fast/cheap model
         simple_patterns = [
             "hello", "hi", "thanks", "help", "what is", "explain",
             "define", "meaning of", "quick", "simple", "briefly"
         ]
         is_simple = any(p in last_message.lower() for p in simple_patterns)
-        
-        # Complex query indicators
+
+        # Complex query indicators -> capable model
         complex_patterns = [
             "analyze", "compare", "evaluate", "detailed", "comprehensive",
             "research", "in-depth", "synthesize", "advanced", "complex"
         ]
         is_complex = any(p in last_message.lower() for p in complex_patterns)
-        
+
         # Routing logic:
-        # - Short messages (<100 chars) + simple patterns -> flash (fastest)
-        # - Complex patterns or long context -> 2.0-pro (most capable)
-        # - Otherwise -> 2.0-flash (balanced)
+        # - Short + simple -> fast flash (cheap)
+        # - Complex or long context -> gemini-3.1-pro (capable)
+        # - Otherwise -> flash + gpt-4o-mini balanced
         if len(last_message) < 100 and (is_simple or max_tokens < 256):
             return ["gpt-4o-mini", "gemini-3.1-pro-preview-customtools"]
         elif is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-3.1-pro-preview-customtools", "gpt-4o"]
+            return ["gemini-3.1-pro", "gpt-4o"]
         else:
             return ["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"]
 

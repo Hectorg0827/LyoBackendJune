@@ -628,3 +628,31 @@ class A2ABaseAgent(ABC, Generic[T]):
             agent_name=self.name,
             thinking=thinking
         )
+
+    def get_typed_output(self, task_output: "TaskOutput") -> Optional[T]:
+        """
+        Extract and validate the strongly-typed output (T) from a TaskOutput.
+
+        Each A2ABaseAgent[T] stores its structured result inside the first
+        output artifact's `data` field.  This helper deserialises that payload
+        back into the declared `output_schema` (T), giving callers type-safe
+        access without digging into artifact dicts manually.
+
+        Returns None if the TaskOutput has no artifacts or the data cannot be
+        validated against the schema.
+        """
+        if not task_output.output_artifacts:
+            return None
+        artifact = task_output.output_artifacts[0]
+        raw = artifact.data
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, dict):
+                return self.output_schema.model_validate(raw)
+            return self.output_schema.model_validate_json(raw)
+        except Exception as e:
+            logger.warning(
+                f"[{self.name}] get_typed_output validation failed: {e}"
+            )
+            return None
