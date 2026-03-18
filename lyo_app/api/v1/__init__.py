@@ -14,19 +14,29 @@ api_router = APIRouter()
 
 # Lyo 2.0 Router - Layered Architecture
 try:
+    print(">>> LOADING LYO 2.0 CHAT ROUTER...", flush=True)
     from .chat_lyo2 import router as chat_lyo2_router
     api_router.include_router(chat_lyo2_router, prefix="/lyo2", tags=["Lyo 2.0"])
     logger.info("✅ Lyo 2.0 Chat router loaded")
+    print(">>> LYO 2.0 CHAT ROUTER LOADED", flush=True)
 except Exception as e:
+    import traceback
     logger.error(f"❌ Failed to load Lyo 2.0 Chat router: {e}")
+    print(f">>> LYO 2.0 CHAT ROUTER FAILED: {e}", flush=True)
+    traceback.print_exc()
 
 # Lyo 2.0 Streaming Router
 try:
+    print(">>> LOADING LYO 2.0 STREAMING ROUTER...", flush=True)
     from .stream_lyo2 import router as stream_lyo2_router
     api_router.include_router(stream_lyo2_router, prefix="/lyo2", tags=["Lyo 2.0 Streaming"])
     logger.info("✅ Lyo 2.0 Streaming router loaded")
+    print(">>> LYO 2.0 STREAMING ROUTER LOADED", flush=True)
 except Exception as e:
+    import traceback
     logger.error(f"❌ Failed to load Lyo 2.0 Streaming router: {e}")
+    print(f">>> LYO 2.0 STREAMING ROUTER FAILED: {e}", flush=True)
+    traceback.print_exc()
 
 # Import health router - minimal dependencies
 try:
@@ -38,6 +48,13 @@ except Exception as e:
 
 # Import other routers with graceful error handling
 # These may fail if there are database model conflicts
+
+try:
+    from lyo_app.chat import chat_router
+    api_router.include_router(chat_router, prefix="/chat", tags=["Chat"])
+    logger.info("✅ Chat router loaded")
+except Exception as e:
+    logger.warning(f"⚠️ Chat router not loaded: {e}")
 
 try:
     from .auth import router as auth_router
@@ -80,6 +97,23 @@ try:
     logger.info("✅ Gamification router loaded")
 except Exception as e:
     logger.warning(f"⚠️ Gamification router not loaded: {e}")
+
+try:
+    print(">>> LOADING AI CLASSROOM ROUTES...", flush=True)
+    from lyo_app.ai_classroom.routes import router as ai_classroom_router
+    api_router.include_router(ai_classroom_router, tags=["AI Classroom"])
+    logger.info("✅ AI Classroom router loaded")
+    print(">>> AI CLASSROOM ROUTES LOADED", flush=True)
+except Exception as e:
+    logger.warning(f"⚠️ AI Classroom router not loaded: {e}")
+    print(f">>> AI CLASSROOM FAILED: {e}", flush=True)
+
+try:
+    from lyo_app.ai_classroom.playback_routes import router as playback_router
+    api_router.include_router(playback_router, tags=["AI Classroom Playback"])
+    logger.info("✅ AI Classroom Playback router loaded")
+except Exception as e:
+    logger.warning(f"⚠️ AI Classroom Playback router not loaded: {e}")
 
 try:
     from .push import router as push_router

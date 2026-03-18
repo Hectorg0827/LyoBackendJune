@@ -336,22 +336,43 @@ class PersonalizationEngine:
 
             session_lines: List[str] = []
             for conv in conversations:
-                # Access attributes safely
-                topic = getattr(conv, "topic", None) or (getattr(conv, "context_data", {}) or {}).get("topic")
+                # 1. Capture ID early to avoid greenlet errors on expired objects
+                conv_id = getattr(conv, "id", None)
+                if not conv_id:
+                    continue
+
+                # 2. Extract topic safely (might be in topic col or JSON context_data)
+                topic = getattr(conv, "topic", None)
+                if not topic:
+                    # Defensive check for context_data attribute availability
+                    try:
+                        ctx = getattr(conv, "context_data", {}) or {}
+                        topic = ctx.get("topic")
+                    except Exception:
+                        topic = None
+                
                 topic_prefix = f"Topic: {topic}" if topic else "Topic: (unspecified)"
 
-                # Pull last user+assistant turns (compact)
+                # 3. Pull last user+assistant turns (compact)
                 msg_result = await db.execute(
                     select(ChatMessage)
-                    .where(ChatMessage.conversation_id == conv.id)
+                    .where(ChatMessage.conversation_id == conv_id)
                     .options(load_only(ChatMessage.content, ChatMessage.role))
                     .order_by(desc(ChatMessage.created_at))
                     .limit(4)
                 )
                 msgs = list(reversed(msg_result.scalars().all()))
 
-                last_user = next((m.content for m in reversed(msgs) if m.role == "user"), "")
-                last_assistant = next((m.content for m in reversed(msgs) if m.role == "assistant"), "")
+                # 4. Extract content and role early to variables
+                processed_msgs = []
+                for m in msgs:
+                    processed_msgs.append({
+                        "role": getattr(m, "role", "unknown"),
+                        "content": getattr(m, "content", "")
+                    })
+
+                last_user = next((m["content"] for m in reversed(processed_msgs) if m["role"] == "user"), "")
+                last_assistant = next((m["content"] for m in reversed(processed_msgs) if m["role"] == "assistant"), "")
 
                 def _truncate(s: str, n: int) -> str:
                     s = (s or "").strip().replace("\n", " ")
@@ -365,11 +386,11 @@ class PersonalizationEngine:
                 parts.append("Recent sessions:")
                 parts.extend(session_lines)
         except Exception as e:
+            logger.debug(f"Skipping chat continuity context: {e}")
             try:
                 await db.rollback()
             except Exception:
                 pass
-            logger.debug(f"Skipping chat continuity context: {e}")
 
         return "\n".join(parts).strip()
     

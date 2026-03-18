@@ -30,6 +30,7 @@ RUN useradd --create-home --shell /bin/bash app
 
 # Copy virtual environment
 COPY --from=builder /opt/venv /opt/venv
+RUN chmod -R a+rX /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Set working directory

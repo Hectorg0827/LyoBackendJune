@@ -543,6 +543,11 @@ class A2ACourseResponse(BaseModel):
     
     # Artifacts produced
     artifacts: List[Artifact] = Field(default_factory=list)
+
+    @property
+    def output_artifacts(self) -> List[Artifact]:
+        """Backward compatibility for 'output_artifacts'"""
+        return self.artifacts
     
     # Pipeline info
     stages_completed: List[str] = Field(default_factory=list)

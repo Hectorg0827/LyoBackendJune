@@ -25,7 +25,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .intent_detector import get_intent_detector, ChatIntent, IntentType
-from lyo_app.ai_agents.schemas import AgentContext
+from lyo_app.ai_agents.a2a.schemas import TaskInput
 from lyo_app.ai_agents.multi_agent_v2.review_agent import WeeklyReviewAgent
 from lyo_app.evolution.reflection_service import ReflectionPayload, process_reflection
 from .conversation_flow import (
@@ -106,7 +106,7 @@ async def get_current_user_or_guest(
     )
 
 
-router = APIRouter(prefix="/api/v1/classroom", tags=["AI Classroom"])
+router = APIRouter(prefix="/classroom", tags=["AI Classroom"])
 
 # Initialize Context Engine
 context_engine = ContextEngine()
@@ -681,22 +681,29 @@ async def classroom_chat(
         user_id_int = current_user.id if (current_user.id != "guest_session" and isinstance(current_user.id, int)) else 0
         
         if detected_intent.intent_type == IntentType.WEEKLY_REVIEW:
-            # Route to executive coach instead of normal QA
-            review_agent = WeeklyReviewAgent()
-            agent_ctx = AgentContext(session_id=session.session_id, user_id=user_id_int, session=db)
-            review_response = await review_agent.execute(agent_ctx, user_message=request.message)
-            
-            # Record it in the session
-            session.add_message("user", request.message, intent=detected_intent)
-            session.add_message("assistant", review_response.content)
-            
-            return ChatResponse(
-                session_id=session.session_id,
-                content=review_response.content,
-                response_type="text",
-                state=session.state.value,
-                intent=detected_intent.to_dict()
-            )
+            try:
+                # Route to executive coach instead of normal QA
+                review_agent = WeeklyReviewAgent()
+                task_input = TaskInput(user_id=str(user_id_int), session_id=session.session_id, user_message=request.message)
+                review_response = await review_agent.execute(task_input)
+                
+                # Record it in the session
+                session.add_message("user", request.message, intent=detected_intent)
+                
+                # TaskOutput uses response_message, not content
+                assistant_content = review_response.response_message or "I'm processing your weekly review..."
+                session.add_message("assistant", assistant_content)
+                
+                return ChatResponse(
+                    session_id=session.session_id,
+                    content=assistant_content,
+                    response_type="text",
+                    state=session.state.value,
+                    intent=detected_intent.to_dict()
+                )
+            except Exception as e:
+                logger.exception(f"Weekly review failed: {e}")
+                # Fall through to normal chat if specialized agent fails
             
         elif detected_intent.intent_type == IntentType.REFLECT and user_id_int > 0:
             # We don't fully block chat, but we intercept the structured intent to background process it

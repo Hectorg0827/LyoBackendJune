@@ -274,7 +274,12 @@ class EnhancedErrorHandler:
         try:
             # Only read body for POST/PUT/PATCH requests
             if request.method in ['POST', 'PUT', 'PATCH']:
-                body = await request.body()
+                # Check if body is already cached (avoids Stream consumed error)
+                if hasattr(request, "_body"):
+                    body = request._body
+                else:
+                    body = await request.body()
+                
                 if body:
                     return json.loads(body.decode('utf-8'))
         except Exception as e:

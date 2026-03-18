@@ -564,7 +564,7 @@ class AIResilienceManager:
 
     def _get_fallback_response(self, message: str, error: str) -> Dict[str, Any]:
         return {
-            "response": random.choice(
+            "content": random.choice(
                 [
                     "I'm temporarily unable to process your request. Please try again soon.",
                     "Experiencing technical issues; retry shortly.",

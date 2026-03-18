@@ -24,6 +24,7 @@ from lyo_app.api.v1.feeds import router as feeds_router
 from lyo_app.api.v1.gamification import router as gamification_router
 from lyo_app.api.v1.push import router as push_router
 from lyo_app.api.v1.health import router as health_router
+from lyo_app.chat import chat_router
 
 # Import core components
 from lyo_app.core.database import init_db
@@ -187,6 +188,12 @@ app.include_router(
     health_router,
     prefix="/api/v1/health",
     tags=["Health"]
+)
+
+app.include_router(
+    chat_router,
+    prefix="/api/v1",
+    tags=["Chat"]
 )
 
 
