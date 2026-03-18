@@ -9,6 +9,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback that logs unhandled exceptions from fire-and-forget tasks."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Background STT task %s raised: %s", task.get_name(), exc, exc_info=exc)
+
+
 class DeepgramSTTService:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("DEEPGRAM_API_KEY")
@@ -37,14 +44,14 @@ class DeepgramSTTService:
         
         if self._demo_mode:
             logger.info("🎭 STT Demo Mode: Will simulate transcripts")
-            asyncio.create_task(self._run_demo_mode())
+            asyncio.create_task(self._run_demo_mode()).add_done_callback(_log_task_exception)
             return
             
         if not self.client: 
             return
         
         # Start the context manager in a background task to keep it alive
-        asyncio.create_task(self._run_socket())
+        asyncio.create_task(self._run_socket()).add_done_callback(_log_task_exception)
     
     async def _run_demo_mode(self):
         """Demo mode: wait for audio data, then simulate a transcript."""

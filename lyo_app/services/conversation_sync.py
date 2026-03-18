@@ -28,6 +28,12 @@ from lyo_app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback that logs unhandled exceptions from fire-and-forget tasks."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Background sync task %s raised: %s", task.get_name(), exc, exc_info=exc)
+
+
 class DeviceType(str, Enum):
     """Types of devices that can connect."""
     MOBILE_IOS = "mobile_ios"
@@ -129,7 +135,9 @@ class ConversationSyncService:
 
             # Start background tasks
             self.subscriber_task = asyncio.create_task(self._redis_subscriber())
+            self.subscriber_task.add_done_callback(_log_task_exception)
             self.presence_task = asyncio.create_task(self._presence_monitor())
+            self.presence_task.add_done_callback(_log_task_exception)
 
             logger.info("Conversation sync service initialized with Redis")
 
