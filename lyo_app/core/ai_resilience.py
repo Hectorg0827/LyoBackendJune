@@ -1,3 +1,4 @@
+import hashlib
 import os
 import json
 import asyncio
@@ -283,7 +284,7 @@ class AIResilienceManager:
             
         message_str = json.dumps(messages)
         if use_cache:
-            cache_key = f"chat:{hash(message_str)}"
+            cache_key = f"chat:{hashlib.sha256(message_str.encode()).hexdigest()[:32]}"
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached

@@ -230,7 +230,7 @@ class WebSocketManager:
                     
                     try:
                         await websocket.close()
-                    except:
+                    except Exception:
                         pass
                 
                 if stale_connections:

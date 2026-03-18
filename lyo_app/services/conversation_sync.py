@@ -139,10 +139,15 @@ class ConversationSyncService:
 
     async def shutdown(self):
         """Shutdown the sync service."""
+        tasks_to_cancel = []
         if self.presence_task:
             self.presence_task.cancel()
+            tasks_to_cancel.append(self.presence_task)
         if self.subscriber_task:
             self.subscriber_task.cancel()
+            tasks_to_cancel.append(self.subscriber_task)
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
         if self.pubsub:
             await self.pubsub.punsubscribe("conversation_sync:*")
             await self.pubsub.close()

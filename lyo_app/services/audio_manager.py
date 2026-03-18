@@ -27,6 +27,13 @@ from lyo_app.services.highlight_service import highlight_service
 
 logger = logging.getLogger(__name__)
 
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Callback for fire-and-forget tasks to surface exceptions to the logger."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error(f"Background task {task.get_name()} failed: {exc}", exc_info=exc)
+
+
 class AudioWebSocketManager:
     def __init__(self):
         # Active audio sessions: session_id -> ActiveAudioSession
@@ -52,7 +59,7 @@ class AudioWebSocketManager:
         if session_id in self.active_sessions:
             session = self.active_sessions[session_id]
             # Since disconnect is synchronous, we use a task
-            asyncio.create_task(session.stop())
+            asyncio.create_task(session.stop()).add_done_callback(_log_task_exception)
             del self.active_sessions[session_id]
             logger.info(f"Audio session stopped/disconnected: {session_id}")
             
@@ -171,7 +178,7 @@ class ActiveAudioSession:
                 session_id_int = int(self.session_id)
                 asyncio.create_task(highlight_service.generate_mastery_highlight(
                     self.user_id, self.history, session_id_int
-                ))
+                )).add_done_callback(_log_task_exception)
             except Exception as e:
                 logger.error(f"Error triggering highlight: {e}")
         
@@ -191,7 +198,7 @@ class ActiveAudioSession:
         if self.vad and self.manager.SAMPLE_RATE in [8000, 16000, 32000, 48000]:
             try:
                 return self.vad.is_speech(frame, self.manager.SAMPLE_RATE)
-            except:
+            except Exception:
                 pass
         
         # Energy fallback
@@ -222,7 +229,9 @@ class ActiveAudioSession:
             
         self.is_ai_responding = False
         # Notify client to stop playback
-        asyncio.create_task(self.websocket.send_text(json.dumps({"type": "interrupt"})))
+        asyncio.create_task(
+            self.websocket.send_text(json.dumps({"type": "interrupt"}))
+        ).add_done_callback(_log_task_exception)
 
     def handle_transcript(self, text: str, is_final: bool):
         """Callback from STT."""
@@ -233,13 +242,14 @@ class ActiveAudioSession:
             "type": "transcript",
             "text": text,
             "is_final": is_final
-        })))
+        }))).add_done_callback(_log_task_exception)
 
         if is_final:
             self.history.append({"role": "user", "content": text})
             # Start AI response task
             if self.ai_task: self.ai_task.cancel()
             self.ai_task = asyncio.create_task(self.process_ai_response())
+            self.ai_task.add_done_callback(_log_task_exception)
 
     async def process_ai_response(self):
         """Stream LLM response and TTS it."""

@@ -3,6 +3,7 @@ Chat API endpoint for iOS app
 Handles conversational AI interactions with user profile personalization
 """
 
+import json
 import logging
 import time
 import asyncio
@@ -96,8 +97,11 @@ Include 4-8 lessons. Make the course comprehensive and engaging."""
             raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
             raw = raw.rsplit("```", 1)[0].strip()
 
-        import json
-        course_data = json.loads(raw)
+        try:
+            course_data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error(f"AI returned malformed JSON for course: {e} | raw={raw[:500]!r}")
+            raise
         logger.info(f"✅ AI generated course: {course_data.get('title', topic)}")
         return course_data
 
@@ -105,8 +109,10 @@ Include 4-8 lessons. Make the course comprehensive and engaging."""
         logger.error(f"AI course generation failed: {e} — using fallback")
         # Minimal fallback so the flow doesn't break
         topic = extract_learning_topic(message) or message[:60]
+        import hashlib
+        topic_id = int(hashlib.md5(topic.encode()).hexdigest()[:8], 16) % 10000
         return {
-            'id': f"course_{hash(topic) % 10000}",
+            'id': f"course_{topic_id}",
             'title': f"Learn {topic.title()}",
             'description': f"A comprehensive course covering all aspects of {topic}",
             'subject': topic,
@@ -118,8 +124,6 @@ Include 4-8 lessons. Make the course comprehensive and engaging."""
 
 def extract_learning_topic(message: str) -> Optional[str]:
     """Extract learning topic from user message"""
-    import re
-
     patterns = [
         r"teach me (?:about )?(.+?)(?:\s+please|\s+pls|\s+today|\s+now|$)",
         r"learn (?:about )?(.+?)(?:\s+please|\s+pls|\s+today|\s+now|$)",
@@ -133,7 +137,7 @@ def extract_learning_topic(message: str) -> Optional[str]:
             topic = match.group(1).strip()
             # Clean up common trailing words
             topic = re.sub(r'\s+(please|pls|today|now)$', '', topic)
-            return topic
+            return topic[:200]  # Cap length to prevent excessive token usage
 
     return None
 
@@ -386,6 +390,9 @@ async def chat(
         user_profile = await personalization.get_mastery_profile(db, str(current_user.id))
         user_profile_summary = user_profile.model_dump() if user_profile else {}
         
+        # Initialise shared output variable used in both course and regular paths
+        ui_component_json = None
+
         # ============================================================
         # STEP 1: Detect Course Creation Intent
         # ============================================================
@@ -474,8 +481,9 @@ async def chat(
         messages.append({"role": "user", "content": request.message})
 
         # Add system message for Lyo personality with optional profile context
-        # Incorporate client-provided context if available
-        client_context = request.context if request.context else ""
+        # Sanitize client-provided context to prevent prompt injection
+        raw_client_context = request.context or ""
+        client_context = raw_client_context[:500] if raw_client_context else ""
         
         system_content = f"""You are Lyo, a friendly and engaging AI learning assistant.
 Be conversational, helpful, and educational. Use emojis sparingly for warmth.

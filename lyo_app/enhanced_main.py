@@ -174,7 +174,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ]
     
     results = await asyncio.gather(*init_tasks, return_exceptions=True)
-    successful = sum(1 for r in results if r is True)
+    successful = sum(1 for r in results if not isinstance(r, Exception))
     
     elapsed = time.time() - start_time
     logger.info(f"🎉 LyoBackend startup completed in {elapsed:.2f}s ({successful}/5 services)")

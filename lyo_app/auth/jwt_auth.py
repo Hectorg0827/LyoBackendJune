@@ -2,6 +2,7 @@
 
 import jwt
 import json
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import Depends, HTTPException, status
@@ -67,8 +68,7 @@ def get_password_hash(password: str) -> str:
 def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]] = None) -> str:
     """Create JWT access token."""
     expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    import secrets
-    
+
     to_encode = {
         "jti": secrets.token_hex(8),
         "user_id": str(user_id),  # Ensure it's a string in JWT
@@ -93,8 +93,7 @@ def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]
 def create_refresh_token(user_id: str) -> str:
     """Create JWT refresh token."""
     expire = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-    import secrets
-    
+
     to_encode = {
         "jti": secrets.token_hex(8),
         "user_id": str(user_id),  # Ensure it's a string in JWT

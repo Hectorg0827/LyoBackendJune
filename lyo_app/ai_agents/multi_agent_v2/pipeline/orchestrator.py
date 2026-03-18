@@ -431,9 +431,11 @@ class CourseGenerationPipeline(StreamingPipeline):
                 ),
                 timeout=300.0 # 5 minutes max for all lessons
             )
-        except (Exception, asyncio.TimeoutError) as e:
-            logger.error(f"[{state.job_id}] Content generation failed or timed out: {e}")
-            # Fallback: Create minimal placeholder lessons so pipeline can continue
+        except asyncio.TimeoutError:
+            logger.error(f"[{state.job_id}] Content generation timed out after 300s")
+            lessons = self._build_fallback_lessons(contexts)
+        except Exception as e:
+            logger.error(f"[{state.job_id}] Content generation failed: {e}")
             lessons = self._build_fallback_lessons(contexts)
         
         # Validate each lesson
