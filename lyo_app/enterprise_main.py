@@ -85,6 +85,16 @@ async def lifespan(app: FastAPI):
         logger.info("🧠 Initializing AI Study Manager...")
         ai_study_manager = get_ai_study_manager()
         app.state.ai_study_manager = ai_study_manager
+
+        # Pre-warm AI resilience manager so cold-start latency doesn't hit
+        # the first real user request (API key resolution + session creation).
+        logger.info("⚡ Pre-warming AI resilience manager...")
+        try:
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            await ai_resilience_manager.initialize()
+            logger.info("✅ AI resilience manager: Pre-warmed")
+        except Exception as e:
+            logger.warning(f"⚠️ AI resilience manager pre-warm warning: {e}")
         
         # Setup observability middleware
         logger.info("📡 Setting up observability middleware...")

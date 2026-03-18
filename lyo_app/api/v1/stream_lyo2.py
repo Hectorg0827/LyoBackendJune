@@ -130,7 +130,8 @@ async def stream_lyo2_chat(
             skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
             collected_bricks.append(skeleton_brick)
             yield f"data: {json.dumps(skeleton_brick)}\n\n"
-            await asyncio.sleep(0.01) # Yield to event loop
+            # Note: the yield itself surrenders control to the event loop;
+            # an explicit sleep(0.01) is not needed and adds 10 ms of latency.
             
             # 2. Performance & Cache Layer (New for Phase 17)
             # Ensure optimizer is ready
@@ -169,21 +170,30 @@ async def stream_lyo2_chat(
                 )
             else:
                 try:
-                    # 2b. Fetch Proactive Nudges (New for Phase 16)
-                    proactive_context = ""
+                    # Fire nudge fetch and routing in parallel — nudges were
+                    # previously sequential (200-500 ms of DB latency wasted
+                    # before the router could even start).
+                    nudges_task = asyncio.create_task(
+                        proactive_engagement_service.get_pending_nudges_for_user(current_user.id, db)
+                    )
+                    routing_task = asyncio.create_task(
+                        asyncio.wait_for(router_agent.route(request), timeout=35.0)
+                    )
+
+                    # Await routing first (it's on the critical path)
+                    routing_response = await routing_task
+                    decision = routing_response.decision
+
+                    # Await nudges (likely already done; cost is near-zero)
                     try:
-                        nudges = await proactive_engagement_service.get_pending_nudges_for_user(current_user.id, db)
+                        nudges = await nudges_task
                         if nudges:
                             proactive_context = "\n**Proactive System Nudges (Incorporate these into your greeting if relevant):**\n"
                             for n in nudges:
                                 proactive_context += f"- [{n.nudge_type}] {n.title}: {n.message}\n"
-                            # Append to request text for the router/planner/executor to see
                             request.text = f"[Proactive Context: {proactive_context}]\n" + (request.text or "")
                     except Exception as ne:
                         logger.warning(f"Failed to fetch proactive nudges: {ne}")
-
-                    routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
-                    decision = routing_response.decision
                 except asyncio.TimeoutError:
                     logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
                     yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"

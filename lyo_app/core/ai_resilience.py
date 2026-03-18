@@ -112,8 +112,13 @@ class AIResilienceManager:
         self.daily_costs: Dict[str, float] = {}
         self.daily_usage_reset = time.time()
         self.openai_client: Optional[AsyncOpenAI] = None
+        # Guard: skip the entire init body if already done
+        self._initialized: bool = False
 
     async def initialize(self):
+        # Fast path: skip if already initialized (called on every SSE request)
+        if self._initialized:
+            return
         print(f">>> [PID {os.getpid()}] AI Resilience Init: Starting...", flush=True)
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         openai_key = os.getenv("OPENAI_API_KEY") or get_secret("OPENAI_API_KEY")
@@ -190,8 +195,9 @@ class AIResilienceManager:
         except ImportError:
             ssl_context = ssl.create_default_context()
         
+        # Higher limits for better throughput under concurrent load
         connector = aiohttp.TCPConnector(
-            limit=100, limit_per_host=30, ttl_dns_cache=300, use_dns_cache=True,
+            limit=200, limit_per_host=50, ttl_dns_cache=300, use_dns_cache=True,
             ssl=ssl_context
         )
         timeout = aiohttp.ClientTimeout(total=75, connect=15)
@@ -203,9 +209,12 @@ class AIResilienceManager:
         logger.info(
             f"AI Resilience Manager initialized with {len(self.models)} models"
         )
-        
+
         # Pre-warm connection pool for faster first requests
         await self._prewarm_connections()
+
+        # Mark as initialized so subsequent calls skip setup entirely
+        self._initialized = True
 
     async def stream_chat_completion(
         self,

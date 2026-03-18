@@ -54,6 +54,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await websocket_manager.initialize()
         logger.info("WebSocket manager initialized")
         
+        # Pre-warm AI resilience manager so the first request doesn't pay
+        # the full initialization cost (API key resolution, session creation,
+        # connection pool warm-up).
+        try:
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            await ai_resilience_manager.initialize()
+            logger.info("AI resilience manager pre-warmed")
+        except Exception as e:
+            logger.warning(f"AI resilience manager pre-warm warning: {e}")
+
         # Initialize model manager (lazy loading)
         try:
             from lyo_app.models.loading import model_manager

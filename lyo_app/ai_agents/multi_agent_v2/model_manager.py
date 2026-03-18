@@ -117,22 +117,29 @@ class ModelManager:
         "summary_generation": ModelTier.ECONOMY
     }
     
+    # Class-level cache so repeated lookups for the same task name are O(1)
+    _config_cache: dict = {}
+
     @classmethod
     def get_model_for_task(cls, task_name: str) -> ModelConfig:
         """
         Get the appropriate model configuration for a task.
-        
+
         Args:
             task_name: Name of the task/agent
-            
+
         Returns:
             ModelConfig with appropriate settings
         """
-        tier = cls.TASK_MODEL_MAP.get(task_name.lower(), ModelTier.STANDARD)
+        key = task_name.lower()
+        if key in cls._config_cache:
+            return cls._config_cache[key]
+
+        tier = cls.TASK_MODEL_MAP.get(key, ModelTier.STANDARD)
         config = cls.MODELS[tier]
-        
+        cls._config_cache[key] = config
+
         logger.debug(f"Selected {tier.value} model for task '{task_name}': {config.model_name}")
-        
         return config
     
     @classmethod

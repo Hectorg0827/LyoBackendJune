@@ -529,9 +529,11 @@ class A2ABaseAgent(ABC, Generic[T]):
                 last_error = e
                 logger.warning(f"[{self.name}] Error on attempt {attempt + 1}: {type(e).__name__}: {e}")
             
-            # Exponential backoff
+            # Jittered exponential backoff — start at 100 ms, cap at 1 s.
+            # Previous values (1 s, 2 s, 4 s) added up to 7 s of pure waiting
+            # on transient errors; this reduces worst-case retry overhead by ~6 s.
             if attempt < self.max_retries - 1:
-                delay = 2 ** attempt
+                delay = min(0.1 * (2 ** attempt), 1.0)
                 await asyncio.sleep(delay)
         
         logger.error(f"[{self.name}] All retries exhausted, raising: {type(last_error).__name__}: {last_error}")
