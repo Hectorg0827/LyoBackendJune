@@ -3,6 +3,7 @@ Chat API endpoint for iOS app
 Handles conversational AI interactions with user profile personalization
 """
 
+import json
 import logging
 import time
 import asyncio
@@ -17,8 +18,8 @@ from lyo_app.core.config import settings
 from lyo_app.auth.dependencies import get_current_user, get_db
 from lyo_app.auth.models import User
 from lyo_app.personalization.service import PersonalizationEngine
-from lyo_app.ai_agents.a2a.schemas import Artifact, ArtifactType, A2ACourseRequest
-from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
+from lyo_app.ai_agents.a2a.schemas import Artifact, ArtifactType
+from lyo_app.ai.unified_course_schema import UnifiedCourse
 
 logger = logging.getLogger(__name__)
 
@@ -44,82 +45,9 @@ def detect_ai_classroom_intent(message: str) -> str:
     else:
         return "general_learning"
 
-async def generate_ai_classroom_course(message: str, user) -> Optional[Dict[str, Any]]:
-    """Generate course using real AI pipeline and return structured course data"""
-    try:
-        # Extract topic from message
-        topic = extract_learning_topic(message)
-        if not topic:
-            return None
-
-        logger.info(f"🚀 Generating real AI course for topic: {topic}")
-
-        # Use the AI resilience manager to generate a structured course outline
-        prompt = f"""You are the Lyo Course Architect. Generate a structured course outline.
-
-Topic: {topic}
-Return ONLY valid JSON with this exact structure:
-{{
-    "id": "course_<unique_number>",
-    "title": "Course Title",
-    "description": "2-3 sentence description of the course",
-    "subject": "{topic}",
-    "grade_band": "Beginner|Intermediate|Advanced",
-    "estimated_minutes": <number>,
-    "total_nodes": <number between 8 and 20>,
-    "thumbnail_url": null,
-    "learning_objectives": [
-        "Objective 1",
-        "Objective 2",
-        "Objective 3"
-    ],
-    "lessons": [
-        {{"title": "Lesson Title", "description": "What this lesson covers", "duration_minutes": <number>}}
-    ]
-}}
-Include 4-8 lessons. Make the course comprehensive and engaging."""
-
-        response = await ai_resilience_manager.chat_completion(
-            messages=[
-                {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
-        )
-
-        raw = response.get("content", "").strip()
-
-        # Strip markdown code fences
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif raw.startswith("```"):
-            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            raw = raw.rsplit("```", 1)[0].strip()
-
-        import json
-        course_data = json.loads(raw)
-        logger.info(f"✅ AI generated course: {course_data.get('title', topic)}")
-        return course_data
-
-    except Exception as e:
-        logger.error(f"AI course generation failed: {e} — using fallback")
-        # Minimal fallback so the flow doesn't break
-        topic = extract_learning_topic(message) or message[:60]
-        return {
-            'id': f"course_{hash(topic) % 10000}",
-            'title': f"Learn {topic.title()}",
-            'description': f"A comprehensive course covering all aspects of {topic}",
-            'subject': topic,
-            'grade_band': 'Intermediate',
-            'estimated_minutes': 90,
-            'total_nodes': 12,
-            'thumbnail_url': None
-        }
 
 def extract_learning_topic(message: str) -> Optional[str]:
     """Extract learning topic from user message"""
-    import re
-
     patterns = [
         r"teach me (?:about )?(.+?)(?:\s+please|\s+pls|\s+today|\s+now|$)",
         r"learn (?:about )?(.+?)(?:\s+please|\s+pls|\s+today|\s+now|$)",
@@ -133,7 +61,7 @@ def extract_learning_topic(message: str) -> Optional[str]:
             topic = match.group(1).strip()
             # Clean up common trailing words
             topic = re.sub(r'\s+(please|pls|today|now)$', '', topic)
-            return topic
+            return topic[:200]  # Cap length to prevent excessive token usage
 
     return None
 
@@ -389,6 +317,9 @@ async def chat(
         user_profile = await personalization.get_mastery_profile(db, user_id_str)
         user_profile_summary = user_profile.model_dump() if user_profile else {}
         
+        # Initialise shared output variable used in both course and regular paths
+        ui_component_json = None
+
         # ============================================================
         # STEP 1: Detect Course Creation Intent
         # ============================================================
@@ -396,8 +327,10 @@ async def chat(
         
         if course_intent:
             logger.info(f"🎓 Course creation detected: {course_intent['topic']}")
-            
-            # Use A2A Orchestrator for course generation
+
+            # Use Multi-Agent v2 Pipeline for course generation.
+            # It has proper state management, Redis persistence, QA gates,
+            # and returns a strongly-typed GeneratedCourse.
             try:
                 course_request = A2ACourseRequest(
                     topic=course_intent['topic'],
@@ -411,53 +344,34 @@ async def chat(
                     orchestrator.generate_course(course_request),
                     timeout=120.0
                 )
-                
-                # Extract artifacts
-                artifacts = a2a_response.output_artifacts
-                
-                # Build course data from artifacts
-                course_data = {
-                    "title": f"Learn {course_intent['topic'].title()}",
-                    "description": f"A comprehensive course on {course_intent['topic']}",
-                    "lessons": []
-                }
 
-                # Extract lessons from artifacts
-                for artifact in artifacts:
-                    if artifact.type == ArtifactType.CURRICULUM_STRUCTURE and artifact.data:
-                        modules = artifact.data.get("modules", [])
-                        for module in modules:
-                            for lesson in module.get("lessons", []):
-                                course_data["lessons"].append({
-                                    "title": lesson.get("title", "Lesson"),
-                                    "type": "reading",
-                                    "duration": f"{lesson.get('duration_minutes', 15)} min"
-                                })
+                pipeline = CourseGenerationPipeline(config=PipelineConfig())
+                generated = await asyncio.wait_for(
+                    pipeline.generate_course(
+                        user_request=f"Create a comprehensive course on: {course_intent['topic']}",
+                        user_context={"user_id": str(current_user.id)},
+                    ),
+                    timeout=120.0,
+                )
 
-                # Build course UI component from artifacts
-                ui_component_json = None
-                for artifact in artifacts:
-                    ui_component_json = translate_artifact_to_ui_component(artifact)
-                    if ui_component_json:
-                        break
-
-                # Build response text
-                response_text = f"🎓 **Course Created: {course_intent['topic'].title()}**\n\nI've designed a comprehensive learning experience for you! The course includes {len(course_data['lessons'])} lessons covering all the essential concepts.\n\n✨ *Tap below to explore your personalized course*"
+                unified = UnifiedCourse.from_generated_course(generated)
+                ui_component_json = unified.to_ui_block()
+                response_text = unified.to_chat_response_text()
 
                 latency_ms = int((time.time() - start_time) * 1000)
-                logger.info(f"A2A Course generated in {latency_ms}ms")
+                logger.info(f"Multi-Agent v2 course generated in {latency_ms}ms")
 
                 return ChatResponse(
                     response=response_text,
-                    model_used="A2A Multi-Agent Pipeline",
+                    model_used="Multi-Agent v2 Pipeline",
                     success=True,
                     error=None,
                     user_profile=user_profile_summary,
-                    ui_component=[{"type": "ui_block", "component": ui_component_json}] if ui_component_json else None
+                    ui_component=[{"type": "ui_block", "component": ui_component_json}],
                 )
-                
+
             except Exception as e:
-                logger.error(f"A2A course generation failed: {e}", exc_info=True)
+                logger.error(f"Multi-Agent v2 course generation failed: {e}", exc_info=True)
                 # Fall through to regular chat completion
                 pass
         
@@ -476,8 +390,26 @@ async def chat(
         messages.append({"role": "user", "content": request.message})
 
         # Add system message for Lyo personality with optional profile context
-        # Incorporate client-provided context if available
-        client_context = request.context if request.context else ""
+        # Sanitize client-provided context to prevent prompt injection
+        raw_client_context = request.context or ""
+        # Cap length, strip leading injection phrases, then label as untrusted user data
+        client_context = raw_client_context[:500].strip()
+        if client_context:
+            # Remove lines that start with common injection lead-ins
+            _INJECTION_RE = re.compile(
+                r"^\s*(ignore\b|override\b|disregard\b|forget\b|system\s*:|"
+                r"new\s+instruction|you\s+are\s+now|act\s+as\b)",
+                re.IGNORECASE,
+            )
+            cleaned_lines = [
+                ln for ln in client_context.splitlines()
+                if not _INJECTION_RE.match(ln)
+            ]
+            client_context = (
+                "[Additional context]\n"
+                + "\n".join(cleaned_lines)
+                + "\n[End context]"
+            ) if cleaned_lines else ""
         
         system_content = f"""You are Lyo, a friendly and engaging AI learning assistant.
 Be conversational, helpful, and educational. Use emojis sparingly for warmth.
@@ -606,7 +538,11 @@ When a user asks to create a course, briefly confirm the topic and ask about the
                     else:
                         continue
 
-                    translated = translate_artifact_to_ui_component(artifact)
+                    try:
+                        unified = UnifiedCourse.from_a2a_artifacts([artifact], topic="course")
+                        translated = unified.to_ui_block()
+                    except Exception:
+                        translated = translate_artifact_to_ui_component(artifact)
                     if translated:
                         ui_component_json = translated
                         break

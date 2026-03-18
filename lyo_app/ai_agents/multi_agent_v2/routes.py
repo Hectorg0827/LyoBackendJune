@@ -57,9 +57,10 @@ router = APIRouter(
 _pipeline: Optional[CourseGenerationPipeline] = None
 _job_manager: Optional[JobManager] = None
 
-# 🧠 Production-Grade Job Store
-# fallback if DB is not available or for fast retrieval
-_job_store: Dict[str, Dict[str, Any]] = {}
+# 🧠 Production-Grade Job Store (Redis-backed, falls back to in-memory)
+# Survives server restarts and horizontal scaling — fixes 404s on Cloud Run.
+from lyo_app.cache.job_store import get_job_store as _get_job_store
+_job_store = _get_job_store()
 
 
 # ==================== REQUEST/RESPONSE MODELS ====================
@@ -266,71 +267,62 @@ async def run_course_generation(
     user_context: Optional[Dict[str, Any]],
     pipeline: CourseGenerationPipeline
 ):
-    """Background task to run course generation with store updates"""
+    """Background task to run course generation with Redis-backed store updates."""
+    def _save_job(updates: dict):
+        """Merge *updates* into the stored job entry and persist to Redis."""
+        job = _job_store.get(job_id) or {}
+        job.update(updates)
+        _job_store.save(job_id, job)
+
     try:
         logger.info(f"Starting course generation for job {job_id}")
-        
+
         # Initialize store entry
-        _job_store[job_id] = {
+        _job_store.save(job_id, {
             "job_id": job_id,
             "status": "running",
             "progress_percent": 5,
             "current_step": "initializing",
             "steps_completed": [],
             "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        }
+            "updated_at": datetime.utcnow(),
+        })
 
-        # Inner progress update function
         async def update_progress(status: JobStatus, step: str):
-            if job_id in _job_store:
-                _job_store[job_id].update({
-                    "status": "running",
-                    "progress_percent": status_to_progress(status),
-                    "current_step": step,
-                    "updated_at": datetime.utcnow()
-                })
-                if step not in _job_store[job_id]["steps_completed"]:
-                    _job_store[job_id]["steps_completed"].append(step)
+            job = _job_store.get(job_id) or {}
+            steps = job.get("steps_completed", [])
+            if step not in steps:
+                steps.append(step)
+            _job_store.save(job_id, {
+                **job,
+                "status": "running",
+                "progress_percent": status_to_progress(status),
+                "current_step": step,
+                "steps_completed": steps,
+                "updated_at": datetime.utcnow(),
+            })
 
-        # Run pipeline
-        # Note: In a full implementation, we'd hook into pipeline events
-        # For now, we manually update after the full call or wait for it to finish
-        # since pipeline.generate_course is a single awaitable here.
-        
         course = await pipeline.generate_course(
             user_request=request,
             user_context=user_context,
             job_id=job_id
         )
-        
-        # Mark as completed
-        if job_id in _job_store:
-            _job_store[job_id].update({
-                "status": "completed",
-                "progress_percent": 100,
-                "current_step": "completed",
-                "completed_at": datetime.utcnow(),
-                "result": course
-            })
-            
+
+        _save_job({
+            "status": "completed",
+            "progress_percent": 100,
+            "current_step": "completed",
+            "completed_at": datetime.utcnow(),
+            "result": course,
+        })
         logger.info(f"Course generation completed for job {job_id}: {course.course_id}")
+
     except PipelineError as e:
         logger.error(f"Pipeline error for job {job_id}: {e}")
-        if job_id in _job_store:
-            _job_store[job_id].update({
-                "status": "failed",
-                "error": str(e),
-                "updated_at": datetime.utcnow()
-            })
+        _save_job({"status": "failed", "error": str(e), "updated_at": datetime.utcnow()})
     except Exception as e:
         logger.error(f"Unexpected error for job {job_id}: {e}")
-        if job_id in _job_store:
-            _job_store[job_id].update({
-                "status": "failed",
-                "error": str(e),
-                "updated_at": datetime.utcnow()
-            })
+        _save_job({"status": "failed", "error": str(e), "updated_at": datetime.utcnow()})
 
 
 # ==================== LYO CONVERTER ====================
@@ -531,9 +523,10 @@ async def get_job_status(job_id: str):
     Get the status of a course generation job from store or DB.
     """
     try:
-        # 1. Check in-memory store (primary for active jobs)
-        if job_id in _job_store:
-            return JobStatusResponse(**_job_store[job_id])
+        # 1. Check job store (Redis-backed, falls back to in-memory)
+        job_data = _job_store.get(job_id)
+        if job_data:
+            return JobStatusResponse(**job_data)
             
         # 2. Fallback to placeholder if not found (avoids 404 while job is starting)
         # In production we'd check DB here
@@ -813,8 +806,8 @@ async def get_course(job_id_or_course_id: str):
     """
     try:
         # 1. Check job store for completed job
-        if job_id_or_course_id in _job_store:
-            job = _job_store[job_id_or_course_id]
+        job = _job_store.get(job_id_or_course_id)
+        if job:
             if job.get("status") == "completed" and "result" in job:
                 return convert_to_lyo_course(job["result"])
             elif job.get("status") == "failed":

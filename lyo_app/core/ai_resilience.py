@@ -1,3 +1,4 @@
+import hashlib
 import os
 import json
 import asyncio
@@ -111,8 +112,13 @@ class AIResilienceManager:
         self.daily_costs: Dict[str, float] = {}
         self.daily_usage_reset = time.time()
         self.openai_client: Optional[AsyncOpenAI] = None
+        # Guard: skip the entire init body if already done
+        self._initialized: bool = False
 
     async def initialize(self):
+        # Fast path: skip if already initialized (called on every SSE request)
+        if self._initialized:
+            return
         print(f">>> [PID {os.getpid()}] AI Resilience Init: Starting...", flush=True)
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         openai_key = os.getenv("OPENAI_API_KEY") or get_secret("OPENAI_API_KEY")
@@ -153,13 +159,13 @@ class AIResilienceManager:
                 priority=1,
                 capabilities=["chat", "fast", "conversational"],
             ),
-            "gemini-3.1-pro-preview-customtools": AIModelConfig(
-                name="Google Gemini 2.0 Pro",
-                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview-customtools:generateContent",
+            "gemini-3.1-pro": AIModelConfig(
+                name="Google Gemini 3.1 Pro (Complex)",
+                endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro:generateContent",
                 api_key=gemini_key,
                 max_tokens=8000,
                 priority=2,
-                capabilities=["chat", "creative"],
+                capabilities=["chat", "complex", "creative"],
             ),
             "gpt-4o": AIModelConfig(
                 name="OpenAI GPT-4o",
@@ -189,8 +195,9 @@ class AIResilienceManager:
         except ImportError:
             ssl_context = ssl.create_default_context()
         
+        # Higher limits for better throughput under concurrent load
         connector = aiohttp.TCPConnector(
-            limit=100, limit_per_host=30, ttl_dns_cache=300, use_dns_cache=True,
+            limit=200, limit_per_host=50, ttl_dns_cache=300, use_dns_cache=True,
             ssl=ssl_context
         )
         timeout = aiohttp.ClientTimeout(total=75, connect=15)
@@ -202,9 +209,12 @@ class AIResilienceManager:
         logger.info(
             f"AI Resilience Manager initialized with {len(self.models)} models"
         )
-        
+
         # Pre-warm connection pool for faster first requests
         await self._prewarm_connections()
+
+        # Mark as initialized so subsequent calls skip setup entirely
+        self._initialized = True
 
     async def stream_chat_completion(
         self,
@@ -283,7 +293,7 @@ class AIResilienceManager:
             
         message_str = json.dumps(messages)
         if use_cache:
-            cache_key = f"chat:{hash(message_str)}"
+            cache_key = f"chat:{hashlib.sha256(message_str.encode()).hexdigest()[:32]}"
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached
@@ -305,39 +315,53 @@ class AIResilienceManager:
             logger.error(error_msg)
             raise Exception(error_msg)
         
-        last_exception = None
-        for model_name, model in available_models_with_configs:
+        async def _try_model(model_name: str, model: AIModelConfig) -> Dict[str, Any]:
             cb = self.circuit_breakers[model_name]
             if not cb.is_closed:
-                continue
-            try:
-                if model.endpoint == "openai":
-                    if not self.openai_client: continue
-                    res = await self.openai_client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                    result = {
-                        "content": res.choices[0].message.content,
-                        "model": model.name,
-                        "tokens_used": res.usage.total_tokens if res.usage else 0,
-                        "response_time": 0,
-                        "timestamp": time.time(),
-                    }
+                raise RuntimeError(f"{model_name} circuit breaker open")
+            if model.endpoint == "openai":
+                if not self.openai_client:
+                    raise RuntimeError(f"{model_name}: no openai client")
+                res = await self.openai_client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return {
+                    "content": res.choices[0].message.content,
+                    "model": model.name,
+                    "tokens_used": res.usage.total_tokens if res.usage else 0,
+                    "response_time": 0,
+                    "timestamp": time.time(),
+                }
+            return await self._call_model_with_messages(
+                model_name, model, messages, temperature, max_tokens
+            )
+
+        # Launch all candidate models concurrently; return the first success.
+        tasks: Dict[asyncio.Task, str] = {
+            asyncio.create_task(_try_model(mn, m)): mn
+            for mn, m in available_models_with_configs
+        }
+        pending = set(tasks.keys())
+        last_exception: Exception = RuntimeError("No models attempted")
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                exc = task.exception()
+                if exc is None:
+                    result = task.result()
+                    # Cancel remaining in-flight calls
+                    for p in pending:
+                        p.cancel()
+                    if use_cache:
+                        self._add_to_cache(cache_key, result)
+                    return result
                 else:
-                    result = await self._call_model_with_messages(
-                        model_name, model, messages, temperature, max_tokens
-                    )
-                
-                if use_cache:
-                    self._add_to_cache(cache_key, result)
-                return result
-            except Exception as e:
-                logger.error(f"Error calling {model_name}: {e}")
-                last_exception = e
-                continue
+                    model_name = tasks[task]
+                    logger.error(f"Error calling {model_name}: {exc}")
+                    last_exception = exc
         return self._get_fallback_response(message_str, str(last_exception))
 
     async def _call_model_with_messages(
@@ -484,33 +508,33 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-3.1-pro-preview-customtools"]  # Default
-        
+            return ["gemini-3.1-pro-preview-customtools"]  # Default (fast)
+
         last_message = messages[-1].get("content", "")
         total_chars = sum(len(m.get("content", "")) for m in messages)
-        
-        # Simple query indicators
+
+        # Simple query indicators -> fast/cheap model
         simple_patterns = [
             "hello", "hi", "thanks", "help", "what is", "explain",
             "define", "meaning of", "quick", "simple", "briefly"
         ]
         is_simple = any(p in last_message.lower() for p in simple_patterns)
-        
-        # Complex query indicators
+
+        # Complex query indicators -> capable model
         complex_patterns = [
             "analyze", "compare", "evaluate", "detailed", "comprehensive",
             "research", "in-depth", "synthesize", "advanced", "complex"
         ]
         is_complex = any(p in last_message.lower() for p in complex_patterns)
-        
+
         # Routing logic:
-        # - Short messages (<100 chars) + simple patterns -> flash (fastest)
-        # - Complex patterns or long context -> 2.0-pro (most capable)
-        # - Otherwise -> 2.0-flash (balanced)
+        # - Short + simple -> fast flash (cheap)
+        # - Complex or long context -> gemini-3.1-pro (capable)
+        # - Otherwise -> flash + gpt-4o-mini balanced
         if len(last_message) < 100 and (is_simple or max_tokens < 256):
             return ["gpt-4o-mini", "gemini-3.1-pro-preview-customtools"]
         elif is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-3.1-pro-preview-customtools", "gpt-4o"]
+            return ["gemini-3.1-pro", "gpt-4o"]
         else:
             return ["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"]
 

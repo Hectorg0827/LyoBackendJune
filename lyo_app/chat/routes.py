@@ -13,6 +13,8 @@ FastAPI routes for the chat module including:
 """
 
 import asyncio
+import json
+import re
 import time
 import logging
 from datetime import datetime, timedelta
@@ -38,7 +40,12 @@ from lyo_app.chat.schemas import (
     ChatCourseRead, ChatCourseCreate,
     ChatNoteRead, ChatNoteCreate, ChatNoteUpdate,
     GreetingResponse,
-    OpenClassroomCourse, OpenClassroomPayload
+    OpenClassroomCourse, OpenClassroomPayload,
+    # Selection / highlight / notes-popup schemas
+    SelectionExplainRequest, SelectionExplainResponse,
+    SelectionNoteRequest, SelectionNoteResponse,
+    HighlightCreate, HighlightRead, HighlightListResponse,
+    AnnotationUpdate,
 )
 from lyo_app.core.lyo_protocol import (
     LyoBlock, BlockType, SemanticRole, PresentationHint, ConceptPayload
@@ -47,8 +54,8 @@ from lyo_app.chat.router import chat_router, mode_transition_manager
 from lyo_app.chat.agents import agent_registry
 from lyo_app.chat.assembler import response_assembler
 from lyo_app.chat.stores import (
-    course_store, notes_store, conversation_store, 
-    response_cache, telemetry_store
+    course_store, notes_store, conversation_store,
+    highlight_store, response_cache, telemetry_store
 )
 from lyo_app.streaming import get_sse_manager, stream_response, EventType, StreamEvent
 from lyo_app.personalization.service import personalization_engine
@@ -1369,6 +1376,254 @@ async def get_course(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+# =============================================================================
+# SELECTION POPUP ENDPOINTS
+# (explain · add to notes · highlight)
+# =============================================================================
+
+@router.post("/selection/explain", response_model=SelectionExplainResponse)
+async def explain_selection(
+    request: SelectionExplainRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Explain a piece of text selected by the user in the chat thread.
+
+    Called when the user taps *Explain* in the selection popup.
+    Returns a short explanation plus key points, ready to display in a
+    bottom sheet without navigating away from the conversation.
+    """
+    depth_instructions = {
+        "brief":    "Give a concise 2-3 sentence explanation. No bullet lists.",
+        "moderate": "Give a clear explanation in 1 short paragraph plus 2-3 bullet key points.",
+        "detailed": "Give a thorough explanation with 3-5 bullet key points and 2-3 related topics.",
+    }
+    instruction = depth_instructions.get(request.depth, depth_instructions["brief"])
+
+    history_context = ""
+    if request.conversation_history:
+        recent = request.conversation_history[-4:]
+        history_context = "\n".join(
+            f"{m.role.upper()}: {m.content[:300]}" for m in recent
+        )
+
+    system_prompt = (
+        "You are Lyo, a friendly AI learning assistant. "
+        "The user selected a piece of text from a conversation and wants a quick explanation. "
+        f"{instruction} "
+        "Return JSON with keys: explanation (string), key_points (list of strings), "
+        "related_topics (list of strings). key_points and related_topics may be empty lists."
+    )
+
+    user_message = f'Selected text:\n"""\n{request.selected_text}\n"""'
+    if history_context:
+        user_message += f"\n\nConversation context:\n{history_context}"
+
+    try:
+        response = await ai_resilience_manager.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.4,
+            max_tokens=400,
+        )
+        raw = response.get("content", "")
+        # Parse structured JSON from the model
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group())
+        else:
+            data = {"explanation": raw.strip(), "key_points": [], "related_topics": []}
+    except Exception as exc:
+        logger.warning("explain_selection AI call failed: %s", exc)
+        data = {
+            "explanation": "I couldn't generate an explanation right now. Please try again.",
+            "key_points": [],
+            "related_topics": [],
+        }
+
+    chip_actions = [
+        ChipActionItem(id="add_note", action="add_to_notes", label="Add to notes", icon="note"),
+        ChipActionItem(id="highlight", action="highlight", label="Highlight", icon="highlight"),
+        ChipActionItem(id="practice", action="practice", label="Practice this", icon="quiz"),
+    ]
+
+    return SelectionExplainResponse(
+        selected_text=request.selected_text,
+        explanation=data.get("explanation", ""),
+        key_points=data.get("key_points", []),
+        related_topics=data.get("related_topics", []),
+        chip_actions=chip_actions,
+    )
+
+
+@router.post("/selection/note", response_model=SelectionNoteResponse)
+async def add_selection_to_notes(
+    request: SelectionNoteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Save a selected piece of chat text as a note.
+
+    Called when the user taps *Add to notes* in the selection popup.
+    The server auto-generates a title and tags when the client omits them.
+    """
+    user_id = str(current_user.id) if current_user else "anonymous"
+
+    # Auto-generate title if not provided
+    title = request.title
+    if not title:
+        # Truncate selected text to produce a natural title
+        preview = request.selected_text[:60].strip()
+        title = preview + ("…" if len(request.selected_text) > 60 else "")
+
+    # Auto-generate a one-sentence summary via AI (best-effort, non-blocking)
+    summary: Optional[str] = None
+    try:
+        sum_response = await ai_resilience_manager.chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Summarise the following text in ONE sentence (≤20 words). "
+                        "Return only the sentence, nothing else."
+                    ),
+                },
+                {"role": "user", "content": request.selected_text[:1000]},
+            ],
+            temperature=0.3,
+            max_tokens=60,
+        )
+        summary = sum_response.get("content", "").strip() or None
+    except Exception as exc:
+        logger.debug("Summary generation skipped: %s", exc)
+
+    try:
+        note = await notes_store.create(
+            db,
+            user_id=user_id,
+            title=title,
+            content=request.selected_text,
+            summary=summary,
+            tags=request.tags,
+            source_message_id=request.message_id,
+            source_conversation_id=request.conversation_id,
+            note_type="key_concept",
+        )
+    except Exception as exc:
+        logger.error("add_selection_to_notes: failed to save note for user %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save note. Please try again.",
+        )
+
+    return SelectionNoteResponse(
+        note_id=str(note.id),
+        title=note.title,
+        content=note.content,
+        summary=note.summary,
+        tags=note.tags or [],
+        created_at=note.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Highlights
+# ---------------------------------------------------------------------------
+
+@router.post("/selection/highlight", response_model=HighlightRead, status_code=201)
+async def create_highlight(
+    request: HighlightCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Persist a yellow highlight on a chat message.
+
+    The client sends the selected text and its character offsets within the
+    message.  On the next conversation load the client fetches highlights via
+    GET /chat/selection/highlights/{conversation_id} and re-renders them.
+    """
+    user_id = str(current_user.id) if current_user else "anonymous"
+
+    highlight = await highlight_store.create(
+        db,
+        user_id=user_id,
+        conversation_id=request.conversation_id,
+        selected_text=request.selected_text,
+        message_id=request.message_id,
+        char_start=request.char_start,
+        char_end=request.char_end,
+        color=request.color,
+        annotation=request.annotation,
+    )
+    return highlight
+
+
+@router.get(
+    "/selection/highlights/{conversation_id}",
+    response_model=HighlightListResponse,
+)
+async def get_highlights(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Return all persisted highlights for a conversation.
+
+    The response groups highlights by message_id so the client can apply them
+    in a single pass when rendering the message list.
+    Highlights not tied to a message live under the key ``__unanchored__``.
+    """
+    user_id = str(current_user.id) if current_user else "anonymous"
+    highlights = await highlight_store.get_by_conversation(db, user_id, conversation_id)
+
+    by_message: dict = {}
+    for h in highlights:
+        key = h.message_id or "__unanchored__"
+        by_message.setdefault(key, []).append(HighlightRead.model_validate(h))
+
+    return HighlightListResponse(
+        conversation_id=conversation_id,
+        highlights_by_message=by_message,
+        total=len(highlights),
+    )
+
+
+@router.delete("/selection/highlights/{highlight_id}", status_code=204)
+async def delete_highlight(
+    highlight_id: str = Path(..., description="Highlight ID to remove"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Remove a highlight.  The yellow rendering will disappear on next reload.
+    """
+    user_id = str(current_user.id) if current_user else "anonymous"
+    deleted = await highlight_store.delete(db, highlight_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Highlight not found")
+
+
+@router.patch("/selection/highlights/{highlight_id}/annotation", response_model=HighlightRead)
+async def update_highlight_annotation(
+    body: AnnotationUpdate,
+    highlight_id: str = Path(..., description="Highlight ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """Update the margin annotation on an existing highlight."""
+    user_id = str(current_user.id) if current_user else "anonymous"
+    highlight = await highlight_store.update_annotation(db, highlight_id, user_id, body.annotation)
+    if not highlight:
+        raise HTTPException(status_code=404, detail="Highlight not found")
+    return highlight
 
 
 # =============================================================================

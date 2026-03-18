@@ -827,38 +827,41 @@ class A2AOrchestrator:
             if result.output
         }
         
-        # LATENCY OPTIMIZATION: Skip QA for 'fast' tier
+        # For 'fast' tier: run a lightweight factual-only QA instead of skipping
+        # entirely.  This catches critical errors (hallucinations, broken code)
+        # while still reducing latency vs. the full review.
+        from lyo_app.ai_agents.a2a.qa_checker_agent import ReviewScope
         if state.request.quality_tier == "fast":
-            print(f"[A2A Orchestrator] Skipping QA Agent for 'fast' tier to reduce latency.")
-            return {
-                "approval_status": "approved",
-                "issues": [],
-                "critical_issues_count": 0,
-                "bypassed": True
-            }
-        
+            logger.info("[A2A Orchestrator] Fast tier: using lightweight factual-only QA.")
+            review_scope = ReviewScope.FACTUAL_ONLY
+        else:
+            review_scope = ReviewScope.FULL
+
         task_input = TaskInput(
             task_id=f"{state.pipeline_id}_qa",
             requesting_agent="orchestrator",
             user_message=state.request.topic,
             context={
                 "quality_tier": state.request.quality_tier,
-                "phase_outputs": list(all_outputs.keys())
-            }
+                "phase_outputs": list(all_outputs.keys()),
+            },
         )
-        
-        # Pass all outputs to QA
+
         output = await self.qa_agent.execute(
             task_input,
-            content_to_review=all_outputs
+            content_to_review=all_outputs,
+            review_scope=review_scope,
         )
-        
-        # Check quality gate
-        if hasattr(output, 'overall_quality_score') and output.overall_quality_score is not None:
-            if output.overall_quality_score < self.config.min_qa_score:
-                raise ValueError(
-                    f"QA score {output.overall_quality_score:.2f} below minimum {self.config.min_qa_score}"
-                )
+
+        # Extract typed QA output to access overall_quality_score
+        typed_qa = self.qa_agent.get_typed_output(output)
+
+        # Enforce quality gate on the score
+        if typed_qa is not None and typed_qa.overall_quality_score < self.config.min_qa_score:
+            raise ValueError(
+                f"QA score {typed_qa.overall_quality_score:.2f} below minimum "
+                f"{self.config.min_qa_score} (scope={review_scope.value})"
+            )
         
         self._record_handoff(
             from_agent="visual_director",
@@ -866,15 +869,20 @@ class A2AOrchestrator:
             artifact_type=ArtifactType.QA_REPORT
         )
         
-        return output.dict() if hasattr(output, 'dict') else output
+        # Return the typed QA output as a dict (includes overall_quality_score)
+        if typed_qa is not None:
+            return typed_qa.model_dump()
+        return output.model_dump() if hasattr(output, "model_dump") else (
+            output.dict() if hasattr(output, "dict") else {}
+        )
 
     async def _run_qa_for_phase(self, phase: PipelinePhase) -> Dict[str, Any]:
         """Run QA specifically for a single phase output."""
         state = self._current_state
         phase_output = state.phase_results.get(phase.value).output if state.phase_results.get(phase.value) else None
-        
+
         if not phase_output:
-            return {"approval_status": "approved", "issues": []}
+            return {"approval_status": "approved", "issues": [], "overall_quality_score": 1.0}
             
         task_input = TaskInput(
             task_id=f"{state.pipeline_id}_qa_{phase.value}",
@@ -883,12 +891,30 @@ class A2AOrchestrator:
             context={"quality_tier": state.request.quality_tier}
         )
         
-        output = await self.qa_agent.execute(
-            task_input,
-            content_to_review={phase.value: phase_output}
+        # Guard: per-phase QA must not hang indefinitely.
+        # Use the configured phase_timeout (default 300 s) as an upper bound.
+        phase_qa_timeout = getattr(self.config, "phase_timeout", 300)
+        try:
+            output = await asyncio.wait_for(
+                self.qa_agent.execute(
+                    task_input,
+                    content_to_review={phase.value: phase_output},
+                ),
+                timeout=phase_qa_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[A2A] _run_qa_for_phase timed out after {phase_qa_timeout}s "
+                f"for phase {phase.value}. Returning lenient pass."
+            )
+            return {"approval_status": "approved", "issues": [], "overall_quality_score": 0.75}
+
+        typed_qa = self.qa_agent.get_typed_output(output)
+        if typed_qa is not None:
+            return typed_qa.model_dump()
+        return output.model_dump() if hasattr(output, "model_dump") else (
+            output.dict() if hasattr(output, "dict") else {}
         )
-        
-        return output.dict() if hasattr(output, 'dict') else output
 
     # ========================
     # PERSISTENCE & RECOVERY (Phase 17)

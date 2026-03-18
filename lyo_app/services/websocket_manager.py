@@ -13,6 +13,17 @@ from lyo_app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback that logs unhandled exceptions from fire-and-forget tasks."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error(
+            "Background WebSocket task %s raised an exception: %s",
+            task.get_name(),
+            exc,
+            exc_info=exc,
+        )
+
+
 class WebSocketManager:
     """
     Manages WebSocket connections and real-time message broadcasting.
@@ -52,6 +63,7 @@ class WebSocketManager:
             
             # Start Redis subscriber task
             self.redis_subscriber_task = asyncio.create_task(self._redis_subscriber())
+            self.redis_subscriber_task.add_done_callback(_log_task_exception)
             
             logger.info("WebSocket manager initialized with Redis pub/sub")
             
@@ -61,6 +73,7 @@ class WebSocketManager:
         
         # Start cleanup task
         self.cleanup_task = asyncio.create_task(self._cleanup_stale_connections())
+        self.cleanup_task.add_done_callback(_log_task_exception)
     
     async def shutdown(self):
         """Shutdown WebSocket manager and cleanup resources."""
@@ -76,7 +89,7 @@ class WebSocketManager:
             for websocket in connections.copy():
                 try:
                     await websocket.close()
-                except:
+                except Exception:
                     pass
         
         # Close Redis connections
@@ -230,7 +243,7 @@ class WebSocketManager:
                     
                     try:
                         await websocket.close()
-                    except:
+                    except Exception:
                         pass
                 
                 if stale_connections:

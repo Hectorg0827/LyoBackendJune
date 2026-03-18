@@ -318,6 +318,97 @@ class NoteResponse(BaseModel):
 
 
 # =============================================================================
+# SELECTION / HIGHLIGHT / NOTES POPUP SCHEMAS
+# =============================================================================
+
+class SelectionActionRequest(BaseModel):
+    """
+    Base payload sent by the client whenever the user selects text and taps
+    one of the popup actions (explain, add_to_notes, highlight).
+
+    char_start / char_end are byte offsets within the plain-text content of
+    the referenced message.  They are optional: older clients may omit them
+    and the server will still store the selected_text verbatim.
+    """
+    selected_text: str = Field(..., min_length=1, max_length=5000, description="The user-selected text")
+    message_id: Optional[str] = Field(None, description="ID of the message the text was selected from")
+    conversation_id: Optional[str] = Field(None, description="Conversation the message belongs to")
+    char_start: Optional[int] = Field(None, ge=0, description="Start character offset in message content")
+    char_end: Optional[int] = Field(None, ge=0, description="End character offset in message content")
+
+
+class SelectionExplainRequest(SelectionActionRequest):
+    """Request to explain a selected piece of text"""
+    depth: str = Field("brief", description="brief | moderate | detailed")
+    conversation_history: Optional[List[ConversationHistoryItem]] = Field(
+        None, description="Optional surrounding conversation history for richer explanation"
+    )
+
+
+class SelectionExplainResponse(BaseModel):
+    """Short explanation of the selected text, ready to show in a bottom sheet"""
+    selected_text: str
+    explanation: str
+    key_points: List[str] = Field(default_factory=list)
+    related_topics: List[str] = Field(default_factory=list)
+    # Chips so the user can immediately act (e.g. "Add to notes", "Practice this")
+    chip_actions: List[ChipActionItem] = Field(default_factory=list)
+
+
+class SelectionNoteRequest(SelectionActionRequest):
+    """Request to save selected text as a note"""
+    title: Optional[str] = Field(None, description="Optional custom note title")
+    tags: Optional[List[str]] = Field(None, description="Optional tags")
+
+
+class SelectionNoteResponse(BaseModel):
+    """Confirmation that a note was created from the selection"""
+    note_id: str
+    title: str
+    content: str
+    summary: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class HighlightCreate(SelectionActionRequest):
+    """Request to persist a yellow highlight on a chat message"""
+    # Override to make conversation_id required for highlights (needed for persistence)
+    conversation_id: str = Field(..., description="Conversation the message belongs to")
+    color: str = Field("#FBBF24", description="Highlight colour as hex, default yellow")
+    annotation: Optional[str] = Field(None, max_length=1000, description="Optional margin note")
+
+
+class HighlightRead(BaseModel):
+    """A persisted highlight returned to the client"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversation_id: str
+    message_id: Optional[str] = None
+    selected_text: str
+    char_start: Optional[int] = None
+    char_end: Optional[int] = None
+    color: str
+    annotation: Optional[str] = None
+    created_at: datetime
+
+
+class AnnotationUpdate(BaseModel):
+    """Request body for updating a highlight's margin annotation"""
+    annotation: str = Field("", max_length=1000, description="Updated annotation text (empty string clears it)")
+
+
+class HighlightListResponse(BaseModel):
+    """All highlights for a conversation, keyed by message for fast client lookup"""
+    conversation_id: str
+    # message_id -> list of highlights on that message
+    # highlights not tied to a message_id live under key "__unanchored__"
+    highlights_by_message: Dict[str, List[HighlightRead]] = Field(default_factory=dict)
+    total: int = 0
+
+
+# =============================================================================
 # TELEMETRY SCHEMAS
 # =============================================================================
 

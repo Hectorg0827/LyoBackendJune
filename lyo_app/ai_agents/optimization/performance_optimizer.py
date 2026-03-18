@@ -95,14 +95,18 @@ class IntelligentCacheManager:
         self.cache_stats: Dict[str, int] = {"hits": 0, "misses": 0}
         self._initialized = False
         
-        # Cache configurations for different content types
+        # Cache TTLs — tuned to reduce redundant AI calls on repeated/similar queries.
+        # sentiment_analysis: 5 min → 30 min  (sentiment for a topic rarely changes mid-session)
+        # user_recommendations: 10 min → 30 min (stable within a learning session)
+        # model_responses: 15 min → 60 min (identical prompts produce identical results)
+        # curriculum: 1 hr → 24 hr (course structures are stable content)
         self.cache_configs = {
-            "curriculum": CacheConfig(ttl_seconds=3600, max_size=1000),  # 1 hour
+            "curriculum": CacheConfig(ttl_seconds=86400, max_size=1000),       # 24 hours
             "content_curation": CacheConfig(ttl_seconds=1800, max_size=2000),  # 30 min
-            "user_recommendations": CacheConfig(ttl_seconds=600, max_size=5000),  # 10 min
-            "sentiment_analysis": CacheConfig(ttl_seconds=300, max_size=10000),  # 5 min
-            "translations": CacheConfig(ttl_seconds=86400, max_size=20000),  # 24 hours
-            "model_responses": CacheConfig(ttl_seconds=900, max_size=3000),  # 15 min
+            "user_recommendations": CacheConfig(ttl_seconds=1800, max_size=5000),  # 30 min
+            "sentiment_analysis": CacheConfig(ttl_seconds=1800, max_size=10000),   # 30 min
+            "translations": CacheConfig(ttl_seconds=86400, max_size=20000),    # 24 hours
+            "model_responses": CacheConfig(ttl_seconds=3600, max_size=3000),   # 60 min
         }
     
     async def initialize(self):
