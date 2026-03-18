@@ -171,6 +171,7 @@ async def init_db() -> None:
         
         # Import phase 7 chat enhancements models
         from lyo_app.models.notebook import NotebookNote  # noqa: F401
+        from lyo_app.models.social import Story  # noqa: F401
         
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")

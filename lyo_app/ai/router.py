@@ -173,7 +173,42 @@ YOU MUST RESPOND ONLY WITH JSON.
             )
         else:
             decision = result.data
-            
+
+        # Post-classification fallback: if the model returned UNKNOWN but the
+        # user supplied a non-empty message, use keyword heuristics to avoid
+        # blocking the pipeline with an unhelpful clarification request.
+        if decision.intent == "UNKNOWN" and (request.text or "").strip():
+            text_lower = (request.text or "").lower()
+            _course_kws = ["create course", "create a course", "course on", "course about",
+                           "make a course", "build a course"]
+            _quiz_kws = ["quiz me", "quiz on", "test me", "make a quiz"]
+            _flashcard_kws = ["flashcard", "flash card", "make cards"]
+            _study_plan_kws = ["study plan", "study schedule", "learning plan"]
+            _test_prep_kws = ["test prep", "have a test", "upcoming test", "exam"]
+
+            if any(kw in text_lower for kw in _course_kws):
+                fallback_intent, fallback_tier = "COURSE", "LARGE"
+            elif any(kw in text_lower for kw in _quiz_kws):
+                fallback_intent, fallback_tier = "QUIZ", "MEDIUM"
+            elif any(kw in text_lower for kw in _flashcard_kws):
+                fallback_intent, fallback_tier = "FLASHCARDS", "MEDIUM"
+            elif any(kw in text_lower for kw in _study_plan_kws):
+                fallback_intent, fallback_tier = "STUDY_PLAN", "MEDIUM"
+            elif any(kw in text_lower for kw in _test_prep_kws):
+                fallback_intent, fallback_tier = "TEST_PREP", "MEDIUM"
+            else:
+                fallback_intent, fallback_tier = "EXPLAIN", "MEDIUM"
+
+            logger.info(
+                f"⚡ Post-classification fallback: model returned UNKNOWN, "
+                f"overriding to '{fallback_intent}' for: '{text_lower[:80]}'"
+            )
+            decision.intent = fallback_intent
+            decision.confidence = 0.6
+            decision.needs_clarification = False
+            decision.clarification_question = None
+            decision.suggested_tier = fallback_tier
+
         import uuid
         return RouterResponse(
             decision=decision,

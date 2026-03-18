@@ -38,7 +38,7 @@ from lyo_app.ai_classroom.schemas import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/classroom/playback", tags=["AI Classroom Playback"])
+router = APIRouter(prefix="/classroom/playback", tags=["AI Classroom Playback"])
 
 
 # =============================================================================

@@ -112,7 +112,7 @@ def start_server():
         config = {
             "app": "lyo_app.enhanced_main:app",
             "host": "0.0.0.0",
-            "port": 8000,
+            "port": 8001,
             "reload": os.getenv("LYO_ENV") == "development",
             "workers": 1 if os.getenv("LYO_ENV") == "development" else int(os.getenv("UVICORN_WORKERS", "4")),
             "log_level": os.getenv("LOG_LEVEL", "info").lower(),
@@ -125,10 +125,10 @@ def start_server():
             "timeout_keep_alive": 5
         }
         
-        print("🌐 Server starting on: http://0.0.0.0:8000")
-        print("📖 API Documentation: http://localhost:8000/docs")
-        print("🔍 Health Check: http://localhost:8000/health")
-        print("📊 Metrics: http://localhost:8000/metrics")
+        print("🌐 Server starting on: http://0.0.0.0:8001")
+        print("📖 API Documentation: http://localhost:8001/docs")
+        print("🔍 Health Check: http://localhost:8001/health")
+        print("📊 Metrics: http://localhost:8001/metrics")
         print("=" * 50)
         
         # Start server

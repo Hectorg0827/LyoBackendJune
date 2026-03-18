@@ -51,14 +51,18 @@ class RAGService:
         ).limit(limit)
         
         course_res = await db.execute(course_stmt)
-        for course in course_res.scalars().all():
-            # Calculate mock score (1 - distance approximation)
+        courses = course_res.scalars().all()
+        for course in courses:
+            # Capture properties early to avoid greenlet errors later
+            c_id = getattr(course, "id", None)
+            c_title = getattr(course, "title", "Untitled")
+            c_desc = getattr(course, "description", None) or getattr(course, "summary", "")
             results.append({
-                "id": str(course.id),
+                "id": str(c_id),
                 "type": "course",
-                "title": course.title,
-                "content": course.description or course.summary,
-                "score": 0.95 # Placeholder, real distance calc requires raw SQL or specific attribute selection
+                "title": c_title,
+                "content": c_desc,
+                "score": 0.95
             })
             
         # 3. Semantic Search (Lessons)
@@ -67,12 +71,16 @@ class RAGService:
         ).limit(limit)
         
         lesson_res = await db.execute(lesson_stmt)
-        for lesson in lesson_res.scalars().all():
+        lessons = lesson_res.scalars().all()
+        for lesson in lessons:
+            l_id = getattr(lesson, "id", None)
+            l_title = getattr(lesson, "title", "Untitled")
+            l_content = getattr(lesson, "content", None) or getattr(lesson, "summary", "")
             results.append({
-                "id": str(lesson.id),
+                "id": str(l_id),
                 "type": "lesson",
-                "title": lesson.title,
-                "content": lesson.content or lesson.summary,
+                "title": l_title,
+                "content": l_content,
                 "score": 0.95
             })
             
@@ -112,13 +120,17 @@ class RAGService:
         ).limit(limit)
         
         lesson_res = await db.execute(lesson_stmt)
-        for lesson in lesson_res.scalars().all():
+        lessons = lesson_res.scalars().all()
+        for lesson in lessons:
+            l_id = getattr(lesson, "id", None)
+            l_title = getattr(lesson, "title", "Untitled")
+            l_content = getattr(lesson, "content", None) or getattr(lesson, "summary", "")
             results.append({
-                "id": str(lesson.id),
+                "id": str(l_id),
                 "type": "lesson",
-                "title": lesson.title,
-                "content": lesson.content or lesson.summary,
-                "score": 0.9 if query.lower() in lesson.title.lower() else 0.7
+                "title": l_title,
+                "content": l_content,
+                "score": 0.9 if query.lower() in l_title.lower() else 0.7
             })
             
         results.sort(key=lambda x: x["score"], reverse=True)
@@ -175,10 +187,10 @@ class RAGService:
 
         return [
             {
-                "category": insight.category,
-                "insight": insight.insight_text,
-                "confidence": insight.confidence,
-                "created_at": insight.created_at.isoformat()
+                "category": getattr(insight, "category", "general"),
+                "insight": getattr(insight, "insight_text", ""),
+                "confidence": getattr(insight, "confidence", 0.0),
+                "created_at": getattr(insight, "created_at", datetime.utcnow()).isoformat()
             }
             for insight in insights
         ]

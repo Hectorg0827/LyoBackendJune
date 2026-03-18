@@ -375,15 +375,18 @@ async def chat(
     Provides Lyo's conversational AI with personalization.
     """
     start_time = time.time()
+    # Capture user data EARLY to prevent session expiration issues after potential commits/rollbacks
+    user_id_str = str(current_user.id) if current_user else None
+
     try:
         # Get personalization context
         personalization = PersonalizationEngine()
         
         # Build profile context for AI prompts (Layer 1 & 2 personalization)
-        profile_context = await personalization.build_prompt_context(db, str(current_user.id))
+        profile_context = await personalization.build_prompt_context(db, user_id_str)
         
         # Get profile summary for client response
-        user_profile = await personalization.get_mastery_profile(db, str(current_user.id))
+        user_profile = await personalization.get_mastery_profile(db, user_id_str)
         user_profile_summary = user_profile.model_dump() if user_profile else {}
         
         # ============================================================
@@ -396,10 +399,9 @@ async def chat(
             
             # Use A2A Orchestrator for course generation
             try:
-                orchestrator = A2AOrchestrator()
                 course_request = A2ACourseRequest(
                     topic=course_intent['topic'],
-                    user_id=str(current_user.id),
+                    user_id=user_id_str,
                     level="beginner",  # Could be detected from message or profile
                     duration_minutes=30
                 )
@@ -585,7 +587,7 @@ When a user asks to create a course, briefly confirm the topic and ask about the
         # ============================================================
         try:
             from lyo_app.services.proactive_dispatcher import proactive_dispatcher
-            proactive_dispatcher.extract_and_schedule_from_text(current_user.id, response_text)
+            proactive_dispatcher.extract_and_schedule_from_text(user_id_str, response_text)
         except Exception as e:
             logger.error(f"Proactive dispatcher failed: {e}")
 

@@ -4,6 +4,8 @@ import json
 import uuid
 import time
 from datetime import datetime
+
+print(">>> STREAM LYO2 ROUTER MODULE IMPORTING...", flush=True)
 from typing import AsyncGenerator, Dict, Any, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -15,7 +17,7 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent
-from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
+# from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
@@ -105,7 +107,7 @@ router = APIRouter()
 
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
-test_prep_agent = TestPrepAgent()
+# test_prep_agent = TestPrepAgent()
 
 @router.post("/chat/stream")
 async def stream_lyo2_chat(
@@ -227,18 +229,19 @@ async def stream_lyo2_chat(
                 return
                 
             # Intercept TEST_PREP intent to gather structured details
-            if decision.intent == Intent.TEST_PREP:
-                logger.info(f"📚 [STREAM][{trace_id}] Analyzing Test Prep intent...")
-                prep_result = await test_prep_agent.analyze_test_prep(request)
-                if prep_result.success and prep_result.data:
-                    data = prep_result.data
-                    if data.missing_critical_info and data.follow_up_question:
-                        # Yield a clarification if critical info is missing
-                        logger.info(f"🤔 [STREAM][{trace_id}] Test Prep needs clarification: missing {data.missing_critical_info}")
-                        yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
-                        return
-                    # Optionally attach extracted data back to the request for the planner
-                    request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
+            # TODO: Re-enable when TestPrepAgent is available
+            # if decision.intent == Intent.TEST_PREP:
+            #     logger.info(f"📚 [STREAM][{trace_id}] Analyzing Test Prep intent...")
+            #     prep_result = await test_prep_agent.analyze_test_prep(request)
+            #     if prep_result.success and prep_result.data:
+            #         data = prep_result.data
+            #         if data.missing_critical_info and data.follow_up_question:
+            #             # Yield a clarification if critical info is missing
+            #             logger.info(f"🤔 [STREAM][{trace_id}] Test Prep needs clarification: missing {data.missing_critical_info}")
+            #             yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
+            #             return
+            #         # Optionally attach extracted data back to the request for the planner
+            #         request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
 
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning...")

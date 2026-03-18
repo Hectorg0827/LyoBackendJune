@@ -754,7 +754,9 @@ async def _ai_chat_handler(message: str, context: List[Dict], user_context: str 
             max_tokens=1500
         )
         
-        return response.get("content", "I'd be happy to help you with that!")
+        # Support both 'content' and 'response' keys for fallback compatibility
+        content = response.get("content") or response.get("response") or "I'd be happy to help you with that!"
+        return content
         
     except Exception as e:
         logger.error(f"AI chat handler error: {e}")

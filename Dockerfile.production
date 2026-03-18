@@ -32,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python -c "import requests; requests.get('http://localhost:8080/health')" || exit 1
 
 # Start command
-CMD exec uvicorn minimal_server:app --host 0.0.0.0 --port $PORT --workers 1
+CMD ["bash", "-c", "mkdir -p /tmp/prometheus_multiproc_dir && exec gunicorn lyo_app.enhanced_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers 1 --timeout 300"]
