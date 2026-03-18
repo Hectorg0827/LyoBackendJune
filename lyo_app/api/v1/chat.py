@@ -45,82 +45,6 @@ def detect_ai_classroom_intent(message: str) -> str:
     else:
         return "general_learning"
 
-async def generate_ai_classroom_course(message: str, user) -> Optional[Dict[str, Any]]:
-    """Generate course using real AI pipeline and return structured course data"""
-    try:
-        # Extract topic from message
-        topic = extract_learning_topic(message)
-        if not topic:
-            return None
-
-        logger.info(f"🚀 Generating real AI course for topic: {topic}")
-
-        # Use the AI resilience manager to generate a structured course outline
-        prompt = f"""You are the Lyo Course Architect. Generate a structured course outline.
-
-Topic: {topic}
-Return ONLY valid JSON with this exact structure:
-{{
-    "id": "course_<unique_number>",
-    "title": "Course Title",
-    "description": "2-3 sentence description of the course",
-    "subject": "{topic}",
-    "grade_band": "Beginner|Intermediate|Advanced",
-    "estimated_minutes": <number>,
-    "total_nodes": <number between 8 and 20>,
-    "thumbnail_url": null,
-    "learning_objectives": [
-        "Objective 1",
-        "Objective 2",
-        "Objective 3"
-    ],
-    "lessons": [
-        {{"title": "Lesson Title", "description": "What this lesson covers", "duration_minutes": <number>}}
-    ]
-}}
-Include 4-8 lessons. Make the course comprehensive and engaging."""
-
-        response = await ai_resilience_manager.chat_completion(
-            messages=[
-                {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
-        )
-
-        raw = response.get("content", "").strip()
-
-        # Strip markdown code fences
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif raw.startswith("```"):
-            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            raw = raw.rsplit("```", 1)[0].strip()
-
-        try:
-            course_data = json.loads(raw)
-        except json.JSONDecodeError as e:
-            logger.error(f"AI returned malformed JSON for course: {e} | raw={raw[:500]!r}")
-            raise
-        logger.info(f"✅ AI generated course: {course_data.get('title', topic)}")
-        return course_data
-
-    except Exception as e:
-        logger.error(f"AI course generation failed: {e} — using fallback")
-        # Minimal fallback so the flow doesn't break
-        topic = extract_learning_topic(message) or message[:60]
-        import hashlib
-        topic_id = int(hashlib.md5(topic.encode()).hexdigest()[:8], 16) % 10000
-        return {
-            'id': f"course_{topic_id}",
-            'title': f"Learn {topic.title()}",
-            'description': f"A comprehensive course covering all aspects of {topic}",
-            'subject': topic,
-            'grade_band': 'Intermediate',
-            'estimated_minutes': 90,
-            'total_nodes': 12,
-            'thumbnail_url': None
-        }
 
 def extract_learning_topic(message: str) -> Optional[str]:
     """Extract learning topic from user message"""
@@ -585,7 +509,11 @@ When a user asks to create a course, briefly confirm the topic and ask about the
                     else:
                         continue
 
-                    translated = translate_artifact_to_ui_component(artifact)
+                    try:
+                        unified = UnifiedCourse.from_a2a_artifacts([artifact], topic="course")
+                        translated = unified.to_ui_block()
+                    except Exception:
+                        translated = translate_artifact_to_ui_component(artifact)
                     if translated:
                         ui_component_json = translated
                         break

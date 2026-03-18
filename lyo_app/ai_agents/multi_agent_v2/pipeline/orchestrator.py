@@ -613,11 +613,10 @@ class CourseGenerationPipeline(StreamingPipeline):
         
         # Check if QA score is acceptable
         if qa_report.overall_score < self.config.qa_min_score:
-            logger.warning(
-                f"QA score {qa_report.overall_score} below threshold "
-                f"{self.config.qa_min_score}"
+            raise PipelineError(
+                f"QA score {qa_report.overall_score} below required threshold "
+                f"{self.config.qa_min_score}. Issues: {qa_report.issues}"
             )
-            # Could trigger regeneration of specific parts here
         
         state.qa_report = qa_report
         state.step_results["qa_review"] = step_result

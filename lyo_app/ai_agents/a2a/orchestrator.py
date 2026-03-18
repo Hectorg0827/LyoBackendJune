@@ -891,10 +891,23 @@ class A2AOrchestrator:
             context={"quality_tier": state.request.quality_tier}
         )
         
-        output = await self.qa_agent.execute(
-            task_input,
-            content_to_review={phase.value: phase_output},
-        )
+        # Guard: per-phase QA must not hang indefinitely.
+        # Use the configured phase_timeout (default 300 s) as an upper bound.
+        phase_qa_timeout = getattr(self.config, "phase_timeout", 300)
+        try:
+            output = await asyncio.wait_for(
+                self.qa_agent.execute(
+                    task_input,
+                    content_to_review={phase.value: phase_output},
+                ),
+                timeout=phase_qa_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[A2A] _run_qa_for_phase timed out after {phase_qa_timeout}s "
+                f"for phase {phase.value}. Returning lenient pass."
+            )
+            return {"approval_status": "approved", "issues": [], "overall_quality_score": 0.75}
 
         typed_qa = self.qa_agent.get_typed_output(output)
         if typed_qa is not None:

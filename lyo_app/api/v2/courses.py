@@ -38,22 +38,21 @@ def _start_background_generation(job_id: str, request, user):
     def _on_done(t):
         if t.cancelled():
             print(f"⚠️ Background task {job_id} was cancelled")
+            job = job_store.get(job_id)
+            if job:
+                job["status"] = "failed"
+                job["error"] = "Task was cancelled"
+                job_store.save(job_id, job)
         elif t.exception():
             exc = t.exception()
             print(f"❌ Background task {job_id} FAILED: {type(exc).__name__}: {exc}")
-            # Mark job as failed so the client knows
             job = job_store.get(job_id)
             if job:
-                job["status"] = "completed"
-                job["progress_percent"] = 100
-                job["current_step"] = "Course ready (simplified)"
+                # Use "failed" so clients can distinguish from a successful generation.
+                # Previously this was "completed" which hid errors from callers.
+                job["status"] = "failed"
+                job["progress_percent"] = 0
                 job["error"] = str(exc)
-                job["warning"] = f"Generated with fallback due to: {str(exc)}"
-                try:
-                    from lyo_app.api.v2.courses import _build_fallback_course
-                    job["result"] = _build_fallback_course(job_id, job.get("topic", "General"), {})
-                except Exception:
-                    pass
                 job_store.save(job_id, job)
     task.add_done_callback(_on_done)
     return task

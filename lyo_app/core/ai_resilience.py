@@ -315,39 +315,53 @@ class AIResilienceManager:
             logger.error(error_msg)
             raise Exception(error_msg)
         
-        last_exception = None
-        for model_name, model in available_models_with_configs:
+        async def _try_model(model_name: str, model: AIModelConfig) -> Dict[str, Any]:
             cb = self.circuit_breakers[model_name]
             if not cb.is_closed:
-                continue
-            try:
-                if model.endpoint == "openai":
-                    if not self.openai_client: continue
-                    res = await self.openai_client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                    result = {
-                        "content": res.choices[0].message.content,
-                        "model": model.name,
-                        "tokens_used": res.usage.total_tokens if res.usage else 0,
-                        "response_time": 0,
-                        "timestamp": time.time(),
-                    }
+                raise RuntimeError(f"{model_name} circuit breaker open")
+            if model.endpoint == "openai":
+                if not self.openai_client:
+                    raise RuntimeError(f"{model_name}: no openai client")
+                res = await self.openai_client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return {
+                    "content": res.choices[0].message.content,
+                    "model": model.name,
+                    "tokens_used": res.usage.total_tokens if res.usage else 0,
+                    "response_time": 0,
+                    "timestamp": time.time(),
+                }
+            return await self._call_model_with_messages(
+                model_name, model, messages, temperature, max_tokens
+            )
+
+        # Launch all candidate models concurrently; return the first success.
+        tasks: Dict[asyncio.Task, str] = {
+            asyncio.create_task(_try_model(mn, m)): mn
+            for mn, m in available_models_with_configs
+        }
+        pending = set(tasks.keys())
+        last_exception: Exception = RuntimeError("No models attempted")
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                exc = task.exception()
+                if exc is None:
+                    result = task.result()
+                    # Cancel remaining in-flight calls
+                    for p in pending:
+                        p.cancel()
+                    if use_cache:
+                        self._add_to_cache(cache_key, result)
+                    return result
                 else:
-                    result = await self._call_model_with_messages(
-                        model_name, model, messages, temperature, max_tokens
-                    )
-                
-                if use_cache:
-                    self._add_to_cache(cache_key, result)
-                return result
-            except Exception as e:
-                logger.error(f"Error calling {model_name}: {e}")
-                last_exception = e
-                continue
+                    model_name = tasks[task]
+                    logger.error(f"Error calling {model_name}: {exc}")
+                    last_exception = exc
         return self._get_fallback_response(message_str, str(last_exception))
 
     async def _call_model_with_messages(
