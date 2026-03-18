@@ -13,6 +13,8 @@ FastAPI routes for the chat module including:
 """
 
 import asyncio
+import json
+import re
 import time
 import logging
 from datetime import datetime, timedelta
@@ -43,6 +45,7 @@ from lyo_app.chat.schemas import (
     SelectionExplainRequest, SelectionExplainResponse,
     SelectionNoteRequest, SelectionNoteResponse,
     HighlightCreate, HighlightRead, HighlightListResponse,
+    AnnotationUpdate,
 )
 from lyo_app.core.lyo_protocol import (
     LyoBlock, BlockType, SemanticRole, PresentationHint, ConceptPayload
@@ -1409,11 +1412,9 @@ async def explain_selection(
         )
         raw = response.get("content", "")
         # Parse structured JSON from the model
-        import json as _json
-        import re as _re
-        json_match = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
         if json_match:
-            data = _json.loads(json_match.group())
+            data = json.loads(json_match.group())
         else:
             data = {"explanation": raw.strip(), "key_points": [], "related_topics": []}
     except Exception as exc:
@@ -1481,17 +1482,24 @@ async def add_selection_to_notes(
     except Exception as exc:
         logger.debug("Summary generation skipped: %s", exc)
 
-    note = await notes_store.create(
-        db,
-        user_id=user_id,
-        title=title,
-        content=request.selected_text,
-        summary=summary,
-        tags=request.tags,
-        source_message_id=request.message_id,
-        source_conversation_id=request.conversation_id,
-        note_type="key_concept",
-    )
+    try:
+        note = await notes_store.create(
+            db,
+            user_id=user_id,
+            title=title,
+            content=request.selected_text,
+            summary=summary,
+            tags=request.tags,
+            source_message_id=request.message_id,
+            source_conversation_id=request.conversation_id,
+            note_type="key_concept",
+        )
+    except Exception as exc:
+        logger.error("add_selection_to_notes: failed to save note for user %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save note. Please try again.",
+        )
 
     return SelectionNoteResponse(
         note_id=str(note.id),
@@ -1520,12 +1528,6 @@ async def create_highlight(
     message.  On the next conversation load the client fetches highlights via
     GET /chat/selection/highlights/{conversation_id} and re-renders them.
     """
-    if not request.conversation_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="conversation_id is required to persist a highlight",
-        )
-
     user_id = str(current_user.id) if current_user else "anonymous"
 
     highlight = await highlight_store.create(
@@ -1590,14 +1592,14 @@ async def delete_highlight(
 
 @router.patch("/selection/highlights/{highlight_id}/annotation", response_model=HighlightRead)
 async def update_highlight_annotation(
+    body: AnnotationUpdate,
     highlight_id: str = Path(..., description="Highlight ID"),
-    annotation: str = "",
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Update the margin annotation on an existing highlight."""
     user_id = str(current_user.id) if current_user else "anonymous"
-    highlight = await highlight_store.update_annotation(db, highlight_id, user_id, annotation)
+    highlight = await highlight_store.update_annotation(db, highlight_id, user_id, body.annotation)
     if not highlight:
         raise HTTPException(status_code=404, detail="Highlight not found")
     return highlight

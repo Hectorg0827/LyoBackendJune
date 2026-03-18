@@ -373,6 +373,8 @@ class SelectionNoteResponse(BaseModel):
 
 class HighlightCreate(SelectionActionRequest):
     """Request to persist a yellow highlight on a chat message"""
+    # Override to make conversation_id required for highlights (needed for persistence)
+    conversation_id: str = Field(..., description="Conversation the message belongs to")
     color: str = Field("#FBBF24", description="Highlight colour as hex, default yellow")
     annotation: Optional[str] = Field(None, max_length=1000, description="Optional margin note")
 
@@ -390,6 +392,11 @@ class HighlightRead(BaseModel):
     color: str
     annotation: Optional[str] = None
     created_at: datetime
+
+
+class AnnotationUpdate(BaseModel):
+    """Request body for updating a highlight's margin annotation"""
+    annotation: str = Field("", max_length=1000, description="Updated annotation text (empty string clears it)")
 
 
 class HighlightListResponse(BaseModel):

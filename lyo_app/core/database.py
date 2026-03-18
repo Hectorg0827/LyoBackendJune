@@ -164,7 +164,7 @@ async def init_db() -> None:
         from lyo_app.ai_agents.models import UserEngagementState, MentorInteraction  # noqa: F401
         from lyo_app.personalization.models import LearnerState, LearnerMastery, AffectSample, SpacedRepetitionSchedule  # noqa: F401
         # Chat module models (for session continuity + notes/courses)
-        from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry  # noqa: F401
+        from lyo_app.chat.models import ChatConversation, ChatMessage, ChatNote, ChatCourse, ChatTelemetry, ChatHighlight  # noqa: F401
         # Import new mentor chat models
         from lyo_app.ai_chat.mentor_models import MentorConversation, MentorMessage, MentorAction, MentorSuggestion  # noqa: F401
         from lyo_app.classroom.models import ClassroomSession, ClassroomInteraction  # noqa: F401
