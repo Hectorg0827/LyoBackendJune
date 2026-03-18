@@ -380,7 +380,24 @@ async def chat(
         # Add system message for Lyo personality with optional profile context
         # Sanitize client-provided context to prevent prompt injection
         raw_client_context = request.context or ""
-        client_context = raw_client_context[:500] if raw_client_context else ""
+        # Cap length, strip leading injection phrases, then label as untrusted user data
+        client_context = raw_client_context[:500].strip()
+        if client_context:
+            # Remove lines that start with common injection lead-ins
+            _INJECTION_RE = re.compile(
+                r"^\s*(ignore\b|override\b|disregard\b|forget\b|system\s*:|"
+                r"new\s+instruction|you\s+are\s+now|act\s+as\b)",
+                re.IGNORECASE,
+            )
+            cleaned_lines = [
+                ln for ln in client_context.splitlines()
+                if not _INJECTION_RE.match(ln)
+            ]
+            client_context = (
+                "[Additional context]\n"
+                + "\n".join(cleaned_lines)
+                + "\n[End context]"
+            ) if cleaned_lines else ""
         
         system_content = f"""You are Lyo, a friendly and engaging AI learning assistant.
 Be conversational, helpful, and educational. Use emojis sparingly for warmth.

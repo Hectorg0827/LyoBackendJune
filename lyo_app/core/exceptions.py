@@ -61,16 +61,20 @@ class AuthorizationError(LyoAppException):
         )
 
 
-class ValidationError(LyoAppException):
-    """Validation related errors."""
-    
+class LyoValidationError(LyoAppException):
+    """Validation related errors. Named LyoValidationError to avoid shadowing pydantic.ValidationError."""
+
     def __init__(self, message: str = "Validation failed", details: Optional[Dict] = None):
         super().__init__(
             message=message,
             error_code="VALIDATION_ERROR",
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            details=details
+            details=details,
         )
+
+
+# Backwards-compatible alias — prefer LyoValidationError in new code
+AppValidationError = LyoValidationError
 
 
 class NotFoundError(LyoAppException):

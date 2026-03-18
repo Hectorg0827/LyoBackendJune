@@ -314,7 +314,7 @@ class ActiveAudioSession:
             widget_data_str = match.group(2)
             try:
                 widget_data = json.loads(widget_data_str)
-                asyncio.create_task(self.push_widget(widget_type, widget_data))
+                asyncio.create_task(self.push_widget(widget_type, widget_data)).add_done_callback(_log_task_exception)
             except Exception as e:
                 logger.error(f"Error parsing widget JSON: {e}")
 

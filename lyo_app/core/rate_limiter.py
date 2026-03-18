@@ -267,6 +267,44 @@ class RateLimitMiddleware:
         return response
 
 
+class InMemoryRateLimiter:
+    """Sliding-window in-memory rate limiter.
+
+    Canonical shared implementation — import this in all middleware instead
+    of defining separate local copies with independent state.
+    """
+
+    def __init__(self) -> None:
+        from collections import defaultdict
+        self.clients: dict = defaultdict(list)
+        self._cleanup_interval: float = 3600.0
+        self._last_cleanup: float = time.time()
+
+    def is_allowed(self, client_id: str, limit: int, window: int) -> bool:
+        now = time.time()
+        if now - self._last_cleanup > self._cleanup_interval:
+            self._cleanup(now)
+            self._last_cleanup = now
+        window_start = now - window
+        recent = [t for t in self.clients[client_id] if t > window_start]
+        self.clients[client_id] = recent
+        if len(recent) >= limit:
+            return False
+        self.clients[client_id].append(now)
+        return True
+
+    def _cleanup(self, now: float, max_age: float = 3600.0) -> None:
+        cutoff = now - max_age
+        for cid in list(self.clients):
+            self.clients[cid] = [t for t in self.clients[cid] if t > cutoff]
+            if not self.clients[cid]:
+                del self.clients[cid]
+
+
+# Shared in-memory limiter singleton (used by both security_middleware modules)
+in_memory_rate_limiter = InMemoryRateLimiter()
+
+
 # Global rate limiter instance
 rate_limiter = RedisRateLimiter(
     max_requests=getattr(settings, 'rate_limit_requests', 100),
