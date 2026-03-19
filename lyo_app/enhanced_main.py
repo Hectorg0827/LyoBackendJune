@@ -383,21 +383,6 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
     
-    # AI Classroom
-    try:
-        from lyo_app.ai_classroom.routes import router as ai_classroom_router
-        app.include_router(ai_classroom_router)
-    except ImportError:
-        pass
-
-    # AI Classroom Playback - Interactive Cinema API (separate router)
-    try:
-        from lyo_app.ai_classroom.playback_routes import router as playback_router
-        app.include_router(playback_router)
-        logger.info("✅ AI Classroom Playback routes integrated - Interactive Cinema active!")
-    except ImportError as e:
-        logger.warning(f"AI Classroom Playback routes not available: {e}")
-    
     # Phase 1: Generative AI Tutor Foundation
     try:
         from lyo_app.personalization.routes import router as personalization_router

@@ -90,7 +90,8 @@ async def get_proactive_greeting(
             user_context_tag = await context_engine.get_user_context(db, current_user.id)
             
             # Get Detailed Learning Context
-            learner_context = await personalization_engine.build_prompt_context(db, str(current_user.id))
+            # TEMPORARILY DISABLED due to greenlet issues
+            learner_context = ""  # await personalization_engine.build_prompt_context(db, str(current_user.id))
         except Exception as e:
             await db.rollback()
             logger.warning(f"Failed to build context for greeting: {e}")
@@ -183,6 +184,10 @@ async def chat_endpoint(
                 initial_mode=request.mode_hint or ChatMode.GENERAL.value
             )
 
+        # Capture essential data EARLY before any commit/rollback expires the object
+        active_conversation_id = conversation.id
+        active_conversation_topic = conversation.topic
+
         # Best-effort backfill user binding for continuity
         if current_user and not conversation.user_id:
             try:
@@ -192,9 +197,10 @@ async def chat_endpoint(
                 await db.rollback()
 
         # Best-effort topic assignment (does not change client contract)
-        if request.context and not conversation.topic:
+        if request.context and not active_conversation_topic:
             try:
                 conversation.topic = request.context[:200]
+                active_conversation_topic = conversation.topic
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -207,14 +213,16 @@ async def chat_endpoint(
 
         context = {
             "context": request.context,
-            "conversation_id": conversation.id,
+            "conversation_id": active_conversation_id,
             "resource_id": request.resource_id,
             "course_id": request.course_id,
             "note_id": request.note_id,
         }
 
         # Optional learner context (authenticated users only)
-        if current_user:
+        # TEMPORARILY DISABLED due to greenlet/SQLAlchemy async issues
+        # TODO: Re-enable once personalization service is fixed
+        if current_user and False:  # Disabled for now
             try:
                 learner_context = await personalization_engine.build_prompt_context(
                     db,
@@ -225,7 +233,11 @@ async def chat_endpoint(
                     context["learner_context"] = learner_context
                     context["learner_id"] = str(current_user.id)
             except Exception as e:
-                await db.rollback()
+                # Defensive rollback and continue without personalization
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
                 logger.warning(f"Personalization context unavailable: {e}")
                 
         # 3. Route the message (Now with full context)
@@ -268,22 +280,35 @@ async def chat_endpoint(
                     request.message, mode.value, agent_result
                 )
         
-        # FORCE ROLLBACK to clear any stealth failed transaction states (e.g., from personalization or cache logic)
+        # FORCE ROLLBACK to clear any stealth failed transaction states
+        # (e.g., from personalization pgvector queries or cache logic)
         try:
             await db.rollback()
         except Exception:
             pass
 
-        # FORCE ROLLBACK to clear any stealth failed transaction states (e.g., from personalization or cache logic)
+        # 7. Get recent CTAs for deduplication (defensive: retry after rollback)
+        recent_messages = []
         try:
-            await db.rollback()
-        except Exception:
-            pass
-
-        # 7. Get recent CTAs for deduplication
-        recent_messages = await conversation_store.get_messages(
-            db, conversation.id, limit=5
-        )
+            recent_messages = await conversation_store.get_messages(
+                db, active_conversation_id, limit=5
+            )
+        except Exception as msg_err:
+            logger.warning(f"get_messages failed ({msg_err}), retrying after rollback")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            try:
+                recent_messages = await conversation_store.get_messages(
+                    db, active_conversation_id, limit=5
+                )
+            except Exception:
+                logger.warning("get_messages retry also failed, skipping CTA dedup")
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
         recent_ctas = [msg.ctas or [] for msg in recent_messages]
         
         # 8. Assemble final response
@@ -328,14 +353,21 @@ async def chat_endpoint(
                 cache_hit=cache_hit
             )
         
-        # Capture ID before saves expire the conversation object
-        # accessing attributes on expired objects in async session causes greenlet errors
-        active_conversation_id = conversation.id
+        # Captured ID is used for saves to avoid greenlet errors on expired objects
 
         # Execute saves sequentially to avoid SQLAlchemy session conflicts
         # (asyncio.gather with shared db session causes IllegalStateChangeError)
-        await save_user_message()
-        assistant_message = await save_assistant_message()
+        try:
+            await save_user_message()
+            assistant_message = await save_assistant_message()
+        except Exception as save_err:
+            logger.warning(f"Message save failed ({save_err}), retrying after rollback")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            await save_user_message()
+            assistant_message = await save_assistant_message()
         
         # 11. Record telemetry (await to avoid "transaction closed" errors)
         # Note: fire-and-forget with asyncio.create_task + db session causes errors
@@ -499,6 +531,10 @@ async def chat_endpoint(
         
     except Exception as e:
         logger.error(f"Chat endpoint error: {e}", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Chat processing failed: {str(e)}"
@@ -550,6 +586,9 @@ async def chat_stream_endpoint(
                     initial_mode=request.mode_hint or ChatMode.GENERAL.value
                 )
 
+            # Capture essential data EARLY
+            active_conversation_id = conversation.id
+
             # Best-effort backfill user binding for continuity
             if current_user and not conversation.user_id:
                 try:
@@ -566,6 +605,9 @@ async def chat_stream_endpoint(
                 except Exception:
                     await db.rollback()
             
+            # Refresh ID just in case commit/rollback happened
+            active_conversation_id = conversation.id
+            
             # 2. Build Context & History EARLY (for Router)
             history = []
             if request.conversation_history:
@@ -574,14 +616,15 @@ async def chat_stream_endpoint(
 
             context = {
                 "context": request.context,
-                "conversation_id": conversation.id,
+                "conversation_id": active_conversation_id,
                 "resource_id": request.resource_id,
                 "course_id": request.course_id,
                 "note_id": request.note_id,
             }
 
             # Optional learner context (authenticated users only)
-            if current_user:
+            # TEMPORARILY DISABLED due to greenlet/SQLAlchemy async issues
+            if current_user and False:  # Disabled for now
                 try:
                     learner_context = await personalization_engine.build_prompt_context(
                         db,
@@ -592,7 +635,11 @@ async def chat_stream_endpoint(
                         context["learner_context"] = learner_context
                         context["learner_id"] = str(current_user.id)
                 except Exception as e:
-                    await db.rollback()
+                    # Defensive rollback and continue without personalization
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
                     logger.warning(f"Personalization context unavailable: {e}")
             
             # 3. Route the message
@@ -609,7 +656,7 @@ async def chat_stream_endpoint(
                 event=EventType.MESSAGE_START,
                 data={
                     "session_id": session_id,
-                    "conversation_id": conversation.id,
+                    "conversation_id": active_conversation_id,
                     "mode": mode.value,
                     "confidence": confidence,
                     "timestamp": time.time()
@@ -680,7 +727,7 @@ async def chat_stream_endpoint(
             
             # 8. Save messages in background (don't block stream completion)
             asyncio.create_task(_save_stream_messages(
-                db, conversation.id, session_id, mode.value, request, assembled,
+                db, active_conversation_id, session_id, mode.value, request, assembled,
                 agent_result, cache_hit, latency_ms, confidence, reasoning
             ))
             
