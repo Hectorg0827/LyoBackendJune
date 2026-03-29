@@ -838,6 +838,12 @@ async def root():  # noqa: D401
     }
 
 
+@app.get("/healthz")
+async def healthz_alias():
+    """Compatibility health endpoint."""
+    return {"status": "healthy", "service": settings.APP_NAME}
+
+
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
 

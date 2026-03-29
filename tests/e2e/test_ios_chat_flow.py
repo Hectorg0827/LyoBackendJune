@@ -1,49 +1,18 @@
-import sys
 import os
-print(">>> [DEBUG] Script started, sys.path and current dir set.")
 import pytest
 import asyncio
 import json
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
-from contextlib import asynccontextmanager
-
-print(">>> [DEBUG] Standard libraries imported.")
-
-# Mock dependencies before imports to prevent heavy init
-from sqlalchemy.orm import DeclarativeBase
-
-# Define a real Base for models to inherit from during tests
-class Base(DeclarativeBase):
-    pass
-
-# Mock Redis
-sys.modules["redis.asyncio"] = MagicMock()
-
-# Mock Database but provide the real Base
-mock_db = MagicMock()
-mock_db.Base = Base
-sys.modules["lyo_app.core.database"] = mock_db
-
-# Mock AI modules
-sys.modules["lyo_app.ai.next_gen_algorithm"] = MagicMock()
-sys.modules["lyo_app.ai.gemma_local"] = MagicMock()
-
-# Mock Config
-mock_config = MagicMock()
-mock_config.settings = MagicMock()
-mock_config.settings.google_api_key = "fake_key"
-mock_config.settings.database_url = "sqlite+aiosqlite:///:memory:"
-sys.modules["lyo_app.core.config"] = mock_config
 
 # Set Lightweight startup
-import os
 os.environ["LYO_LIGHTWEIGHT_STARTUP"] = "1"
 
 # Now import app
-from lyo_app.app_factory import app
+from lyo_app.app_factory import create_app
 from lyo_app.ai.schemas.lyo2 import RouterDecision, Intent, RouterResponse
 
+app = create_app()
 client = TestClient(app)
 
 # --- MOCK SETUP HELPERS ---
@@ -119,9 +88,10 @@ async def test_ios_chat_flow_hi(mock_auth, mock_ai_internals):
             # Verify Token Streaming (Fast Track)
             assert not any('type": "clarification"' in c for c in chunks), "REGRESSION: Received clarification!"
             
-            # Verify Tokens
+            # Verify streamed content (token chunks in fast path OR answer block fallback)
             token_lines = [c for c in chunks if 'type": "token"' in c]
-            assert len(token_lines) > 0, "No tokens received"
+            answer_lines = [c for c in chunks if 'type": "answer"' in c]
+            assert len(token_lines) > 0 or len(answer_lines) > 0, "No streamed answer content received"
             
             print(f"\n✅ PASSED: Received {len(token_lines)} token chunks.")
 

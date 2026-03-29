@@ -33,6 +33,7 @@ from .routers import clips
 from .community.routes import router as community_router
 from .classroom.routes import router as classroom_router
 from .classroom.analytics import router as classroom_analytics_router
+from .api.v1 import api_router as core_v1_router
 
 # Global AI components for lifecycle management
 ai_components = {}
@@ -287,6 +288,7 @@ def create_app() -> FastAPI:
 
     # Include all v1 routers with enhanced error handling
     router_configs = [
+        (core_v1_router, "/api/v1", "Core API v1"),
         (auth.router, "/api/v1", "Authentication & Authorization"),
         (media.router, "/api/v1", "Media Management"),
         (feed.router, "/api/v1", "NextGen Feed Algorithm"),
