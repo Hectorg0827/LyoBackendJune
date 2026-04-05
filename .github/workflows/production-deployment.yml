@@ -315,7 +315,7 @@ jobs:
         TARGET_URL: ${{ secrets.STAGING_URL }}
 
     - name: 📊 Upload performance results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-results
         path: results.json
