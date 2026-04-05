@@ -16,16 +16,25 @@ logger = logging.getLogger(__name__)
 
 def _get_gemini_model():
     """Lazy-initialise a Gemini model for text generation."""
-    api_key = getattr(settings, "google_api_key", None) or getattr(settings, "gemini_api_key", None)
+    # Attempt to use the same logic as AIResilienceManager if settings are incomplete
+    from lyo_app.core.ai_resilience import ai_resilience_manager
+    import os
+    
+    api_key = (
+        getattr(settings, "gemini_api_key", None) or 
+        os.getenv("GEMINI_API_KEY") or 
+        os.getenv("GOOGLE_API_KEY") or
+        getattr(settings, "google_api_key", None)
+    )
+    
     if not api_key:
         logger.error(
-            "⚠️ No Gemini API key available for executor text generation! "
-            "Set GEMINI_API_KEY or GOOGLE_API_KEY env var. "
-            "Chat will return fallback error messages."
+            "⚠️ No Gemini API key available! Chat will return fallback error messages."
         )
         return None
+    
     genai.configure(api_key=api_key)
-    logger.info(f"✅ Gemini executor model initialised (key ending ...{api_key[-4:]})")
+    logger.info(f"✅ Gemini executor model initialised (key ...{api_key[-4:]})")
     return genai.GenerativeModel(
         "gemini-2.5-flash",
         generation_config={"temperature": 0.7, "max_output_tokens": 2048},
@@ -122,13 +131,13 @@ CRITICAL PERSONA & FORMATTING RULES:
 - If providing a course overview or progress update, you can use the `:::mastery_map` smart block. 
   Example: 
   :::mastery_map
-  {
+  {{
     "title": "Python Basics",
     "nodes": [
-      {"id": "n1", "title": "Variables", "status": "completed", "position": [100, 100]},
-      {"id": "n2", "title": "Loops", "status": "current", "position": [200, 100]}
+      {{"id": "n1", "title": "Variables", "status": "completed", "position": [100, 100]}},
+      {{"id": "n2", "title": "Loops", "status": "current", "position": [200, 100]}}
     ]
-  }
+  }}
   :::
 {rag_text}{history_text}
 
@@ -137,10 +146,13 @@ USER QUESTION:
 """
         try:
             from lyo_app.core.ai_resilience import ai_resilience_manager
+            import os
+            import asyncio
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
                 
             messages = [{"role": "user", "content": prompt}]
+            print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=messages,
@@ -148,10 +160,12 @@ USER QUESTION:
                 ),
                 timeout=30.0
             )
-            
+            print(f">>> [PID {os.getpid()}] LyoExecutor: Received AIResilience response", flush=True)
             generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
             if generated:
                 return generated
+        except asyncio.TimeoutError:
+            logger.error(f"Text generation TIMED OUT after 30s for request: {original_request[:100]}")
         except Exception as e:
             logger.error(f"Text generation failed: {e}", exc_info=True)
 
@@ -239,6 +253,13 @@ USER QUESTION:
                     original_request, execution_context, step.parameters
                 )
 
+        # For COURSE intent, explicitly generate the classroom payload if it hasn't been set
+        if intent == "COURSE" and not execution_context.get("open_classroom_payload"):
+            logger.info(f"🎓 [EXECUTOR] Generating course payload for intent: {intent}")
+            execution_context["open_classroom_payload"] = await self._generate_course_data(
+                original_request, {}, execution_context
+            )
+
         # Construct UnifiedChatResponse
         answer_block = UIBlock(
             type=UIBlockType.TUTOR_MESSAGE,
@@ -278,6 +299,8 @@ USER QUESTION:
             "STUDY_PLAN": ["Start Now", "Modify Plan", "Create Course"],
             "TEST_PREP":  ["Start Studying", "Upload Notes", "Take a Quiz"],
             "SUMMARIZE_NOTES": ["Deep Dive", "Quiz Me", "Flashcards"],
+            "REFLECT":    ["Explain Difficulty", "Try a Quiz", "New Topic"],
+            "WEEKLY_REVIEW": ["Deep Dive", "Set Goals", "Start Lesson"],
             "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
             "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
         }

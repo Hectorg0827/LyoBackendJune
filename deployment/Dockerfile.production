@@ -1,0 +1,97 @@
+# Living Classroom - Production Dockerfile
+# =======================================
+#
+# Multi-stage production build with:
+# - Security hardening
+# - Minimal attack surface
+# - Performance optimization
+# - Health checks
+
+# Build stage
+FROM python:3.12-slim as builder
+
+LABEL maintainer="Lyo AI Team <team@lyo.ai>"
+LABEL description="Living Classroom - Production-ready AI learning platform"
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set work directory
+WORKDIR /app
+
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Build any necessary assets
+RUN python -m compileall . && \
+    find . -name "*.pyc" -delete && \
+    find . -name "__pycache__" -type d -exec rm -rf {} +
+
+# Production stage
+FROM python:3.12-slim
+
+# Create non-root user for security
+RUN groupadd -r lyo && useradd -r -g lyo lyo
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set work directory
+WORKDIR /app
+
+# Copy Python dependencies from builder
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code
+COPY --from=builder --chown=lyo:lyo /app .
+
+# Create directories for logs and data
+RUN mkdir -p /app/logs /app/data && \
+    chown -R lyo:lyo /app
+
+# Switch to non-root user
+USER lyo
+
+# Environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV FASTAPI_ENV=production
+ENV WORKERS=4
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Production command with Gunicorn
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "4", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--worker-connections", "1000", \
+     "--max-requests", "10000", \
+     "--max-requests-jitter", "1000", \
+     "--timeout", "120", \
+     "--keep-alive", "5", \
+     "--log-level", "info", \
+     "--access-logfile", "/app/logs/access.log", \
+     "--error-logfile", "/app/logs/error.log", \
+     "--capture-output", \
+     "--enable-stdio-inheritance", \
+     "lyo_app.enhanced_main:app"]

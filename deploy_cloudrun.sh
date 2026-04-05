@@ -121,6 +121,7 @@ fi
 DEPLOY_CMD+=" --set-env-vars ENVIRONMENT=production"
 DEPLOY_CMD+=" --set-env-vars GCP_PROJECT_ID=${PROJECT_ID}"
 DEPLOY_CMD+=" --set-env-vars PYTHONUNBUFFERED=1"
+DEPLOY_CMD+=" --set-env-vars WORKERS=1"
 
 # Extract RUNWARE_API_KEY from .env.production if it exists, otherwise pass a placholder
 if [ -f .env.production ]; then
@@ -176,6 +177,10 @@ else
 fi
 # DATABASE_URL is handled above if it exists
 
+# VPC Connector — private-ranges-only egress routes 10.x.x.x traffic (Redis) through VPC
+# while public traffic (OpenAI, Gemini APIs) goes through the default internet gateway.
+DEPLOY_CMD+=" --vpc-connector lyo-connector"
+DEPLOY_CMD+=" --vpc-egress private-ranges-only"
 
 # Execute deployment
 log_info "Executing deployment command..."

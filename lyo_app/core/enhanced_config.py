@@ -479,10 +479,8 @@ if settings.ENVIRONMENT == "production":
     settings.DEBUG = False
     settings.DATABASE_ECHO = False
     settings.LOG_LEVEL = "WARNING"
-    settings.CORS_ORIGINS = [
-        "https://yourdomain.com",
-        "https://app.yourdomain.com"
-    ]
+    # CORS origins controlled via CORS_ORIGINS env var (default: ["*"])
+    # Do NOT hardcode placeholder domains here
 elif settings.ENVIRONMENT == "staging":
     # Staging overrides
     settings.DEBUG = False
@@ -514,9 +512,7 @@ def validate_settings():
         if settings.DEBUG:
             errors.append("DEBUG must be False in production")
         
-        if "*" in settings.CORS_ORIGINS:
-            errors.append("CORS_ORIGINS cannot contain '*' in production")
-        
+        # Removed strict CORS_ORIGINS check to allow mobile clients        
         if settings.LOG_LEVEL == "DEBUG":
             errors.append("LOG_LEVEL should not be DEBUG in production")
     

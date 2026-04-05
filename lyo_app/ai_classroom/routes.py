@@ -25,7 +25,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .intent_detector import get_intent_detector, ChatIntent, IntentType
-from lyo_app.ai_agents.schemas import AgentContext
+from lyo_app.ai_agents.a2a.schemas import TaskInput
 from lyo_app.ai_agents.multi_agent_v2.review_agent import WeeklyReviewAgent
 from lyo_app.evolution.reflection_service import ReflectionPayload, process_reflection
 from .conversation_flow import (
@@ -356,7 +356,7 @@ async def _create_minimal_graph_course(
     """Create a minimal playable graph course (linear graph) for iOS playback."""
     # ── Generate real AI narration for each node ──
     try:
-        from lyo_app.ai_agents.ai_resilience_manager import ai_resilience_manager
+        from lyo_app.core.ai_resilience import ai_resilience_manager
         import json as _json
 
         narration_prompt = (
@@ -383,11 +383,12 @@ async def _create_minimal_graph_course(
             temperature=0.7,
         )
 
-        raw = ai_response.get("content", "")
-        # Strip markdown fences if present
-        if "```" in raw:
-            raw = raw.split("```json")[-1].split("```")[0] if "```json" in raw else raw.split("```")[1].split("```")[0]
-        ai_data = _json.loads(raw.strip())
+        raw = ai_response.get("content", "").strip()
+        # Robust JSON extraction
+        if "{" in raw and "}" in raw:
+            raw = raw[raw.find("{"):raw.rfind("}")+1]
+        
+        ai_data = _json.loads(raw)
 
         hook_narration = ai_data.get("hook", f"Welcome! Today we are going to learn {topic}. Ready to begin?")
         lesson_narration = ai_data.get("lesson", f"Let us start with the basics of {topic}.")
@@ -683,13 +684,19 @@ async def classroom_chat(
         if detected_intent.intent_type == IntentType.WEEKLY_REVIEW:
             # Route to executive coach instead of normal QA
             review_agent = WeeklyReviewAgent()
-            agent_ctx = AgentContext(session_id=session.session_id, user_id=user_id_int, session=db)
-            review_response = await review_agent.execute(agent_ctx, user_message=request.message)
-            
+            # Build TaskInput for the review agent
+            task_input = TaskInput(
+                user_message=request.message,
+                session_id=session.session_id,
+                user_id=str(user_id_int),
+                conversation_history=[],  # Optionally fill with real history if available
+                input_artifacts=[],
+                context=None
+            )
+            review_response = await review_agent.execute(task_input)
             # Record it in the session
             session.add_message("user", request.message, intent=detected_intent)
             session.add_message("assistant", review_response.content)
-            
             return ChatResponse(
                 session_id=session.session_id,
                 content=review_response.content,

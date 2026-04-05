@@ -323,9 +323,22 @@ async def chat_endpoint(
             include_ctas=request.include_ctas,
             include_chips=request.include_chips
         )
-        
+
+        # 8b. Guard: never return an empty response — blank bubbles confuse users.
+        # This happens when the AI agent times out, returns "", or returns whitespace.
+        if not assembled.get("response", "").strip():
+            logger.warning(
+                f"chat_endpoint: agent returned empty/whitespace response for mode={mode.value}. "
+                "Injecting fallback message."
+            )
+            assembled["response"] = (
+                "Hey! I'm Lyo — your AI learning companion. "
+                "Ask me anything, from explaining a concept to building you a full course. What would you like to explore today? 🚀"
+            )
+
         # 9. Calculate latency
         latency_ms = int((time.time() - start_time) * 1000)
+
         
         # 10. Save messages and telemetry in parallel (batch writes for ~10-20ms savings)
         message_id = str(uuid4())

@@ -5,8 +5,8 @@ Intelligently selects between Gemini models based on task complexity.
 MIT Architecture Engineering - Cost-Performance Optimization Layer
 
 Model Strategy:
-- Gemini 2.5 Pro: Complex tasks (curriculum design, QA review)
-- Gemini 1.5 Flash: Simple/repetitive tasks (content generation, assessments)
+- Gemini 2.0 Pro: Complex tasks (curriculum design, QA review)
+- Gemini 2.0 Flash: Simple/repetitive tasks (content generation, assessments)
 
 This provides optimal balance between quality and cost.
 """
@@ -21,16 +21,16 @@ logger = logging.getLogger(__name__)
 
 class ModelTier(str, Enum):
     """Model tiers for different task complexities"""
-    PREMIUM = "premium"      # Gemini 2.5 Pro - complex reasoning
-    STANDARD = "standard"    # Gemini 1.5 Flash - balanced
-    ECONOMY = "economy"      # Gemini 1.5 Flash (lower temp) - simple tasks
+    PREMIUM = "premium"      # Gemini 2.0 Pro - complex reasoning
+    STANDARD = "standard"    # Gemini 2.0 Flash - balanced
+    ECONOMY = "economy"      # Gemini 2.0 Flash (lower temp) - simple tasks
 
 
 class QualityTier(str, Enum):
     """User-selectable quality tiers for course generation"""
-    ULTRA = "ultra"       # All Gemini 2.5 Pro - Maximum quality, highest cost
+    ULTRA = "ultra"       # All Gemini 2.0 Pro - Maximum quality, highest cost
     BALANCED = "balanced" # Mixed Pro/Flash - Optimal cost-quality balance
-    FAST = "fast"         # All Gemini 1.5 Flash - Fastest, lowest cost
+    FAST = "fast"         # All Gemini 2.0 Flash - Fastest, lowest cost
     CUSTOM = "custom"     # User-defined per-agent configuration
 
 
@@ -78,18 +78,18 @@ class ModelManager:
             model_name="gemini-3.1-pro-preview-customtools",
             temperature=0.7,
             max_tokens=16384,
-            description="Gemini 2.5 Pro - Best for complex reasoning",
+            description="Gemini 2.0 Pro - Best for complex reasoning",
             cost_per_1k_tokens=0.00125  # Approximate
         ),
         ModelTier.STANDARD: ModelConfig(
-            model_name="gemini-3.1-pro-preview-customtools",
+            model_name="gemini-2.5-flash",
             temperature=0.7,
             max_tokens=8192,
             description="Gemini 2.0 Flash - Fast and cost-effective",
             cost_per_1k_tokens=0.000075  # Approximate
         ),
         ModelTier.ECONOMY: ModelConfig(
-            model_name="gemini-3.1-pro-preview-customtools",
+            model_name="gemini-2.5-flash",
             temperature=0.5,  # Lower temperature for consistency
             max_tokens=4096,
             description="Gemini 2.0 Flash Lite (Economy) - Simple tasks",

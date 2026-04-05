@@ -103,6 +103,16 @@ class TutorExplanation(BaseModel):
     practice_suggestions: List[str] = Field(default_factory=list)
 
 
+from lyo_app.ai_classroom.sdui_models import (
+    Component as SDUIComponent,
+    Scene as SDUIScene,
+    ComponentType as SDUIComponentType,
+    TeacherMessage,
+    CTAButton,
+    ActionIntent
+)
+
+
 class TutorAgent:
     """
     AI Tutor Agent for personalized learning support.
@@ -401,7 +411,7 @@ Format your response clearly with these sections."""
                 ]
             elif recent_performance == "struggling":
                 messages = [
-                    "Learning takes time, and you're doing great by sticking with it!",
+                    "Learning takes time, and you've doing great by sticking with it!",
                     "Every expert was once a beginner. Keep asking questions!",
                     "It's okay to find this challenging - that means you're learning!"
                 ]
@@ -418,6 +428,42 @@ Format your response clearly with these sections."""
         except Exception as e:
             logger.error(f"TutorAgent encouragement error: {e}")
             return "Keep up the great work!"
+
+    async def generate_sdui_scene(
+        self,
+        tutor_response: TutorResponse,
+        session_id: str
+    ) -> SDUIScene:
+        """
+        Convert a standard TutorResponse into a structured SDUI Scene.
+        """
+        # We'll use the proper models from ai_classroom.sdui_models
+        from lyo_app.ai_classroom.sdui_models import SceneType
+        
+        components = []
+        
+        # 1. Main Teacher Message
+        components.append(TeacherMessage(
+            text=tutor_response.message,
+            delay_ms=500,
+            animation="slide_up",
+            emotion="happy" if tutor_response.confidence > 0.8 else "thinking"
+        ))
+        
+        # 2. Suggestions as CTA Buttons
+        for i, suggestion in enumerate(tutor_response.suggestions):
+            components.append(CTAButton(
+                label=suggestion,
+                action_intent=ActionIntent.CONTINUE, # Default intent
+                delay_ms=1000 + (i * 200),
+                animation="bounce"
+            ))
+            
+        return SDUIScene(
+            scene_id=f"scene_{session_id}_{datetime.now().timestamp()}",
+            scene_type=SceneType.INSTRUCTION,
+            components=components
+        )
 
 
 # Singleton instance

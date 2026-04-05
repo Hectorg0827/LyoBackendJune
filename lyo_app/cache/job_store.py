@@ -63,11 +63,9 @@ class RedisJobStore:
                 data = self._redis.get(f"job:{job_id}")
                 if data:
                     return json.loads(data)
-                return None
             except Exception as e:
                 logger.error(f"RedisJobStore.get error: {e}")
-                # Fallthrough to in-memory
-                return self._fallback.get(job_id)
+        # Always check in-memory fallback (covers Redis miss + Redis failure)
         return self._fallback.get(job_id)
 
     def __getitem__(self, job_id: str) -> Dict[str, Any]:
@@ -103,6 +101,35 @@ class RedisJobStore:
     def save(self, job_id: str, job_data: Dict[str, Any]):
         """Alias for set() — used after mutating a job dict to persist changes."""
         self.set(job_id, job_data)
+
+    def get_all(self) -> list:
+        """Return all stored job dicts. Used for scanning by course_id."""
+        results = []
+        if self._use_redis:
+            try:
+                keys = self._redis.keys("job:*")
+                for key in keys:
+                    data = self._redis.get(key)
+                    if data:
+                        results.append(json.loads(data))
+            except Exception as e:
+                logger.error(f"RedisJobStore.get_all error: {e}")
+        # Always include in-memory fallback entries
+        if self._fallback:
+            results.extend(self._fallback.values())
+        return results
+
+    def find_by_course_id(self, course_id: str) -> Optional[Dict[str, Any]]:
+        """Find a job by its course_id field. Returns None if not found."""
+        # Try direct alias key first (O(1) lookup)
+        alias = self.get(f"course:{course_id}")
+        if alias and isinstance(alias, dict) and "job_id" in alias:
+            return self.get(alias["job_id"])
+        # Fallback: scan all jobs
+        for job in self.get_all():
+            if isinstance(job, dict) and job.get("course_id") == course_id:
+                return job
+        return None
 
     def delete(self, job_id: str):
         """Remove a job."""

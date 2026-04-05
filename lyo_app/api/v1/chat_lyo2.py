@@ -87,7 +87,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         execution_response = await executor.execute(
             user_id=str(current_user.id),
             plan=plan,
-            original_request=request.text or ""
+            original_request=request.text or "",
+            conversation_history=request.history
         )
         
         # Add trace metadata

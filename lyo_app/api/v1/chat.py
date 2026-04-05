@@ -89,12 +89,9 @@ Include 4-8 lessons. Make the course comprehensive and engaging."""
 
         raw = response.get("content", "").strip()
 
-        # Strip markdown code fences
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif raw.startswith("```"):
-            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            raw = raw.rsplit("```", 1)[0].strip()
+        # Robust JSON extraction
+        if "{" in raw and "}" in raw:
+            raw = raw[raw.find("{"):raw.rfind("}")+1]
 
         import json
         course_data = json.loads(raw)

@@ -577,6 +577,22 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Predictive Intelligence routes not available: {e}")
 
+    # ── Living Classroom: Real-time Scene-based Learning ──
+    try:
+        from lyo_app.ai_classroom.websocket_routes import router as living_classroom_router
+        app.include_router(living_classroom_router)
+        logger.info("✅ Living Classroom WebSocket routes integrated - Real-time scene streaming active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Living Classroom routes not available: {e}")
+
+    # ── Living Classroom: Production Monitoring Dashboard ──
+    try:
+        from lyo_app.ai_classroom.monitoring_dashboard import router as monitoring_router
+        app.include_router(monitoring_router)
+        logger.info("✅ Living Classroom Monitoring Dashboard integrated - Real-time metrics & A/B testing active!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Living Classroom monitoring dashboard not available: {e}")
+
     # ── Self-Evolution OS: Evolution (Goals, Events, Reflections) ──
     try:
         from lyo_app.evolution.routes import router as evolution_router
@@ -667,6 +683,16 @@ def create_app() -> FastAPI:
         except Exception as e:  # noqa: BLE001
             health_status["services"]["vertex_ai"] = f"error: {e}"
         return health_status
+
+    @app.post("/admin/reset-circuit-breakers")
+    async def reset_circuit_breakers():
+        """Reset all AI circuit breakers to CLOSED state."""
+        try:
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            ai_resilience_manager.reset_circuit_breakers()
+            return {"status": "ok", "message": "All circuit breakers reset"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     @app.get("/metrics")
     async def prometheus_metrics():
@@ -842,4 +868,3 @@ if __name__ == "__main__":  # pragma: no cover
         access_log=not settings.is_production(),
         reload=settings.is_development(),
         loop="uvloop" if not settings.is_development() else "auto",
-    )

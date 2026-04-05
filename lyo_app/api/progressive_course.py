@@ -35,7 +35,7 @@ async def start_course_generation(
     instant = await generate_instant_payload(req.topic, req.user_level)
     
     # Store job metadata in internal DB
-    job_store[job_id] = {
+    job_data = {
         "job_id": job_id,
         "course_id": course_id,
         "user_id": user.id,
@@ -43,6 +43,8 @@ async def start_course_generation(
         "modules_total": len(instant.get("syllabus", [])),
         "topic": req.topic,
         "user_level": req.user_level,
+        "title": instant.get("title", req.topic),
+        "objective": instant.get("objective", ""),
         "syllabus": instant.get("syllabus", []),
         "results": {},
         "modules_status": [
@@ -50,8 +52,9 @@ async def start_course_generation(
             for idx, title in enumerate(instant.get("syllabus", []), start=1)
         ]
     }
-    
-    job_store.save(job_id, job_store[job_id])
+    job_store.save(job_id, job_data)
+    # Store course_id → job_id alias for O(1) lookup
+    job_store.save(f"course:{course_id}", {"job_id": job_id})
     
     # Kick off full generation as background task
     background_tasks.add_task(
@@ -110,7 +113,7 @@ async def generate_instant_payload(topic: str, level: str) -> dict:
                 ],
                 temperature=0.3,
                 max_tokens=600,
-                provider_order=["gemini-2.0-flash", "gpt-4o-mini"],
+                provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
             ),
             timeout=5.0,
         )
@@ -193,7 +196,7 @@ async def generate_modules_progressively(job_id: str, course_id: str, topic: str
             # Use the robust resilient module builder from v2 courses
             mod_outline = outline["modules"][idx-1]
             module_content = None
-            max_retries = 2
+            max_retries = 4
 
             for attempt in range(1, max_retries + 1):
                 try:
@@ -206,11 +209,14 @@ async def generate_modules_progressively(job_id: str, course_id: str, topic: str
                         timeout=TIMEOUT_MODULE_GENERATION
                     )
                     # Validate: AI must return actual lessons, not empty stubs
-                    if module_content and module_content.get("lessons"):
-                        print(f"✅ Module {idx} generated via AI (attempt {attempt}): {len(module_content['lessons'])} lessons")
+                    # A single-lesson module with generic "Overview" content is the
+                    # internal fallback of _generate_module_content — treat it as failure
+                    lessons = module_content.get("lessons", []) if module_content else []
+                    if len(lessons) >= 2:
+                        print(f"✅ Module {idx} generated via AI (attempt {attempt}): {len(lessons)} lessons")
                         break
                     else:
-                        print(f"⚠️ Module {idx} AI returned empty lessons (attempt {attempt})")
+                        print(f"⚠️ Module {idx} AI returned insufficient lessons ({len(lessons)}) (attempt {attempt})")
                         module_content = None
                 except asyncio.TimeoutError:
                     print(f"⚠️ Module {idx} AI timed out (attempt {attempt}/{max_retries})")
@@ -219,9 +225,9 @@ async def generate_modules_progressively(job_id: str, course_id: str, topic: str
                     print(f"⚠️ Module {idx} AI error (attempt {attempt}/{max_retries}): {gen_err}")
                     module_content = None
 
-                # Brief pause before retry
+                # Brief pause before retry (escalating)
                 if attempt < max_retries:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(2 + attempt)
 
             if not module_content:
                 print(f"⚠️ Module {idx} all AI attempts failed — using fallback")
@@ -258,7 +264,10 @@ async def generate_modules_progressively(job_id: str, course_id: str, topic: str
     # Store full results so Final Truth endpoint works
     job["result"] = {
         "id": course_id,
-        "title": job["topic"],
+        "job_id": job_id,
+        "title": job.get("title", job["topic"]),
+        "objective": job.get("objective", ""),
+        "syllabus": job.get("syllabus", []),
         "modules": results,
         "schema_version": "1.0"
     }
@@ -296,9 +305,8 @@ async def get_module(
     module_index: int,
     user = Depends(get_current_user_or_guest)
 ):
-    # Find job by course_id
-    all_jobs = job_store.get_all() if hasattr(job_store, 'get_all') else job_store.store.values()
-    job = next((j for j in all_jobs if isinstance(j, dict) and j.get("course_id") == course_id), None)
+    # Find job by course_id (O(1) via alias key)
+    job = job_store.find_by_course_id(course_id)
     
     if not job:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -323,8 +331,7 @@ async def get_full_course(
     user = Depends(get_current_user_or_guest)
 ):
     """The single source of truth. Always returns whatever exists."""
-    all_jobs = job_store.get_all() if hasattr(job_store, 'get_all') else job_store.store.values()
-    job = next((j for j in all_jobs if isinstance(j, dict) and j.get("course_id") == course_id), None)
+    job = job_store.find_by_course_id(course_id)
     
     if not job:
         raise HTTPException(status_code=404, detail="Course not found")

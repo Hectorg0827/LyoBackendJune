@@ -5,8 +5,8 @@ Uses structured output enforcement via Pydantic.
 MIT Architecture Engineering - Production Grade Agent Framework
 
 Model Selection:
-- Gemini 2.5 Pro: Complex tasks (orchestrator, curriculum, QA)
-- Gemini 1.5 Flash: High-volume tasks (content, assessments)
+- Gemini 2.0 Pro: Complex tasks (orchestrator, curriculum, QA)
+- Gemini 2.0 Flash: High-volume tasks (content, assessments)
 """
 
 import asyncio
@@ -199,10 +199,10 @@ class BaseAgent(ABC, Generic[T]):
     @property
     def model_tier(self) -> str:
         """Get the model tier being used"""
-        if "2.5" in self.model_name or "2.0" in self.model_name:
-            return "PREMIUM (Gemini 2.5 Pro)"
+        if "pro" in self.model_name.lower():
+            return "PREMIUM (Gemini 2.0 Pro)"
         elif "flash" in self.model_name.lower():
-            return "STANDARD (Gemini 1.5 Flash)"
+            return "STANDARD (Gemini 2.0 Flash)"
         else:
             return f"CUSTOM ({self.model_name})"
     

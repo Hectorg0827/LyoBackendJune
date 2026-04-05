@@ -590,8 +590,8 @@ async def stream_a2a_generation(
 # ============================================================================
 
 TIMEOUT_ORCHESTRATOR = 120  # 2 min max for full orchestrator
-TIMEOUT_MODULE_GENERATION = 45  # 45s per module
-TIMEOUT_TOTAL_JOB = 300  # 5 min absolute max
+TIMEOUT_MODULE_GENERATION = 90  # 90s per module — allows complex generation
+TIMEOUT_TOTAL_JOB = 600  # 10 min absolute max (8 modules × 90s timeout × 4 retries)
 
 
 # MARK: - Background Task
@@ -1255,37 +1255,44 @@ async def _generate_module_content(
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.4,
-        max_tokens=3000,
-        provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"],
+        max_tokens=6000,
+        provider_order=["gemini-2.5-flash", "gpt-4o"],
     )
 
     raw = ai_response.get("content", "")
+    # Skip fallback responses from ai_resilience (all providers failed)
+    if ai_response.get("is_fallback"):
+        print(f"⚠️ Module {module_id}: AI resilience returned fallback — skipping parse")
+        return None
+
     parsed = None
     try:
         parsed = json.loads(raw)
     except Exception:
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                parsed = json.loads(raw[start : end + 1])
-        except Exception:
-            parsed = None
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            first_nl = cleaned.find("\n")
+            if first_nl != -1:
+                cleaned = cleaned[first_nl + 1:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3].strip()
+            try:
+                parsed = json.loads(cleaned)
+            except Exception:
+                pass
+        if not parsed:
+            try:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    parsed = json.loads(raw[start : end + 1])
+            except Exception:
+                parsed = None
 
     if not parsed:
-        return {
-            "id": module_id,
-            "title": module_title,
-            "description": module_description,
-            "lessons": [
-                {
-                    "id": f"{module_id}_les_1",
-                    "title": "Overview",
-                    "content": f"This module covers the essentials of {module_title}.",
-                    "duration_minutes": 15,
-                }
-            ],
-        }
+        print(f"⚠️ Module {module_id}: JSON parse failed. Raw length={len(raw)}, first 200 chars: {raw[:200]}")
+        return None
 
     parsed.setdefault("id", module_id)
     parsed.setdefault("title", module_title)

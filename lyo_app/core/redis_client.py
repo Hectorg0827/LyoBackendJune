@@ -20,7 +20,7 @@ class RedisClient:
     """Redis client wrapper with additional functionality."""
     
     def __init__(self):
-        self.redis_url = getattr(settings, 'REDIS_URL', None)
+        self.redis_url = settings.effective_redis_url
         self.client: Optional[redis.Redis] = None
     
     async def connect(self):

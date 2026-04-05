@@ -270,14 +270,31 @@ async def stream_lyo2_chat(
                     request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
 
             # 3. Layer B: Planning
-            logger.info(f"📋 [STREAM][{trace_id}] Starting Planning...")
+            logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
             try:
-                plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=35.0)
+                # OPTIMIZATION: Fast Path for simple intents
+                if decision.intent in [Intent.GREETING, Intent.CHAT] and decision.confidence > 0.7:
+                    logger.info(f"⚡ [STREAM][{trace_id}] Fast Path: Skipping Planner for {decision.intent}")
+                    plan = Plan(steps=[
+                        PlannedAction(
+                            action_type=ActionType.GENERATE_TEXT,
+                            description=f"Handle {decision.intent.value} request directly",
+                            parameters={"content": None}
+                        )
+                    ])
+                else:
+                    plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=25.0)
             except asyncio.TimeoutError:
-                logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 35s")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
-                return
+                logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 25s")
+                # Fallback plan
+                plan = Plan(steps=[
+                    PlannedAction(
+                        action_type=ActionType.GENERATE_TEXT,
+                        description="Fallback generation after planner timeout",
+                        parameters={"content": None}
+                    )
+                ])
             
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
 
@@ -410,6 +427,29 @@ async def stream_lyo2_chat(
                 )
 
             if execution_response.open_classroom_payload:
+                try:
+                    from lyo_app.ai_classroom.conversation_flow import get_conversation_manager, ConversationSession
+                    cm = get_conversation_manager()
+                    
+                    oc_payload = execution_response.open_classroom_payload
+                    # Ensure oc_payload has a 'course' dict (sometimes it's nested in payload, sometimes it's direct)
+                    if isinstance(oc_payload, dict) and "course" in oc_payload:
+                        cinfo = oc_payload["course"]
+                        s_id = cinfo.get("id")
+                        c_topic = cinfo.get("topic")
+                        
+                        if s_id:
+                            sess = ConversationSession(
+                                session_id=str(s_id),
+                                user_id=getattr(request, "user_id", "guest_session")
+                            )
+                            sess.current_topic = c_topic
+                            sess.current_course_id = str(s_id)
+                            cm._sessions[str(s_id)] = sess
+                            logger.info(f"💾 Stored ConversationSession({s_id}) for topic '{c_topic}'")
+                except Exception as e:
+                    logger.error(f"Failed to save cm session: {e}", exc_info=True)
+
                 logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
                 oc_brick = {
                     "type": "open_classroom",

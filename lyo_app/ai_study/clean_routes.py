@@ -966,7 +966,7 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
                     
                     real_modules = []
                     flat_modules = []
-                    for i, artifact in enumerate(a2a_response.output_artifacts):
+                    for i, artifact in enumerate(a2a_response.artifacts):
                         if artifact.type == ArtifactType.CURRICULUM_STRUCTURE and artifact.data:
                             for j, mod in enumerate(artifact.data.get("modules", [])):
                                 t = mod.get("title", f"Module {j+1}")

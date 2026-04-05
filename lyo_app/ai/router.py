@@ -18,7 +18,7 @@ class MultimodalRouter(BaseAgent[RouterDecision]):
         super().__init__(
             name="multimodal_router",
             output_schema=RouterDecision,
-            model_name="gemini-3.1-pro-preview-customtools",  # Stable Gemini 2.0 Flash
+            model_name="gemini-2.5-flash",  # Stable Gemini 2.0 Flash
             temperature=0.1,  # Low temperature for deterministic behavior
             max_tokens=4096
         )
@@ -29,13 +29,8 @@ You are the Lyo 2.0 Multimodal Router. Your job is to analyze user input (text, 
 Lyo is an Outcome Engine for learning.
 
 ## Intents (use EXACTLY one of these values):
-<<<<<<< feature/a2ui-v2-compiler
-- EXPLAIN: User wants a concept explained or has a general question (e.g., "tell me about cats", "how do black holes work"). Use this for quick, conversational knowledge.
-- COURSE: User EXPLICITLY wants a structured curriculum, syllabus, or multi-lesson course (e.g., "build me a syllabus on...", "create a 3-part course"). DO NOT use COURSE for simple questions like "teach me about X"—use EXPLAIN instead. To preserve the conversational magic, reserve COURSE only for heavy-duty learning paths.
-=======
 - EXPLAIN: User wants a concept explained or has a general question.
 - COURSE: User explicitly requests the creation of a structured course, curriculum, or lesson plan. Examples: "create a course on X", "build me a course", "teach me Python from scratch" (imperative, self-directed request). Do NOT use for conversational questions about learning topics — those are EXPLAIN or CHAT.
->>>>>>> main
 - QUIZ: User wants to be tested on a topic.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.
@@ -44,6 +39,8 @@ Lyo is an Outcome Engine for learning.
 - SCHEDULE_REMINDERS: User wants to set study reminders.
 - COMMUNITY: User wants to interact with the learning community.
 - MODIFY_ARTIFACT: User is asking to change an existing quiz, plan, or flashcard set.
+- REFLECT: User is expressing a qualitative reflection, feeling, or feedback about their recent learning effort or difficulty.
+- WEEKLY_REVIEW: User wants a macro-level summary or review of their learning progress, trajectory, or goals over the past week.
 - GREETING: User is saying hello, hi, hey, or greeting.
 - CHAT: User wants general conversation or small talk.
 - HELP: User is asking for help or what Lyo can do.
@@ -144,6 +141,16 @@ YOU MUST RESPOND ONLY WITH JSON.
                 "upcoming test", "midterm", "final exam", "have a midterm"
             ]
 
+            _reflect_kws = [
+                "reflect", "how i did", "my performance", "this was hard",
+                "this was easy", "i'm confused", "feedback on my learning",
+                "i feel", "frustrated", "bored"
+            ]
+            _weekly_review_kws = [
+                "weekly review", "my progress", "my goals", "how am i doing overall",
+                "trajectory", "overall summary"
+            ]
+
             if any(kw in combined for kw in _course_kws):
                 fallback_intent = "COURSE"
                 fallback_tier = "LARGE"
@@ -161,6 +168,12 @@ YOU MUST RESPOND ONLY WITH JSON.
                 fallback_tier = "MEDIUM"
             elif any(kw in text_lower for kw in _test_prep_kws):
                 fallback_intent = "TEST_PREP"
+                fallback_tier = "MEDIUM"
+            elif any(kw in text_lower for kw in _reflect_kws):
+                fallback_intent = "REFLECT"
+                fallback_tier = "TINY"
+            elif any(kw in text_lower for kw in _weekly_review_kws):
+                fallback_intent = "WEEKLY_REVIEW"
                 fallback_tier = "MEDIUM"
             else:
                 fallback_intent = "EXPLAIN"

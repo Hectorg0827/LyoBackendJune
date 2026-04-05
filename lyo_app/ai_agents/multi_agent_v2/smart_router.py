@@ -233,7 +233,7 @@ async def generate_quick_explainer(topic: str) -> Dict[str, Any]:
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=800,
-            provider_order=[model_config.model_name, "gemini-1.5-flash", "gpt-4o-mini"]
+            provider_order=[model_config.model_name, "gemini-2.5-flash", "gpt-4o-mini"]
         ),
         timeout=30.0
     )

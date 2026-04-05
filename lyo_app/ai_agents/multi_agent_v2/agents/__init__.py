@@ -58,6 +58,12 @@ from lyo_app.ai_agents.multi_agent_v2.agents.tutor_agent import (
     TutorExplanation
 )
 
+# Test Prep Agent
+from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import (
+    TestPrepAgent,
+    TestPrepExtraction
+)
+
 # Exercise Validator
 from lyo_app.ai_agents.multi_agent_v2.agents.exercise_validator import (
     ExerciseValidator,
@@ -125,6 +131,10 @@ __all__ = [
     "TutorResponse",
     "HintResponse",
     "TutorExplanation",
+    
+    # Test Prep
+    "TestPrepAgent",
+    "TestPrepExtraction",
     
     # Exercise Validator
     "ExerciseValidator",

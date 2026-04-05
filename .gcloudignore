@@ -1,5 +1,9 @@
-venv/
-.new_venv/
+venv/**
+.new_venv/**
+.venv/**
+.env/**
+.git/**
+node_modules/**
 __pycache__/
 *.pyc
 .git
@@ -25,10 +29,11 @@ tmp/
 docs/
 infrastructure/
 ios_integration/
-test_*.py
-verify_*.py
+tests/
+verify_code.py
 *.md
 docker/
 alembic/
 scripts/
 uploads/
+LYO_Da_ONE/

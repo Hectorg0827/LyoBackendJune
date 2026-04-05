@@ -66,11 +66,12 @@ jobs:
 
     - name: 🔧 Set up test environment
       run: |
-        cp .env.example .env.test
-        echo "DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb" >> .env.test
-        echo "REDIS_URL=redis://localhost:6379" >> .env.test
-        echo "ENVIRONMENT=test" >> .env.test
-        echo "SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long" >> .env.test
+        cat << 'ENVEOF' > .env.test
+DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
+REDIS_URL=redis://localhost:6379
+ENVIRONMENT=test
+SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
+ENVEOF
 
     - name: 🗄️ Run database migrations
       run: |
@@ -87,12 +88,13 @@ jobs:
         pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
 
     - name: 📊 Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
+      continue-on-error: true
 
     - name: 🔍 Run linting (flake8)
       run: |
@@ -315,10 +317,11 @@ jobs:
         TARGET_URL: ${{ secrets.STAGING_URL }}
 
     - name: 📊 Upload performance results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-results
         path: results.json
+        if-no-files-found: ignore
 
   # 📝 Documentation
   documentation:
