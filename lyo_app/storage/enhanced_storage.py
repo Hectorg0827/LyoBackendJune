@@ -315,31 +315,31 @@ class EnhancedStorageSystem:
         
         try:
             # Initialize Redis for caching
-            if REDIS_AVAILABLE and settings.REDIS_URL:
+            if REDIS_AVAILABLE and settings.effective_redis_url:
                 self.redis_client = redis.from_url(
-                    settings.REDIS_URL,
+                    settings.effective_redis_url,
                     encoding="utf-8",
                     decode_responses=True
                 )
                 logger.info("Redis client initialized")
             
             # Initialize AWS S3
-            if BOTO3_AVAILABLE and settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+            if BOTO3_AVAILABLE and settings.aws_access_key_id and settings.aws_secret_access_key:
                 self.s3_client = boto3.client(
                     's3',
-                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                    region_name=settings.AWS_REGION or 'us-east-1'
+                    aws_access_key_id=settings.aws_access_key_id,
+                    aws_secret_access_key=settings.aws_secret_access_key,
+                    region_name=settings.aws_region or 'us-east-1'
                 )
                 logger.info("AWS S3 client initialized")
             
             # Initialize Cloudflare R2
-            if BOTO3_AVAILABLE and settings.R2_ACCESS_KEY_ID and settings.R2_SECRET_ACCESS_KEY:
+            if BOTO3_AVAILABLE and settings.r2_access_key and settings.r2_secret_key:
                 self.r2_client = boto3.client(
                     's3',
-                    endpoint_url=settings.R2_ENDPOINT_URL,
-                    aws_access_key_id=settings.R2_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+                    endpoint_url=settings.r2_endpoint,
+                    aws_access_key_id=settings.r2_access_key,
+                    aws_secret_access_key=settings.r2_secret_key,
                     region_name='auto'
                 )
                 logger.info("Cloudflare R2 client initialized")
@@ -540,7 +540,7 @@ class EnhancedStorageSystem:
         """Upload to AWS S3"""
         
         self.s3_client.put_object(
-            Bucket=settings.AWS_S3_BUCKET,
+            Bucket=settings.storage_bucket,
             Key=storage_path,
             Body=file_data,
             ContentType=content_type,
@@ -555,7 +555,7 @@ class EnhancedStorageSystem:
         """Upload to Cloudflare R2"""
         
         self.r2_client.put_object(
-            Bucket=settings.R2_BUCKET,
+            Bucket=settings.storage_bucket,
             Key=storage_path,
             Body=file_data,
             ContentType=content_type,
@@ -569,7 +569,7 @@ class EnhancedStorageSystem:
     async def _upload_to_local(self, file_data: bytes, storage_path: str):
         """Upload to local storage"""
         
-        local_path = Path(settings.UPLOAD_DIR) / storage_path
+        local_path = Path(settings.upload_dir) / storage_path
         local_path.parent.mkdir(parents=True, exist_ok=True)
         
         async with aiofiles.open(local_path, 'wb') as f:
@@ -614,7 +614,7 @@ class EnhancedStorageSystem:
         # Delete from R2
         if self.r2_client:
             try:
-                self.r2_client.delete_object(Bucket=settings.R2_BUCKET, Key=storage_path)
+                self.r2_client.delete_object(Bucket=settings.storage_bucket, Key=storage_path)
             except Exception as e:
                 logger.warning(f"R2 deletion failed: {e}")
                 success = False
@@ -622,14 +622,14 @@ class EnhancedStorageSystem:
         # Delete from S3
         if self.s3_client:
             try:
-                self.s3_client.delete_object(Bucket=settings.AWS_S3_BUCKET, Key=storage_path)
+                self.s3_client.delete_object(Bucket=settings.storage_bucket, Key=storage_path)
             except Exception as e:
                 logger.warning(f"S3 deletion failed: {e}")
                 success = False
         
         # Delete from local storage
         try:
-            local_path = Path(settings.UPLOAD_DIR) / storage_path
+            local_path = Path(settings.upload_dir) / storage_path
             if local_path.exists():
                 local_path.unlink()
         except Exception as e:

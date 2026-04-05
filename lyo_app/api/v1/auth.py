@@ -13,7 +13,8 @@ from pydantic import BaseModel, EmailStr
 from lyo_app.core.database import get_db
 from lyo_app.core.database import engine
 from lyo_app.auth.models import User
-from lyo_app.auth.security import create_access_token, verify_password, hash_password
+from lyo_app.auth.jwt_auth import create_access_token as jwt_create_access_token
+from lyo_app.auth.security import verify_password, hash_password
 
 router = APIRouter()
 
@@ -93,7 +94,7 @@ async def login_json(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token = create_access_token(data={"sub": user.email})
+    access_token = jwt_create_access_token(user_id=str(user.id))
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/token")
@@ -111,16 +112,21 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user.email})
+    access_token = jwt_create_access_token(user_id=str(user.id))
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me")
 async def read_users_me(
-    current_user: User = Depends(oauth2_scheme),
+    token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ):
     """Get current user information"""
-    return current_user
+    from lyo_app.auth.jwt_auth import verify_token_async
+    token_data = await verify_token_async(token, expected_type="access")
+    user = (await db.execute(select(User).where(User.id == int(token_data.user_id)))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return {"id": user.id, "email": user.email, "username": user.username, "full_name": getattr(user, "full_name", None)}
 
 @router.get("/users")
 async def list_users(
