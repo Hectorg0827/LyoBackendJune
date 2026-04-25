@@ -34,8 +34,6 @@ def generate_api_key() -> tuple[str, str, str]:
         - key_prefix: First 16 chars for display (lyo_sk_live_xxxx)
         - key_hash: SHA256 hash for storage and lookup
     """
-    # Generate 32 bytes of random data
-    raw_bytes = secrets.token_bytes(32)
     raw_key = secrets.token_urlsafe(32)
     
     # Create full key with prefix

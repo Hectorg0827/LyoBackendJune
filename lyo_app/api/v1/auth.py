@@ -4,27 +4,55 @@ Authentication API endpoints
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import OperationalError
+from typing import List, Optional
+from pydantic import BaseModel, EmailStr
 
 from lyo_app.core.database import get_db
+from lyo_app.core.database import engine
 from lyo_app.auth.models import User
-from lyo_app.auth.security import create_access_token, verify_password, hash_password
+from lyo_app.auth.jwt_auth import create_access_token as jwt_create_access_token
+from lyo_app.auth.security import verify_password, hash_password
 
 router = APIRouter()
+
+
+async def _ensure_user_table_if_missing(exc: Exception) -> None:
+    """Best-effort lazy table creation for lightweight/test SQLite runs."""
+    if not isinstance(exc, OperationalError):
+        return
+    if "no such table: users" not in str(exc).lower():
+        return
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: User.__table__.create(bind=sync_conn, checkfirst=True))
+
+
+class RegisterPayload(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+
+
+class LoginPayload(BaseModel):
+    email: EmailStr
+    password: str
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 @router.post("/register")
 async def register_user(
-    email: str,
-    password: str,
-    full_name: str = None,
-    db: Session = Depends(get_db)
+    payload: RegisterPayload,
+    db: AsyncSession = Depends(get_db)
 ):
     """Register a new user"""
     # Check if user exists
-    existing_user = db.query(User).filter(User.email == email).first()
+    try:
+        existing_user = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
+    except Exception as e:
+        await _ensure_user_table_if_missing(e)
+        existing_user = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
     if existing_user:
         raise HTTPException(
             status_code=400,
@@ -32,27 +60,50 @@ async def register_user(
         )
     
     # Create new user
-    hashed_password = hash_password(password)
+    hashed_password = hash_password(payload.password)
+    derived_username = payload.email.split("@", 1)[0][:50]
     user = User(
-        email=email,
+        email=payload.email,
+        username=derived_username,
         hashed_password=hashed_password,
-        full_name=full_name,
+        first_name=payload.full_name,
         is_active=True
     )
     
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     
     return {"message": "User created successfully", "user_id": user.id}
+
+
+@router.post("/login")
+async def login_json(
+    payload: LoginPayload,
+    db: AsyncSession = Depends(get_db)
+):
+    """JSON login endpoint compatibility alias."""
+    try:
+        user = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
+    except Exception as e:
+        await _ensure_user_table_if_missing(e)
+        user = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = jwt_create_access_token(user_id=str(user.id))
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/token")
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Authenticate user and return access token"""
-    user = db.query(User).filter(User.email == form_data.username).first()
+    user = (await db.execute(select(User).where(User.email == form_data.username))).scalar_one_or_none()
     
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
@@ -61,23 +112,29 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user.email})
+    access_token = jwt_create_access_token(user_id=str(user.id))
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me")
 async def read_users_me(
-    current_user: User = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
 ):
     """Get current user information"""
-    return current_user
+    from lyo_app.auth.jwt_auth import verify_token_async
+    token_data = await verify_token_async(token, expected_type="access")
+    user = (await db.execute(select(User).where(User.id == int(token_data.user_id)))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return {"id": user.id, "email": user.email, "username": user.username, "full_name": getattr(user, "full_name", None)}
 
 @router.get("/users")
 async def list_users(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """List all users (admin only)"""
-    users = db.query(User).offset(skip).limit(limit).all()
+    result = await db.execute(select(User).offset(skip).limit(limit))
+    users = result.scalars().all()
     return users

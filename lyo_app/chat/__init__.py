@@ -16,7 +16,8 @@ Usage:
 from lyo_app.chat.routes import router as chat_router
 from lyo_app.chat.models import (
     ChatMode, ChipAction, CTAType,
-    ChatCourse, ChatNote, ChatConversation, ChatMessage, ChatTelemetry
+    ChatCourse, ChatNote, ChatConversation, ChatMessage, ChatTelemetry,
+    ChatHighlight,
 )
 from lyo_app.chat.schemas import (
     ChatRequest, ChatResponse,
@@ -24,14 +25,18 @@ from lyo_app.chat.schemas import (
     CoursePlannerRequest, CoursePlannerResponse,
     PracticeRequest, PracticeResponse,
     NoteRequest, NoteResponse,
-    TelemetryStatsResponse
+    TelemetryStatsResponse,
+    # Selection popup schemas
+    SelectionExplainRequest, SelectionExplainResponse,
+    SelectionNoteRequest, SelectionNoteResponse,
+    HighlightCreate, HighlightRead, HighlightListResponse,
 )
 from lyo_app.chat.router import chat_router as message_router
 from lyo_app.chat.agents import agent_registry
 from lyo_app.chat.assembler import response_assembler
 from lyo_app.chat.stores import (
     course_store, notes_store, conversation_store,
-    response_cache, telemetry_store, initialize_stores
+    highlight_store, response_cache, telemetry_store, initialize_stores,
 )
 
 __all__ = [
@@ -47,7 +52,8 @@ __all__ = [
     "ChatConversation",
     "ChatMessage",
     "ChatTelemetry",
-    
+    "ChatHighlight",
+
     # Schemas
     "ChatRequest",
     "ChatResponse",
@@ -60,16 +66,25 @@ __all__ = [
     "NoteRequest",
     "NoteResponse",
     "TelemetryStatsResponse",
-    
+    # Selection popup schemas
+    "SelectionExplainRequest",
+    "SelectionExplainResponse",
+    "SelectionNoteRequest",
+    "SelectionNoteResponse",
+    "HighlightCreate",
+    "HighlightRead",
+    "HighlightListResponse",
+
     # Internal components
     "message_router",
     "agent_registry",
     "response_assembler",
-    
+
     # Stores
     "course_store",
     "notes_store",
     "conversation_store",
+    "highlight_store",
     "response_cache",
     "telemetry_store",
     "initialize_stores",

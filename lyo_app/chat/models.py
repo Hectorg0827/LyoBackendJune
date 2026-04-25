@@ -253,6 +253,55 @@ class ChatMessage(TenantMixin, Base):
 
 
 # =============================================================================
+# CHAT HIGHLIGHT MODEL
+# =============================================================================
+
+class ChatHighlight(TenantMixin, Base):
+    """
+    Persists a user-selected text highlight within a chat message.
+
+    The client sends the character offsets (char_start / char_end) of the
+    selection within the message's plain-text content.  On reload the client
+    uses those offsets to re-apply the yellow highlight without any server
+    round-trip beyond fetching highlights for the conversation.
+    """
+
+    __tablename__ = "chat_highlights"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    # Reference to the specific message that was highlighted
+    conversation_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+
+    # The highlighted text (stored for display in the Notes review screen)
+    selected_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Character-range within the message's plain-text content so the client
+    # can restore the highlight without fuzzy-matching.
+    char_start: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Visual appearance — default yellow, client may send custom hex
+    color: Mapped[str] = mapped_column(String(20), default="#FBBF24")
+
+    # Optional annotation the user types after highlighting
+    annotation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_chat_highlights_conv_user", "conversation_id", "user_id"),
+        Index("ix_chat_highlights_created", "created_at"),
+    )
+
+
+# =============================================================================
 # TELEMETRY MODEL
 # =============================================================================
 

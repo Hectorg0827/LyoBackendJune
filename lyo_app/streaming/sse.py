@@ -151,25 +151,55 @@ class SSEManager:
     def get_session(self, session_id: str) -> Optional[StreamSession]:
         """Get session info"""
         return self._sessions.get(session_id)
+    
+    def buffer_event(self, session_id: str, event: StreamEvent):
+        """Store an event in the session buffer for replay on reconnect."""
+        buf = self._event_buffer.get(session_id)
+        if buf is None:
+            return
+        buf.append(event)
+        # Trim to buffer_size (ring buffer)
+        if len(buf) > self.buffer_size:
+            self._event_buffer[session_id] = buf[-self.buffer_size:]
+    
+    def replay_after(self, session_id: str, last_event_id: Optional[str]) -> List[StreamEvent]:
+        """Return buffered events after the given last_event_id for SSE reconnect replay."""
+        buf = self._event_buffer.get(session_id, [])
+        if not last_event_id:
+            return list(buf)
+        # Find the index of the last received event
+        for i, ev in enumerate(buf):
+            if ev.id == last_event_id:
+                return buf[i + 1:]
+        # If not found, return all (client may have missed everything in buffer)
+        return list(buf)
         
     async def stream_text_generation(
         self,
         generator: AsyncGenerator[str, None],
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        last_event_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Stream AI text generation word by word
-        
-        Provides a typing effect like ChatGPT
+        Stream AI text generation word by word.
+        If last_event_id is provided, replays buffered events first.
         """
         session_id = session_id or self.create_session()
         
+        # Replay missed events on reconnect
+        if last_event_id:
+            for ev in self.replay_after(session_id, last_event_id):
+                yield ev.to_sse()
+            return  # After replaying, the original generator is gone — client reconnects to same session
+        
         # Send start event
-        yield StreamEvent(
+        start_event = StreamEvent(
             event=EventType.MESSAGE_START,
             data={"session_id": session_id, "timestamp": time.time()},
             retry=self.max_reconnect_time
-        ).to_sse()
+        )
+        self.buffer_event(session_id, start_event)
+        yield start_event.to_sse()
         
         full_content = ""
         chunk_count = 0
@@ -179,34 +209,42 @@ class SSEManager:
                 full_content += chunk
                 chunk_count += 1
                 
-                yield StreamEvent(
+                delta_event = StreamEvent(
                     event=EventType.MESSAGE_DELTA,
                     data={
                         "content": chunk,
                         "chunk_index": chunk_count
                     }
-                ).to_sse()
+                )
+                self.buffer_event(session_id, delta_event)
+                yield delta_event.to_sse()
                 
                 # Small delay for natural feeling
                 await asyncio.sleep(0.02)
                 
         except Exception as e:
-            yield StreamEvent(
+            err_event = StreamEvent(
                 event=EventType.ERROR,
                 data={"error": str(e)}
-            ).to_sse()
+            )
+            self.buffer_event(session_id, err_event)
+            yield err_event.to_sse()
             
         # Send completion
-        yield StreamEvent(
+        complete_event = StreamEvent(
             event=EventType.MESSAGE_COMPLETE,
             data={
                 "full_content": full_content,
                 "total_chunks": chunk_count,
                 "timestamp": time.time()
             }
-        ).to_sse()
+        )
+        self.buffer_event(session_id, complete_event)
+        yield complete_event.to_sse()
         
-        yield StreamEvent(event=EventType.DONE, data={}).to_sse()
+        done_event = StreamEvent(event=EventType.DONE, data={})
+        self.buffer_event(session_id, done_event)
+        yield done_event.to_sse()
         
     async def stream_course_generation(
         self,

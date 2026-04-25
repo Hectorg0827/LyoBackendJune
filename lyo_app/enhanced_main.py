@@ -174,8 +174,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ]
     
     results = await asyncio.gather(*init_tasks, return_exceptions=True)
-    successful = sum(1 for r in results if r is True)
+    successful = sum(1 for r in results if not isinstance(r, Exception))
     
+    # Wire chat stores with the cache manager (best-effort; stores work without it)
+    try:
+        from lyo_app.core.cache_manager import IntelligentCacheManager
+        from lyo_app.chat.stores import initialize_stores
+        initialize_stores(IntelligentCacheManager())
+        logger.info("✅ Chat stores initialized with cache manager")
+    except Exception as e:
+        logger.warning(f"Chat store cache initialization skipped: {e}")
+
     elapsed = time.time() - start_time
     logger.info(f"🎉 LyoBackend startup completed in {elapsed:.2f}s ({successful}/5 services)")
     
@@ -853,6 +862,12 @@ async def root():  # noqa: D401
         },
         "timestamp": time.time(),
     }
+
+
+@app.get("/healthz")
+async def healthz_alias():
+    """Compatibility health endpoint."""
+    return {"status": "healthy", "service": settings.APP_NAME}
 
 
 if __name__ == "__main__":  # pragma: no cover

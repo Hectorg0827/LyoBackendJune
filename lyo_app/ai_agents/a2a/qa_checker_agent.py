@@ -74,6 +74,9 @@ class QAOutput(BaseModel):
     approval_status: str = "approved"         # approved, needs_revision, rejected
     issues: List[ContentIssue] = Field(default_factory=list)
     critical_issues_count: int = 0
+    # 0.0–1.0 score used by the orchestrator's quality gate
+    overall_quality_score: float = Field(default=0.9, ge=0.0, le=1.0)
+    review_scope: str = "full"                # full | factual_only | lightweight
 
 
 # ============================================================
@@ -267,13 +270,14 @@ Check for:
 ### Output Standards
 
 You must:
-1. ONLY return issues if there are critical errors that prevent publishing.
-2. The schema has been aggressively minimized to prioritize low latency. Do not generate verbose explanations unless necessary.
+1. ONLY flag issues that meaningfully degrade learning quality.
+2. Always produce an `overall_quality_score` (0.0–1.0) based on the severity and count of issues found.
+3. The schema has been aggressively minimized to prioritize low latency. Do not generate verbose explanations unless necessary.
 
 CRITICAL: Return valid JSON matching the QAOutput schema exactly."""
-    
+
     def build_prompt(
-        self, 
+        self,
         task_input: TaskInput,
         content_to_review: Optional[Dict[str, Any]] = None,
         cinematic_output: Optional[Dict[str, Any]] = None,
@@ -281,41 +285,57 @@ CRITICAL: Return valid JSON matching the QAOutput schema exactly."""
         review_scope: ReviewScope = ReviewScope.FULL,
         **kwargs
     ) -> str:
-        # Build content section from available inputs
         content_sections = []
-        
+
         if content_to_review:
             content_sections.append(f"""
-### Raw Content for Review
+### Content for Review
 ```json
-{str(content_to_review)[:4000]}...
+{str(content_to_review)[:4000]}
 ```
 """)
-        
+
         content_text = "\n".join(content_sections) if content_sections else "No specific content provided for review."
-        
+
+        scope_instruction = {
+            ReviewScope.FULL: "Perform a full review covering factual accuracy, pedagogy, accessibility, and consistency.",
+            ReviewScope.FACTUAL_ONLY: "Perform a fast factual-accuracy-only review. Skip pedagogy, accessibility, and style checks.",
+            ReviewScope.PEDAGOGY_ONLY: "Review only pedagogical quality (objectives, scaffolding, Bloom's taxonomy).",
+            ReviewScope.TECHNICAL_ONLY: "Review only technical accuracy (code correctness, API usage, syntax).",
+            ReviewScope.ACCESSIBILITY: "Review only accessibility compliance (WCAG 2.1 Level AA).",
+        }.get(review_scope, "Perform a full review.")
+
         return f"""## Quality Assurance Review Task
 
-Perform a rapid, latency-optimized critical review:
+{scope_instruction}
 
 {content_text}
 
 ## Your Task:
-Output a single JSON object with EXACTLY these schema fields—no others:
+Output a JSON object with EXACTLY these fields:
 - `approval_status`: "approved", "needs_revision", or "rejected"
-- `issues`: List of dicts `[{{"category": "factual", "description": "What's wrong"}}]` (Return empty list [] if approved)
-- `critical_issues_count`: integer
+- `issues`: List of dicts `[{{"category": "...", "description": "..."}}]` (empty list if none found)
+- `critical_issues_count`: integer (count of CRITICAL/HIGH issues)
+- `overall_quality_score`: float 0.0–1.0 (1.0 = perfect, 0.7+ = publishable, <0.5 = reject)
+- `review_scope`: string (echo back the scope: "{review_scope.value}")
+
+## Scoring Guide
+- 0.95–1.0: Excellent — no issues
+- 0.80–0.94: Good — minor issues only
+- 0.70–0.79: Acceptable — some issues but publishable
+- 0.50–0.69: Needs revision — significant issues
+- 0.00–0.49: Reject — critical errors
 
 ## CRITICAL: JSON Output Format
 
-You MUST return a single JSON object matching this EXACT structure (no markdown, no wrapping):
+Return ONLY valid JSON — no markdown wrappers, no extra text:
 
 ```json
 {{
   "approval_status": "approved",
   "issues": [],
-  "critical_issues_count": 0
+  "critical_issues_count": 0,
+  "overall_quality_score": 0.92,
+  "review_scope": "{review_scope.value}"
 }}
-```
-
-Return ONLY valid JSON matching this structure. No markdown wrappers, no extra text."""
+```"""

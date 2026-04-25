@@ -30,36 +30,47 @@ from pydantic import BaseModel, Field
 # Production-grade structured logging
 logger = structlog.get_logger(__name__)
 
-# Mock the missing imports for development
-class MockTikToken:
+# Fallback implementations used only when real libraries are unavailable
+class _MockTikToken:
     @staticmethod
     def encoding_for_model(model_name: str):
-        return MockTikToken()
-    
+        return _MockTikToken()
+
     def encode(self, text: str) -> List[int]:
         # Rough approximation: 1 token per 4 characters
         return list(range(len(text) // 4))
 
-class MockLangDetect:
+
+class _MockLangDetect:
     @staticmethod
     def detect(text: str) -> str:
-        # Simple language detection based on common words
         text_lower = text.lower()
-        if any(word in text_lower for word in ['the', 'and', 'is', 'are', 'of']):
-            return 'en'
-        elif any(word in text_lower for word in ['el', 'la', 'es', 'y', 'de']):
+        if any(word in text_lower for word in ['el', 'la', 'es', 'y', 'de']):
             return 'es'
-        elif any(word in text_lower for word in ['le', 'la', 'est', 'et', 'de']):
+        if any(word in text_lower for word in ['le', 'la', 'est', 'et', 'de']):
             return 'fr'
-        else:
-            return 'en'  # Default to English
+        return 'en'
 
-# Use mock implementations
-tiktoken = MockTikToken()
-detect = MockLangDetect.detect
 
-class LangDetectError(Exception):
-    pass
+# Prefer real libraries; fall back to mocks if not installed
+try:
+    import tiktoken as _tiktoken
+    tiktoken = _tiktoken
+    logger.debug("tiktoken loaded successfully")
+except ImportError:
+    logger.warning("tiktoken not installed — using character-count approximation for token counting")
+    tiktoken = _MockTikToken()
+
+try:
+    from langdetect import detect as _detect, LangDetectError
+    detect = _detect
+    logger.debug("langdetect loaded successfully")
+except ImportError:
+    logger.warning("langdetect not installed — using keyword-based language detection fallback")
+    detect = _MockLangDetect.detect
+
+    class LangDetectError(Exception):
+        pass
 
 class MockRedis:
     def __init__(self):

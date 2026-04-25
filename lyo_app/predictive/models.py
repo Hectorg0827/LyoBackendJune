@@ -6,7 +6,7 @@ from datetime import datetime, time
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, JSON, Float, Text, ARRAY, Time
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, JSON, Float, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -80,7 +80,7 @@ class DropoutRiskScore(TenantMixin, Base):
     )  # 'low', 'medium', 'high', 'critical'
 
     # Risk factors
-    risk_factors: Mapped[List] = mapped_column(ARRAY(String), nullable=False)
+    risk_factors: Mapped[List] = mapped_column(JSON, nullable=False)
 
     # Metrics contributing to score
     session_frequency_trend: Mapped[float] = mapped_column(Float, nullable=True)
@@ -129,13 +129,13 @@ class UserTimingProfile(TenantMixin, Base):
 
     # Peak learning times (hours when user performs best)
     peak_hours: Mapped[List] = mapped_column(
-        ARRAY(Integer), nullable=True
+        JSON, nullable=True
     )  # [7, 8, 19, 20]
     optimal_study_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
 
     # Day of week preferences
     best_days: Mapped[Optional[List]] = mapped_column(
-        ARRAY(String), nullable=True
+        JSON, nullable=True
     )  # ['Monday', 'Wednesday']
 
     # Session patterns
@@ -157,7 +157,7 @@ class UserTimingProfile(TenantMixin, Base):
 
     # Streak patterns
     typical_study_days: Mapped[Optional[List]] = mapped_column(
-        ARRAY(Integer), nullable=True
+        JSON, nullable=True
     )  # [1,2,3,4,5] for Mon-Fri
 
     # Data points used

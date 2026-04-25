@@ -250,17 +250,26 @@ class PersonalizationEngine:
         """
         user_id = learner_id
 
-        state_result = await db.execute(
-            select(LearnerState).where(LearnerState.user_id == user_id)
-        )
-        state = state_result.scalar_one_or_none()
+        state = None
+        masteries = []
+        try:
+            state_result = await db.execute(
+                select(LearnerState).where(LearnerState.user_id == user_id)
+            )
+            state = state_result.scalar_one_or_none()
 
-        mastery_result = await db.execute(
-            select(LearnerMastery)
-            .where(LearnerMastery.user_id == user_id)
-            .order_by(desc(LearnerMastery.mastery_level))
-        )
-        masteries = mastery_result.scalars().all()
+            mastery_result = await db.execute(
+                select(LearnerMastery)
+                .where(LearnerMastery.user_id == user_id)
+                .order_by(desc(LearnerMastery.mastery_level))
+            )
+            masteries = mastery_result.scalars().all()
+        except Exception as e:
+            logger.warning(f"Failed to query learner state/mastery: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
         if not state and not masteries:
             return ""
@@ -327,22 +336,43 @@ class PersonalizationEngine:
 
             session_lines: List[str] = []
             for conv in conversations:
-                # Access attributes safely
-                topic = getattr(conv, "topic", None) or (getattr(conv, "context_data", {}) or {}).get("topic")
+                # 1. Capture ID early to avoid greenlet errors on expired objects
+                conv_id = getattr(conv, "id", None)
+                if not conv_id:
+                    continue
+
+                # 2. Extract topic safely (might be in topic col or JSON context_data)
+                topic = getattr(conv, "topic", None)
+                if not topic:
+                    # Defensive check for context_data attribute availability
+                    try:
+                        ctx = getattr(conv, "context_data", {}) or {}
+                        topic = ctx.get("topic")
+                    except Exception:
+                        topic = None
+                
                 topic_prefix = f"Topic: {topic}" if topic else "Topic: (unspecified)"
 
-                # Pull last user+assistant turns (compact)
+                # 3. Pull last user+assistant turns (compact)
                 msg_result = await db.execute(
                     select(ChatMessage)
-                    .where(ChatMessage.conversation_id == conv.id)
+                    .where(ChatMessage.conversation_id == conv_id)
                     .options(load_only(ChatMessage.content, ChatMessage.role))
                     .order_by(desc(ChatMessage.created_at))
                     .limit(4)
                 )
                 msgs = list(reversed(msg_result.scalars().all()))
 
-                last_user = next((m.content for m in reversed(msgs) if m.role == "user"), "")
-                last_assistant = next((m.content for m in reversed(msgs) if m.role == "assistant"), "")
+                # 4. Extract content and role early to variables
+                processed_msgs = []
+                for m in msgs:
+                    processed_msgs.append({
+                        "role": getattr(m, "role", "unknown"),
+                        "content": getattr(m, "content", "")
+                    })
+
+                last_user = next((m["content"] for m in reversed(processed_msgs) if m["role"] == "user"), "")
+                last_assistant = next((m["content"] for m in reversed(processed_msgs) if m["role"] == "assistant"), "")
 
                 def _truncate(s: str, n: int) -> str:
                     s = (s or "").strip().replace("\n", " ")
@@ -361,6 +391,10 @@ class PersonalizationEngine:
             except Exception:
                 pass
             logger.debug(f"Skipping chat continuity context: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
         return "\n".join(parts).strip()
     

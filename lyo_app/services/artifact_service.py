@@ -1,5 +1,5 @@
+import asyncio
 import logging
-import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from lyo_app.integrations.firebase_client import firebase_client
@@ -41,9 +41,12 @@ class ArtifactService:
         }
         
         if self._is_enabled():
-            # Store versioned document: lyo_artifacts/{artifact_id}_v{version}
-            doc_ref = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{version}")
-            doc_ref.set(doc_data)
+            # Store versioned document in a thread to avoid blocking loop
+            def _sync_save():
+                doc_ref = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{version}")
+                doc_ref.set(doc_data)
+            
+            await asyncio.to_thread(_sync_save)
         else:
             logger.warning("Firebase not enabled, artifact not persisted")
             
@@ -69,16 +72,19 @@ class ArtifactService:
         }
         
         if self._is_enabled():
-            doc_ref = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{new_version}")
-            # Get existing doc to preserve user_id and type
-            prev_doc = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{latest_version}").get()
-            if prev_doc.exists:
-                prev_data = prev_doc.to_dict()
-                doc_data["user_id"] = prev_data.get("user_id")
-                doc_data["type"] = prev_data.get("type")
-                doc_data["created_at"] = prev_data.get("created_at")
+            def _sync_update():
+                doc_ref = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{new_version}")
+                # Get existing doc to preserve user_id and type
+                prev_doc = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{latest_version}").get()
+                if prev_doc.exists:
+                    prev_data = prev_doc.to_dict()
+                    doc_data["user_id"] = prev_data.get("user_id")
+                    doc_data["type"] = prev_data.get("type")
+                    doc_data["created_at"] = prev_data.get("created_at")
+                
+                doc_ref.set(doc_data)
             
-            doc_ref.set(doc_data)
+            await asyncio.to_thread(_sync_update)
         else:
             logger.warning("Firebase not enabled, artifact version not persisted")
             
@@ -91,17 +97,18 @@ class ArtifactService:
         if not self._is_enabled():
             return 1
             
-        # Query Firestore for latest version
-        docs = self.fb.db.collection(self.COLLECTION)\
-            .where("artifact_id", "==", artifact_id)\
-            .order_by("version", direction="DESCENDING")\
-            .limit(1)\
-            .stream()
-            
-        for doc in docs:
-            return doc.to_dict().get("version", 1)
-            
-        return 1
+        def _sync_get_latest():
+            docs = self.fb.db.collection(self.COLLECTION)\
+                .where("artifact_id", "==", artifact_id)\
+                .order_by("version", direction="DESCENDING")\
+                .limit(1)\
+                .stream()
+                
+            for doc in docs:
+                return doc.to_dict().get("version", 1)
+            return 1
+
+        return await asyncio.to_thread(_sync_get_latest)
 
     async def get_artifact(self, artifact_id: str, version: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
@@ -111,16 +118,20 @@ class ArtifactService:
             return None
             
         if version:
-            doc_ref = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{version}")
-            doc = doc_ref.get()
-            return doc.to_dict() if doc.exists else None
+            def _sync_get_v():
+                doc_ref = self.fb.db.collection(self.COLLECTION).document(f"{artifact_id}_v{version}")
+                doc = doc_ref.get()
+                return doc.to_dict() if doc.exists else None
+            return await asyncio.to_thread(_sync_get_v)
         else:
             # Get latest
-            docs = self.fb.db.collection(self.COLLECTION)\
-                .where("artifact_id", "==", artifact_id)\
-                .order_by("version", direction="DESCENDING")\
-                .limit(1)\
-                .stream()
-            for doc in docs:
-                return doc.to_dict()
-        return None
+            def _sync_get_latest_doc():
+                docs = self.fb.db.collection(self.COLLECTION)\
+                    .where("artifact_id", "==", artifact_id)\
+                    .order_by("version", direction="DESCENDING")\
+                    .limit(1)\
+                    .stream()
+                for doc in docs:
+                    return doc.to_dict()
+                return None
+            return await asyncio.to_thread(_sync_get_latest_doc)

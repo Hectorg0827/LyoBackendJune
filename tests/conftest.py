@@ -34,6 +34,18 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """
     # Import models to ensure they're registered (match database.py init_db)
     from lyo_app.models.enhanced import User  # noqa: F401
+    try:
+        from lyo_app.models.clips import Clip, ClipAnnotation, ClipComment  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        from lyo_app.models.notebook import NotebookEntry, NotebookTag  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        from lyo_app.models.social import Follow, Reaction, Conversation, Message  # noqa: F401
+    except ImportError:
+        pass
     from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
     from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow, FeedItem  # noqa: F401
     from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
@@ -58,6 +70,10 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         pass
     try:
         from lyo_app.auth.rbac import Role, Permission  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        from lyo_app.skills.models import Skill, SkillEdge, SkillTag  # noqa: F401
     except ImportError:
         pass
     

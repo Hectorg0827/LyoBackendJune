@@ -18,33 +18,30 @@ from lyo_app.core.ai_resilience import ai_resilience_manager
 logger = logging.getLogger(__name__)
 
 class CourseGeneratorV2:
+    # Limit concurrent AI calls to avoid rate-limiting / overload
+    _hydration_semaphore = asyncio.Semaphore(3)
     
     async def generate_course(self, topic: str, target_audience: str, learning_objectives: List[str]) -> LyoCourse:
         """
         Generates a full LyoCourse object using a multi-step prompt strategy.
         1. Generate Skeleton (Modules + Lessons)
-        2. Hydrate Artifacts (parallelized)
+        2. Hydrate Artifacts (parallelized with bounded concurrency)
         """
         
         # Step 1: Generate Structure
         structure = await self._generate_structure(topic, target_audience, learning_objectives)
         
-        # Step 2: Hydrate Lessons (in parallel for speed)
+        # Step 2: Hydrate Lessons (parallel per module, bounded by semaphore)
         hydrated_modules = []
         for module in structure.modules:
-            hydrated_lessons = []
-            
-            # Simple gathering for now, can be optimized with asyncio.gather
-            for lesson in module.lessons:
-                hydrated_lesson = await self._hydrate_lesson(lesson, topic)
-                hydrated_lessons.append(hydrated_lesson)
+            hydrated_lessons = await self._hydrate_module_lessons(module.lessons, topic)
                 
             hydrated_modules.append(
                 LyoModule(
                     module_id=module.module_id,
                     title=module.title,
                     goal=module.goal,
-                    lessons=hydrated_lessons
+                    lessons=list(hydrated_lessons)
                 )
             )
             
@@ -56,6 +53,13 @@ class CourseGeneratorV2:
             modules=hydrated_modules,
             generation_source="ai_v2_lily"
         )
+
+    async def _hydrate_module_lessons(self, lessons: List[LyoLesson], topic: str) -> List[LyoLesson]:
+        """Hydrate all lessons in a module concurrently, bounded by semaphore."""
+        async def _throttled(lesson):
+            async with self._hydration_semaphore:
+                return await self._hydrate_lesson(lesson, topic)
+        return list(await asyncio.gather(*[_throttled(l) for l in lessons]))
 
     async def _generate_structure(self, topic: str, audience: str, objectives: List[str]) -> LyoCourse:
         """Generates the skeleton (Modules & Lessons) without heavy artifact content."""

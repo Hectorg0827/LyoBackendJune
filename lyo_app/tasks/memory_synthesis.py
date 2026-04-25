@@ -24,8 +24,43 @@ from lyo_app.ai_agents.models import MentorInteraction
 logger = logging.getLogger(__name__)
 
 # Database setup for Celery tasks
-DATABASE_URL = getattr(settings, "DATABASE_URL", "postgresql+asyncpg://lyo_user:lyo_password@localhost:5432/lyo_db")
-SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("postgresql://", "postgresql+psycopg2://")
+def _pick_database_url(config_obj: object) -> str:
+    """Pick a usable DB URL from mixed config styles (upper/lower case names)."""
+    candidates = [
+        getattr(config_obj, "DATABASE_URL", None),
+        getattr(config_obj, "database_url", None),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return "sqlite+aiosqlite:///./lyo_app_worker_dev.db"
+
+
+DATABASE_URL = _pick_database_url(settings)
+
+
+def _build_sync_database_url(database_url: Optional[str]) -> str:
+    """
+    Convert async database URLs to a sync SQLAlchemy URL for Celery workers.
+
+    Falls back to local SQLite when input is missing/malformed so module import
+    remains safe in test and lightweight environments.
+    """
+    fallback_url = "sqlite:///./lyo_app_worker_dev.db"
+    if not database_url or "://" not in database_url:
+        return fallback_url
+
+    normalized = database_url.strip()
+    if normalized.startswith("postgresql+asyncpg://"):
+        return normalized.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    if normalized.startswith("postgresql://"):
+        return normalized.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if normalized.startswith("sqlite+aiosqlite://"):
+        return normalized.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    return normalized
+
+
+SYNC_DATABASE_URL = _build_sync_database_url(DATABASE_URL)
 
 # Sync engine for Celery
 sync_engine = create_engine(SYNC_DATABASE_URL)

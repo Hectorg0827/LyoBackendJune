@@ -2,7 +2,7 @@ import requests
 import json
 import time
 
-BASE_URL = "https://lyo-backend-5oq7jszolq-uc.a.run.app"
+BASE_URL = "https://lyo-backend-830162750094.us-central1.run.app"
 CHAT_ENDPOINT = f"{BASE_URL}/api/v1/chat"
 HEALTH_ENDPOINT = f"{BASE_URL}/health"
 

@@ -364,22 +364,6 @@ async def get_user(
     return UserRead.model_validate(user)
 
 
-@router.get("/me", response_model=UserRead)
-async def get_current_user_endpoint(
-    current_user: Annotated[UserRead, Depends(get_current_user)]
-) -> UserRead:
-    """
-    Get current authenticated user.
-    
-    Args:
-        current_user: Current authenticated user from JWT token
-        
-    Returns:
-        Current user data
-    """
-    return current_user
-
-
 # ============================================================================
 # ADDITIONAL AUTH ENDPOINTS (100% Feature Complete)
 # ============================================================================

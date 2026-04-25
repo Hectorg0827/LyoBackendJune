@@ -47,7 +47,10 @@ class EnhancedSettings(BaseSettings):
     WORKERS: int = Field(1, description="Number of worker processes")
     
     # Security
-    SECRET_KEY: str = Field(..., description="Secret key for signing tokens")
+    SECRET_KEY: str = Field(
+        "dev-only-insecure-secret-key-change-in-production-123456",
+        description="Secret key for signing tokens"
+    )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60 * 24 * 7, description="Access token expiration (minutes)")  # 7 days
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, description="Refresh token expiration (days)")
     PASSWORD_MIN_LENGTH: int = Field(8, description="Minimum password length")
@@ -63,7 +66,10 @@ class EnhancedSettings(BaseSettings):
     # ============================================================================
     
     # PostgreSQL
-    DATABASE_URL: str = Field(..., description="Database connection URL")
+    DATABASE_URL: str = Field(
+        "sqlite+aiosqlite:///./lyo_app_enhanced_dev.db",
+        description="Database connection URL"
+    )
     DATABASE_ECHO: bool = Field(False, description="Echo SQL queries")
     DATABASE_POOL_SIZE: int = Field(20, description="Database connection pool size")
     DATABASE_MAX_OVERFLOW: int = Field(30, description="Database max overflow connections")

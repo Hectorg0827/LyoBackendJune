@@ -13,6 +13,7 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from lyo_app.core.rate_limiter import InMemoryRateLimiter, in_memory_rate_limiter as _shared_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         self.enable_rate_limiting = enable_rate_limiting
         self.enable_audit_logging = enable_audit_logging
         self.enable_security_headers = enable_security_headers
-        self._rate_limiter = InMemoryRateLimiter()
+        self._rate_limiter = _shared_rate_limiter  # shared singleton — no duplicate state
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         start_time = time.time()
@@ -97,43 +98,4 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         )
 
 
-class InMemoryRateLimiter:
-    """Simple in-memory rate limiter."""
-    
-    def __init__(self):
-        self._requests: dict = {}
-    
-    def is_allowed(self, client_id: str, limit: int, window: int) -> bool:
-        """Check if request is allowed within rate limit."""
-        now = time.time()
-        key = f"{client_id}:{window}"
-        
-        # Clean up old entries
-        self._cleanup(now, window)
-        
-        # Get current count for this client
-        if key not in self._requests:
-            self._requests[key] = []
-        
-        # Filter to requests in current window
-        self._requests[key] = [
-            req_time for req_time in self._requests[key]
-            if now - req_time < window
-        ]
-        
-        # Check limit
-        if len(self._requests[key]) >= limit:
-            return False
-        
-        # Record this request
-        self._requests[key].append(now)
-        return True
-    
-    def _cleanup(self, now: float, max_window: int = 3600) -> None:
-        """Remove old entries to prevent memory growth."""
-        keys_to_remove = []
-        for key, requests in self._requests.items():
-            if not requests or now - max(requests) > max_window:
-                keys_to_remove.append(key)
-        for key in keys_to_remove:
-            del self._requests[key]
+# InMemoryRateLimiter imported from lyo_app.core.rate_limiter above

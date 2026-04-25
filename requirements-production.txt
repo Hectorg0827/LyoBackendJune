@@ -52,8 +52,11 @@ slowapi==0.1.9
 psutil==5.9.6
 numpy==1.26.2
 
-# AI/ML - Google Gemini
+# AI/ML - Google Gemini & Vertex AI
 google-generativeai==0.8.3
+google-cloud-aiplatform>=1.50.0
+google-cloud-texttospeech>=2.16.0
+google-cloud-storage>=2.17.0
 openai==1.12.0
 scikit-learn==1.3.2
 

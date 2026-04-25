@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from lyo_app.chat.models import (
-    ChatCourse, ChatNote, ChatConversation, ChatMessage, 
-    ChatTelemetry, ChatMode, ChipAction
+    ChatCourse, ChatNote, ChatConversation, ChatMessage,
+    ChatTelemetry, ChatMode, ChipAction, ChatHighlight
 )
 from lyo_app.core.cache_manager import IntelligentCacheManager, CacheConfig, CacheStrategy
 
@@ -748,6 +748,105 @@ class TelemetryStore:
 
 
 # =============================================================================
+# HIGHLIGHT STORE
+# =============================================================================
+
+class HighlightStore:
+    """
+    CRUD for chat highlights.
+
+    Highlights are lightweight — no caching layer needed because they are only
+    fetched once per conversation open and the total count is small.
+    """
+
+    async def create(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        conversation_id: str,
+        selected_text: str,
+        *,
+        message_id: Optional[str] = None,
+        char_start: Optional[int] = None,
+        char_end: Optional[int] = None,
+        color: str = "#FBBF24",
+        annotation: Optional[str] = None,
+    ) -> ChatHighlight:
+        highlight = ChatHighlight(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            selected_text=selected_text,
+            char_start=char_start,
+            char_end=char_end,
+            color=color,
+            annotation=annotation,
+        )
+        db.add(highlight)
+        await db.commit()
+        await db.refresh(highlight)
+        logger.info("Created highlight %s for conversation %s", highlight.id, conversation_id)
+        return highlight
+
+    async def get_by_conversation(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        conversation_id: str,
+    ) -> List[ChatHighlight]:
+        """Return all highlights for *conversation_id* owned by *user_id*."""
+        result = await db.execute(
+            select(ChatHighlight)
+            .where(
+                and_(
+                    ChatHighlight.conversation_id == conversation_id,
+                    ChatHighlight.user_id == user_id,
+                )
+            )
+            .order_by(ChatHighlight.created_at)
+        )
+        return list(result.scalars().all())
+
+    async def get_by_id(
+        self, db: AsyncSession, highlight_id: str, user_id: str
+    ) -> Optional[ChatHighlight]:
+        result = await db.execute(
+            select(ChatHighlight).where(
+                and_(
+                    ChatHighlight.id == highlight_id,
+                    ChatHighlight.user_id == user_id,
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_annotation(
+        self,
+        db: AsyncSession,
+        highlight_id: str,
+        user_id: str,
+        annotation: str,
+    ) -> Optional[ChatHighlight]:
+        highlight = await self.get_by_id(db, highlight_id, user_id)
+        if not highlight:
+            return None
+        highlight.annotation = annotation
+        await db.commit()
+        await db.refresh(highlight)
+        return highlight
+
+    async def delete(
+        self, db: AsyncSession, highlight_id: str, user_id: str
+    ) -> bool:
+        highlight = await self.get_by_id(db, highlight_id, user_id)
+        if not highlight:
+            return False
+        await db.delete(highlight)
+        await db.commit()
+        return True
+
+
+# =============================================================================
 # STORE INSTANCES
 # =============================================================================
 
@@ -755,6 +854,7 @@ class TelemetryStore:
 course_store = CourseStore()
 notes_store = NotesStore()
 conversation_store = ConversationStore()
+highlight_store = HighlightStore()
 response_cache: Optional[ResponseCache] = None
 telemetry_store = TelemetryStore()
 
@@ -762,7 +862,7 @@ telemetry_store = TelemetryStore()
 def initialize_stores(cache_manager: IntelligentCacheManager):
     """Initialize stores with cache manager"""
     global course_store, notes_store, conversation_store, response_cache
-    
+
     course_store = CourseStore(cache_manager)
     notes_store = NotesStore(cache_manager)
     conversation_store = ConversationStore(cache_manager)

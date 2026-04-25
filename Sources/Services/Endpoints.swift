@@ -57,6 +57,14 @@ enum Endpoints {
         case chat
         case chatStream
         case chatHistory
+
+        // MARK: - Chat Selection Popup (explain · add-to-notes · highlight)
+        case selectionExplain
+        case selectionNote
+        case selectionHighlight
+        case selectionHighlights(conversationId: String)
+        case selectionHighlightDelete(highlightId: String)
+        case selectionHighlightAnnotation(highlightId: String)
         
         // MARK: - A2UI
         case a2uiNegotiate
@@ -97,6 +105,14 @@ enum Endpoints {
             case .chat: return "chat"
             case .chatStream: return "chat/stream"
             case .chatHistory: return "chat/history"
+
+            // Selection popup
+            case .selectionExplain: return "chat/selection/explain"
+            case .selectionNote: return "chat/selection/note"
+            case .selectionHighlight: return "chat/selection/highlight"
+            case .selectionHighlights(let conversationId): return "chat/selection/highlights/\(conversationId)"
+            case .selectionHighlightDelete(let highlightId): return "chat/selection/highlights/\(highlightId)"
+            case .selectionHighlightAnnotation(let highlightId): return "chat/selection/highlights/\(highlightId)/annotation"
                 
             // A2UI
             case .a2uiNegotiate: return "a2ui/negotiate"
@@ -129,13 +145,19 @@ enum Endpoints {
         var method: HTTPMethod {
             switch self {
             case .login, .register, .refreshToken, .logout,
-                 .chat, .chatStream, .courseGenerate, .courseComplete:
+                 .chat, .chatStream, .courseGenerate, .courseComplete,
+                 .selectionExplain, .selectionNote, .selectionHighlight:
                 return .post
             case .verifyToken, .chatHistory, .a2uiNegotiate, .a2uiComponents,
                  .courseStatus, .courseFetch, .userProfile, .userPreferences,
                  .userProgress, .studyPlans, .studyPlanDetail, .studySessions,
-                 .health, .healthDetailed, .a2uiWebSocket:
+                 .health, .healthDetailed, .a2uiWebSocket,
+                 .selectionHighlights:
                 return .get
+            case .selectionHighlightDelete:
+                return .delete
+            case .selectionHighlightAnnotation:
+                return .patch
             }
         }
         

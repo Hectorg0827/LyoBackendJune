@@ -9,6 +9,13 @@ from lyo_app.tenants.usage import log_usage_async
 
 logger = logging.getLogger(__name__)
 
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Callback for fire-and-forget tasks to surface exceptions to the logger."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error(f"Background task {task.get_name()} failed: {exc}", exc_info=exc)
+
+
 class UsageMiddleware(BaseHTTPMiddleware):
     """
     Middleware to track API usage per organization.
@@ -47,7 +54,7 @@ class UsageMiddleware(BaseHTTPMiddleware):
             
             # Log usage asynchronously (fire-and-forget)
             # Using create_task to ensure it doesn't block the response
-            asyncio.create_task(
+            t1 = asyncio.create_task(
                 log_usage_async(
                     organization_id=organization_id,
                     endpoint=request.url.path,
@@ -60,6 +67,23 @@ class UsageMiddleware(BaseHTTPMiddleware):
                     user_id=user_id
                 )
             )
+            t1.add_done_callback(_log_task_exception)
+
+            # Phase 2: Report to Unified Analytics
+            from lyo_app.services.analytics_service import analytics_service
+            t2 = asyncio.create_task(
+                analytics_service.track_system_event(
+                    event_name="api_request",
+                    properties={
+                        "endpoint": request.url.path,
+                        "method": request.method,
+                        "status": response.status_code,
+                        "latency_ms": duration_ms
+                    },
+                    user_id=user_id
+                )
+            )
+            t2.add_done_callback(_log_task_exception)
             
             # Phase 2: Report to Unified Analytics
             from lyo_app.services.analytics_service import analytics_service

@@ -1,0 +1,14 @@
+steps:
+  # Build the container image using the lightweight Dockerfile.cloud
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-f', 'Dockerfile.cloud',
+      '-t', 'debug-image',
+      '.'
+    ]
+
+  # Run the debug script inside the built image
+  - name: 'debug-image'
+    entrypoint: 'python'
+    args: ['debug_routes.py']

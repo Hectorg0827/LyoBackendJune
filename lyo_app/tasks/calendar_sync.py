@@ -24,8 +24,29 @@ from lyo_app.auth.models import User
 logger = logging.getLogger(__name__)
 
 # Database setup
-DATABASE_URL = getattr(settings, "DATABASE_URL", "postgresql+asyncpg://lyo_user:lyo_password@localhost:5432/lyo_db")
-SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("postgresql://", "postgresql+psycopg2://")
+def _pick_database_url(config_obj: object) -> str:
+    candidates = [
+        getattr(config_obj, "DATABASE_URL", None),
+        getattr(config_obj, "database_url", None),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return "sqlite+aiosqlite:///./lyo_app_worker_dev.db"
+
+
+def _build_sync_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if database_url.startswith("sqlite+aiosqlite://"):
+        return database_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
+    return database_url
+
+
+DATABASE_URL = _pick_database_url(settings)
+SYNC_DATABASE_URL = _build_sync_database_url(DATABASE_URL)
 
 sync_engine = create_engine(SYNC_DATABASE_URL)
 SyncSessionLocal = sessionmaker(bind=sync_engine)

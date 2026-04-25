@@ -431,9 +431,11 @@ class CourseGenerationPipeline(StreamingPipeline):
                 ),
                 timeout=300.0 # 5 minutes max for all lessons
             )
-        except (Exception, asyncio.TimeoutError) as e:
-            logger.error(f"[{state.job_id}] Content generation failed or timed out: {e}")
-            # Fallback: Create minimal placeholder lessons so pipeline can continue
+        except asyncio.TimeoutError:
+            logger.error(f"[{state.job_id}] Content generation timed out after 300s")
+            lessons = self._build_fallback_lessons(contexts)
+        except Exception as e:
+            logger.error(f"[{state.job_id}] Content generation failed: {e}")
             lessons = self._build_fallback_lessons(contexts)
         
         # Validate each lesson
@@ -611,11 +613,10 @@ class CourseGenerationPipeline(StreamingPipeline):
         
         # Check if QA score is acceptable
         if qa_report.overall_score < self.config.qa_min_score:
-            logger.warning(
-                f"QA score {qa_report.overall_score} below threshold "
-                f"{self.config.qa_min_score}"
+            raise PipelineError(
+                f"QA score {qa_report.overall_score} below required threshold "
+                f"{self.config.qa_min_score}. Issues: {qa_report.issues}"
             )
-            # Could trigger regeneration of specific parts here
         
         state.qa_report = qa_report
         state.step_results["qa_review"] = step_result
