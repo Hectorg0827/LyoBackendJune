@@ -66,12 +66,7 @@ jobs:
 
     - name: 🔧 Set up test environment
       run: |
-        cat << 'ENVEOF' > .env.test
-DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
-REDIS_URL=redis://localhost:6379
-ENVIRONMENT=test
-SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
-ENVEOF
+        printf "DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb\nREDIS_URL=redis://localhost:6379\nENVIRONMENT=test\nSECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long\n" > .env.test
 
     - name: 🗄️ Run database migrations
       run: |
