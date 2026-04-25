@@ -64,13 +64,7 @@ jobs:
     - name: Create test environment
       run: |
         mkdir -p uploads/avatars uploads/documents uploads/temp
-        cat << 'ENVEOF' > .env
-DATABASE_URL=postgresql+asyncpg://testuser:testpassword@localhost:5432/lyoapp_test
-REDIS_URL=redis://localhost:6379/0
-TESTING=true
-SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
-ENVIRONMENT=test
-ENVEOF
+        printf "DATABASE_URL=postgresql+asyncpg://testuser:testpassword@localhost:5432/lyoapp_test\nREDIS_URL=redis://localhost:6379/0\nTESTING=true\nSECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long\nENVIRONMENT=test\n" > .env
 
     - name: Run database migrations
       run: |
