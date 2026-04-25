@@ -68,3 +68,33 @@ async def get_progress_analytics(
             "recent_activity": [],
         },
     }
+
+
+@router.post("/users/me/subscription/sync")
+async def sync_subscription(
+    request: Any = None,
+    current_user: Any = Depends(get_current_user_or_guest),
+):
+    """
+    POST /api/v1/users/me/subscription/sync — iOS compatibility stub.
+    Fixes the 404 error reported by the iOS app when syncing subscription state.
+    """
+    return {
+        "status": "success",
+        "tier": "FREE",
+        "synced_at": "2026-04-09T00:00:00Z"
+    }
+
+
+@router.get("/users/me/subscription")
+async def get_subscription_status(
+    current_user: Any = Depends(get_current_user_or_guest),
+):
+    """
+    GET /api/v1/users/me/subscription — iOS compatibility stub.
+    """
+    return {
+        "tier": "FREE",
+        "is_premium": False,
+        "expires_at": None
+    }

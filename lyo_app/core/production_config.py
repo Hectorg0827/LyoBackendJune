@@ -56,13 +56,13 @@ class ProductionSettings(BaseSettings):
     INFLUXDB_URL: str = Field(default="http://localhost:8086", description="InfluxDB connection URL")
     
     # Database Configuration
-    DB_POOL_SIZE: int = 20
-    DB_MAX_OVERFLOW: int = 30
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 3600
     
     # Cache Configuration
-    REDIS_MAX_CONNECTIONS: int = 100
+    REDIS_MAX_CONNECTIONS: int = 10
     CACHE_DEFAULT_TTL: int = 300  # 5 minutes
     CACHE_MAX_MEMORY_MB: int = 1024  # 1GB
     
@@ -312,10 +312,10 @@ PRODUCTION_OVERRIDES = {
     "LOG_LEVEL": "INFO", 
     "RATE_LIMIT_ENABLED": True,
     "ENABLE_THREAT_DETECTION": True,
-    "WORKER_PROCESSES": 4,
-    "DB_POOL_SIZE": 50,
-    "DB_MAX_OVERFLOW": 100,
-    "REDIS_MAX_CONNECTIONS": 200
+    "WORKER_PROCESSES": 1,
+    "DB_POOL_SIZE": 5,
+    "DB_MAX_OVERFLOW": 5,
+    "REDIS_MAX_CONNECTIONS": 10
 }
 
 

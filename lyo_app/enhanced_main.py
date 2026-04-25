@@ -868,3 +868,4 @@ if __name__ == "__main__":  # pragma: no cover
         access_log=not settings.is_production(),
         reload=settings.is_development(),
         loop="uvloop" if not settings.is_development() else "auto",
+    )

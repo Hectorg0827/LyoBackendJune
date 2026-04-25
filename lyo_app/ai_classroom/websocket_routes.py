@@ -277,6 +277,7 @@ async def _send_welcome_scene(
 
     try:
         # Resolve topic from the ConversationManager session (if one exists)
+        # Also ensure a ConversationSession exists for lesson tracking
         topic = None
         course_id = None
         try:
@@ -286,8 +287,24 @@ async def _send_welcome_scene(
             if conv_session:
                 topic = conv_session.current_topic
                 course_id = conv_session.current_course_id
+            else:
+                # iOS sends courseId as session_id — create a session for it
+                from lyo_app.ai_classroom.conversation_flow import ConversationSession as ConvSession
+                conv_session = ConvSession(
+                    session_id=connection.session_id,
+                    user_id=connection.user_id,
+                    current_course_id=connection.session_id,
+                    current_lesson_index=0,
+                )
+                cm._sessions[connection.session_id] = conv_session
+                course_id = connection.session_id
+                logger.info(f"📚 Created ConversationSession for WS classroom: {connection.session_id}")
         except Exception as e:
             logger.warning(f"⚠️ Could not resolve topic from ConversationManager: {e}")
+
+        # iOS sends courseId as session_id, so always try it as course_id
+        if not course_id:
+            course_id = connection.session_id
 
         # Create welcome trigger with topic context
         welcome_trigger = Trigger(

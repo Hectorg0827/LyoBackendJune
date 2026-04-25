@@ -35,8 +35,8 @@ class Settings(BaseSettings):
         description="Database URL"
     )
     database_echo: bool = Field(default=False, description="Echo SQL queries")
-    connection_pool_size: int = Field(default=20, description="Database connection pool size")
-    max_overflow: int = Field(default=30, description="Database max overflow connections")
+    connection_pool_size: int = Field(default=5, description="Database connection pool size")
+    max_overflow: int = Field(default=5, description="Database max overflow connections")
     
     # Security settings
     secret_key: str = Field(
@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     # Dual AI System Configuration
     ai_brain_provider: str = Field(default="gemini", description="AI Brain provider for reasoning (gemini)")
     ai_conversation_provider: str = Field(default="openai", description="AI Conversation provider (openai)")
-    ai_hybrid_mode: bool = Field(default=True, description="Enable hybrid AI mode")
+    ai_hybrid_mode: bool = Field(default=False, description="Enable hybrid AI mode")
     
     # Google Cloud Configuration
     gcs_bucket: Optional[str] = Field(default=None, description="Google Cloud Storage bucket name")
@@ -166,6 +166,7 @@ class Settings(BaseSettings):
     r2_endpoint: Optional[str] = Field(default=None, description="Cloudflare R2 endpoint")
     r2_access_key: Optional[str] = Field(default=None, description="R2 Access Key")
     r2_secret_key: Optional[str] = Field(default=None, description="R2 Secret Key")
+    r2_bucket: Optional[str] = Field(default=None, description="R2 Bucket name")
     
     # Cloudflare CDN Configuration
     cloudflare_api_token: Optional[str] = Field(default=None, description="Cloudflare API token for CDN management")
@@ -173,8 +174,8 @@ class Settings(BaseSettings):
     cdn_base_url: Optional[str] = Field(default=None, description="CDN base URL for content delivery")
     
     # Database Optimization
-    database_pool_size: int = Field(default=20, description="Database connection pool size")
-    database_max_overflow: int = Field(default=30, description="Database max overflow connections")
+    database_pool_size: int = Field(default=5, description="Database connection pool size")
+    database_max_overflow: int = Field(default=5, description="Database max overflow connections")
     database_pool_timeout: int = Field(default=30, description="Database pool timeout")
     database_pool_recycle: int = Field(default=3600, description="Database pool recycle time")
     
@@ -201,8 +202,12 @@ class Settings(BaseSettings):
     api_burst_limit: int = Field(default=20, description="API burst limit")
     
     # Monitoring & Analytics
-    enable_performance_monitoring: bool = Field(default=True, description="Enable performance monitoring")
+    enable_performance_monitoring: bool = Field(default=False, description="Enable performance monitoring")
     enable_user_analytics: bool = Field(default=True, description="Enable user analytics")
+    enable_tracing: bool = Field(default=False, description="Enable distributed tracing")
+    enable_metrics: bool = Field(default=False, description="Enable metrics collection")
+    enable_firebase: bool = Field(default=False, description="Enable Firebase")
+    enable_vertex_ai: bool = Field(default=False, description="Enable Vertex AI")
     analytics_batch_size: int = Field(default=100, description="Analytics batch processing size")
     
     # Security Enhancement

@@ -550,14 +550,12 @@ class AIResilienceManager:
         ]
         is_complex = any(p in last_message.lower() for p in complex_patterns)
         
-        # Routing logic:
-        # - Short messages (<100 chars) + simple patterns -> flash (fastest)
-        # - Complex patterns or long context -> 3.1-pro (most capable)
-        # - Otherwise -> 2.5-flash (balanced)
-        if len(last_message) < 100 and (is_simple or max_tokens < 256):
-            return ["gpt-4o-mini", "gemini-2.5-flash"]
-        elif is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-3.1-pro-preview-customtools", "gpt-4o"]
+        # Routing logic per user request:
+        # 1. Try cheap Gemini Flash
+        # 2. If it fails, try GPT-4o-mini
+        # 3. Only use stronger model for long course generation / deep reasoning
+        if is_complex or total_chars > 2000 or max_tokens > 1500:
+            return ["gemini-3.1-pro-preview-customtools", "gpt-4o", "gemini-2.5-flash"]
         else:
             return ["gemini-2.5-flash", "gpt-4o-mini"]
 

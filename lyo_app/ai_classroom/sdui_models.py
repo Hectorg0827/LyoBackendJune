@@ -105,7 +105,7 @@ class TeacherMessage(ComponentBase):
     """Primary teaching content from Lio, the AI teacher"""
 
     type: Literal[ComponentType.TEACHER_MESSAGE] = ComponentType.TEACHER_MESSAGE
-    text: str = Field(..., min_length=1, max_length=2000)
+    text: str = Field(..., min_length=1, max_length=5000)
 
     # Personality & Voice
     emotion: Literal["neutral", "encouraging", "thinking", "excited", "concerned"] = "neutral"

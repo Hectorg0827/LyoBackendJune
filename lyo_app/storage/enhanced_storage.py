@@ -230,6 +230,34 @@ class VideoProcessor:
                     thumbnail_image.save(thumbnail_io, format='JPEG', quality=85)
                     metadata['thumbnail_data'] = thumbnail_io.getvalue()
             
+            # Generate a compressed preview video using ffmpeg
+            try:
+                import subprocess
+                import tempfile
+                
+                # Check if ffmpeg is available
+                subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+                with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as preview_file:
+                    preview_path = preview_file.name
+                    
+                # TikTok-style preview: 480p, 15fps, max 5 seconds, heavily compressed
+                cmd = [
+                    'ffmpeg', '-y', '-i', video_path, 
+                    '-vf', 'scale=-2:480', '-r', '15', 
+                    '-t', '5', '-c:v', 'libx264', '-crf', '30', 
+                    '-preset', 'ultrafast', '-an', preview_path
+                ]
+                
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+                with open(preview_path, 'rb') as f:
+                    metadata['preview_data'] = f.read()
+                    
+                os.unlink(preview_path)
+            except (subprocess.CalledProcessError, FileNotFoundError, Exception) as e:
+                logger.warning(f"Could not generate compressed preview video: {e}")
+            
             cap.release()
             
             return metadata
@@ -334,12 +362,12 @@ class EnhancedStorageSystem:
                 logger.info("AWS S3 client initialized")
             
             # Initialize Cloudflare R2
-            if BOTO3_AVAILABLE and settings.R2_ACCESS_KEY_ID and settings.R2_SECRET_ACCESS_KEY:
+            if BOTO3_AVAILABLE and settings.r2_access_key and settings.r2_secret_key:
                 self.r2_client = boto3.client(
                     's3',
-                    endpoint_url=settings.R2_ENDPOINT_URL,
-                    aws_access_key_id=settings.R2_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+                    endpoint_url=settings.r2_endpoint,
+                    aws_access_key_id=settings.r2_access_key,
+                    aws_secret_access_key=settings.r2_secret_key,
                     region_name='auto'
                 )
                 logger.info("Cloudflare R2 client initialized")
@@ -423,6 +451,14 @@ class EnhancedStorageSystem:
                             video_metadata['thumbnail_data'], thumbnail_path
                         )
                         result['urls']['thumbnail'] = self.cdn_manager.get_cdn_url(thumbnail_path)
+                        
+                    # Upload preview video if generated
+                    if 'preview_data' in video_metadata:
+                        preview_path = storage_path.replace(file_ext, '_preview.mp4')
+                        await self._upload_to_storage(
+                            video_metadata['preview_data'], preview_path, content_type='video/mp4'
+                        )
+                        result['urls']['preview'] = self.cdn_manager.get_cdn_url(preview_path)
                 
                 finally:
                     os.unlink(temp_path)
@@ -555,7 +591,7 @@ class EnhancedStorageSystem:
         """Upload to Cloudflare R2"""
         
         self.r2_client.put_object(
-            Bucket=settings.R2_BUCKET,
+            Bucket=settings.r2_bucket,
             Key=storage_path,
             Body=file_data,
             ContentType=content_type,
@@ -614,7 +650,7 @@ class EnhancedStorageSystem:
         # Delete from R2
         if self.r2_client:
             try:
-                self.r2_client.delete_object(Bucket=settings.R2_BUCKET, Key=storage_path)
+                self.r2_client.delete_object(Bucket=settings.r2_bucket, Key=storage_path)
             except Exception as e:
                 logger.warning(f"R2 deletion failed: {e}")
                 success = False

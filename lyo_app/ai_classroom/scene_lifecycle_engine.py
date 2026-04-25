@@ -25,6 +25,7 @@ from uuid import uuid4
 from lyo_app.ai_agents.multi_agent_v2.agents.tutor_agent import get_tutor_agent, UserContext as AgentUserContext
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select, func as sa_func, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.ai_classroom.sdui_models import (
@@ -173,6 +174,9 @@ class ContextSnapshot(BaseModel):
     course_id: Optional[str] = None
     course_title: Optional[str] = None
     lesson_index: int = 0
+    lesson_title: Optional[str] = None
+    lesson_content: Optional[str] = None
+    total_lessons: int = 0
 
     # Knowledge state
     knowledge_states: List[KnowledgeState] = Field(default_factory=list)
@@ -217,6 +221,13 @@ class ContextAssembler:
         # Resolve topic / course from ConversationManager session
         context.topic, context.course_id, context.course_title, context.lesson_index = \
             await self._resolve_topic(trigger)
+
+        # Resolve current lesson content from the DB
+        context.lesson_title, context.lesson_content, context.total_lessons = \
+            await self._resolve_current_lesson(context.course_id, context.lesson_index)
+        # If lesson gave us a more specific topic, use it
+        if context.lesson_title and not context.topic:
+            context.topic = context.lesson_title
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)
@@ -268,10 +279,14 @@ class ContextAssembler:
             except Exception as e:
                 logger.warning(f"⚠️ Could not look up ConversationSession: {e}")
 
-        # 3) If we have a course_id, query the Course DB for the title
+        # 3) If we still don't have a course_id, try using session_id as course_id
+        #    (iOS sends courseId as the WebSocket session_id)
+        if not course_id:
+            course_id = trigger.session_id
+
+        # 4) If we have a course_id, query the Course DB for the title
         if course_id and not course_title:
             try:
-                # course_id might be a UUID from chat, so catch ValueError
                 course_id_int = int(course_id)
                 from sqlalchemy import select
                 from lyo_app.learning.models import Course
@@ -283,68 +298,276 @@ class ContextAssembler:
                     course_title = row.title
                     topic = topic or row.topic
             except ValueError:
-                logger.debug(f"ℹ️ course_id '{course_id}' is not an int (likely a chat session UUID), skipping DB query")
+                # It's a UUID, so it might be a ChatCourse or GeneratedCourseModel
+                try:
+                    from lyo_app.chat.models import ChatCourse
+                    from sqlalchemy import select
+                    result = await self.db.execute(
+                        select(ChatCourse.title, ChatCourse.topic).where(ChatCourse.id == course_id)
+                    )
+                    row = result.first()
+                    if row:
+                        course_title = row.title
+                        topic = topic or row.topic
+                    else:
+                        # Try GeneratedCourseModel
+                        from lyo_app.ai_agents.multi_agent_v2.pipeline.job_queue import GeneratedCourseModel
+                        result = await self.db.execute(
+                            select(GeneratedCourseModel.title, GeneratedCourseModel.topic).where(GeneratedCourseModel.id == course_id)
+                        )
+                        row = result.first()
+                        if row:
+                            course_title = row.title
+                            topic = topic or row.topic
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not query UUID course models: {e}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not query Course: {e}")
 
         return topic, course_id, course_title, lesson_index
 
-    async def _get_knowledge_states(self, user_id: str) -> List[KnowledgeState]:
-        """Retrieve current mastery states for all concepts"""
-        # This would query your mastery_states table from the existing architecture
-        # For now, return mock data
-        return [
-            KnowledgeState(
-                concept_id="python_variables",
-                mastery_level=0.7,
-                confidence=0.8,
-                consecutive_correct=2,
-                total_attempts=5
+    async def _resolve_current_lesson(
+        self, course_id: Optional[str], lesson_index: int
+    ) -> tuple:
+        """Fetch the current lesson title, content, and total lessons for the course."""
+        lesson_title = None
+        lesson_content = None
+        total_lessons = 0
+
+        if not course_id:
+            return lesson_title, lesson_content, total_lessons
+
+        try:
+            course_id_int = int(course_id)
+            from lyo_app.learning.models import Lesson
+
+            # Get the current lesson by order_index
+            result = await self.db.execute(
+                select(Lesson.title, Lesson.content, Lesson.description, Lesson.topic)
+                .where(
+                    and_(
+                        Lesson.course_id == course_id_int,
+                        Lesson.order_index == lesson_index
+                    )
+                )
+                .limit(1)
             )
-        ]
+            row = result.first()
+            if row:
+                lesson_title = row.title
+                lesson_content = row.content or row.description or ""
+                logger.info(f"📖 Resolved lesson {lesson_index}: {lesson_title}")
+
+            # Get total lesson count
+            count_result = await self.db.execute(
+                select(sa_func.count(Lesson.id)).where(Lesson.course_id == course_id_int)
+            )
+            total_lessons = count_result.scalar() or 0
+            logger.info(f"📚 Course {course_id} has {total_lessons} lessons")
+
+        except ValueError:
+            # It's a UUID, try getting lesson from ChatCourse or GeneratedCourseModel
+            try:
+                from lyo_app.chat.models import ChatCourse
+                from sqlalchemy import select
+                result = await self.db.execute(
+                    select(ChatCourse.modules).where(ChatCourse.id == course_id)
+                )
+                row = result.first()
+                modules = []
+                if row and row.modules:
+                    modules = row.modules
+                else:
+                    from lyo_app.ai_agents.multi_agent_v2.pipeline.job_queue import GeneratedCourseModel
+                    result = await self.db.execute(
+                        select(GeneratedCourseModel.modules).where(GeneratedCourseModel.id == course_id)
+                    )
+                    row = result.first()
+                    if row and row.modules:
+                        modules = row.modules
+                
+                if modules:
+                    # Flatten lessons from modules to find the one matching lesson_index
+                    all_lessons = []
+                    for module in modules:
+                        module_lessons = module.get("lessons", [])
+                        all_lessons.extend(module_lessons)
+                    
+                    total_lessons = len(all_lessons)
+                    if 0 <= lesson_index < total_lessons:
+                        lesson = all_lessons[lesson_index]
+                        lesson_title = lesson.get("title")
+                        lesson_content = lesson.get("content") or lesson.get("description") or lesson.get("summary") or ""
+                        logger.info(f"📖 Resolved chat/gen lesson {lesson_index}: {lesson_title}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Could not query UUID course models for lesson: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not query Lesson: {e}")
+
+        return lesson_title, lesson_content, total_lessons
+
+    async def _get_knowledge_states(self, user_id: str) -> List[KnowledgeState]:
+        """Retrieve current mastery states from the mastery_states table"""
+        try:
+            from lyo_app.ai_classroom.models import MasteryState as MasteryStateDB
+            result = await self.db.execute(
+                select(MasteryStateDB).where(MasteryStateDB.user_id == user_id)
+            )
+            rows = result.scalars().all()
+            if rows:
+                return [
+                    KnowledgeState(
+                        concept_id=r.concept_id or r.objective_id or "unknown",
+                        mastery_level=r.mastery_score,
+                        confidence=r.confidence,
+                        consecutive_correct=r.correct_count,
+                        consecutive_incorrect=r.incorrect_count,
+                        total_attempts=r.attempts,
+                        last_attempt=r.last_seen,
+                    )
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.warning(f"⚠️ Could not query mastery states: {e}")
+        return []
 
     async def _calculate_frustration(self, trigger: Trigger) -> FrustrationMetrics:
         """Calculate user frustration based on recent interactions"""
-        # Analyze recent failed attempts, hint requests, time spent
         frustration = FrustrationMetrics()
 
+        # Check the current trigger for hint requests
         if trigger.trigger_type == TriggerType.USER_ACTION:
             action_data = trigger.action_data or {}
             if action_data.get("action_intent") == "request_hint":
                 frustration.consecutive_hints += 1
-                frustration.frustration_score = min(1.0, frustration.consecutive_hints * 0.2)
 
+        # Query recent interaction attempts for failure streaks
+        try:
+            from lyo_app.ai_classroom.models import InteractionAttempt
+            result = await self.db.execute(
+                select(InteractionAttempt.is_correct)
+                .where(InteractionAttempt.user_id == trigger.user_id)
+                .order_by(desc(InteractionAttempt.created_at))
+                .limit(10)
+            )
+            recent = [row[0] for row in result.all()]
+            # Count consecutive failures from most recent
+            for correct in recent:
+                if not correct:
+                    frustration.consecutive_failures += 1
+                else:
+                    break
+        except Exception as e:
+            logger.debug(f"ℹ️ Could not query interaction attempts for frustration: {e}")
+
+        # Compute frustration score: weight failures more than hints
+        frustration.frustration_score = min(
+            1.0,
+            frustration.consecutive_failures * 0.2 + frustration.consecutive_hints * 0.15
+        )
         return frustration
 
     async def _get_peer_states(self, session_id: str) -> List[PeerState]:
-        """Get state of AI peer students in this session"""
+        """Get state of AI peer students in this session.
+        AI peers are synthetic — no DB table. We keep a static configuration."""
         return [
             PeerState(
                 peer_name="Sam",
                 personality_trait="curious",
-                total_interventions=1
+                total_interventions=0
             )
         ]
 
     async def _get_session_duration(self, session_id: str) -> int:
-        """Calculate session duration in minutes"""
-        # Query session start time and calculate duration
-        return 15  # Mock
+        """Calculate session duration in minutes from ClassroomSession"""
+        try:
+            from lyo_app.classroom.models import ClassroomSession
+            result = await self.db.execute(
+                select(ClassroomSession.created_at)
+                .where(
+                    and_(
+                        ClassroomSession.is_active == True,
+                        ClassroomSession.id == int(session_id) if session_id.isdigit()
+                        else ClassroomSession.title == session_id,
+                    )
+                )
+                .limit(1)
+            )
+            row = result.first()
+            if row and row[0]:
+                delta = datetime.utcnow() - row[0]
+                return max(0, int(delta.total_seconds() / 60))
+        except Exception as e:
+            logger.debug(f"ℹ️ Could not query session duration: {e}")
+        return 0
 
     async def _count_completed_scenes(self, session_id: str) -> int:
-        """Count scenes completed in this session"""
-        # Query scene completion history
-        return 0  # Mock
+        """Count completed scene interactions in this session"""
+        try:
+            from lyo_app.classroom.models import ClassroomInteraction
+            sess_id = int(session_id) if session_id.isdigit() else None
+            if sess_id is not None:
+                result = await self.db.execute(
+                    select(sa_func.count(ClassroomInteraction.id))
+                    .where(ClassroomInteraction.session_id == sess_id)
+                )
+                count = result.scalar() or 0
+                return count
+        except Exception as e:
+            logger.debug(f"ℹ️ Could not count completed scenes: {e}")
+        return 0
 
     async def _calculate_engagement(self, user_id: str) -> float:
-        """Calculate user engagement based on behavior patterns"""
-        # Analyze response times, voluntary interactions, session frequency
-        return 0.75  # Mock
+        """Calculate user engagement from UserEngagementState table"""
+        try:
+            from lyo_app.ai_agents.models import UserEngagementState, UserEngagementStateEnum
+            # user_id may be str UUID; UserEngagementState uses int FK
+            uid = int(user_id) if user_id.isdigit() else None
+            if uid is not None:
+                result = await self.db.execute(
+                    select(UserEngagementState.state, UserEngagementState.sentiment_score)
+                    .where(UserEngagementState.user_id == uid)
+                )
+                row = result.first()
+                if row:
+                    state, sentiment = row
+                    # Map state to engagement multiplier
+                    state_scores = {
+                        UserEngagementStateEnum.ENGAGED: 0.9,
+                        UserEngagementStateEnum.CURIOUS: 0.85,
+                        UserEngagementStateEnum.CONFIDENT: 0.8,
+                        UserEngagementStateEnum.IDLE: 0.4,
+                        UserEngagementStateEnum.BORED: 0.3,
+                        UserEngagementStateEnum.STRUGGLING: 0.5,
+                        UserEngagementStateEnum.FRUSTRATED: 0.2,
+                    }
+                    base = state_scores.get(state, 0.5)
+                    # Blend with sentiment (-1..1 mapped to 0..1)
+                    sentiment_factor = (sentiment + 1.0) / 2.0 if sentiment is not None else 0.5
+                    return round(base * 0.7 + sentiment_factor * 0.3, 2)
+        except Exception as e:
+            logger.debug(f"ℹ️ Could not query engagement state: {e}")
+        return 0.5
 
     async def _calculate_learning_velocity(self, user_id: str) -> float:
-        """Calculate how quickly user is learning new concepts"""
-        # Analyze mastery progression over time
-        return 1.2  # Mock - above average velocity
+        """Calculate learning velocity from mastery trend data"""
+        try:
+            from lyo_app.ai_classroom.models import MasteryState as MasteryStateDB
+            result = await self.db.execute(
+                select(MasteryStateDB.trend)
+                .where(MasteryStateDB.user_id == user_id)
+            )
+            trends = [row[0] for row in result.all()]
+            if trends:
+                improving = sum(1 for t in trends if t == "improving")
+                declining = sum(1 for t in trends if t == "declining")
+                total = len(trends)
+                # velocity: 1.0 = average, >1 = fast learner, <1 = slower
+                return round(0.5 + (improving / total) - (declining / total * 0.5), 2)
+        except Exception as e:
+            logger.debug(f"ℹ️ Could not calculate learning velocity: {e}")
+        return 1.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -424,7 +647,27 @@ class ClassroomDirector:
         if trigger.trigger_type == TriggerType.USER_ACTION:
             action_intent = trigger.action_data.get("action_intent") if trigger.action_data else None
 
-            if action_intent == ActionIntent.REQUEST_HINT:
+            if action_intent == ActionIntent.CONTINUE:
+                # ── Lesson Progression ────────────────────────────────
+                # Every 3rd lesson → quiz to reinforce learning
+                if context.lesson_index > 0 and context.lesson_index % 3 == 0:
+                    return DirectorDecision(
+                        selected_scene_type=SceneType.CHALLENGE,
+                        reasoning=f"Quiz time after lesson {context.lesson_index}",
+                        confidence=0.85,
+                        suggested_components=[ComponentType.QUIZ_CARD],
+                        require_interaction=True,
+                        estimated_duration_seconds=45
+                    )
+                return DirectorDecision(
+                    selected_scene_type=SceneType.INSTRUCTION,
+                    reasoning=f"Continue to lesson {context.lesson_index}"
+                              + (f": {context.lesson_title}" if hasattr(context, 'lesson_title') and context.lesson_title else ""),
+                    confidence=0.8,
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON]
+                )
+
+            elif action_intent == ActionIntent.REQUEST_HINT:
                 # User is stuck - provide gentle guidance
                 return DirectorDecision(
                     selected_scene_type=SceneType.INSTRUCTION,
@@ -584,20 +827,26 @@ class SceneCompiler:
             topic = context.topic or "the next concept"
             instruction_text = f"Let's continue learning about {topic}. Are you ready?"
 
-        components.append(TeacherMessage(
-            text=instruction_text,
-            emotion="encouraging",
-            audio_mood=AudioMood.CALM,
-            concept_tags=[context.topic or "current_topic"],
-            priority=0
-        ))
+        paragraphs = [p.strip() for p in instruction_text.split('\n\n') if p.strip()]
+        
+        for idx, paragraph in enumerate(paragraphs):
+            delay = min(idx * 1500, 4900)  # Cap delay to 4900ms
+            components.append(TeacherMessage(
+                text=paragraph,
+                emotion="encouraging",
+                audio_mood=AudioMood.CALM,
+                concept_tags=[context.topic or "current_topic"],
+                priority=idx,
+                delay_ms=delay
+            ))
 
         # Continue button
         components.append(CTAButton(
             label="Continue",
             action_intent=ActionIntent.CONTINUE,
             button_style="primary",
-            priority=1
+            priority=len(paragraphs),
+            delay_ms=min(len(paragraphs) * 1500, 5000)
         ))
 
         return components
@@ -675,18 +924,45 @@ class SceneCompiler:
 
             topic = context.topic or "general learning"
             course_label = f" in the course '{context.course_title}'" if context.course_title else ""
-            progress_note = (
-                f" The learner has completed {context.scenes_completed} scenes so far"
-                f" and is at lesson index {context.lesson_index}."
-                if context.scenes_completed > 0 else ""
+
+            logger.info(
+                f"📝 Generating instruction: lesson_title={context.lesson_title!r}, "
+                f"lesson_index={context.lesson_index}, total={context.total_lessons}, "
+                f"topic={context.topic!r}, course={context.course_title!r}"
             )
 
             # Build a contextual prompt for the tutor
-            prompt = (
-                f"You are teaching a student about {topic}{course_label}.{progress_note} "
-                f"Provide a clear, engaging explanation of the next concept they should learn. "
-                f"Keep it concise (2-3 paragraphs max) and end with a thought-provoking question."
-            )
+            # If we have lesson-specific data, use it for a focused lesson
+            if context.lesson_title:
+                prompt = (
+                    f"You are Lyo, an expert AI tutor{course_label}. "
+                    f"You are now teaching Lesson {context.lesson_index + 1} of {context.total_lessons}: "
+                    f"'{context.lesson_title}'.\n\n"
+                )
+                if context.lesson_content:
+                    # Include lesson source material (truncated for prompt size)
+                    prompt += (
+                        f"Use this source material as a guide for your explanation:\n"
+                        f"{context.lesson_content[:2000]}\n\n"
+                    )
+                prompt += (
+                    f"Explain this lesson clearly and engagingly in 2-3 paragraphs. "
+                    f"Use examples, analogies, or real-world applications. "
+                    f"End with a thought-provoking question to check understanding. "
+                    f"IMPORTANT: Do NOT introduce yourself or say hello. Start directly with the lesson content."
+                )
+            else:
+                # Fallback to generic prompt when no lesson data
+                progress_note = (
+                    f" The learner has completed {context.scenes_completed} scenes so far."
+                    if context.scenes_completed > 0 else ""
+                )
+                prompt = (
+                    f"You are Lyo, an expert AI tutor teaching about {topic}{course_label}.{progress_note} "
+                    f"Provide a clear, engaging explanation of the next concept they should learn. "
+                    f"Keep it concise (2-3 paragraphs max) and end with a thought-provoking question. "
+                    f"Do NOT introduce yourself. Start directly with the teaching content."
+                )
 
             # Map classroom context to TutorAgent's UserContext
             agent_context = AgentUserContext(
@@ -706,7 +982,11 @@ class SceneCompiler:
                 context=agent_context,
             )
 
-            return response.message
+            # Truncate to stay within TeacherMessage max_length (5000)
+            text = response.message
+            if len(text) > 4800:
+                text = text[:4800] + "..."
+            return text
 
         except Exception as e:
             logger.error(f"❌ TutorAgent instruction generation failed: {e}")
@@ -812,6 +1092,7 @@ class SceneLifecycleEngine:
         # State tracking
         self.active_scenes: Dict[str, Scene] = {}
         self.session_contexts: Dict[str, ContextSnapshot] = {}
+        self.session_lesson_indices: Dict[str, int] = {}  # session_id → current lesson_index
 
         # Register default handlers
         self._register_handlers()
@@ -838,6 +1119,16 @@ class SceneLifecycleEngine:
 
             # PHASE 2: Context Assembly (Think)
             context = await self.context_assembler.assemble_context(trigger)
+            # Inject cached lesson_index from previous CONTINUE advances
+            if trigger.session_id in self.session_lesson_indices:
+                context.lesson_index = self.session_lesson_indices[trigger.session_id]
+                # Re-resolve lesson data with updated index
+                context.lesson_title, context.lesson_content, context.total_lessons = \
+                    await self.context_assembler._resolve_current_lesson(
+                        context.course_id, context.lesson_index
+                    )
+                if context.lesson_title and not context.topic:
+                    context.topic = context.lesson_title
             self.session_contexts[trigger.session_id] = context
             logger.debug(f"Phase 2 (Context): {len(context.knowledge_states)} concepts analyzed")
 
@@ -853,6 +1144,28 @@ class SceneLifecycleEngine:
             # Stream to client
             if self.websocket_manager:
                 await self._stream_scene_to_client(scene, trigger.session_id)
+
+            # ── Lesson Progression: advance lesson_index on CONTINUE (skip quizzes) ──
+            if trigger.trigger_type == TriggerType.USER_ACTION:
+                action_intent = (trigger.action_data or {}).get("action_intent")
+                if action_intent == ActionIntent.CONTINUE and scene.scene_type != SceneType.CHALLENGE:
+                    old_idx = self.session_lesson_indices.get(trigger.session_id, 0)
+                    new_idx = old_idx + 1
+                    # Wrap around if we've passed the last lesson
+                    if context.total_lessons > 0 and new_idx >= context.total_lessons:
+                        new_idx = 0  # restart or could stop
+                        logger.info(f"📚 Course completed! Wrapping to lesson 0")
+                    self.session_lesson_indices[trigger.session_id] = new_idx
+                    logger.info(f"📖 Advanced lesson index: {old_idx} → {new_idx}")
+                    # Also update ConversationSession if it exists
+                    try:
+                        from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
+                        cm = get_conversation_manager()
+                        conv_session = cm.get_session(trigger.session_id)
+                        if conv_session:
+                            conv_session.current_lesson_index = new_idx
+                    except Exception:
+                        pass
 
             total_time = (time.time() - start_time) * 1000
             logger.info(f"✅ LIFECYCLE COMPLETE: {scene.scene_id} in {total_time:.0f}ms")
@@ -936,10 +1249,38 @@ class SceneLifecycleEngine:
         is_correct: bool,
         response_time_ms: int
     ) -> Scene:
-        """Public API: Handle quiz answer submission"""
+        """Public API: Handle quiz answer submission with server-side validation"""
+
+        # ── Server-side correctness check ────────────────────────────
+
+        # Look up the active QuizCard scene to validate the answer.
+        # The client-supplied `is_correct` is treated as a hint only;
+        # the authoritative answer lives in the scene's QuizCard options.
+        validated_correct = is_correct  # fallback to client value
+        active_scene = self.active_scenes.get(
+            next(
+                (sid for sid, s in self.active_scenes.items()
+                 if any(c.component_id == quiz_component_id for c in s.components)),
+                None
+            )
+        ) if self.active_scenes else None
+
+        if active_scene:
+            for comp in active_scene.components:
+                if comp.component_id == quiz_component_id and hasattr(comp, 'options'):
+                    for opt in comp.options:
+                        if opt.id == selected_option_id:
+                            validated_correct = opt.is_correct
+                            if validated_correct != is_correct:
+                                logger.warning(
+                                    f"⚠️ Quiz validation mismatch: client said "
+                                    f"is_correct={is_correct}, server says {validated_correct}"
+                                )
+                            break
+                    break
 
         # Determine frustration based on correctness and time
-        urgency = 7 if not is_correct else 3
+        urgency = 7 if not validated_correct else 3
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
@@ -949,7 +1290,7 @@ class SceneLifecycleEngine:
                 "action_intent": ActionIntent.SUBMIT_ANSWER,
                 "answer_data": {
                     "selected_option_id": selected_option_id,
-                    "is_correct": is_correct,
+                    "is_correct": validated_correct,
                     "response_time_ms": response_time_ms
                 }
             },

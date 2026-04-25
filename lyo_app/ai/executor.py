@@ -1,6 +1,7 @@
 import logging
 import json
 import uuid
+import asyncio
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType

@@ -124,18 +124,27 @@ class CourseOutlineResponse(BaseModel):
     status: str
 
 
+class LessonQuiz(BaseModel):
+    question: str
+    options: List[str]
+    correct_index: int
+    explanation: Optional[str] = None
+
+
 class CourseLesson(BaseModel):
     id: str
     title: str
     content: Optional[str] = None
     duration_minutes: int
-    order: int
+    order: Optional[int] = None
+    quiz: Optional[LessonQuiz] = None
 
 
 class CourseModule(BaseModel):
     id: str
     title: str
     description: str
+    hook: Optional[str] = None
     lessons: List[CourseLesson]
 
 
@@ -844,59 +853,80 @@ def _build_fallback_module(module_outline: Dict[str, Any], topic: str, user_cont
         "id": module_id,
         "title": module_title,
         "description": module_outline.get("description", f"Learn about {module_title}"),
+        "hook": f"Let's dive into {module_title} — one of the most important building blocks in {topic}.",
         "is_fallback": True,
         "lessons": [
             {
                 "id": f"{module_id}_les_1",
-                "title": f"Introduction to {module_title}",
-                "content": f"""## {module_title}
+                "title": f"Understanding {module_title}",
+                "content": f"""## What is {module_title}?
 
-Welcome to this section on **{module_title}**. This is an essential part of your {topic} journey.
+{module_title} is a core concept in {topic} that you'll use constantly in practice.
 
-### What You'll Learn
+### Why It Matters
 
-Understanding {module_title} is crucial because it forms the foundation for more advanced concepts.
+Understanding {module_title} unlocks your ability to work with more advanced {topic} concepts. Think of it as the foundation — without it, everything built on top becomes shaky.
 
-### Key Points
+> **Key insight:** The best way to learn {module_title} is to see it in action, not just read about it.
 
-1. **Foundation**: Every journey in {topic} starts with understanding the basics. {module_title} provides the groundwork you need.
+### Core Ideas
 
-2. **Application**: Theory becomes powerful when applied. We'll explore how {module_title} works in real-world situations.
+1. **The Basics** — {module_title} starts with a simple principle that applies broadly across {topic}
+2. **Real-World Application** — You'll encounter {module_title} in almost every practical {topic} scenario
+3. **Building Blocks** — Each part of {module_title} connects to the next, creating a coherent understanding
 
-3. **Connection**: No concept exists in isolation. See how {module_title} connects to the broader landscape of {topic}.
+### Key Takeaway
 
-### Summary
-
-{module_title} is a crucial stepping stone in your {topic} journey. Take time to absorb these concepts before moving forward.
+- {module_title} is foundational to {topic}
+- Focus on understanding the *why*, not just the *what*
+- Practice with small examples before tackling complex ones
 """,
                 "duration_minutes": 15,
-                "order": 1
+                "order": 1,
+                "quiz": {
+                    "question": f"What is the primary purpose of understanding {module_title} in {topic}?",
+                    "options": [
+                        f"It provides the foundation for more advanced {topic} concepts",
+                        f"It is only useful for theoretical knowledge",
+                        f"It replaces the need to learn other {topic} topics",
+                        f"It is an optional nice-to-have skill"
+                    ],
+                    "correct_index": 0,
+                    "explanation": f"{module_title} is foundational — it enables you to understand and apply more complex {topic} concepts effectively."
+                }
             },
             {
                 "id": f"{module_id}_les_2",
-                "title": f"Applying {module_title}",
-                "content": f"""## Practical Application of {module_title}
+                "title": f"Applying {module_title} in Practice",
+                "content": f"""## Putting {module_title} to Work
 
-Now that you understand the basics, let's see how to apply {module_title} in practice.
+Theory is great, but {module_title} really clicks when you see it in action.
 
-### Real-World Examples
+### From Concept to Practice
 
-Consider how {module_title} impacts everyday situations:
+The gap between understanding {module_title} and applying it confidently is smaller than you think. Here's a practical approach:
 
-- **Example 1**: Understanding how this concept works in professional settings
-- **Example 2**: Seeing the patterns and principles in action
-- **Example 3**: Recognizing opportunities to apply your knowledge
+1. **Start simple** — Pick the most basic example of {module_title} and work through it completely
+2. **Add complexity gradually** — Once the basics feel natural, introduce one new element at a time
+3. **Connect the dots** — Notice how {module_title} relates to other {topic} concepts you've learned
 
-### Practice Exercise
+> **Pro tip:** When you get stuck, go back to the simplest version that works and build up from there.
 
-Try to identify examples of {module_title} in your own experience. This will help reinforce your learning and make the concepts more memorable.
+### Common Mistakes to Avoid
 
-### Next Steps
+- Trying to learn everything about {module_title} at once instead of building incrementally
+- Skipping practice and jumping to advanced topics too early
+- Not connecting {module_title} to real problems you want to solve
 
-Once you're comfortable with these basics, you'll be ready to explore more advanced topics in {topic}.
+### Key Takeaway
+
+- {module_title} is best learned by doing, not just reading
+- Start with the simplest case and build up
+- Mistakes are part of learning — each one teaches you something
 """,
                 "duration_minutes": 20,
-                "order": 2
+                "order": 2,
+                "quiz": None
             }
         ]
     }
@@ -1228,17 +1258,29 @@ async def _generate_module_content(
     module_description = module_outline.get("description")
 
     system_prompt = (
-        "You are an expert course module writer for an educational app. "
+        "You are an expert course module writer for the Lyo learning app. "
         "Use the provided outline as a strict contract. "
         "Return ONLY valid JSON with this schema:\n"
-        "{\"id\": string, \"title\": string, \"description\": string, \"lessons\": ["
-        "{\"id\": string, \"title\": string, \"content\": string, \"duration_minutes\": int}]}\n"
+        "{\"id\": string, \"title\": string, \"description\": string, \"hook\": string, \"lessons\": ["
+        "{\"id\": string, \"title\": string, \"content\": string, \"duration_minutes\": int, \"quiz\": {\"question\": string, \"options\": [string, string, string, string], \"correct_index\": int, \"explanation\": string} | null}]}\n"
         "Rules:\n"
         "- Keep lesson count between 3 and 6.\n"
-        "- Each lesson MUST have rich, educational content (at least 3 paragraphs with examples, explanations, and key takeaways).\n"
-        "- Use markdown formatting (headers, bold, bullet points) in lesson content.\n"
-        "- Include real examples, analogies, and practical applications specific to the topic.\n"
-        "- Do NOT use generic filler text. Every sentence must teach something specific about the topic.\n"
+        "- The \"hook\" field is a 1-2 sentence engaging intro for this module. "
+        "It must be specific to the topic (e.g. 'Ever wondered how Python knows 3 + 3 is 6 but \"hello\" + \"world\" is \"helloworld\"? That magic is called type inference.'). "
+        "NEVER use generic phrases like 'Welcome to this module' or 'In this section you will learn'.\n"
+        "- Structure each lesson's \"content\" using clear markdown:\n"
+        "  * Start with a ## heading for the main concept\n"
+        "  * Use ### subheadings to break into digestible sections (max 2-3 paragraphs per section)\n"
+        "  * Use **bold** for key terms on first introduction\n"
+        "  * Include at least one concrete example with > blockquote for callouts\n"
+        "  * Use numbered lists for step-by-step processes\n"
+        "  * Use ```language code blocks for programming topics\n"
+        "  * End each lesson with a ### Key Takeaway section (2-3 bullet points)\n"
+        "- Each lesson may include a \"quiz\" object to check understanding. "
+        "Include a quiz for at least half the lessons. The quiz should test the specific concept taught, not general knowledge. "
+        "Options must be plausible — no joke answers.\n"
+        "- Do NOT use generic filler text. Every sentence must teach something specific.\n"
+        "- Write as if explaining to a smart friend, not a textbook — use analogies and real examples.\n"
         "- Do NOT invent new modules. Use the provided module id and title."
     )
 
