@@ -70,17 +70,19 @@ jobs:
 
     - name: 🗄️ Run database migrations
       run: |
+        export PYTHONPATH=.
         export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
         export SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
         python setup_database.py
 
     - name: 🧪 Run tests with coverage
       run: |
+        export PYTHONPATH=.
         export ENVIRONMENT=test
         export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
         export REDIS_URL=redis://localhost:6379
         export SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
-        pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
+        python -m pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
 
     - name: 📊 Upload coverage to Codecov
       uses: codecov/codecov-action@v4

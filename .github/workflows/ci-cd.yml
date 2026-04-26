@@ -68,21 +68,24 @@ jobs:
 
     - name: Run database migrations
       run: |
+        export PYTHONPATH=.
         alembic upgrade head
 
     - name: Run linting
       run: |
-        flake8 lyo_app --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 lyo_app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        python -m flake8 lyo_app --count --select=E9,F63,F7,F82 --show-source --statistics
+        python -m flake8 lyo_app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
     - name: Run type checking
       run: |
         pip install mypy
-        mypy lyo_app --ignore-missing-imports || true
+        export PYTHONPATH=.
+        python -m mypy lyo_app --ignore-missing-imports || true
 
     - name: Run tests with coverage
       run: |
-        pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
+        export PYTHONPATH=.
+        python -m pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
         
     - name: Upload coverage reports
       uses: codecov/codecov-action@v4
