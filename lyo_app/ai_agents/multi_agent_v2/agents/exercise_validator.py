@@ -92,7 +92,7 @@ class ExerciseValidator:
             try:
                 genai.configure(api_key=api_key)
                 self.model = genai.GenerativeModel(
-                    "gemini-3.1-pro-preview-customtools",
+                    "gemini-2.5-flash",
                     generation_config={
                         "temperature": 0.3,
                         "max_output_tokens": 1024,

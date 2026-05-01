@@ -659,7 +659,7 @@ class ModernCloudLLMClient:
                  openai_api_key: Optional[str] = None,
                  anthropic_api_key: Optional[str] = None,
                  google_api_key: Optional[str] = None,
-                 default_model: str = "gemini-3.1-pro-preview-customtools"):
+                 default_model: str = "gemini-2.5-flash"):
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
         self.google_api_key = google_api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -673,7 +673,7 @@ class ModernCloudLLMClient:
         if self.google_api_key:
             import google.generativeai as genai
             genai.configure(api_key=self.google_api_key)
-            self.gemini_model = genai.GenerativeModel('gemini-3.1-pro-preview-customtools')
+            self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
         else:
             self.gemini_model = None
         
@@ -732,7 +732,7 @@ class ModernCloudLLMClient:
     def _select_model(self, preference: Optional[ModelType]) -> Tuple[ModelType, str]:
         """Select appropriate model based on preference and availability."""
         if preference == ModelType.GEMINI_1_5_FLASH and self.google_api_key:
-            return ModelType.GEMINI_1_5_FLASH, "gemini-3.1-pro-preview-customtools"
+            return ModelType.GEMINI_1_5_FLASH, "gemini-2.5-flash"
         elif preference == ModelType.GPT_4_TURBO and self.openai_api_key:
             return ModelType.GPT_4_TURBO, "gpt-4-turbo"
         elif preference == ModelType.GPT_4_MINI and self.openai_api_key:
@@ -742,7 +742,7 @@ class ModernCloudLLMClient:
         
         # Defaults
         if self.google_api_key:
-            return ModelType.GEMINI_1_5_FLASH, "gemini-3.1-pro-preview-customtools"
+            return ModelType.GEMINI_1_5_FLASH, "gemini-2.5-flash"
         elif self.openai_api_key:
             return ModelType.GPT_4_MINI, "gpt-4o-mini"
         elif self.anthropic_api_key:
@@ -786,7 +786,7 @@ class ModernCloudLLMClient:
             tokens_used=int(tokens_used),
             cost_estimate=cost_estimate,
             confidence_score=0.95,
-            model_version="gemini-3.1-pro-preview-customtools",
+            model_version="gemini-2.5-flash",
             language_detected=LanguageCode.ENGLISH
         )
 

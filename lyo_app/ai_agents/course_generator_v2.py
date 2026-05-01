@@ -83,7 +83,7 @@ class CourseGeneratorV2:
         # In prod, use structured output mode
         response = await ai_resilience_manager.chat_completion(
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini"]
+            provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
         )
         
         # Allow AI to do the work, but for this "executable plan" I'll enforce the schema parsing

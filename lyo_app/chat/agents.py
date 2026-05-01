@@ -74,7 +74,7 @@ class BaseAgent(ABC):
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                provider_order=provider_order or ["gemini-3.1-pro-preview-customtools", "gpt-4o-mini", "gemini-3.1-pro-preview-customtools"]
+                provider_order=provider_order or ["gemini-2.5-flash", "gpt-4o-mini"]
             )
             
             latency_ms = int((time.time() - start_time) * 1000)

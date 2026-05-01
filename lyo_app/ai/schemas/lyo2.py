@@ -157,7 +157,7 @@ class LyoPlan(BaseModel):
     artifacts_to_create: List[ArtifactType] = Field(default_factory=list)
     safety_constraints: List[str] = Field(default_factory=list)
     grounding_required: bool = True
-    suggested_model: str = "gemini-3.1-pro-preview-customtools"
+    suggested_model: str = "gemini-2.5-flash"
 
 
 # --- Layer C: Executor / UI Block Schemas ---

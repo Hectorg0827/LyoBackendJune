@@ -129,7 +129,7 @@ but do not be creepy or over-specific. Just a gentle nod to their journey.
             ],
             temperature=0.7,
             max_tokens=100,
-            provider_order=["gemini-3.1-pro-preview-customtools", "gpt-4o-mini", "gemini-3.1-pro-preview-customtools"] # Prefer fast model
+            provider_order=["gemini-2.5-flash", "gpt-4o-mini"] # Prefer fast model
         )
         greeting_text = response.get("content", "Welcome back! Ready to learn something new?")
     except Exception as e:

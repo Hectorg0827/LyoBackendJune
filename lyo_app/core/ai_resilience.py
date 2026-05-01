@@ -147,6 +147,34 @@ class AIResilienceManager:
 
             if openai_key:
                 self.openai_client = AsyncOpenAI(api_key=openai_key)
+            
+            # VALIDATE that API keys are NOT placeholder keys
+            def is_valid_key(key: str) -> bool:
+                """Check if key looks like a valid API key (not a placeholder)"""
+                if not key:
+                    return False
+                # Placeholder patterns to reject
+                placeholders = [
+                    'YOUR-',
+                    'YOUR_',
+                    'REPLACE_',
+                    'your-',
+                    'your_',
+                    'replace_',
+                    'XXX',
+                    'xxx',
+                    'test',
+                    'demo',
+                    'placeholder',
+                ]
+                key_lower = key.lower()
+                if any(p in key_lower for p in placeholders):
+                    print(f"    ⚠️  REJECTED API key looks like a placeholder", flush=True)
+                    return False
+                return len(key) > 10  # Real keys are usually longer
+                
+            gemini_key = gemini_key if is_valid_key(gemini_key) else ""
+            openai_key = openai_key if is_valid_key(openai_key) else ""
                 
             self.models = {
                 "gemini-2.5-flash": AIModelConfig(
@@ -165,9 +193,9 @@ class AIResilienceManager:
                     priority=1,
                     capabilities=["chat", "fast", "conversational"],
                 ),
-                "gemini-3.1-pro-preview-customtools": AIModelConfig(
-                    name="Google Gemini 3.1 Pro",
-                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview-customtools:generateContent",
+                "gemini-2.5-pro": AIModelConfig(
+                    name="Google Gemini 2.5 Pro",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
                     api_key=gemini_key,
                     max_tokens=8000,
                     priority=2,
@@ -182,7 +210,7 @@ class AIResilienceManager:
                     capabilities=["chat", "complex"],
                 )
             }
-            print(f">>> [PID {os.getpid()}] AI Resilience Init: Configured {len(self.models)} models (OpenAI: {bool(openai_key)})", flush=True)
+            print(f">>> [PID {os.getpid()}] AI Resilience Init: Configured {len(self.models)} models (Gemini: {bool(gemini_key)}, OpenAI: {bool(openai_key)})", flush=True)
 
             for model_name in self.models:
                 self.circuit_breakers[model_name] = CircuitBreaker(
@@ -317,6 +345,7 @@ class AIResilienceManager:
             cache_key = f"chat:{hash(message_str)}"
             cached = self._get_from_cache(cache_key)
             if cached:
+                print(f">>> [PID {os.getpid()}] AI Resilience: Using cached response", flush=True)
                 return cached
         
         # Intelligent model routing based on message complexity
@@ -330,20 +359,34 @@ class AIResilienceManager:
         ]
         
         print(f">>> [PID {os.getpid()}] chat_completion: available_models_with_configs count={len(available_models_with_configs)}", flush=True)
+        
+        # Log API key availability for debugging
+        for name in provider_order:
+            if name in self.models:
+                model = self.models[name]
+                has_key = bool(model.api_key)
+                print(f">>> [PID {os.getpid()}]   Model '{name}': API key present={has_key}, endpoint={model.endpoint}", flush=True)
 
         if not available_models_with_configs:
             error_msg = "No AI models available."
             logger.error(error_msg)
+            print(f">>> [PID {os.getpid()}] ❌ ERROR: No models available. Returning fallback.", flush=True)
             raise Exception(error_msg)
         
         last_exception = None
         for model_name, model in available_models_with_configs:
             cb = self.circuit_breakers[model_name]
+            print(f">>> [PID {os.getpid()}] Trying model '{model_name}', circuit_breaker.is_closed={cb.is_closed}", flush=True)
+            
             if not cb.is_closed:
+                print(f">>> [PID {os.getpid()}]   ⏸️ Circuit breaker OPEN for {model_name}, skipping", flush=True)
                 continue
             try:
+                print(f">>> [PID {os.getpid()}]   🔄 Attempting {model_name}...", flush=True)
                 if model.endpoint == "openai":
-                    if not self.openai_client: continue
+                    if not self.openai_client:
+                        print(f">>> [PID {os.getpid()}]   ❌ OpenAI client missing for {model_name}", flush=True)
+                        continue
 
                     async def _openai_call():
                         return await self.openai_client.chat.completions.create(
@@ -361,21 +404,23 @@ class AIResilienceManager:
                         "response_time": 0,
                         "timestamp": time.time(),
                     }
+                    print(f">>> [PID {os.getpid()}]   ✅ OpenAI {model_name} SUCCESS", flush=True)
                 else:
                     result = await self._call_model_with_messages(
                         model_name, model, messages, temperature, max_tokens
                     )
+                    print(f">>> [PID {os.getpid()}]   ✅ Gemini {model_name} SUCCESS", flush=True)
                 
                 if use_cache:
                     self._add_to_cache(cache_key, result)
                 return result
             except Exception as e:
-                print(f">>> [PID {os.getpid()}] Error calling {model_name}: {e}", flush=True)
+                print(f">>> [PID {os.getpid()}]   ❌ Error calling {model_name}: {type(e).__name__}: {str(e)[:100]}", flush=True)
                 logger.error(f"Error calling {model_name}: {e}")
                 last_exception = e
                 continue
         
-        print(f">>> [PID {os.getpid()}] All providers failed for '{message_str}'. Returning fallback.", flush=True)
+        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED for '{message_str}'. Returning fallback.", flush=True)
         return self._get_fallback_response(message_str, str(last_exception))
 
     async def _call_model_with_messages(
@@ -555,7 +600,7 @@ class AIResilienceManager:
         # 2. If it fails, try GPT-4o-mini
         # 3. Only use stronger model for long course generation / deep reasoning
         if is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-3.1-pro-preview-customtools", "gpt-4o", "gemini-2.5-flash"]
+            return ["gemini-2.5-pro", "gpt-4o", "gemini-2.5-flash"]
         else:
             return ["gemini-2.5-flash", "gpt-4o-mini"]
 
@@ -584,6 +629,9 @@ class AIResilienceManager:
             del self.request_cache[oldest]
 
     def _get_fallback_response(self, message: str, error: str) -> Dict[str, Any]:
+        """Generate fallback response when ALL AI providers fail."""
+        logger.error(f"🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}")
+        print(f">>> [PID {os.getpid()}] 🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}", flush=True)
         return {
             "content": random.choice(
                 [

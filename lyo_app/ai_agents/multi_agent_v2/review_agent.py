@@ -37,7 +37,7 @@ class WeeklyReviewAgent(A2ABaseAgent[WeeklyReviewAgentResponse]):
             description="Executive OS coach that analyzes Goal Trajectories and Event History.",
             output_schema=WeeklyReviewAgentResponse,
             capabilities=[AgentCapability.TUTORING],
-            model_name="gemini-3.1-pro-preview-customtools", # Can be overridden by AI Orchestrator
+            model_name="gemini-2.5-flash", # Can be overridden by AI Orchestrator
             temperature=0.7
         )
     

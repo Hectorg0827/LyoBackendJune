@@ -18,7 +18,7 @@ class LyoPlanner(BaseAgent[LyoPlan]):
         super().__init__(
             name="lyo_planner",
             output_schema=LyoPlan,
-            model_name="gemini-3.1-pro-preview-customtools",  # Fast and capable model for planning
+            model_name="gemini-2.5-pro",  # Pro model for planning/reasoning
             temperature=0.2,
             max_tokens=2048
         )

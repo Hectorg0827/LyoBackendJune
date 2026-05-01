@@ -75,7 +75,7 @@ class ModelManager:
     # Model configurations
     MODELS = {
         ModelTier.PREMIUM: ModelConfig(
-            model_name="gemini-3.1-pro-preview-customtools",
+            model_name="gemini-2.5-flash",
             temperature=0.7,
             max_tokens=16384,
             description="Gemini 2.0 Pro - Best for complex reasoning",
