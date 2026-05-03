@@ -52,6 +52,11 @@ opencv-python-headless==4.8.1.78
 imageio==2.34.0
 moviepy==1.0.3
 boto3>=1.28.0
+aiofiles==23.2.1
+python-magic==0.4.27
+
+# Async Redis client (legacy module name; some routes still import `aioredis`)
+aioredis==2.0.1
 
 # Observability, Tracing, Analytics
 prometheus-client==0.19.0

@@ -3,6 +3,7 @@ Database configuration and session management using SQLAlchemy async.
 Provides database engine, session factory, and base model class.
 """
 
+import asyncio
 import logging
 import os
 import time

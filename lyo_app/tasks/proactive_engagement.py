@@ -31,13 +31,21 @@ DATABASE_URL = getattr(settings, "database_url", "sqlite+aiosqlite:///./lyo_app_
 
 if "sqlite" in DATABASE_URL:
     SYNC_DATABASE_URL = DATABASE_URL.replace("+aiosqlite", "")
+    ASYNC_DATABASE_URL = DATABASE_URL
 else:
+    # Hosted Postgres (e.g. Railway) hands us "postgresql://..." which works for psycopg2 (sync)
+    # but the async engine needs the asyncpg driver explicitly.
     SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("postgresql://", "postgresql+psycopg2://")
+    if DATABASE_URL.startswith("postgresql://"):
+        ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif "+psycopg2" in DATABASE_URL:
+        ASYNC_DATABASE_URL = DATABASE_URL.replace("+psycopg2", "+asyncpg")
+    else:
+        ASYNC_DATABASE_URL = DATABASE_URL
 
 sync_engine = create_engine(SYNC_DATABASE_URL)
 SyncSessionLocal = sessionmaker(bind=sync_engine)
 
-ASYNC_DATABASE_URL = DATABASE_URL
 async_engine = create_async_engine(ASYNC_DATABASE_URL)
 AsyncSessionLocal = async_sessionmaker(bind=async_engine, class_=AsyncSession, expire_on_commit=False)
 

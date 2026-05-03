@@ -127,7 +127,7 @@ export const useLivingClassroomClient = (userToken: string, sessionId?: string) 
 
     setConnectionState('connecting');
 
-    const baseURL = 'wss://api.lyo.ai'; // Replace with your backend URL
+    const baseURL = 'wss://lyo-production.up.railway.app';
     const wsURL = `${baseURL}/api/v1/classroom/ws/connect`;
 
     try {

@@ -5,6 +5,22 @@ import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, List, Optional, Any, Callable
 
+# LOAD ENVIRONMENT VARIABLES FROM .env FIRST (before any other imports)
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+    if os.path.exists(env_path):
+        load_dotenv(dotenv_path=env_path, override=False)
+        print(f">>> .env loaded from: {os.path.abspath(env_path)}", flush=True)
+    else:
+        # Try parent directory
+        env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+        if os.path.exists(env_path):
+            load_dotenv(dotenv_path=env_path, override=False)
+            print(f">>> .env loaded from: {os.path.abspath(env_path)}", flush=True)
+except ImportError:
+    print(">>> WARNING: python-dotenv not installed, skipping .env loading", flush=True)
+
 # BOOTSTRAP HEARTBEAT - Monitors slow import performance on Cloud Run
 pid = os.getpid()
 print(f">>> [PID {pid}] BOOTSTRAP STARTING (enhanced_main.py)...", flush=True)

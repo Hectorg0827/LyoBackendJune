@@ -51,7 +51,19 @@ SYNC_DATABASE_URL = _build_sync_database_url(DATABASE_URL)
 sync_engine = create_engine(SYNC_DATABASE_URL)
 SyncSessionLocal = sessionmaker(bind=sync_engine)
 
-ASYNC_DATABASE_URL = DATABASE_URL
+def _build_async_database_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgresql+psycopg2://"):
+        return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("sqlite://"):
+        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    return url
+
+
+ASYNC_DATABASE_URL = _build_async_database_url(DATABASE_URL)
 async_engine = create_async_engine(ASYNC_DATABASE_URL)
 AsyncSessionLocal = async_sessionmaker(bind=async_engine, class_=AsyncSession, expire_on_commit=False)
 

@@ -1,0 +1,113 @@
+# What NOT to upload to Railway (reduces 3 GB → ~30 MB)
+# Mirror of .gitignore + extras specific to local dev artifacts.
+
+# Python virtualenvs / caches / build outputs
+venv/
+.venv/
+env/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local databases (SQLite)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs / debug dumps / reports
+*.log
+*.log.*
+server_log_*.txt
+debug*.txt
+test_output.*
+*.pcm
+quality_assurance_report_*.json
+generated_courses.json
+validation_results.json
+
+# IDE / OS junk
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.bak
+*.backup
+
+# Docs / planning files (huge .md set, not needed at runtime)
+*.md
+docs/
+
+# Big secrets / dev-only env files (Railway already has env vars set)
+.env
+.env.*
+lyobackend-service-account-key.json
+
+# Mobile / unrelated client code shipped alongside the backend
+react_native_client/
+ios_client_integration/
+ios_integration/
+
+# Misc test scripts (kept in git but not needed for the deployed image)
+test_*.py
+verify_*.py
+diag_*.py
+diagnostic_*.py
+diagnose_*.py
+probe_*.py
+fetch_logs*.py
+direct_test.py
+quick_*.py
+simple_*.py
+phase_*.py
+phase2_*.py
+final_*.py
+final_*.sh
+patch_main.py
+analyze_xcode_errors.py
+ios_connection_simulator.py
+ios_backend_connection_test.py
+demo_backend.py
+seed_*.py
+seed_*.sql
+celebrate_*.py
+achievement_summary.py
+config_demo.py
+clean_main.py
+debug_*.py
+
+# Old Dockerfile variants
+Dockerfile.bak
+Dockerfile.cloud
+Dockerfile.production
+docker-compose*.yml
+
+# Other deploy targets (we use railway.json + Dockerfile only)
+cloudbuild*.yaml
+cloud-run-config.yaml
+nginx/
+deployment/
+infrastructure/
+
+# Local validation scripts
+validate_*.py
+validate_*.swift
+/ai_training/
+/load_test/
+/models/
+ios_test_sample.json
+sample_classroom_ui.json
+generated_courses.json
+
+# Backups
+backups/
+*.backup_pre_xcodegen
