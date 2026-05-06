@@ -322,17 +322,22 @@ async def _send_welcome_scene(
             urgency=1
         )
 
-        # Process through lifecycle engine
-        welcome_scene = await asyncio.wait_for(
-            lifecycle_engine.process_trigger(welcome_trigger),
-            timeout=10.0
-        )
+        # Fire welcome scene generation as a background task so the message loop
+        # starts immediately. process_trigger streams directly to the WebSocket
+        # when it completes (LLM calls can take 30-60s, far above any safe timeout).
+        async def _run_welcome():
+            try:
+                scene = await lifecycle_engine.process_trigger(welcome_trigger)
+                logger.info(f"👋 Welcome scene streamed: {scene.scene_id}")
+            except Exception as exc:
+                logger.error(f"❌ Background welcome scene failed: {exc}", exc_info=True)
 
-        logger.info(f"👋 Welcome scene sent: {welcome_scene.scene_id}")
+        asyncio.create_task(_run_welcome())
+        logger.info(f"👋 Welcome scene generation started in background for {connection.session_id}")
 
     except Exception as e:
-        logger.error(f"❌ Welcome scene failed: {e}", exc_info=True)
-        # Send fallback so the client isn't stuck on "Connecting..."
+        logger.error(f"❌ Welcome scene setup failed: {e}", exc_info=True)
+        # Send a placeholder so the client isn't stuck on "Connecting..."
         try:
             fallback = {
                 "type": "scene_stream",
