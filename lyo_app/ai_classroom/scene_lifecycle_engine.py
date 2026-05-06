@@ -1174,8 +1174,14 @@ class SceneLifecycleEngine:
 
         except Exception as e:
             logger.error(f"❌ LIFECYCLE FAILED: {e}")
-            # Return fallback scene
-            return await self._create_fallback_scene(trigger)
+            fallback = await self._create_fallback_scene(trigger)
+            # Stream the fallback so the client doesn't hang on the loading state
+            if self.websocket_manager:
+                try:
+                    await self._stream_scene_to_client(fallback, trigger.session_id)
+                except Exception as stream_err:
+                    logger.error(f"❌ Failed to stream fallback scene: {stream_err}")
+            return fallback
 
     async def _handle_user_action_trigger(self, trigger: Trigger):
         """Handle user action triggers"""
