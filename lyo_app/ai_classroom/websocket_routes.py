@@ -276,6 +276,9 @@ async def _send_welcome_scene(
         return
 
     try:
+        # Topic passed explicitly by iOS client (courseTitle from the course proposal)
+        topic_from_query = websocket.query_params.get("topic")
+
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
         topic = None
@@ -306,13 +309,16 @@ async def _send_welcome_scene(
         if not course_id:
             course_id = connection.session_id
 
+        # Resolve final topic: session > query param > session_id itself
+        resolved_topic = topic or topic_from_query or connection.session_id
+
         # Create welcome trigger with topic context
         welcome_trigger = Trigger(
             trigger_type=TriggerType.SYSTEM_TIMEOUT,
             user_id=connection.user_id,
             session_id=connection.session_id,
             course_id=course_id,
-            action_data={"welcome": True, "topic": topic} if topic else {"welcome": True},
+            action_data={"welcome": True, "topic": resolved_topic},
             urgency=1
         )
 
