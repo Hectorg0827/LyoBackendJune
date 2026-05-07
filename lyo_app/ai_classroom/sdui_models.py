@@ -34,6 +34,7 @@ class ComponentType(str, Enum):
     TYPING_INDICATOR = "TypingIndicator"
     REFLECTION_PROMPT = "ReflectionPrompt"
     EXAMPLE_BLOCK = "ExampleBlock"
+    LESSON_BLOCK = "LessonBlock"
 
 
 class AnimationType(str, Enum):
@@ -367,6 +368,33 @@ class ChatBubble(ComponentBase):
 # 🚀 SCENE & PAYLOAD MODELS
 # ═══════════════════════════════════════════════════════════════════════════════════
 
+class LessonBlock(ComponentBase):
+    """
+    Pass-through carrier for the iOS LiveLessonBlock model.
+
+    Lets the AI emit any of the 30+ rich block types (diagram, math, chart,
+    flashcard, hook, callout, code, codePlayground, comparison, timeline, etc.)
+    directly as a single component. The `block_type` field maps to iOS
+    LessonBlockType raw value (lowercase string), and `block` carries the
+    block-specific fields verbatim — passed through untouched to BlockRendererView.
+
+    Backend does no semantic validation on the block payload itself: the iOS
+    renderer is the source of truth for which fields each block_type uses.
+    """
+    type: Literal[ComponentType.LESSON_BLOCK] = ComponentType.LESSON_BLOCK
+
+    # Maps to iOS LessonBlockType.rawValue: "text" | "heading" | "callout" |
+    # "hook" | "revelation" | "celebration" | "code" | "codePlayground" |
+    # "diagram" | "chart" | "math" | "flashcard" | "comparison" | "timeline"
+    # | "stepByStep" | "summary" | "quizMcq" | "quizTrueFalse" | etc.
+    block_type: str = Field(..., min_length=1, max_length=40)
+
+    # Free-form payload. iOS LiveLessonBlock decodes the matching keys it knows
+    # (content, title, mermaid, latex, code, language, options, correct_index,
+    # front, back, headers, rows, image_url, etc.) and ignores the rest.
+    block: Dict[str, Any] = Field(default_factory=dict)
+
+
 # Master Component Union - THIS IS THE KEY CONTRACT
 Component = Union[
     TeacherMessage,
@@ -380,7 +408,8 @@ Component = Union[
     Celebration,
     TypingIndicator,
     ReflectionPrompt,
-    ExampleBlock
+    ExampleBlock,
+    LessonBlock,
 ]
 
 
@@ -599,6 +628,7 @@ __all__ = [
 
     # UI Components
     "TextBlock", "ChatBubble", "ProgressBar", "Celebration", "TypingIndicator",
+    "LessonBlock",
 
     # Streaming Payloads
     "WebSocketPayload", "SceneStreamPayload", "ComponentRenderPayload",

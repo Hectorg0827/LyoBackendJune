@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.ai_classroom.sdui_models import (
     Scene, SceneType, Component, ComponentType,
     TeacherMessage, StudentPrompt, QuizCard, QuizOption, CTAButton, Celebration,
+    LessonBlock,
     AudioMood, ActionIntent, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
@@ -887,19 +888,40 @@ class SceneCompiler:
         prompt = f"""You are Lyo, an expert AI tutor{course_label}.
 
 Compose ONE mini-classroom scene about "{topic}"{lesson_label}, structured as a JSON
-array of 5 to 7 blocks. Each block must be one of these types, with the listed fields:
+array of 6 to 9 blocks. Use a MIX of these block types — variety is essential, do
+not just use TeacherMessage everywhere.
 
-  {{"type":"TeacherMessage","text":"<1-3 sentences>","emotion":"curious|encouraging|thinking|excited"}}
-  {{"type":"StudentPrompt","student_name":"Sam|Mia|Alex|Jordan","text":"<a peer student's question or comment, 1-2 sentences>"}}
+CONVERSATIONAL BLOCKS (the spoken layer):
+  {{"type":"TeacherMessage","text":"<1-2 sentences>","emotion":"curious|encouraging|thinking|excited"}}
+  {{"type":"StudentPrompt","student_name":"Sam|Mia|Alex|Jordan","text":"<a peer student's question or comment>"}}
+
+VISUAL & STRUCTURED BLOCKS (use at least 2 of these per scene):
+  {{"type":"LessonBlock","block_type":"hook","block":{{"title":"<short title>","content":"<1-2 sentence narrative hook>"}}}}
+  {{"type":"LessonBlock","block_type":"callout","block":{{"title":"Key insight","content":"<the single most important idea, 1 sentence>","style":{{"variant":"insight|warning|tip"}}}}}}
+  {{"type":"LessonBlock","block_type":"diagram","block":{{"title":"<title>","mermaid":"<valid mermaid graph code, e.g. graph LR; A-->B>"}}}}
+  {{"type":"LessonBlock","block_type":"math","block":{{"title":"<title>","latex":"<a single LaTeX expression>"}}}}
+  {{"type":"LessonBlock","block_type":"code","block":{{"title":"<title>","language":"python|swift|js","code":"<short code snippet, <30 lines>"}}}}
+  {{"type":"LessonBlock","block_type":"comparison","block":{{"title":"<title>","headers":["A","B"],"rows":[["row1A","row1B"], ["row2A","row2B"]]}}}}
+  {{"type":"LessonBlock","block_type":"timeline","block":{{"title":"<title>","content":"1. Step one\\n2. Step two\\n3. Step three"}}}}
+  {{"type":"LessonBlock","block_type":"flashcard","block":{{"front":"<question>","back":"<answer>"}}}}
+  {{"type":"LessonBlock","block_type":"revelation","block":{{"title":"<title>","content":"<the surprise / counterintuitive insight>"}}}}
+
+CHECK & ADVANCE:
   {{"type":"QuizCard","question":"<retrieval-practice question>","options":[{{"id":"a","label":"<option text>","is_correct":true|false}}, ...]}}
   {{"type":"CTAButton","label":"Continue","action_intent":"continue"}}
 
-Required structure, in this order:
-  1. ONE TeacherMessage with emotion "curious" — a hook (a surprising fact, question, or analogy).
-  2. TWO or THREE TeacherMessages with emotion "encouraging" or "thinking" — the explanation, broken into short focused chunks (do not write long paragraphs).
-  3. ONE StudentPrompt — a peer student asking a clarifying question that a real learner might have.
-  4. ONE QuizCard with exactly one correct option among 3 options — quick retrieval practice.
-  5. ONE CTAButton with action_intent "continue".
+Required scene structure, in this order:
+  1. A hook — either a TeacherMessage emotion=curious OR a LessonBlock block_type=hook.
+  2. ONE diagram, math, code, comparison, or timeline LessonBlock — pick whichever fits the topic best (a math topic gets math; a process gets diagram or timeline; an algorithm gets code; a contrast gets comparison).
+  3. TWO short TeacherMessages explaining the visual — keep each under 280 chars.
+  4. ONE LessonBlock block_type=callout (style.variant=insight) — the single key takeaway.
+  5. ONE StudentPrompt — a peer asking a clarifying question.
+  6. ONE QuizCard with exactly one correct option among 3 options.
+  7. ONE CTAButton with action_intent "continue".
+
+For mermaid diagrams: use simple valid syntax like
+  graph LR; Sun[Sunlight]-->Leaf; CO2[CO2]-->Leaf; Water-->Leaf; Leaf-->Glucose; Leaf-->Oxygen
+For math LaTeX: use display-mode equations, e.g. \\\\frac{{a}}{{b}} or E = mc^2.
 
 {source_excerpt}Output ONLY the JSON array. No prose, no markdown fences, no commentary.
 Each TeacherMessage and StudentPrompt text must be at most 280 characters."""
@@ -1017,6 +1039,21 @@ Each TeacherMessage and StudentPrompt text must be at most 280 characters."""
                         label=label,
                         action_intent=intent,
                         button_style="primary",
+                        priority=idx,
+                        delay_ms=delay_ms,
+                    ))
+
+                elif btype == "LessonBlock":
+                    block_type = (block.get("block_type") or "").strip().lower()
+                    block_payload = block.get("block")
+                    if not block_type or not isinstance(block_payload, dict):
+                        continue
+                    # Cap block_type length to satisfy field validator; reject anything obviously wrong.
+                    if len(block_type) > 40:
+                        continue
+                    components.append(LessonBlock(
+                        block_type=block_type,
+                        block=block_payload,
                         priority=idx,
                         delay_ms=delay_ms,
                     ))
