@@ -277,7 +277,7 @@ async def _send_welcome_scene(
 
     try:
         # Topic passed explicitly by iOS client (courseTitle from the course proposal)
-        topic_from_query = websocket.query_params.get("topic")
+        topic_from_query = connection.websocket.query_params.get("topic")
 
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
