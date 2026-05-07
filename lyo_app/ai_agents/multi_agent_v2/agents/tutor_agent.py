@@ -263,12 +263,14 @@ Remember: Your goal is to help the member truly understand, not just give answer
             )
             
         except Exception as e:
-            logger.error(f"TutorAgent chat error: {e}")
+            logger.error(f"TutorAgent chat error: {type(e).__name__}: {e}", exc_info=True)
+            # Surface the exception class & first 200 chars so we can debug from
+            # the WebSocket stream when Railway logs are inaccessible.
             return TutorResponse(
-                message="I encountered an issue processing your question. Could you please rephrase it?",
+                message=f"[debug] TutorAgent.chat failed: {type(e).__name__}: {str(e)[:200]}",
                 confidence=0.0
             )
-    
+
     async def structured_chat(
         self,
         prompt: str,
@@ -301,7 +303,12 @@ Remember: Your goal is to help the member truly understand, not just give answer
             response = await asyncio.to_thread(model.generate_content, prompt)
             return response.text
         except Exception as e:
-            logger.warning(f"TutorAgent structured_chat failed: {e}")
+            logger.warning(
+                f"TutorAgent structured_chat failed: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            # Stash the error so the caller can surface it for debugging.
+            self._last_structured_error = f"{type(e).__name__}: {str(e)[:200]}"
             return None
 
     async def get_hint(
