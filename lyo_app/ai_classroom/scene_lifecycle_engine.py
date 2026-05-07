@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.ai_classroom.sdui_models import (
     Scene, SceneType, Component, ComponentType,
-    TeacherMessage, StudentPrompt, QuizCard, CTAButton, Celebration,
+    TeacherMessage, StudentPrompt, QuizCard, QuizOption, CTAButton, Celebration,
     AudioMood, ActionIntent, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
@@ -815,22 +815,33 @@ class SceneCompiler:
         return components
 
     async def _create_instruction_components(self, context: ContextSnapshot) -> List[Component]:
-        """Create components for instruction scenes"""
-        components = []
+        """
+        Create components for instruction scenes.
 
-        # Main teacher message
+        Layered generation:
+          1. If TutorAgent is available, ask it for a structured scene
+             (mixed component types: hook → explanations → peer voice → quiz → CTA).
+          2. If structured generation produces fewer than 2 valid components,
+             fall back to single-prompt prose generation.
+          3. If even prose generation fails, use a topic-aware template.
+        """
         if self.ai_service:
-            # Dynamic AI-generated content
+            structured = await self._structured_instruction_components(context)
+            if structured and len(structured) >= 2:
+                return structured
+
+        # Layer 2 / 3 fallback: prose split by paragraph + Continue CTA
+        if self.ai_service:
             instruction_text = await self._generate_instruction_content(context)
         else:
-            # Template fallback — still include the topic when available
             topic = context.topic or "the next concept"
             instruction_text = f"Let's continue learning about {topic}. Are you ready?"
 
+        components: List[Component] = []
         paragraphs = [p.strip() for p in instruction_text.split('\n\n') if p.strip()]
-        
+
         for idx, paragraph in enumerate(paragraphs):
-            delay = min(idx * 1500, 4900)  # Cap delay to 4900ms
+            delay = min(idx * 1500, 4900)
             components.append(TeacherMessage(
                 text=paragraph,
                 emotion="encouraging",
@@ -840,7 +851,6 @@ class SceneCompiler:
                 delay_ms=delay
             ))
 
-        # Continue button
         components.append(CTAButton(
             label="Continue",
             action_intent=ActionIntent.CONTINUE,
@@ -848,6 +858,183 @@ class SceneCompiler:
             priority=len(paragraphs),
             delay_ms=min(len(paragraphs) * 1500, 5000)
         ))
+        return components
+
+    async def _structured_instruction_components(
+        self, context: ContextSnapshot
+    ) -> Optional[List[Component]]:
+        """
+        Ask the AI for a structured mixed-block scene.
+        Returns a list of validated Component instances on success, or None on failure.
+        """
+        tutor_agent = self.ai_service
+        if not tutor_agent or not getattr(tutor_agent, "structured_chat", None):
+            return None
+
+        topic = context.topic or "this topic"
+        course_label = (
+            f" in the course '{context.course_title}'" if context.course_title else ""
+        )
+        lesson_label = (
+            f" — lesson {context.lesson_index + 1} of {context.total_lessons}: '{context.lesson_title}'"
+            if context.lesson_title else ""
+        )
+        source_excerpt = (
+            f"Source material to ground the lesson:\n{context.lesson_content[:1500]}\n\n"
+            if context.lesson_content else ""
+        )
+
+        prompt = f"""You are Lyo, an expert AI tutor{course_label}.
+
+Compose ONE mini-classroom scene about "{topic}"{lesson_label}, structured as a JSON
+array of 5 to 7 blocks. Each block must be one of these types, with the listed fields:
+
+  {{"type":"TeacherMessage","text":"<1-3 sentences>","emotion":"curious|encouraging|thinking|excited"}}
+  {{"type":"StudentPrompt","student_name":"Sam|Mia|Alex|Jordan","text":"<a peer student's question or comment, 1-2 sentences>"}}
+  {{"type":"QuizCard","question":"<retrieval-practice question>","options":[{{"id":"a","label":"<option text>","is_correct":true|false}}, ...]}}
+  {{"type":"CTAButton","label":"Continue","action_intent":"continue"}}
+
+Required structure, in this order:
+  1. ONE TeacherMessage with emotion "curious" — a hook (a surprising fact, question, or analogy).
+  2. TWO or THREE TeacherMessages with emotion "encouraging" or "thinking" — the explanation, broken into short focused chunks (do not write long paragraphs).
+  3. ONE StudentPrompt — a peer student asking a clarifying question that a real learner might have.
+  4. ONE QuizCard with exactly one correct option among 3 options — quick retrieval practice.
+  5. ONE CTAButton with action_intent "continue".
+
+{source_excerpt}Output ONLY the JSON array. No prose, no markdown fences, no commentary.
+Each TeacherMessage and StudentPrompt text must be at most 280 characters."""
+
+        raw = await tutor_agent.structured_chat(prompt=prompt)
+        if not raw:
+            return None
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Structured scene JSON parse failed: {e}; first 200 chars: {raw[:200]!r}")
+            return None
+
+        if not isinstance(parsed, list) or not parsed:
+            logger.warning(f"Structured scene was not a non-empty list: type={type(parsed).__name__}")
+            return None
+
+        components = self._build_components_from_blocks(parsed, context)
+        logger.info(
+            f"📐 Structured scene built: {len(components)} components from {len(parsed)} blocks "
+            f"(topic={topic!r})"
+        )
+        return components
+
+    def _build_components_from_blocks(
+        self, blocks: List[Dict[str, Any]], context: ContextSnapshot
+    ) -> List[Component]:
+        """
+        Convert AI-generated block dicts into validated Component instances.
+        Skips any block that fails validation; never raises.
+        """
+        components: List[Component] = []
+        topic_tag = (context.topic or "current_topic")[:30]
+
+        for idx, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            delay_ms = min(idx * 800, 4900)  # progressive reveal
+
+            try:
+                if btype == "TeacherMessage":
+                    text = (block.get("text") or "").strip()
+                    if not text:
+                        continue
+                    emotion = block.get("emotion") or "encouraging"
+                    if emotion not in {"neutral", "encouraging", "thinking", "excited", "concerned", "curious"}:
+                        emotion = "encouraging"
+                    # TeacherMessage schema only allows specific emotions; map "curious" -> "thinking"
+                    emotion_map = {"curious": "thinking"}
+                    safe_emotion = emotion_map.get(emotion, emotion)
+                    components.append(TeacherMessage(
+                        text=text[:4800],
+                        emotion=safe_emotion,
+                        audio_mood=AudioMood.CALM,
+                        concept_tags=[topic_tag],
+                        priority=idx,
+                        delay_ms=delay_ms,
+                    ))
+
+                elif btype == "StudentPrompt":
+                    text = (block.get("text") or "").strip()
+                    name = (block.get("student_name") or "Sam").strip()[:20] or "Sam"
+                    if not text:
+                        continue
+                    components.append(StudentPrompt(
+                        student_name=name,
+                        text=text[:480],
+                        priority=idx,
+                        delay_ms=delay_ms,
+                    ))
+
+                elif btype == "QuizCard":
+                    question = (block.get("question") or "").strip()
+                    raw_options = block.get("options") or []
+                    if not question or len(raw_options) < 2:
+                        continue
+                    quiz_opts: List[QuizOption] = []
+                    for opt in raw_options[:6]:
+                        if not isinstance(opt, dict):
+                            continue
+                        opt_id = (opt.get("id") or "").strip()[:10]
+                        opt_label = (opt.get("label") or "").strip()
+                        if not opt_id or not opt_label:
+                            continue
+                        quiz_opts.append(QuizOption(
+                            id=opt_id,
+                            label=opt_label[:280],
+                            is_correct=bool(opt.get("is_correct", False)),
+                        ))
+                    if len(quiz_opts) < 2:
+                        continue
+                    if not any(o.is_correct for o in quiz_opts):
+                        # Force at least one correct answer to satisfy server-side grading
+                        quiz_opts[0] = QuizOption(
+                            id=quiz_opts[0].id, label=quiz_opts[0].label, is_correct=True
+                        )
+                    components.append(QuizCard(
+                        question=question[:480],
+                        options=quiz_opts,
+                        concept_id=topic_tag,
+                        priority=idx,
+                        delay_ms=delay_ms,
+                    ))
+
+                elif btype == "CTAButton":
+                    label = (block.get("label") or "Continue").strip()[:48] or "Continue"
+                    intent_raw = (block.get("action_intent") or "continue").strip().lower()
+                    try:
+                        intent = ActionIntent(intent_raw)
+                    except ValueError:
+                        intent = ActionIntent.CONTINUE
+                    components.append(CTAButton(
+                        label=label,
+                        action_intent=intent,
+                        button_style="primary",
+                        priority=idx,
+                        delay_ms=delay_ms,
+                    ))
+
+                # Unknown block types are silently dropped — fail-soft.
+            except Exception as e:
+                logger.warning(f"Skipping invalid block #{idx} ({btype}): {e}")
+                continue
+
+        # Ensure there's always a CTAButton at the end so the user can advance.
+        if not any(isinstance(c, CTAButton) for c in components) and components:
+            components.append(CTAButton(
+                label="Continue",
+                action_intent=ActionIntent.CONTINUE,
+                button_style="primary",
+                priority=len(components),
+                delay_ms=min(len(components) * 800, 5000),
+            ))
 
         return components
 

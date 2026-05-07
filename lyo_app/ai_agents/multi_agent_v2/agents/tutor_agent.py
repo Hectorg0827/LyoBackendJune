@@ -10,6 +10,7 @@ This agent provides intelligent tutoring capabilities:
 - Personalized explanations
 """
 
+import asyncio
 import logging
 from typing import Optional, Dict, Any, List
 from enum import Enum
@@ -268,6 +269,41 @@ Remember: Your goal is to help the member truly understand, not just give answer
                 confidence=0.0
             )
     
+    async def structured_chat(
+        self,
+        prompt: str,
+        response_schema: Optional[Dict[str, Any]] = None,
+        max_output_tokens: int = 4096,
+    ) -> Optional[str]:
+        """
+        Generate a JSON-mode response from Gemini.
+
+        Returns the raw JSON string (parseable by json.loads) on success,
+        or None if the model is unavailable or generation failed. Callers
+        are expected to layer their own fallbacks on None.
+        """
+        if not self._available:
+            return None
+
+        generation_config: Dict[str, Any] = {
+            "temperature": self.temperature,
+            "max_output_tokens": max_output_tokens,
+            "response_mime_type": "application/json",
+        }
+        if response_schema is not None:
+            generation_config["response_schema"] = response_schema
+
+        try:
+            model = genai.GenerativeModel(
+                self.model_name,
+                generation_config=generation_config,
+            )
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            return response.text
+        except Exception as e:
+            logger.warning(f"TutorAgent structured_chat failed: {e}")
+            return None
+
     async def get_hint(
         self,
         exercise_description: str,
