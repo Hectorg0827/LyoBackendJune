@@ -264,10 +264,8 @@ Remember: Your goal is to help the member truly understand, not just give answer
             
         except Exception as e:
             logger.error(f"TutorAgent chat error: {type(e).__name__}: {e}", exc_info=True)
-            # Surface the exception class & first 200 chars so we can debug from
-            # the WebSocket stream when Railway logs are inaccessible.
             return TutorResponse(
-                message=f"[debug] TutorAgent.chat failed: {type(e).__name__}: {str(e)[:200]}",
+                message="I encountered an issue processing your question. Could you please rephrase it?",
                 confidence=0.0
             )
 
