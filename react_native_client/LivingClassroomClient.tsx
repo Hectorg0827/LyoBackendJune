@@ -17,7 +17,15 @@ import {
   StyleSheet,
   Animated,
   Alert,
+  Platform,
+  UIManager,
+  LayoutAnimation,
 } from 'react-native';
+
+// Enable LayoutAnimation on Android
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // MARK: - TypeScript Interfaces (matching Python backend exactly)
 
@@ -364,20 +372,28 @@ export const LivingClassroomView: React.FC<LivingClassroomViewProps> = ({
 
   return (
     <View style={styles.container}>
-      {/* Connection Status */}
+      {/* Connection Status Header (Glassmorphic) */}
       <View style={styles.statusBar}>
-        <View style={[
-          styles.statusIndicator,
-          { backgroundColor: client.isConnected ? '#4CAF50' : '#F44336' }
-        ]} />
-        <Text style={styles.statusText}>
-          {client.isConnected ? 'Connected' : 'Disconnected'}
-        </Text>
-        <Text style={styles.titleText}>Living Classroom</Text>
+        <View style={styles.statusLeft}>
+          <View style={[
+            styles.statusIndicator,
+            { backgroundColor: client.isConnected ? '#34C759' : '#FF3B30' }
+          ]} />
+          <Text style={styles.titleText}>Living Classroom</Text>
+        </View>
+        <View style={styles.statusRight}>
+          <Text style={styles.statusText}>
+            {client.isConnected ? 'Live' : 'Offline'}
+          </Text>
+        </View>
       </View>
 
       {/* Scene Components */}
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.scrollView} 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {client.components.map((component) => (
           <ComponentView
             key={component.component_id}
@@ -390,9 +406,9 @@ export const LivingClassroomView: React.FC<LivingClassroomViewProps> = ({
 
       {/* Error Display */}
       {client.lastError && (
-        <View style={styles.errorContainer}>
+        <Animated.View style={styles.errorContainer}>
           <Text style={styles.errorText}>{client.lastError}</Text>
-        </View>
+        </Animated.View>
       )}
     </View>
   );
@@ -409,14 +425,18 @@ const ComponentView: React.FC<ComponentViewProps> = ({
   onQuizSubmit,
   onCTAPress,
 }) => {
-  const fadeAnim = useRef(new Animated.Value(component.isVisible ? 1 : 0)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: component.isVisible ? 1 : 0,
-      duration: 500,
-      useNativeDriver: true,
-    }).start();
+    if (component.isVisible) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      Animated.spring(fadeAnim, {
+        toValue: 1,
+        tension: 40,
+        friction: 8,
+        useNativeDriver: true,
+      }).start();
+    }
   }, [component.isVisible]);
 
   const renderComponent = () => {
@@ -435,18 +455,36 @@ const ComponentView: React.FC<ComponentViewProps> = ({
   };
 
   return (
-    <Animated.View style={[styles.componentContainer, { opacity: fadeAnim }]}>
+    <Animated.View style={[
+      styles.componentContainer, 
+      { 
+        opacity: fadeAnim,
+        transform: [{
+          translateY: fadeAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [30, 0] // Slide up by 30px
+          })
+        }]
+      }
+    ]}>
       {renderComponent()}
     </Animated.View>
   );
 };
 
 const TeacherMessageView: React.FC<{ message: TeacherMessage }> = ({ message }) => (
-  <View style={styles.teacherMessage}>
-    <Text style={styles.teacherMessageText}>{message.text}</Text>
-    {message.emotion && (
-      <Text style={styles.emotionText}>Emotion: {message.emotion}</Text>
-    )}
+  <View style={styles.teacherMessageWrapper}>
+    <View style={styles.avatarPlaceholder}>
+      <Text style={styles.avatarEmoji}>👩‍🏫</Text>
+    </View>
+    <View style={styles.teacherMessageBubble}>
+      <Text style={styles.teacherMessageText}>{message.text}</Text>
+      {message.emotion && (
+        <View style={styles.emotionBadge}>
+          <Text style={styles.emotionText}>{message.emotion}</Text>
+        </View>
+      )}
+    </View>
   </View>
 );
 
@@ -457,29 +495,47 @@ const QuizCardView: React.FC<{
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
 
   const handleOptionSelect = (option: QuizOption) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setSelectedOption(option.id);
-    onSubmit(quiz.component_id, option.id, option.is_correct);
+    
+    // Slight delay so the user sees the button highlight before progressing
+    setTimeout(() => {
+      onSubmit(quiz.component_id, option.id, option.is_correct);
+    }, 600);
   };
 
   return (
     <View style={styles.quizCard}>
       <Text style={styles.quizQuestion}>{quiz.question}</Text>
-      {quiz.options.map((option) => (
-        <TouchableOpacity
-          key={option.id}
-          style={[
-            styles.quizOption,
-            selectedOption === option.id && styles.quizOptionSelected,
-          ]}
-          onPress={() => handleOptionSelect(option)}
-        >
-          <View style={[
-            styles.radioButton,
-            selectedOption === option.id && styles.radioButtonSelected,
-          ]} />
-          <Text style={styles.quizOptionText}>{option.label}</Text>
-        </TouchableOpacity>
-      ))}
+      <View style={styles.quizOptionsContainer}>
+        {quiz.options.map((option) => {
+          const isSelected = selectedOption === option.id;
+          let optionStyle = styles.quizOption;
+          let textStyle = styles.quizOptionText;
+          
+          if (isSelected) {
+            optionStyle = option.is_correct 
+              ? [styles.quizOption, styles.quizOptionSelectedCorrect] 
+              : [styles.quizOption, styles.quizOptionSelectedIncorrect];
+            textStyle = styles.quizOptionTextSelected;
+          }
+
+          return (
+            <TouchableOpacity
+              key={option.id}
+              activeOpacity={0.7}
+              style={optionStyle}
+              onPress={() => handleOptionSelect(option)}
+              disabled={selectedOption !== null}
+            >
+              <View style={[styles.radioButton, isSelected && styles.radioButtonSelected]}>
+                {isSelected && <View style={styles.radioButtonInner} />}
+              </View>
+              <Text style={textStyle}>{option.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
   );
 };
@@ -489,28 +545,34 @@ const CTAButtonView: React.FC<{
   onPress: (intent: ActionIntent) => void;
 }> = ({ button, onPress }) => (
   <TouchableOpacity
-    style={styles.ctaButton}
+    activeOpacity={0.8}
+    style={styles.ctaButtonWrapper}
     onPress={() => onPress(button.action_intent)}
   >
-    <Text style={styles.ctaButtonText}>{button.label}</Text>
+    <View style={styles.ctaButton}>
+      <Text style={styles.ctaButtonText}>{button.label}</Text>
+    </View>
   </TouchableOpacity>
 );
 
 const CelebrationView: React.FC<{ celebration: Celebration }> = ({ celebration }) => {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const scaleAnim = useRef(new Animated.Value(0.5)).current;
 
   useEffect(() => {
-    // Celebration animation
-    Animated.sequence([
-      Animated.timing(scaleAnim, { toValue: 1.2, duration: 300, useNativeDriver: true }),
-      Animated.timing(scaleAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-    ]).start();
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      tension: 50,
+      friction: 4,
+      useNativeDriver: true,
+    }).start();
   }, []);
 
   return (
     <Animated.View style={[styles.celebration, { transform: [{ scale: scaleAnim }] }]}>
-      <Text style={styles.celebrationEmoji}>🎉</Text>
-      <Text style={styles.celebrationText}>{celebration.message}</Text>
+      <View style={styles.celebrationGlow}>
+        <Text style={styles.celebrationEmoji}>✨ 🎉 ✨</Text>
+        <Text style={styles.celebrationText}>{celebration.message}</Text>
+      </View>
     </Animated.View>
   );
 };
@@ -526,129 +588,269 @@ const generateSessionId = (): string => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F7F9FC', // Very light, airy gray/blue
   },
   statusBar: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 56 : 20,
+    paddingBottom: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)', // Glassmorphism base
     borderBottomWidth: 1,
-    borderBottomColor: '#E9ECEF',
+    borderBottomColor: 'rgba(0,0,0,0.03)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    elevation: 3,
+    zIndex: 10,
+  },
+  statusLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusRight: {
+    backgroundColor: '#F0F2F5',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
   statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 8,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 10,
+    shadowColor: '#34C759',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
   },
   statusText: {
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: '600',
     color: '#6C757D',
-    marginRight: 16,
+    letterSpacing: 0.3,
   },
   titleText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#212529',
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.4,
   },
   scrollView: {
     flex: 1,
-    padding: 16,
+  },
+  scrollContent: {
+    padding: 20,
+    paddingBottom: 100, // Breathing room at the bottom
   },
   componentContainer: {
-    marginBottom: 16,
+    marginBottom: 24,
   },
-  teacherMessage: {
-    backgroundColor: '#E3F2FD',
-    padding: 16,
-    borderRadius: 12,
+  teacherMessageWrapper: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginBottom: 8,
+  },
+  avatarPlaceholder: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  avatarEmoji: {
+    fontSize: 24,
+  },
+  teacherMessageBubble: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 20,
+    borderBottomLeftRadius: 4, // Tail effect
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.02)',
   },
   teacherMessageText: {
     fontSize: 16,
-    color: '#1976D2',
+    fontWeight: '500',
+    color: '#374151',
     lineHeight: 24,
+    letterSpacing: 0.2,
+  },
+  emotionBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
   emotionText: {
     fontSize: 12,
-    color: '#757575',
-    marginTop: 8,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'capitalize',
   },
   quizCard: {
-    backgroundColor: '#E8F5E8',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.06,
+    shadowRadius: 24,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.02)',
   },
   quizQuestion: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2E7D32',
-    marginBottom: 16,
+    fontSize: 19,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 20,
+    lineHeight: 28,
+    letterSpacing: -0.3,
+  },
+  quizOptionsContainer: {
+    gap: 12, // React Native supports gap
   },
   quizOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-    marginBottom: 8,
+    padding: 16,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
   },
-  quizOptionSelected: {
-    backgroundColor: '#BBDEFB',
+  quizOptionSelectedCorrect: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#22C55E',
+    shadowColor: '#22C55E',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+  },
+  quizOptionSelectedIncorrect: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#EF4444',
   },
   radioButton: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 2,
-    borderColor: '#9E9E9E',
-    marginRight: 12,
+    borderColor: '#D1D5DB',
+    marginRight: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
   },
   radioButtonSelected: {
-    borderColor: '#2196F3',
-    backgroundColor: '#2196F3',
+    borderColor: '#3B82F6',
+  },
+  radioButtonInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#3B82F6',
   },
   quizOptionText: {
     fontSize: 16,
-    color: '#424242',
+    fontWeight: '600',
+    color: '#4B5563',
     flex: 1,
   },
+  quizOptionTextSelected: {
+    color: '#111827',
+  },
+  ctaButtonWrapper: {
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 6,
+    marginVertical: 8,
+  },
   ctaButton: {
-    backgroundColor: '#2196F3',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: '#4F46E5', // Premium Indigo
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    borderRadius: 100, // Fully rounded pill
     alignItems: 'center',
+    justifyContent: 'center',
   },
   ctaButtonText: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#FFFFFF',
+    letterSpacing: 0.5,
   },
   celebration: {
-    backgroundColor: '#FFF9C4',
-    padding: 20,
-    borderRadius: 12,
+    marginVertical: 16,
+  },
+  celebrationGlow: {
+    backgroundColor: 'rgba(254, 240, 138, 0.4)',
+    padding: 32,
+    borderRadius: 32,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(250, 204, 21, 0.5)',
+    shadowColor: '#EAB308',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 8,
   },
   celebrationEmoji: {
-    fontSize: 48,
-    marginBottom: 8,
+    fontSize: 54,
+    marginBottom: 12,
+    textShadowColor: 'rgba(0,0,0,0.1)',
+    textShadowOffset: { width: 0, height: 4 },
+    textShadowRadius: 8,
   },
   celebrationText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#F57F17',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#B45309',
     textAlign: 'center',
+    letterSpacing: 0.5,
   },
   errorContainer: {
-    backgroundColor: '#FFEBEE',
-    padding: 12,
-    margin: 16,
-    borderRadius: 8,
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    backgroundColor: '#FEF2F2',
+    padding: 16,
+    borderRadius: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#EF4444',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
   },
   errorText: {
     fontSize: 14,
-    color: '#D32F2F',
+    fontWeight: '600',
+    color: '#991B1B',
   },
 });
 
