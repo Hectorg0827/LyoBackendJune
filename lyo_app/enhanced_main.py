@@ -651,17 +651,7 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Relationship routes not available: {e}")
 
-    @app.get("/debug/db-pool")
-    async def debug_db_pool():
-        from lyo_app.core.database import engine
-        pool = engine.pool
-        return {
-            "size": getattr(pool, "_size", "unknown"),
-            "max_overflow": getattr(pool, "_max_overflow", "unknown"),
-            "timeout": getattr(pool, "_timeout", "unknown"),
-            "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
-        }
+
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401
@@ -906,6 +896,19 @@ async def root():  # noqa: D401
             "multi_agent_streaming": True,
         },
         "timestamp": time.time(),
+    }
+
+
+@app.get("/debug/db-pool")
+async def debug_db_pool():
+    from lyo_app.core.database import engine
+    pool = engine.pool
+    return {
+        "size": getattr(pool, "_size", "unknown"),
+        "max_overflow": getattr(pool, "_max_overflow", "unknown"),
+        "timeout": getattr(pool, "_timeout", "unknown"),
+        "checked_out": pool.checkedout(),
+        "overflow": pool.overflow(),
     }
 
 

@@ -75,10 +75,10 @@ class FirebaseAuthService:
                             return google.auth.credentials.AnonymousCredentials()
                     cred = MockCredential()
             
-            if project_id:
-                os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-                
-            options = {'projectId': project_id} if project_id else {}
+            # FORCE project_id to 'lyo-app' if not provided to avoid "A project ID is required" errors
+            active_project_id = project_id or "lyo-app"
+            os.environ["GOOGLE_CLOUD_PROJECT"] = active_project_id
+            options = {'projectId': active_project_id}
             
             try:
                 firebase_admin.initialize_app(cred, options=options)
