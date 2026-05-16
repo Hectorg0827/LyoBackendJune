@@ -845,56 +845,18 @@ if PROMETHEUS_AVAILABLE and settings.ENABLE_METRICS:
 
 @app.get("/")
 async def root():  # noqa: D401
+    from lyo_app.core.database import engine
+    pool = engine.pool
     return {
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "description": settings.APP_DESCRIPTION,
+        "db_debug": {
+            "size": getattr(pool, "_size", "unknown"),
+            "overflow": getattr(pool, "_max_overflow", "unknown"),
+            "timeout": getattr(pool, "_timeout", "unknown"),
+        },
         "environment": settings.ENVIRONMENT,
         "status": "operational",
-        "documentation": {
-            "swagger_ui": "/docs"
-            if not settings.is_production()
-            else "disabled_in_production",
-            "redoc": "/redoc"
-            if not settings.is_production()
-            else "disabled_in_production",
-        },
-        "endpoints": {
-            "health": "/health",
-            "metrics": "/metrics" if settings.ENABLE_METRICS else "disabled",
-            "auth": "/api/v1/auth",
-            "ai_study": "/api/v1/ai-study",
-            "feeds": "/api/v1/feeds",
-            "storage": "/api/v1/storage",
-            "personalization": "/api/v1/personalization",
-            "gen_curriculum": "/api/v1/gen-curriculum",
-            "collaboration": "/api/v1/collaboration",
-            "course_generation_v2": "/api/v2/courses",
-            "a2a_generation": "/api/v2/courses/generate-a2a",
-            "a2a_streaming": "/api/v2/courses/stream-a2a",
-            "a2a_agents": "/api/v2/agents",
-            "a2a_discovery": "/.well-known/agent.json",
-            "tutor_v2": "/api/v2/tutor",
-            "exercises_v2": "/api/v2/exercises",
-            "media_v2": "/api/v2/media",
-        },
-        "features": {
-            "ai_study_mode": getattr(settings, "ENABLE_AI_STUDY_MODE", True),
-            "addictive_feeds": getattr(settings, "ENABLE_ADDICTIVE_FEED", True),
-            "enhanced_storage": getattr(
-                settings, "ENABLE_IMAGE_OPTIMIZATION", True
-            ),
-            "performance_monitoring": getattr(
-                settings, "ENABLE_PERFORMANCE_MONITORING", True
-            ),
-            "deep_knowledge_tracing": True,
-            "generative_curriculum": True,
-            "collaborative_learning": True,
-            "peer_assessment": True,
-            "ai_tutoring": True,
-            "a2a_protocol": True,
-            "multi_agent_streaming": True,
-        },
         "timestamp": time.time(),
     }
 
