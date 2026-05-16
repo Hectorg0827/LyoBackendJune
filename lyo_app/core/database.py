@@ -51,16 +51,20 @@ def get_engine_config():
         connect_args["timeout"] = 30.0
         config["connect_args"] = connect_args
     
+    # Apply stabilization hijack to ensure 20/20 limits regardless of config files
+    from .pool_stabilizer import get_stabilized_engine_config
+    config = get_stabilized_engine_config(config)
+    
     return config
 
-# Create async engine with dynamic configuration
+# Create engine with stabilized config
 db_url = settings.database_url
 
 # Inject password from environment variable if available and missing in URL
-# This is crucial for Cloud Run where password is provided as a separate secret
 db_password = os.getenv("DB_PASSWORD")
 if db_password and "postgresql" in db_url:
     try:
+        from sqlalchemy.engine.url import make_url
         url_obj = make_url(db_url)
         if url_obj.password is None:
             url_obj = url_obj.set(password=db_password)
@@ -72,7 +76,8 @@ if db_password and "postgresql" in db_url:
 if db_url and db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-engine = create_async_engine(db_url, **get_engine_config())
+engine_config = get_engine_config()
+engine = create_async_engine(db_url, **engine_config)
 
 # Add connection event listeners for better debugging
 @event.listens_for(engine.sync_engine, "connect")
