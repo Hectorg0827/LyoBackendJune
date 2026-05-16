@@ -30,8 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.ai_classroom.sdui_models import (
     Scene, SceneType, Component, ComponentType,
-    TeacherMessage, StudentPrompt, QuizCard, QuizOption, CTAButton, Celebration,
-    LessonBlock,
+    TeacherMessage, StudentPrompt, QuizCard, CTAButton, Celebration,
     AudioMood, ActionIntent, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
@@ -816,262 +815,51 @@ class SceneCompiler:
         return components
 
     async def _create_instruction_components(self, context: ContextSnapshot) -> List[Component]:
-        """
-        Create components for instruction scenes.
+        """Create components for instruction scenes"""
+        components = []
 
-        Layered generation:
-          1. If TutorAgent is available, ask it for a structured scene
-             (mixed component types: hook → explanations → peer voice → quiz → CTA).
-          2. If structured generation produces fewer than 2 valid components,
-             fall back to single-prompt prose generation.
-          3. If even prose generation fails, use a topic-aware template.
-        """
+        # Main teacher message
         if self.ai_service:
-            structured = await self._structured_instruction_components(context)
-            if structured and len(structured) >= 2:
-                return structured
-
-        # Layer 2 / 3 fallback: prose split by paragraph + Continue CTA
-        if self.ai_service:
+            # Dynamic AI-generated content
             instruction_text = await self._generate_instruction_content(context)
         else:
+            # Template fallback — still include the topic when available
             topic = context.topic or "the next concept"
-            instruction_text = f"Let's continue learning about {topic}. Are you ready?"
+            instruction_text = f'[ {{"type": "speech", "speaker": "Teacher", "text": "Let\'s continue learning about {topic}. Are you ready?"}} ]'
 
-        components: List[Component] = []
-        paragraphs = [p.strip() for p in instruction_text.split('\n\n') if p.strip()]
-
-        for idx, paragraph in enumerate(paragraphs):
-            delay = min(idx * 1500, 4900)
+        # If the text is JSON (starts with '[' and ends with ']'), do not split it by paragraphs
+        text_to_check = instruction_text.strip()
+        if text_to_check.startswith('[') and text_to_check.endswith(']'):
             components.append(TeacherMessage(
-                text=paragraph,
+                text=text_to_check,
                 emotion="encouraging",
                 audio_mood=AudioMood.CALM,
                 concept_tags=[context.topic or "current_topic"],
-                priority=idx,
-                delay_ms=delay
+                priority=0,
+                delay_ms=0
             ))
+        else:
+            paragraphs = [p.strip() for p in instruction_text.split('\n\n') if p.strip()]
+            
+            for idx, paragraph in enumerate(paragraphs):
+                delay = min(idx * 1500, 4900)  # Cap delay to 4900ms
+                components.append(TeacherMessage(
+                    text=paragraph,
+                    emotion="encouraging",
+                    audio_mood=AudioMood.CALM,
+                    concept_tags=[context.topic or "current_topic"],
+                    priority=idx,
+                    delay_ms=delay
+                ))
 
+        # Continue button
         components.append(CTAButton(
             label="Continue",
             action_intent=ActionIntent.CONTINUE,
             button_style="primary",
-            priority=len(paragraphs),
-            delay_ms=min(len(paragraphs) * 1500, 5000)
+            priority=100,  # Ensure it comes last
+            delay_ms=5000
         ))
-        return components
-
-    async def _structured_instruction_components(
-        self, context: ContextSnapshot
-    ) -> Optional[List[Component]]:
-        """
-        Ask the AI for a structured mixed-block scene.
-        Returns a list of validated Component instances on success, or None on failure.
-        """
-        tutor_agent = self.ai_service
-        if not tutor_agent or not getattr(tutor_agent, "structured_chat", None):
-            return None
-
-        topic = context.topic or "this topic"
-        course_label = (
-            f" in the course '{context.course_title}'" if context.course_title else ""
-        )
-        lesson_label = (
-            f" — lesson {context.lesson_index + 1} of {context.total_lessons}: '{context.lesson_title}'"
-            if context.lesson_title else ""
-        )
-        source_excerpt = (
-            f"Source material to ground the lesson:\n{context.lesson_content[:1500]}\n\n"
-            if context.lesson_content else ""
-        )
-
-        prompt = f"""You are Lyo, an expert AI tutor{course_label}.
-
-Compose ONE mini-classroom scene about "{topic}"{lesson_label}, structured as a JSON
-array of 6 to 9 blocks. Use a MIX of these block types — variety is essential, do
-not just use TeacherMessage everywhere.
-
-CONVERSATIONAL BLOCKS (the spoken layer):
-  {{"type":"TeacherMessage","text":"<1-2 sentences>","emotion":"curious|encouraging|thinking|excited"}}
-  {{"type":"StudentPrompt","student_name":"Sam|Mia|Alex|Jordan","text":"<a peer student's question or comment>"}}
-
-VISUAL & STRUCTURED BLOCKS (use at least 2 of these per scene):
-  {{"type":"LessonBlock","block_type":"hook","block":{{"title":"<short title>","content":"<1-2 sentence narrative hook>"}}}}
-  {{"type":"LessonBlock","block_type":"callout","block":{{"title":"Key insight","content":"<the single most important idea, 1 sentence>","style":{{"variant":"insight|warning|tip"}}}}}}
-  {{"type":"LessonBlock","block_type":"diagram","block":{{"title":"<title>","mermaid":"<valid mermaid graph code, e.g. graph LR; A-->B>"}}}}
-  {{"type":"LessonBlock","block_type":"math","block":{{"title":"<title>","latex":"<a single LaTeX expression>"}}}}
-  {{"type":"LessonBlock","block_type":"code","block":{{"title":"<title>","language":"python|swift|js","code":"<short code snippet, <30 lines>"}}}}
-  {{"type":"LessonBlock","block_type":"comparison","block":{{"title":"<title>","headers":["A","B"],"rows":[["row1A","row1B"], ["row2A","row2B"]]}}}}
-  {{"type":"LessonBlock","block_type":"timeline","block":{{"title":"<title>","content":"1. Step one\\n2. Step two\\n3. Step three"}}}}
-  {{"type":"LessonBlock","block_type":"flashcard","block":{{"front":"<question>","back":"<answer>"}}}}
-  {{"type":"LessonBlock","block_type":"revelation","block":{{"title":"<title>","content":"<the surprise / counterintuitive insight>"}}}}
-
-CHECK & ADVANCE:
-  {{"type":"QuizCard","question":"<retrieval-practice question>","options":[{{"id":"a","label":"<option text>","is_correct":true|false}}, ...]}}
-  {{"type":"CTAButton","label":"Continue","action_intent":"continue"}}
-
-Required scene structure, in this order:
-  1. A hook — either a TeacherMessage emotion=curious OR a LessonBlock block_type=hook.
-  2. ONE diagram, math, code, comparison, or timeline LessonBlock — pick whichever fits the topic best (a math topic gets math; a process gets diagram or timeline; an algorithm gets code; a contrast gets comparison).
-  3. TWO short TeacherMessages explaining the visual — keep each under 280 chars.
-  4. ONE LessonBlock block_type=callout (style.variant=insight) — the single key takeaway.
-  5. ONE StudentPrompt — a peer asking a clarifying question.
-  6. ONE QuizCard with exactly one correct option among 3 options.
-  7. ONE CTAButton with action_intent "continue".
-
-For mermaid diagrams: use simple valid syntax like
-  graph LR; Sun[Sunlight]-->Leaf; CO2[CO2]-->Leaf; Water-->Leaf; Leaf-->Glucose; Leaf-->Oxygen
-For math LaTeX: use display-mode equations, e.g. \\\\frac{{a}}{{b}} or E = mc^2.
-
-{source_excerpt}Output ONLY the JSON array. No prose, no markdown fences, no commentary.
-Each TeacherMessage and StudentPrompt text must be at most 280 characters."""
-
-        raw = await tutor_agent.structured_chat(prompt=prompt)
-        if not raw:
-            return None
-
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Structured scene JSON parse failed: {e}; first 200 chars: {raw[:200]!r}")
-            return None
-
-        if not isinstance(parsed, list) or not parsed:
-            logger.warning(f"Structured scene was not a non-empty list: type={type(parsed).__name__}")
-            return None
-
-        components = self._build_components_from_blocks(parsed, context)
-        logger.info(
-            f"📐 Structured scene built: {len(components)} components from {len(parsed)} blocks "
-            f"(topic={topic!r})"
-        )
-        return components
-
-    def _build_components_from_blocks(
-        self, blocks: List[Dict[str, Any]], context: ContextSnapshot
-    ) -> List[Component]:
-        """
-        Convert AI-generated block dicts into validated Component instances.
-        Skips any block that fails validation; never raises.
-        """
-        components: List[Component] = []
-        topic_tag = (context.topic or "current_topic")[:30]
-
-        for idx, block in enumerate(blocks):
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type")
-            delay_ms = min(idx * 800, 4900)  # progressive reveal
-
-            try:
-                if btype == "TeacherMessage":
-                    text = (block.get("text") or "").strip()
-                    if not text:
-                        continue
-                    emotion = block.get("emotion") or "encouraging"
-                    if emotion not in {"neutral", "encouraging", "thinking", "excited", "concerned", "curious"}:
-                        emotion = "encouraging"
-                    # TeacherMessage schema only allows specific emotions; map "curious" -> "thinking"
-                    emotion_map = {"curious": "thinking"}
-                    safe_emotion = emotion_map.get(emotion, emotion)
-                    components.append(TeacherMessage(
-                        text=text[:4800],
-                        emotion=safe_emotion,
-                        audio_mood=AudioMood.CALM,
-                        concept_tags=[topic_tag],
-                        priority=idx,
-                        delay_ms=delay_ms,
-                    ))
-
-                elif btype == "StudentPrompt":
-                    text = (block.get("text") or "").strip()
-                    name = (block.get("student_name") or "Sam").strip()[:20] or "Sam"
-                    if not text:
-                        continue
-                    components.append(StudentPrompt(
-                        student_name=name,
-                        text=text[:480],
-                        priority=idx,
-                        delay_ms=delay_ms,
-                    ))
-
-                elif btype == "QuizCard":
-                    question = (block.get("question") or "").strip()
-                    raw_options = block.get("options") or []
-                    if not question or len(raw_options) < 2:
-                        continue
-                    quiz_opts: List[QuizOption] = []
-                    for opt in raw_options[:6]:
-                        if not isinstance(opt, dict):
-                            continue
-                        opt_id = (opt.get("id") or "").strip()[:10]
-                        opt_label = (opt.get("label") or "").strip()
-                        if not opt_id or not opt_label:
-                            continue
-                        quiz_opts.append(QuizOption(
-                            id=opt_id,
-                            label=opt_label[:280],
-                            is_correct=bool(opt.get("is_correct", False)),
-                        ))
-                    if len(quiz_opts) < 2:
-                        continue
-                    if not any(o.is_correct for o in quiz_opts):
-                        # Force at least one correct answer to satisfy server-side grading
-                        quiz_opts[0] = QuizOption(
-                            id=quiz_opts[0].id, label=quiz_opts[0].label, is_correct=True
-                        )
-                    components.append(QuizCard(
-                        question=question[:480],
-                        options=quiz_opts,
-                        concept_id=topic_tag,
-                        priority=idx,
-                        delay_ms=delay_ms,
-                    ))
-
-                elif btype == "CTAButton":
-                    label = (block.get("label") or "Continue").strip()[:48] or "Continue"
-                    intent_raw = (block.get("action_intent") or "continue").strip().lower()
-                    try:
-                        intent = ActionIntent(intent_raw)
-                    except ValueError:
-                        intent = ActionIntent.CONTINUE
-                    components.append(CTAButton(
-                        label=label,
-                        action_intent=intent,
-                        button_style="primary",
-                        priority=idx,
-                        delay_ms=delay_ms,
-                    ))
-
-                elif btype == "LessonBlock":
-                    block_type = (block.get("block_type") or "").strip().lower()
-                    block_payload = block.get("block")
-                    if not block_type or not isinstance(block_payload, dict):
-                        continue
-                    # Cap block_type length to satisfy field validator; reject anything obviously wrong.
-                    if len(block_type) > 40:
-                        continue
-                    components.append(LessonBlock(
-                        block_type=block_type,
-                        block=block_payload,
-                        priority=idx,
-                        delay_ms=delay_ms,
-                    ))
-
-                # Unknown block types are silently dropped — fail-soft.
-            except Exception as e:
-                logger.warning(f"Skipping invalid block #{idx} ({btype}): {e}")
-                continue
-
-        # Ensure there's always a CTAButton at the end so the user can advance.
-        if not any(isinstance(c, CTAButton) for c in components) and components:
-            components.append(CTAButton(
-                label="Continue",
-                action_intent=ActionIntent.CONTINUE,
-                button_style="primary",
-                priority=len(components),
-                delay_ms=min(len(components) * 800, 5000),
-            ))
 
         return components
 
@@ -1142,51 +930,22 @@ Each TeacherMessage and StudentPrompt text must be at most 280 characters."""
         return components
 
     async def _generate_instruction_content(self, context: ContextSnapshot) -> str:
-        """Generate dynamic instruction content using AI TutorAgent"""
+        """Generate dynamic instruction content using the Classroom Director System Prompt"""
         try:
             tutor_agent = self.ai_service  # TutorAgent instance
 
+            from lyo_app.ai_classroom.director_prompt import CLASSROOM_DIRECTOR_PROMPT
+            
             topic = context.topic or "general learning"
-            course_label = f" in the course '{context.course_title}'" if context.course_title else ""
+            course_title = context.course_title or topic
+            session_number = context.lesson_index + 1
+            user_name = "Learner" # Default, could be extracted from context if available
 
             logger.info(
                 f"📝 Generating instruction: lesson_title={context.lesson_title!r}, "
                 f"lesson_index={context.lesson_index}, total={context.total_lessons}, "
-                f"topic={context.topic!r}, course={context.course_title!r}"
+                f"topic={topic!r}, course={course_title!r}"
             )
-
-            # Build a contextual prompt for the tutor
-            # If we have lesson-specific data, use it for a focused lesson
-            if context.lesson_title:
-                prompt = (
-                    f"You are Lyo, an expert AI tutor{course_label}. "
-                    f"You are now teaching Lesson {context.lesson_index + 1} of {context.total_lessons}: "
-                    f"'{context.lesson_title}'.\n\n"
-                )
-                if context.lesson_content:
-                    # Include lesson source material (truncated for prompt size)
-                    prompt += (
-                        f"Use this source material as a guide for your explanation:\n"
-                        f"{context.lesson_content[:2000]}\n\n"
-                    )
-                prompt += (
-                    f"Explain this lesson clearly and engagingly in 2-3 paragraphs. "
-                    f"Use examples, analogies, or real-world applications. "
-                    f"End with a thought-provoking question to check understanding. "
-                    f"IMPORTANT: Do NOT introduce yourself or say hello. Start directly with the lesson content."
-                )
-            else:
-                # Fallback to generic prompt when no lesson data
-                progress_note = (
-                    f" The learner has completed {context.scenes_completed} scenes so far."
-                    if context.scenes_completed > 0 else ""
-                )
-                prompt = (
-                    f"You are Lyo, an expert AI tutor teaching about {topic}{course_label}.{progress_note} "
-                    f"Provide a clear, engaging explanation of the next concept they should learn. "
-                    f"Keep it concise (2-3 paragraphs max) and end with a thought-provoking question. "
-                    f"Do NOT introduce yourself. Start directly with the teaching content."
-                )
 
             # Map classroom context to TutorAgent's UserContext
             agent_context = AgentUserContext(
@@ -1197,25 +956,49 @@ Each TeacherMessage and StudentPrompt text must be at most 280 characters."""
                     s.concept_id for s in context.knowledge_states if s.mastery_level > 0.8
                 ],
                 skill_level="beginner" if context.preferred_difficulty < 0.4 else (
-                    "advanced" if context.preferred_difficulty > 0.7 else "intermediate"
+                    "advanced" if context.preferred_difficulty > 0.7 else "developing"
                 ),
             )
 
+            input_block = f"""
+INPUT FORMAT:
+subject: "{course_title}"
+session_number: {session_number}
+user_name: "{user_name}"
+user_memory: "Likes clear and concise explanations."
+last_session_recap: ""
+user_level: "{agent_context.skill_level}"
+"""
+            prompt = CLASSROOM_DIRECTOR_PROMPT + "\n\n" + input_block
+
+            # Try structured chat first
+            if hasattr(tutor_agent, "structured_chat"):
+                json_response = await tutor_agent.structured_chat(prompt)
+                if json_response:
+                    return json_response
+
+            # Fallback to standard chat
             response = await tutor_agent.chat(
                 user_message=prompt,
                 context=agent_context,
             )
 
-            # Truncate to stay within TeacherMessage max_length (5000)
             text = response.message
-            if len(text) > 4800:
-                text = text[:4800] + "..."
+            # Remove Markdown fences if any
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].strip()
+
             return text
 
         except Exception as e:
             logger.error(f"❌ TutorAgent instruction generation failed: {e}")
             topic = context.topic or "this concept"
-            return f"Let's explore {topic} together. I'll guide you through the key ideas step by step."
+            fallback_json = f"""[
+                {{"type": "speech", "speaker": "Teacher", "text": "Let's explore {topic} together. I'll guide you through the key ideas step by step."}}
+            ]"""
+            return fallback_json
 
     async def _generate_quiz_question(self, context: ContextSnapshot) -> QuizCard:
         """Generate dynamic quiz question using AI"""
@@ -1398,14 +1181,8 @@ class SceneLifecycleEngine:
 
         except Exception as e:
             logger.error(f"❌ LIFECYCLE FAILED: {e}")
-            fallback = await self._create_fallback_scene(trigger)
-            # Stream the fallback so the client doesn't hang on the loading state
-            if self.websocket_manager:
-                try:
-                    await self._stream_scene_to_client(fallback, trigger.session_id)
-                except Exception as stream_err:
-                    logger.error(f"❌ Failed to stream fallback scene: {stream_err}")
-            return fallback
+            # Return fallback scene
+            return await self._create_fallback_scene(trigger)
 
     async def _handle_user_action_trigger(self, trigger: Trigger):
         """Handle user action triggers"""

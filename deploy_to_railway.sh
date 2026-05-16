@@ -98,8 +98,8 @@ set_var "AI_FORCE_REAL_RESPONSES=true"
 set_var "LOG_LEVEL=INFO"
 set_var "ENABLE_METRICS=true"
 
-# CORS — let everything through by default; lock down later if needed
-set_var "CORS_ORIGINS=[\"*\"]"
+# CORS — must use valid URLs in production; allow the deployed service domain by default
+set_var "CORS_ORIGINS=[\"https://lyobackendjune-lyo.up.railway.app\"]"
 
 # Optional integrations (forwarded if present in .env)
 set_var "DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}"

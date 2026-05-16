@@ -218,6 +218,11 @@ def detect_course_creation_intent(message: str) -> Optional[Dict[str, str]]:
     """
     message_lower = message.lower()
     
+    # Exclude test prep, study plan, and quiz requests
+    no_course_kws = ["test prep", "study plan", "quiz", "test me", "prepare for", "schedule"]
+    if any(kw in message_lower for kw in no_course_kws):
+        return None
+
     # Patterns that indicate course creation
     course_patterns = [
         r"create (?:a )?course (?:on|about|for) (.+)",
@@ -238,6 +243,33 @@ def detect_course_creation_intent(message: str) -> Optional[Dict[str, str]]:
     
     return None
 
+def detect_study_plan_intent(message: str) -> Optional[Dict[str, str]]:
+    """Detect if the user is asking for a study plan or test prep."""
+    message_lower = message.lower()
+    
+    plan_patterns = [
+        r"(?:study\s+plan|learning\s+plan|schedule\s+to\s+learn)\s+(?:for|on)?\s*(.+)?",
+        r"(?:create|make|build)\s+(?:a\s+)?(?:study|learning)\s+(?:plan|schedule)\s+(?:for|on)?\s*(.+)?",
+        r"(?:plan\s+(?:to\s+learn|my\s+study))\s+(.+)",
+    ]
+    prep_patterns = [
+        r"(?:test\s+prep|prepare\s+for\s+(?:a\s+)?(?:test|exam)|help\s+me\s+(?:prep|prepare))\s*(?:for)?\s*(.+)?",
+        r"(?:upcoming|my)\s+(?:test|exam|midterm|final)\s+(?:on|about|for)?\s*(.+)?",
+    ]
+    
+    for pattern in plan_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            topic = match.group(1).strip() if match.group(1) else "your subject"
+            return {"topic": topic, "type": "study_plan"}
+            
+    for pattern in prep_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            topic = match.group(1).strip() if match.group(1) else "your exam"
+            return {"topic": topic, "type": "test_prep"}
+            
+    return None
 
 # ============================================================
 # TRANSLATION LAYER (A2A -> Frontend UI)
@@ -459,6 +491,28 @@ async def chat(
                 pass
         
         # ============================================================
+        # STEP 1.5: Intercept Study Plan & Test Prep Requests
+        # ============================================================
+        study_intent = detect_study_plan_intent(request.message)
+        strict_study_prompt = ""
+        if study_intent:
+            if study_intent["type"] == "study_plan":
+                strict_study_prompt = (
+                    f"\n\nCRITICAL INSTRUCTION: The user wants a study plan for '{study_intent['topic']}'. "
+                    "You MUST output exactly ONE :::study_plan block containing the schedule. "
+                    "Use realistic future dates in ISO8601 format (e.g. 2026-05-15T10:00:00Z). "
+                    "DO NOT write a wall of text. DO NOT output standard markdown lists for the schedule. "
+                    "Only output a brief motivational sentence, followed immediately by the :::study_plan block."
+                )
+            elif study_intent["type"] == "test_prep":
+                strict_study_prompt = (
+                    f"\n\nCRITICAL INSTRUCTION: The user wants to prepare for an exam on '{study_intent['topic']}'. "
+                    "You MUST output exactly ONE :::test_prep block asking for their exam date and details. "
+                    "DO NOT write a wall of text. Only output a brief motivational sentence, "
+                    "followed immediately by the :::test_prep block."
+                )
+
+        # ============================================================
         # STEP 2: Regular Chat Completion (Non-course requests)
         # ============================================================
         
@@ -471,7 +525,7 @@ async def chat(
         
         # Add current message
         messages.append({"role": "user", "content": request.message})
-
+        
         # Add system message for Lyo personality with optional profile context
         # Incorporate client-provided context if available
         client_context = request.context if request.context else ""
@@ -480,9 +534,18 @@ async def chat(
 Be conversational, helpful, and educational. Use emojis sparingly for warmth.
 Format responses with markdown for readability. Keep responses concise but informative.
 
+### CRITICAL MATH FORMATTING RULE
+NEVER use LaTeX delimiters ($...$ or $$...$$). The iOS app cannot render LaTeX.
+Always write math in plain readable text:
+- Write "x squared" or "x^2" instead of dollar-sign math
+- Write "x = (-b plus-or-minus sqrt(b^2 - 4ac)) / 2a" for the quadratic formula
+- Use Unicode superscripts (x², y³) when helpful
+- Write fractions as "a/b" or "a over b"
+
 ### SMART BLOCKS CAPABILITIES
 When appropriate, use the following interactive blocks to enhance learning.
 ALWAYS use the `:::block_type` syntax. Do NOT use these blocks inside code fences.
+{strict_study_prompt}
 
 1. QUIZ (Check understanding)
 :::quiz
@@ -585,6 +648,22 @@ When a user asks to create a course, briefly confirm the topic and ask about the
         try:
             from lyo_app.services.proactive_dispatcher import proactive_dispatcher
             proactive_dispatcher.extract_and_schedule_from_text(user_id_str, response_text)
+            
+            # Extract study plan block to render as a native UI component
+            plans = proactive_dispatcher.parse_smart_block("study_plan", response_text)
+            if plans and not ui_component_json:
+                ui_component_json = {
+                    "type": "study_plan",
+                    "study_plan": plans[0]
+                }
+            
+            # Extract test prep block to render as native UI component
+            preps = proactive_dispatcher.parse_smart_block("test_prep", response_text)
+            if preps and not ui_component_json:
+                ui_component_json = {
+                    "type": "test_prep",
+                    "test_prep": preps[0]
+                }
         except Exception as e:
             logger.error(f"Proactive dispatcher failed: {e}")
 

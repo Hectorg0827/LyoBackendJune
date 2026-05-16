@@ -1,688 +1,786 @@
 /**
- * Living Classroom - iOS WebSocket Client
- * ======================================
+ * Living Classroom - iOS WebSocket Client  (v2 — Interactive)
+ * ============================================================
  *
- * Real-time WebSocket client for scene-by-scene streaming from the Living Classroom backend.
- * Replaces the current HTTP polling with bidirectional WebSocket communication.
+ * Protocol (v2):
+ *   SERVER → CLIENT  LyoStreamChunk  { card, card_index, total_cards, is_last_card }
+ *   CLIENT → SERVER  { "action_intent": "continue" | "skip" | "hint" | "quiz_submit", ... }
+ *   SERVER → CLIENT  { "is_complete": true }
  *
- * Architecture: iOS Client ←→ WebSocket ←→ Scene Lifecycle Engine ←→ Multi-Agent System
+ * The server sends ONE card at a time and waits for the client to send
+ * any action_intent message before advancing.  This file replaces the
+ * previous passive-streaming version.
  */
 
 import Foundation
 import Combine
 import SwiftUI
+import AVFoundation
 
-// MARK: - SDUI Models (matching Python backend exactly)
+// MARK: - Card Models (mirror Python schemas exactly)
 
-struct ScenePayload: Codable {
-    let eventType: String
-    let sessionId: String
-    let scene: Scene
-    let componentCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case eventType = "event_type"
-        case sessionId = "session_id"
-        case scene
-        case componentCount = "component_count"
-    }
-}
-
-struct Scene: Codable, Identifiable {
-    let id: String
-    let sceneId: String
-    let sceneType: SceneType
-    let components: [Component]
-    let priority: Int
-    let metadata: SceneMetadata?
+struct LyoStreamChunk: Codable {
+    let metadata: LyoLessonMetadata?
+    let card: LyoCard?
+    let isComplete: Bool
+    let cardIndex: Int?
+    let totalCards: Int?
+    let isLastCard: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id = "scene_id"
-        case sceneId = "scene_id"
-        case sceneType = "scene_type"
-        case components
-        case priority
         case metadata
+        case card
+        case isComplete   = "is_complete"
+        case cardIndex    = "card_index"
+        case totalCards   = "total_cards"
+        case isLastCard   = "is_last_card"
     }
 }
 
-enum SceneType: String, Codable, CaseIterable {
-    case instruction = "instruction"
-    case challenge = "challenge"
-    case celebration = "celebration"
-    case correction = "correction"
-    case reflection = "reflection"
+struct LyoLessonMetadata: Codable {
+    let topic: String
+    let palette: LyoLessonPalette
 }
 
-struct SceneMetadata: Codable {
-    let estimatedDuration: Int?
-    let difficultyLevel: String?
-    let conceptTags: [String]?
+struct LyoLessonPalette: Codable {
+    let color1Hex: String
+    let color2Hex: String
+    let color3Hex: String
 
     enum CodingKeys: String, CodingKey {
-        case estimatedDuration = "estimated_duration_ms"
-        case difficultyLevel = "difficulty_level"
-        case conceptTags = "concept_tags"
+        case color1Hex = "color1_hex"
+        case color2Hex = "color2_hex"
+        case color3Hex = "color3_hex"
     }
 }
 
-// MARK: - Component System (Server-Driven UI)
+// MARK: - Polymorphic Card
 
-protocol Component: Codable, Identifiable {
-    var id: String { get }
-    var type: ComponentType { get }
-    var priority: Int { get }
-    var delayMs: Int? { get }
-}
+struct LyoCard: Codable {
+    let type: String
 
-enum ComponentType: String, Codable {
-    case teacherMessage = "TeacherMessage"
-    case studentPrompt = "StudentPrompt"
-    case quizCard = "QuizCard"
-    case ctaButton = "CTAButton"
-    case celebration = "Celebration"
-    case codeEditor = "CodeEditor"
-}
+    // ConceptCard
+    let keyTerm: String?
+    let bodyText: String?
 
-struct TeacherMessage: Component {
-    let id: String
-    let type: ComponentType = .teacherMessage
-    let text: String
-    let emotion: String?
-    let audioMood: String?
-    let priority: Int
-    let delayMs: Int?
-    let conceptTags: [String]?
+    // AnalogyCard
+    let conceptSide: String?
+    let analogySide: String?
+
+    // DiagramCard
+    let nodes: [DiagramNode]?
+    let connections: [DiagramConnection]?
+
+    // QuizCard
+    let question: String?
+    let options: [String]?
+    let correctOptionIndex: Int?
+    let explanation: String?
+
+    // ReflectCard
+    let prompt: String?
+
+    // SummaryCard
+    let title: String?
+    let keyPoints: [String]?
+
+    // TransitionCard — uses `title` above
+
+    // Shared
+    let voiceText: String?
+    let audioUrl: String?
 
     enum CodingKeys: String, CodingKey {
-        case id = "component_id"
-        case text
-        case emotion
-        case audioMood = "audio_mood"
-        case priority
-        case delayMs = "delay_ms"
-        case conceptTags = "concept_tags"
+        case type
+        case keyTerm            = "key_term"
+        case bodyText           = "body_text"
+        case conceptSide        = "concept_side"
+        case analogySide        = "analogy_side"
+        case nodes, connections
+        case question, options
+        case correctOptionIndex = "correct_option_index"
+        case explanation, prompt, title
+        case keyPoints          = "key_points"
+        case voiceText          = "voice_text"
+        case audioUrl           = "audio_url"
     }
 }
 
-struct QuizCard: Component {
+struct DiagramNode: Codable, Identifiable {
     let id: String
-    let type: ComponentType = .quizCard
-    let question: String
-    let options: [QuizOption]
-    let priority: Int
-    let delayMs: Int?
-    let conceptId: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id = "component_id"
-        case question
-        case options
-        case priority
-        case delayMs = "delay_ms"
-        case conceptId = "concept_id"
-    }
-}
-
-struct QuizOption: Codable, Identifiable {
-    let id: String
+    let symbolName: String
     let label: String
-    let isCorrect: Bool
+    let colorHex: String?
 
     enum CodingKeys: String, CodingKey {
         case id
+        case symbolName = "symbol_name"
         case label
-        case isCorrect = "is_correct"
+        case colorHex  = "color_hex"
     }
 }
 
-struct CTAButton: Component {
-    let id: String
-    let type: ComponentType = .ctaButton
-    let label: String
-    let actionIntent: ActionIntent
-    let priority: Int
-    let delayMs: Int?
-    let style: String?
+struct DiagramConnection: Codable {
+    let sourceId: String
+    let targetId: String
+    let label: String?
 
     enum CodingKeys: String, CodingKey {
-        case id = "component_id"
+        case sourceId = "source_id"
+        case targetId = "target_id"
         case label
-        case actionIntent = "action_intent"
-        case priority
-        case delayMs = "delay_ms"
-        case style
     }
 }
+
+// MARK: - Action Intent
 
 enum ActionIntent: String, Codable {
-    case `continue` = "continue"
-    case retry = "retry"
-    case hint = "hint"
-    case skip = "skip"
-    case celebrate = "celebrate"
-    case nextTopic = "next_topic"
+    case `continue`  = "continue"
+    case skip        = "skip"
+    case hint        = "hint"
+    case quizSubmit  = "quiz_submit"
+    case nextTopic   = "next_topic"
 }
 
-struct Celebration: Component {
-    let id: String
-    let type: ComponentType = .celebration
-    let message: String
-    let celebrationType: String
-    let particleEffect: Bool?
-    let priority: Int
-    let delayMs: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case id = "component_id"
-        case message
-        case celebrationType = "celebration_type"
-        case particleEffect = "particle_effect"
-        case priority
-        case delayMs = "delay_ms"
-    }
-}
-
-// MARK: - WebSocket Client Implementation
+// MARK: - Classroom ViewModel
 
 @MainActor
-class LivingClassroomClient: ObservableObject {
-    @Published var isConnected = false
-    @Published var currentScene: Scene?
-    @Published var components: [AnyComponent] = []
-    @Published var connectionState: ConnectionState = .disconnected
-    @Published var lastError: String?
+class LivingClassroomViewModel: ObservableObject {
+    // Published state
+    @Published var metadata: LyoLessonMetadata?
+    @Published var currentCard: LyoCard?
+    @Published var cardIndex: Int = 0
+    @Published var totalCards: Int = 0
+    @Published var isComplete: Bool = false
+    @Published var isConnected: Bool = false
+    @Published var isWaitingForServer: Bool = false
+    @Published var errorMessage: String?
 
     private var webSocketTask: URLSessionWebSocketTask?
-    private var sessionId: String
+    private var audioPlayer: AVPlayer?
+    private var sessionId: String = UUID().uuidString
     private let baseURL: String
-    private let userToken: String
-    private var heartbeatTimer: Timer?
 
-    enum ConnectionState {
-        case disconnected
-        case connecting
-        case connected
-        case reconnecting
-        case error(String)
-    }
+    // Heartbeat
+    private var heartbeatTask: Task<Void, Never>?
 
-    init(baseURL: String = "wss://api.lyo.ai", userToken: String, sessionId: String? = nil) {
+    init(baseURL: String = "wss://lyo-production.up.railway.app") {
         self.baseURL = baseURL
-        self.userToken = userToken
-        self.sessionId = sessionId ?? UUID().uuidString
     }
 
-    // MARK: - Connection Management
+    // MARK: - Connect & Start Lesson
 
-    func connect() async throws {
-        connectionState = .connecting
-
-        guard let url = URL(string: "\(baseURL)/api/v1/classroom/ws/connect") else {
-            throw LivingClassroomError.invalidURL
+    func startLesson(topic: String) async {
+        guard let url = URL(string: "\(baseURL)/api/v1/classroom/ws/lesson/\(topic.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? topic)") else {
+            errorMessage = "Invalid classroom URL"
+            return
         }
 
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(userToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(sessionId, forHTTPHeaderField: "X-Session-ID")
+        // Reset state
+        metadata     = nil
+        currentCard  = nil
+        cardIndex    = 0
+        totalCards   = 0
+        isComplete   = false
+        isConnected  = false
+        errorMessage = nil
 
+        let request = URLRequest(url: url)
         let session = URLSession(configuration: .default)
         webSocketTask = session.webSocketTask(with: request)
-
         webSocketTask?.resume()
 
-        // Start listening for messages
-        await startListening()
-
-        // Start heartbeat
-        startHeartbeat()
-
-        connectionState = .connected
         isConnected = true
-
-        print("🎭 Living Classroom WebSocket connected - Session: \(sessionId)")
+        startHeartbeat()
+        await receiveMessages()
     }
 
     func disconnect() {
+        heartbeatTask?.cancel()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
-        heartbeatTimer?.invalidate()
-        connectionState = .disconnected
         isConnected = false
-        print("👋 Living Classroom WebSocket disconnected")
     }
 
-    // MARK: - Message Handling
+    // MARK: - Receive Loop
 
-    private func startListening() async {
-        guard let webSocketTask = webSocketTask else { return }
-
+    private func receiveMessages() async {
+        guard let task = webSocketTask else { return }
         do {
             while isConnected {
-                let message = try await webSocketTask.receive()
-                await handleMessage(message)
-            }
-        } catch {
-            print("❌ WebSocket listening error: \(error)")
-            await handleConnectionError(error)
-        }
-    }
-
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) async {
-        switch message {
-        case .string(let text):
-            await processTextMessage(text)
-        case .data(let data):
-            await processDataMessage(data)
-        @unknown default:
-            print("⚠️ Unknown WebSocket message type")
-        }
-    }
-
-    private func processTextMessage(_ text: String) async {
-        do {
-            let data = Data(text.utf8)
-
-            // Try to parse as ScenePayload
-            if let scenePayload = try? JSONDecoder().decode(ScenePayload.self, from: data) {
-                await handleScenePayload(scenePayload)
-                return
-            }
-
-            // Try generic JSON
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                await handleGenericMessage(json)
-            }
-
-        } catch {
-            print("❌ Failed to process message: \(error)")
-        }
-    }
-
-    private func processDataMessage(_ data: Data) async {
-        // Handle binary data if needed
-        print("📦 Received binary message: \(data.count) bytes")
-    }
-
-    private func handleScenePayload(_ payload: ScenePayload) async {
-        print("🎬 New scene received: \(payload.scene.sceneType) with \(payload.componentCount) components")
-
-        currentScene = payload.scene
-
-        // Convert components to renderable format
-        var newComponents: [AnyComponent] = []
-
-        for component in payload.scene.components {
-            if let anyComponent = createAnyComponent(from: component) {
-                newComponents.append(anyComponent)
-            }
-        }
-
-        components = newComponents
-
-        // Trigger progressive rendering with delays
-        await progressivelyRenderComponents()
-    }
-
-    private func handleGenericMessage(_ json: [String: Any]) async {
-        if let eventType = json["event_type"] as? String {
-            switch eventType {
-            case "connection_established":
-                print("✅ Living Classroom connection established")
-            case "scene_start":
-                print("🎭 Scene starting...")
-            case "scene_complete":
-                print("✅ Scene complete")
-            case "error":
-                if let errorMessage = json["message"] as? String {
-                    lastError = errorMessage
-                    print("❌ Backend error: \(errorMessage)")
+                let message = try await task.receive()
+                switch message {
+                case .string(let text):
+                    processMessage(text)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) {
+                        processMessage(text)
+                    }
+                @unknown default:
+                    break
                 }
-            default:
-                print("📨 Unknown event: \(eventType)")
+            }
+        } catch {
+            if isConnected {
+                errorMessage = "Connection lost: \(error.localizedDescription)"
+                isConnected = false
             }
         }
     }
 
-    private func handleConnectionError(_ error: Error) async {
-        connectionState = .error(error.localizedDescription)
-        isConnected = false
-
-        // Attempt reconnection after delay
-        try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-
-        if case .error = connectionState {
-            connectionState = .reconnecting
-            try? await connect()
-        }
-    }
-
-    // MARK: - Progressive Rendering
-
-    private func progressivelyRenderComponents() async {
-        let sortedComponents = components.sorted { $0.priority < $1.priority }
-
-        for component in sortedComponents {
-            // Apply delay if specified
-            if let delayMs = component.delayMs, delayMs > 0 {
-                let delaySeconds = Double(delayMs) / 1000.0
-                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
-            }
-
-            // Trigger component animation/rendering
-            await animateComponentIn(component)
-        }
-    }
-
-    private func animateComponentIn(_ component: AnyComponent) async {
-        withAnimation(.easeInOut(duration: 0.5)) {
-            // Component becomes visible with animation
-            if let index = components.firstIndex(where: { $0.id == component.id }) {
-                components[index].isVisible = true
+    private func processMessage(_ text: String) {
+        guard let data = text.data(using: .utf8) else { return }
+        do {
+            let chunk = try JSONDecoder().decode(LyoStreamChunk.self, from: data)
+            applyChunk(chunk)
+        } catch {
+            // Might be a plain ping/pong or error envelope — try generic JSON
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let err = json["error"] as? String {
+                    errorMessage = err
+                }
+                if json["is_complete"] as? Bool == true {
+                    isComplete = true
+                    isConnected = false
+                }
             }
         }
     }
 
-    // MARK: - User Actions
+    private func applyChunk(_ chunk: LyoStreamChunk) {
+        if let meta = chunk.metadata {
+            metadata = meta
+            return
+        }
+        if chunk.isComplete {
+            isComplete = true
+            isConnected = false
+            return
+        }
+        if let card = chunk.card {
+            currentCard       = card
+            cardIndex         = chunk.cardIndex ?? cardIndex
+            totalCards        = chunk.totalCards ?? totalCards
+            isWaitingForServer = false
 
-    func sendUserAction(intent: ActionIntent, data: [String: Any] = [:]) async throws {
-        let payload = [
-            "event_type": "user_action",
-            "session_id": sessionId,
-            "action_intent": intent.rawValue,
-            "action_data": data,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
+            // Auto-play audio if available
+            if let urlString = card.audioUrl, let url = URL(string: urlString) {
+                playAudio(from: url)
+            }
+        }
+    }
+
+    // MARK: - User Actions (the "Continue" button)
+
+    /// Call this when the user taps Continue / advances a slide.
+    func sendContinue() async {
+        await sendAction(intent: .continue)
+    }
+
+    func sendSkip() async {
+        await sendAction(intent: .skip)
+    }
+
+    func sendQuizAnswer(selectedIndex: Int, isCorrect: Bool) async {
+        let payload: [String: Any] = [
+            "action_intent": ActionIntent.quizSubmit.rawValue,
+            "selected_index": selectedIndex,
+            "is_correct": isCorrect,
+            "card_index": cardIndex
         ]
-
-        let jsonData = try JSONSerialization.data(withJSONObject: payload)
-        let message = URLSessionWebSocketTask.Message.data(jsonData)
-
-        try await webSocketTask?.send(message)
-        print("📤 User action sent: \(intent.rawValue)")
+        await sendJSON(payload)
     }
 
-    func submitQuizAnswer(questionId: String, selectedOptionId: String, isCorrect: Bool) async throws {
-        try await sendUserAction(
-            intent: .continue,
-            data: [
-                "action_type": "quiz_submit",
-                "question_id": questionId,
-                "selected_option": selectedOptionId,
-                "is_correct": isCorrect
-            ]
-        )
+    private func sendAction(intent: ActionIntent, extra: [String: Any] = [:]) async {
+        var payload: [String: Any] = [
+            "action_intent": intent.rawValue,
+            "session_id": sessionId,
+            "card_index": cardIndex
+        ]
+        extra.forEach { payload[$0] = $1 }
+        await sendJSON(payload)
+        isWaitingForServer = true
     }
 
-    func requestHint() async throws {
-        try await sendUserAction(intent: .hint)
-    }
-
-    func continueLesson() async throws {
-        try await sendUserAction(intent: .continue)
+    private func sendJSON(_ payload: [String: Any]) async {
+        guard let task = webSocketTask, isConnected else { return }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let message = URLSessionWebSocketTask.Message.data(data)
+            try await task.send(message)
+        } catch {
+            print("⚠️ Failed to send message: \(error)")
+        }
     }
 
     // MARK: - Heartbeat
 
     private func startHeartbeat() {
-        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                try? await self?.sendHeartbeat()
+        heartbeatTask = Task {
+            while isConnected {
+                try? await Task.sleep(nanoseconds: 25_000_000_000) // 25 s
+                guard isConnected, let task = webSocketTask else { break }
+                try? await task.send(.string("ping"))
             }
         }
     }
 
-    private func sendHeartbeat() async throws {
-        let ping = URLSessionWebSocketTask.Message.string("ping")
-        try await webSocketTask?.send(ping)
-    }
-}
+    // MARK: - Audio
 
-// MARK: - Component Type Erasure
-
-struct AnyComponent: Identifiable {
-    let id: String
-    let type: ComponentType
-    let priority: Int
-    let delayMs: Int?
-    var isVisible: Bool = false
-
-    let component: Any // The actual component
-
-    init<T: Component>(_ component: T) {
-        self.id = component.id
-        self.type = component.type
-        self.priority = component.priority
-        self.delayMs = component.delayMs
-        self.component = component
-    }
-}
-
-private func createAnyComponent(from json: [String: Any]) -> AnyComponent? {
-    guard let typeString = json["type"] as? String,
-          let componentType = ComponentType(rawValue: typeString) else {
-        return nil
+    private func playAudio(from url: URL) {
+        let item = AVPlayerItem(url: url)
+        audioPlayer = AVPlayer(playerItem: item)
+        audioPlayer?.play()
     }
 
-    do {
-        let data = try JSONSerialization.data(withJSONObject: json)
+    // MARK: - Computed helpers
 
-        switch componentType {
-        case .teacherMessage:
-            let component = try JSONDecoder().decode(TeacherMessage.self, from: data)
-            return AnyComponent(component)
-        case .quizCard:
-            let component = try JSONDecoder().decode(QuizCard.self, from: data)
-            return AnyComponent(component)
-        case .ctaButton:
-            let component = try JSONDecoder().decode(CTAButton.self, from: data)
-            return AnyComponent(component)
-        case .celebration:
-            let component = try JSONDecoder().decode(Celebration.self, from: data)
-            return AnyComponent(component)
-        default:
-            return nil
-        }
-    } catch {
-        print("❌ Failed to decode component: \(error)")
-        return nil
+    var progressFraction: Double {
+        guard totalCards > 0 else { return 0 }
+        return Double(cardIndex + 1) / Double(totalCards)
     }
-}
 
-// MARK: - Error Handling
-
-enum LivingClassroomError: LocalizedError {
-    case invalidURL
-    case connectionFailed
-    case invalidMessage
-    case authenticationFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidURL:
-            return "Invalid WebSocket URL"
-        case .connectionFailed:
-            return "Failed to connect to Living Classroom"
-        case .invalidMessage:
-            return "Invalid message format"
-        case .authenticationFailed:
-            return "Authentication failed"
-        }
+    var cardCountText: String {
+        guard totalCards > 0 else { return "" }
+        return "\(cardIndex + 1) / \(totalCards)"
     }
 }
 
 // MARK: - SwiftUI Views
 
-struct LivingClassroomView: View {
-    @StateObject private var client = LivingClassroomClient(
-        userToken: "your_token_here",
-        sessionId: nil
-    )
+struct LyoClassroomView: View {
+    let topic: String
+    @StateObject private var vm = LivingClassroomViewModel()
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 16) {
-            // Connection Status
-            HStack {
-                Circle()
-                    .fill(client.isConnected ? Color.green : Color.red)
-                    .frame(width: 12, height: 12)
+        ZStack {
+            // Background gradient from palette
+            if let palette = vm.metadata?.palette,
+               let c1 = Color(hex: palette.color1Hex),
+               let c2 = Color(hex: palette.color2Hex) {
+                LinearGradient(colors: [c1, c2], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
+            } else {
+                LinearGradient(colors: [Color(hex: "#2B1A4A") ?? .indigo, Color(hex: "#1A51AC") ?? .blue],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
+            }
 
-                Text(client.isConnected ? "Connected" : "Disconnected")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            VStack(spacing: 0) {
+                // Navigation bar
+                HStack {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    Spacer()
+                    if vm.totalCards > 0 {
+                        Text(vm.cardCountText)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+
+                // Progress bar
+                if vm.totalCards > 0 {
+                    ProgressView(value: vm.progressFraction)
+                        .progressViewStyle(.linear)
+                        .tint(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                }
 
                 Spacer()
 
-                Text("Living Classroom")
-                    .font(.headline)
-            }
-            .padding(.horizontal)
-
-            // Scene Components
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    ForEach(client.components) { anyComponent in
-                        ComponentView(component: anyComponent)
-                            .opacity(anyComponent.isVisible ? 1.0 : 0.0)
-                            .animation(.easeInOut, value: anyComponent.isVisible)
+                // Card area
+                Group {
+                    if let error = vm.errorMessage {
+                        ErrorCardView(message: error, onRetry: {
+                            Task { await vm.startLesson(topic: topic) }
+                        })
+                    } else if vm.isComplete {
+                        LessonCompleteView(topic: topic, onDismiss: { dismiss() })
+                    } else if let card = vm.currentCard {
+                        LyoCardView(card: card, vm: vm)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                            .id(vm.cardIndex) // forces SwiftUI to animate on card change
+                    } else {
+                        // Loading / connecting
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(1.5)
+                            Text("Preparing your lesson…")
+                                .foregroundColor(.white.opacity(0.8))
+                                .font(.subheadline)
+                        }
                     }
                 }
-                .padding()
+                .padding(.horizontal, 20)
+
+                Spacer()
             }
         }
-        .onAppear {
-            Task {
-                try? await client.connect()
-            }
+        .animation(.easeInOut(duration: 0.4), value: vm.cardIndex)
+        .task {
+            await vm.startLesson(topic: topic)
         }
         .onDisappear {
-            client.disconnect()
+            vm.disconnect()
         }
     }
 }
 
-struct ComponentView: View {
-    let component: AnyComponent
+// MARK: - Card View (routes to specific card type)
+
+struct LyoCardView: View {
+    let card: LyoCard
+    @ObservedObject var vm: LivingClassroomViewModel
 
     var body: some View {
-        Group {
-            switch component.type {
-            case .teacherMessage:
-                if let teacherMessage = component.component as? TeacherMessage {
-                    TeacherMessageView(message: teacherMessage)
+        VStack(spacing: 24) {
+            cardContent
+            continueButton
+        }
+    }
+
+    @ViewBuilder
+    private var cardContent: some View {
+        switch card.type {
+        case "transition_card":
+            TransitionCardView(card: card)
+        case "concept_card":
+            ConceptCardView(card: card)
+        case "analogy_card":
+            AnalogyCardView(card: card)
+        case "diagram_card":
+            DiagramCardView(card: card)
+        case "reflect_card":
+            ReflectCardView(card: card)
+        case "quiz_card":
+            QuizCardView(card: card, vm: vm)
+        case "summary_card":
+            SummaryCardView(card: card)
+        default:
+            UnknownCardView(type: card.type)
+        }
+    }
+
+    // ─── THE CONTINUE BUTTON (now actually wired up) ───────────────────────
+    @ViewBuilder
+    private var continueButton: some View {
+        // Quiz cards handle their own "submit" flow; all others get Continue
+        if card.type != "quiz_card" {
+            Button(action: {
+                Task { await vm.sendContinue() }
+            }) {
+                HStack(spacing: 8) {
+                    if vm.isWaitingForServer {
+                        ProgressView().tint(.white)
+                    }
+                    Text(vm.isWaitingForServer ? "Loading…" : continueLabel)
+                        .font(.headline)
+                        .foregroundColor(.white)
                 }
-            case .quizCard:
-                if let quiz = component.component as? QuizCard {
-                    QuizCardView(quiz: quiz)
-                }
-            case .ctaButton:
-                if let button = component.component as? CTAButton {
-                    CTAButtonView(button: button)
-                }
-            case .celebration:
-                if let celebration = component.component as? Celebration {
-                    CelebrationView(celebration: celebration)
-                }
-            default:
-                EmptyView()
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(
+                    vm.isWaitingForServer
+                        ? Color.white.opacity(0.2)
+                        : Color.white.opacity(0.3)
+                )
+                .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.5), lineWidth: 1)
+                )
             }
+            .disabled(vm.isWaitingForServer)
         }
-        .transition(.opacity.combined(with: .slide))
+    }
+
+    private var continueLabel: String {
+        guard vm.totalCards > 0 else { return "Continue →" }
+        return vm.cardIndex >= vm.totalCards - 2 ? "Finish →" : "Continue →"
     }
 }
 
-struct TeacherMessageView: View {
-    let message: TeacherMessage
+// MARK: - Individual Card Views
 
+struct TransitionCardView: View {
+    let card: LyoCard
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(message.text)
+        VStack(spacing: 20) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 56))
+                .foregroundColor(.white)
+            Text(card.title ?? "Welcome")
+                .font(.largeTitle.bold())
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+            if let voice = card.voiceText {
+                Text(voice)
                     .font(.body)
-                    .multilineTextAlignment(.leading)
+                    .foregroundColor(.white.opacity(0.8))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .cardStyle()
+    }
+}
 
-                if let emotion = message.emotion {
-                    Text("Emotion: \(emotion)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+struct ConceptCardView: View {
+    let card: LyoCard
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(card.keyTerm ?? "")
+                .font(.title.bold())
+                .foregroundColor(.white)
+            Text(card.bodyText ?? "")
+                .font(.body)
+                .foregroundColor(.white.opacity(0.9))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardStyle()
+    }
+}
+
+struct AnalogyCardView: View {
+    let card: LyoCard
+    var body: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Abstract").font(.caption.weight(.semibold)).foregroundColor(.white.opacity(0.6))
+                Text(card.conceptSide ?? "").font(.body).foregroundColor(.white)
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(12)
+
+            Image(systemName: "arrow.left.arrow.right")
+                .foregroundColor(.white)
+                .font(.title3)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Analogy").font(.caption.weight(.semibold)).foregroundColor(.white.opacity(0.6))
+                Text(card.analogySide ?? "").font(.body).foregroundColor(.white)
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(12)
+        }
+        .cardStyle()
+    }
+}
+
+struct DiagramCardView: View {
+    let card: LyoCard
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let voice = card.voiceText {
+                Text(voice).font(.subheadline).foregroundColor(.white.opacity(0.8))
+            }
+            if let nodes = card.nodes {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 16) {
+                    ForEach(nodes) { node in
+                        VStack(spacing: 6) {
+                            Image(systemName: node.symbolName)
+                                .font(.largeTitle)
+                                .foregroundColor(.white)
+                            Text(node.label)
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                        }
+                    }
                 }
             }
-
-            Spacer()
         }
-        .padding()
-        .background(Color.blue.opacity(0.1))
-        .cornerRadius(12)
+        .cardStyle()
+    }
+}
+
+struct ReflectCardView: View {
+    let card: LyoCard
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "thought.bubble")
+                .font(.system(size: 48))
+                .foregroundColor(.white.opacity(0.8))
+            Text(card.prompt ?? "")
+                .font(.title3.italic())
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+        }
+        .cardStyle()
     }
 }
 
 struct QuizCardView: View {
-    let quiz: QuizCard
-    @State private var selectedOption: String?
+    let card: LyoCard
+    @ObservedObject var vm: LivingClassroomViewModel
+    @State private var selectedIndex: Int? = nil
+    @State private var revealed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(quiz.question)
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            Text(card.question ?? "")
+                .font(.headline).foregroundColor(.white)
 
-            ForEach(quiz.options) { option in
-                Button {
-                    selectedOption = option.id
-                    // Submit quiz answer via WebSocket
-                } label: {
-                    HStack {
-                        Image(systemName: selectedOption == option.id ? "circle.fill" : "circle")
-                            .foregroundColor(selectedOption == option.id ? .blue : .gray)
-
-                        Text(option.label)
-                            .foregroundColor(.primary)
-
-                        Spacer()
+            if let options = card.options {
+                ForEach(options.indices, id: \.self) { i in
+                    Button(action: {
+                        guard !revealed else { return }
+                        selectedIndex = i
+                        revealed = true
+                        let correct = i == (card.correctOptionIndex ?? -1)
+                        Task {
+                            await vm.sendQuizAnswer(selectedIndex: i, isCorrect: correct)
+                            // Auto-advance after a brief pause to show the result
+                            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 s
+                            await vm.sendContinue()
+                        }
+                    }) {
+                        HStack {
+                            Text(options[i]).foregroundColor(.white)
+                            Spacer()
+                            if revealed && i == (card.correctOptionIndex ?? -1) {
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                            } else if revealed && i == selectedIndex {
+                                Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+                            }
+                        }
+                        .padding()
+                        .background(optionBackground(i))
+                        .cornerRadius(12)
                     }
-                    .padding()
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(8)
+                    .disabled(revealed)
+                }
+            }
+
+            if revealed, let explanation = card.explanation {
+                Text(explanation)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.top, 4)
+            }
+        }
+        .cardStyle()
+    }
+
+    private func optionBackground(_ i: Int) -> Color {
+        if !revealed            { return Color.white.opacity(0.15) }
+        if i == card.correctOptionIndex { return Color.green.opacity(0.4) }
+        if i == selectedIndex   { return Color.red.opacity(0.4) }
+        return Color.white.opacity(0.1)
+    }
+}
+
+struct SummaryCardView: View {
+    let card: LyoCard
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(card.title ?? "Summary")
+                .font(.title.bold()).foregroundColor(.white)
+            if let points = card.keyPoints {
+                ForEach(points, id: \.self) { point in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text(point).foregroundColor(.white.opacity(0.9))
+                    }
                 }
             }
         }
-        .padding()
-        .background(Color.green.opacity(0.1))
-        .cornerRadius(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardStyle()
     }
 }
 
-struct CTAButtonView: View {
-    let button: CTAButton
-
+struct UnknownCardView: View {
+    let type: String
     var body: some View {
-        Button {
-            // Handle CTA action via WebSocket
-        } label: {
-            Text(button.label)
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color.blue)
-                .cornerRadius(12)
-        }
+        Text("Unknown card: \(type)").foregroundColor(.white.opacity(0.5)).cardStyle()
     }
 }
 
-struct CelebrationView: View {
-    let celebration: Celebration
+// MARK: - Lesson Complete View
 
+struct LessonCompleteView: View {
+    let topic: String
+    let onDismiss: () -> Void
     var body: some View {
-        VStack {
-            Text("🎉")
-                .font(.largeTitle)
-                .scaleEffect(2.0)
-                .animation(.easeInOut.repeatCount(3), value: true)
-
-            Text(celebration.message)
-                .font(.headline)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 24) {
+            Text("🎉").font(.system(size: 72))
+            Text("Lesson Complete!").font(.largeTitle.bold()).foregroundColor(.white)
+            Text("You just learned \(topic)")
+                .font(.subheadline).foregroundColor(.white.opacity(0.8))
+            Button(action: onDismiss) {
+                Text("Back to Learning")
+                    .font(.headline).foregroundColor(.white)
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color.white.opacity(0.3)).cornerRadius(16)
+            }
         }
-        .padding()
-        .background(Color.yellow.opacity(0.2))
-        .cornerRadius(12)
+        .cardStyle()
+    }
+}
+
+// MARK: - Error Card View
+
+struct ErrorCardView: View {
+    let message: String
+    let onRetry: () -> Void
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 48)).foregroundColor(.yellow)
+            Text("Something went wrong").font(.headline).foregroundColor(.white)
+            Text(message).font(.caption).foregroundColor(.white.opacity(0.7)).multilineTextAlignment(.center)
+            Button(action: onRetry) {
+                Text("Retry").font(.headline).foregroundColor(.white)
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color.white.opacity(0.3)).cornerRadius(16)
+            }
+        }
+        .cardStyle()
+    }
+}
+
+// MARK: - View Modifier
+
+private struct CardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(24)
+            .background(Color.white.opacity(0.12))
+            .cornerRadius(20)
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.2), lineWidth: 1))
+    }
+}
+
+extension View {
+    func cardStyle() -> some View { modifier(CardStyle()) }
+}
+
+// MARK: - Color hex helper
+
+extension Color {
+    init?(hex: String) {
+        var str = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if str.hasPrefix("#") { str.removeFirst() }
+        guard str.count == 6, let value = UInt64(str, radix: 16) else { return nil }
+        let r = Double((value >> 16) & 0xFF) / 255
+        let g = Double((value >>  8) & 0xFF) / 255
+        let b = Double( value        & 0xFF) / 255
+        self.init(red: r, green: g, blue: b)
     }
 }

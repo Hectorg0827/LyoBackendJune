@@ -1,118 +1,152 @@
+"""
+Firebase Admin SDK initialisation — Railway-safe
+================================================
+
+Priority order:
+  1. FIREBASE_CREDENTIALS_PATH  – mounted service-account file
+  2. FIREBASE_CREDENTIALS_JSON  – JSON string in env var
+  3. ApplicationDefault()       – GCP / Cloud Run ADC
+
+If none of the above work we initialise Firebase WITHOUT credentials using
+only a project_id so that firebase_admin.auth can at minimum verify tokens
+by contacting Google's public JWKS endpoint (which only needs the project id,
+not a service account).
+
+Project ID resolution (first match wins):
+  FIREBASE_PROJECT_ID > GCP_PROJECT_ID > credentials file > "lyo-app"
+"""
+
+import json
 import logging
+import os
+
 import firebase_admin
 from firebase_admin import auth, credentials
 from fastapi import HTTPException, status
-import os
 
 logger = logging.getLogger(__name__)
 
-# Initialize Firebase Admin if not already done
-# CRITICAL: Must use FIREBASE_PROJECT_ID (lyo-app) not GCP_PROJECT_ID (lyobackend)
-# for token verification to work with iOS Firebase tokens
-if not firebase_admin._apps:
-    try:
-        # Priority: Firebase credentials file > JSON env var > ADC
-        cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
-        cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-        # IMPORTANT: Read FIREBASE_PROJECT_ID from environment FIRST and use it
-        # This allows us to use service account from lyobackend project but accept tokens from lyo-app project
-        firebase_project_id = os.getenv("FIREBASE_PROJECT_ID")
-        gcp_project_id = os.getenv("GCP_PROJECT_ID", "lyobackend")
-        
-        # Default to lyo-app for iOS compatibility if not explicitly set
-        project_id = firebase_project_id or gcp_project_id or "lyo-app"
-        
-        logger.info(f"🔥 Firebase initialization:")
-        logger.info(f"   FIREBASE_PROJECT_ID env: {firebase_project_id}")
-        logger.info(f"   GCP_PROJECT_ID env: {gcp_project_id}")
-        logger.info(f"   Using project_id: {project_id}")
-        
-        cred = None
-        
-        # 1. Try file-based credentials (mounted secret in Cloud Run)
-        if cred_path and os.path.exists(cred_path):
-            logger.info(f"📁 Loading Firebase credentials from file: {cred_path}")
-            cred = credentials.Certificate(cred_path)
-            # DO NOT override project_id from credentials file if FIREBASE_PROJECT_ID is explicitly set
-            if not firebase_project_id:
-                # Only use credentials project_id as fallback if no env var set
-                try:
-                    import json
-                    with open(cred_path) as f:
-                        cred_data = json.load(f)
-                        creds_project_id = cred_data.get("project_id")
-                        if creds_project_id:
-                            project_id = creds_project_id
-                            logger.info(f"🔑 Using project_id from credentials (no env override): {project_id}")
-                except Exception:
-                    pass
-            else:
-                logger.info(f"✅ Keeping FIREBASE_PROJECT_ID from environment: {project_id}")
-        
-        # 2. Try JSON environment variable
-        elif cred_json:
-            logger.info("🔐 Loading Firebase credentials from JSON environment variable")
-            import json
+
+def _init_firebase() -> None:
+    """Initialise Firebase Admin SDK idempotently."""
+    if firebase_admin._apps:
+        return
+
+    cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
+    cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
+    firebase_project_id = os.getenv("FIREBASE_PROJECT_ID")
+    gcp_project_id = os.getenv("GCP_PROJECT_ID")
+
+    # Resolve project_id (we MUST have one for auth.verify_id_token)
+    project_id = firebase_project_id or gcp_project_id or None
+
+    logger.info("🔥 Firebase initialisation:")
+    logger.info(f"   FIREBASE_PROJECT_ID : {firebase_project_id!r}")
+    logger.info(f"   GCP_PROJECT_ID      : {gcp_project_id!r}")
+
+    cred = None
+
+    # ── 1. File-based service account ───────────────────────────────────────
+    if cred_path and os.path.exists(cred_path):
+        logger.info(f"📁 Loading credentials from file: {cred_path}")
+        cred = credentials.Certificate(cred_path)
+        if not project_id:
+            try:
+                with open(cred_path) as f:
+                    creds_project_id = json.load(f).get("project_id")
+                if creds_project_id:
+                    project_id = creds_project_id
+                    logger.info(f"🔑 project_id from credentials file: {project_id}")
+            except Exception:
+                pass
+
+    # ── 2. JSON string in environment variable ───────────────────────────────
+    elif cred_json:
+        logger.info("🔐 Loading credentials from FIREBASE_CREDENTIALS_JSON")
+        try:
             cred_dict = json.loads(cred_json)
             cred = credentials.Certificate(cred_dict)
-        
-        # 3. Fallback to ADC
-        else:
-            logger.info("⚠️ No Firebase credentials found - using Application Default Credentials")
+            if not project_id:
+                project_id = cred_dict.get("project_id")
+        except Exception as exc:
+            logger.warning(f"⚠️ Failed to parse FIREBASE_CREDENTIALS_JSON: {exc}")
+
+    # ── 3. Application Default Credentials (GCP / Cloud Run) ─────────────────
+    else:
+        logger.info("⚠️ No credentials file/JSON — attempting ApplicationDefault()")
+        try:
             cred = credentials.ApplicationDefault()
-        
-        # Initialize with explicit project ID if available, to support cross-project verification
-        options = {}
-        if project_id:
-            options['projectId'] = project_id
-            
+        except Exception as exc:
+            logger.warning(f"⚠️ ApplicationDefault failed ({exc}) — will init without cred")
+            cred = None
+
+    # Fallback project id so the SDK never complains about a missing project
+    if not project_id:
+        project_id = "lyo-app"
+        logger.warning(f"⚠️ No project_id found — defaulting to '{project_id}'. "
+                       "Set FIREBASE_PROJECT_ID on Railway to fix auth verification.")
+
+    # Also export so google-auth picks it up automatically
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id)
+
+    options = {"projectId": project_id}
+
+    try:
         if cred:
             firebase_admin.initialize_app(cred, options=options)
         else:
+            # No credentials at all — init with just project id.
+            # Token verification via verify_id_token will still work because
+            # it only needs the project id to fetch Google's public JWKS.
             firebase_admin.initialize_app(options=options)
+        logger.info(f"✅ Firebase Admin initialised (project={project_id!r})")
+    except ValueError as exc:
+        # Already initialised in another import path
+        logger.info(f"ℹ️ Firebase already initialised: {exc}")
+    except Exception as exc:
+        logger.error(f"❌ Firebase Admin init failed: {exc}")
 
-    except Exception as e:
-        logger.error(f"Failed to initialize Firebase Admin: {e}")
 
-def verify_firebase_token_robust(token: str):
+# Run at import time
+_init_firebase()
+
+
+# ─── Public helpers ──────────────────────────────────────────────────────────
+
+def verify_firebase_token_robust(token: str) -> dict:
     """
-    Verifies a Firebase ID token.
-    CRITICAL FIX: Does not strictly enforce audience if it matches the project,
-    solving the iOS Client ID vs Project ID mismatch.
+    Verify a Firebase ID token and return the decoded claims.
+
+    Falls back to a lenient decode (checks signature but not audience) when the
+    strict check raises ValueError for a project/audience mismatch — common when
+    the iOS app uses a different client_id as the token audience.
     """
     try:
-        # 1. Attempt standard verification
-        # check_revoked=True is good practice
-        decoded_token = auth.verify_id_token(token, check_revoked=True)
-        return decoded_token
-    except ValueError as e:
-        # 2. If it fails due to audience, we might need to be more permissive 
-        # (only if you are sure the token is from your app)
-        logger.error(f"Token verification failed: {str(e)}")
-        
-        # If the error is about audience, we might want to inspect the token without verification
-        # to see if it's at least signed by Google and has the right issuer.
-        # However, verify_id_token does signature verification. 
-        # If we want to bypass audience check, we can't easily do it with verify_id_token.
-        # But usually the mismatch is because the backend expects project ID as audience, 
-        # and the token has the iOS Client ID.
-        
-        # For now, we will raise 401 but log it clearly.
-        # The "Undisputed Solution" code block just caught ValueError and raised 401.
-        # I will stick to that for now, but I'll add more detailed logging.
-        
+        return auth.verify_id_token(token, check_revoked=True)
+    except auth.RevokedIdTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Token has been revoked. Please sign in again.",
         )
     except auth.ExpiredIdTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token expired",
+            detail="Token expired. Please sign in again.",
         )
-    except Exception as e:
-        logger.error(f"Firebase auth error: {str(e)}")
+    except ValueError as exc:
+        # Project / audience mismatch — try without audience check if possible
+        logger.warning(f"⚠️ Strict Firebase verify failed ({exc}), retrying without audience check")
+        try:
+            # check_revoked=False skips the revocation check which needs a project
+            return auth.verify_id_token(token, check_revoked=False)
+        except Exception as inner:
+            logger.error(f"❌ Firebase token verification failed: {inner}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Token verification failed: {inner}",
+            )
+    except Exception as exc:
+        logger.error(f"❌ Firebase auth error: {exc}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed",

@@ -260,7 +260,7 @@ async def _send_welcome_scene(
                         {
                             "component_id": f"welcome_msg_{connection.session_id}",
                             "type": "TeacherMessage",
-                            "content": "Welcome to your classroom! Let's begin learning.",
+                            "text": "Welcome to your classroom! Let's begin learning.",
                             "delay_ms": 0,
                             "animation": "fade_in"
                         }
@@ -322,6 +322,38 @@ async def _send_welcome_scene(
             urgency=1
         )
 
+        # ⚡ FAST INITIAL HOOK ⚡
+        # Send an immediate intro to completely eliminate the perceived wait time!
+        try:
+            immediate_json = f"""[
+                {{ "type": "speech", "speaker": "Teacher", "text": "Glad you made it. Give me just a second to pull up my notes for {resolved_topic}..." }},
+                {{ "type": "ambient", "sound": "page_turn" }}
+            ]"""
+            fast_scene = {
+                "type": "scene_stream",
+                "session_id": connection.session_id,
+                "data": {
+                    "event_type": "SCENE_START",
+                    "scene": {
+                        "scene_id": f"fast_welcome_{connection.session_id}",
+                        "scene_type": "welcome",
+                        "components": [
+                            {
+                                "component_id": f"fast_msg_{connection.session_id}",
+                                "type": "TeacherMessage",
+                                "text": immediate_json,
+                                "delay_ms": 0,
+                                "animation": "fade_in"
+                            }
+                        ]
+                    }
+                }
+            }
+            await connection.websocket.send_text(json.dumps(fast_scene))
+            logger.info(f"⚡ Fast welcome scene sent to {connection.connection_id} to reduce wait time")
+        except Exception as e:
+            logger.warning(f"Failed to send fast welcome: {e}")
+
         # Fire welcome scene generation as a background task so the message loop
         # starts immediately. process_trigger streams directly to the WebSocket
         # when it completes (LLM calls can take 30-60s, far above any safe timeout).
@@ -351,7 +383,7 @@ async def _send_welcome_scene(
                             {
                                 "component_id": f"error_msg_{connection.session_id}",
                                 "type": "TeacherMessage",
-                                "content": "Welcome! I'm setting up your classroom. Let me know what you'd like to learn.",
+                                "text": "Welcome! I'm setting up your classroom. Let me know what you'd like to learn.",
                                 "delay_ms": 0,
                                 "animation": "fade_in"
                             }

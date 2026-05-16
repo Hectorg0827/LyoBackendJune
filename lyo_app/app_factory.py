@@ -34,6 +34,7 @@ from .community.routes import router as community_router
 from .classroom.routes import router as classroom_router
 from .classroom.analytics import router as classroom_analytics_router
 from .learning_profile.routes import router as learning_profile_router
+from .study_plans.routes import router as study_plans_router
 from .api.v1 import api_router as core_v1_router
 
 # Global AI components for lifecycle management
@@ -315,6 +316,7 @@ def create_app() -> FastAPI:
         (community_router, "/api/v1/community", "Community Hub"),
         (community_router, "/community", "Community Hub (compat)"),
         (learning_profile_router, "/api/v1", "Learning Profile (Stage B1)"),
+        (study_plans_router, "/api/v1", "Study Plans (Stage B2)"),
     ]
 
     # Phase 1: Add ambient presence and proactive interventions

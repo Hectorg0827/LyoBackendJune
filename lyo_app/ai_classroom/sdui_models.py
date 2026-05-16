@@ -557,7 +557,7 @@ class UserActionPayload(WebSocketPayload):
 
     event_type: Literal[WebSocketEventType.USER_ACTION] = WebSocketEventType.USER_ACTION
     action_intent: ActionIntent
-    component_id: str
+    component_id: Optional[str] = None  # Optional — iOS may not send this
 
     # Action data
     answer_data: Optional[Dict[str, Any]] = None

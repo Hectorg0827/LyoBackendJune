@@ -41,10 +41,14 @@ def get_engine_config():
         # PostgreSQL/MySQL configuration
         # Force a minimum of 20 to prevent QueuePool overflow crashes regardless of environment variables
         config.update({
-            "pool_size": max(20, settings.connection_pool_size),
-            "max_overflow": max(20, settings.max_overflow),
-            "pool_timeout": 60,  # Increased timeout slightly to give connections more time during spikes
+            "pool_size": 20,
+            "max_overflow": 20,
+            "pool_timeout": 5,  # Fail fast to see error
         })
+        # Add connection timeout to asyncpg args
+        connect_args = config.get("connect_args", {})
+        connect_args["timeout"] = 5
+        config["connect_args"] = connect_args
     
     return config
 

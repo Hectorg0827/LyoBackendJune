@@ -11,8 +11,12 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
+logger.info("DEBUG: api/v1/__init__.py is being imported")
+
 # Create main v1 router
 api_router = APIRouter()
+
+logger.info(f"DEBUG: Created api_router: {api_router}")
 
 # ── Lyo 2.0 Router — layered A/B/C architecture ──────────────────────────────
 # Both routers are wrapped individually so a failure in one doesn't block the other.
@@ -153,6 +157,20 @@ try:
     logger.info("✅ Push router loaded")
 except Exception as e:
     logger.warning(f"⚠️ Push router not loaded: {e}")
+
+try:
+    logger.info("DEBUG: Attempting to import learning profile router")
+    from ..learning_profile.routes import router as learning_profile_router
+    logger.info(f"DEBUG: Imported router with {len(learning_profile_router.routes)} routes")
+    api_router.include_router(learning_profile_router)
+    logger.info("✅ Learning profile router loaded")
+    logger.info("DEBUG: Learning profile router included successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to load learning profile router: {e}")
+    logger.error(f"   Traceback: {traceback.format_exc()}")
+    logger.error(f"DEBUG: Failed to load learning profile router: {e}")
+
+logger.info(f"DEBUG: Final api_router has {len(api_router.routes)} routes")
 
 __all__ = ["api_router"]
 

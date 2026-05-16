@@ -40,6 +40,8 @@ class IntentType(str, Enum):
     QUIZ_REQUEST = "quiz_request"             # "Quiz me on X"
     PRACTICE = "practice"                     # "Give me exercises"
     CHALLENGE = "challenge"                   # "Challenge me"
+    TEST_PREP = "test_prep"                   # "I have a test on X" / "help me prep"
+    STUDY_PLAN = "study_plan"                 # "Study plan for X" / "schedule to learn"
     
     # Interactive
     CONTINUE = "continue"                     # "Keep going", "More"
@@ -130,6 +132,19 @@ INTENT_PATTERNS = {
         r"(?:define|definition\s+of)\s+(.+)",
         r"(?:meaning\s+of)\s+(.+)",
         r"(?:what\s+does)\s+(.+)\s+(?:mean)",
+    ],
+    
+    IntentType.TEST_PREP: [
+        r"(?:test\s+prep|prepare\s+for\s+(?:a\s+)?(?:test|exam)|help\s+me\s+(?:prep|prepare))\s*(?:for)?\s*(.+)?",
+        r"(?:i\s+have|have)\s+(?:a\s+)?(?:test|exam|midterm|final)\s+(?:on|for|in|about)?\s*(.+)?",
+        r"(?:upcoming|my)\s+(?:test|exam|midterm|final)\s+(?:on|about|for)?\s*(.+)?",
+        r"(?:study\s+guide|study\s+schedule|exam\s+prep)\s+(?:for|on)?\s*(.+)?",
+    ],
+    
+    IntentType.STUDY_PLAN: [
+        r"(?:study\s+plan|learning\s+plan|revision\s+plan|schedule\s+to\s+learn)\s+(?:for|on)?\s*(.+)?",
+        r"(?:create|make|build)\s+(?:a\s+)?(?:study|learning)\s+(?:plan|schedule)\s+(?:for|on)?\s*(.+)?",
+        r"(?:plan\s+(?:to\s+learn|my\s+study))\s+(.+)",
     ],
     
     IntentType.QUIZ_REQUEST: [
@@ -328,7 +343,9 @@ class IntentDetector:
         always_generate = {
             IntentType.FULL_COURSE,
             IntentType.QUIZ_REQUEST,
-            IntentType.PRACTICE
+            IntentType.PRACTICE,
+            IntentType.TEST_PREP,
+            IntentType.STUDY_PLAN,
         }
         
         if intent_type in always_generate:
@@ -451,10 +468,20 @@ class IntentDetector:
         
     def should_trigger_course_generation(self, intent: ChatIntent) -> bool:
         """
-        Convenience method to check if course generation should be triggered
-        
-        Use this to decide between quick chat response and full course pipeline
+        Convenience method to check if course generation should be triggered.
+
+        TEST_PREP and STUDY_PLAN must NEVER trigger course generation —
+        they have their own handlers that produce study schedules, not full courses.
         """
+        # Explicitly blocked from course generation
+        _no_course_intents = {
+            IntentType.TEST_PREP,
+            IntentType.STUDY_PLAN,
+            IntentType.QUIZ_REQUEST,
+            IntentType.PRACTICE,
+        }
+        if intent.intent_type in _no_course_intents:
+            return False
         return (
             intent.intent_type == IntentType.FULL_COURSE or
             (intent.requires_generation and intent.complexity_hint == "complex")

@@ -728,14 +728,25 @@ async def classroom_chat(
         is_course_request = detector.should_trigger_course_generation(detected_intent)
     else:
         # Fallback keyword detection with multiple patterns
-        is_course_request = (
-            # Standard format
-            (("course" in message_lower) and ("create" in message_lower))
-            # iOS system prompt format
-            or ("curriculum designer" in message_lower)
-            or ("structured learning course" in message_lower)
-            or ("create a structured learning course for:" in message_lower)
-        )
+        # Exclude test-prep / study-plan from course creation flow
+        message_lower_check = request.message.lower()
+        _no_course_kws = [
+            "test prep", "prepare for a test", "prepare for the test",
+            "have a test", "have an exam", "upcoming test", "upcoming exam",
+            "midterm", "final exam", "study plan", "study schedule",
+            "revision plan", "quiz me", "quiz on", "test me",
+        ]
+        if any(kw in message_lower_check for kw in _no_course_kws):
+            is_course_request = False
+        else:
+            is_course_request = (
+                # Standard format
+                (("course" in message_lower) and ("create" in message_lower))
+                # iOS system prompt format
+                or ("curriculum designer" in message_lower)
+                or ("structured learning course" in message_lower)
+                or ("create a structured learning course for:" in message_lower)
+            )
 
 
     generated_course_id: Optional[str] = None
@@ -891,7 +902,34 @@ async def classroom_chat(
             if msg.role.value == "user" and msg.intent:
                 intent_dict = msg.intent.to_dict()
                 break
-    
+
+    # ── Lesson-outline payload: give iOS a course_id + lesson list when the
+    # response contains a lesson outline card (quiz, test-prep, study-plan) or
+    # when the conversation has a current course, so the play button is wired. ──
+    lesson_outline_payload = None
+    _outline_types = {"quiz", "test_prep", "study_plan", "lesson_outline"}
+    if (
+        response.response_type in _outline_types
+        or session.current_course_id
+    ):
+        course_id = generated_course_id or session.current_course_id
+        topic = (
+            (detected_intent.topic if detected_intent else None)
+            or session.current_topic
+            or ""
+        )
+        if course_id or topic:
+            lesson_outline_payload = {
+                "course_id": course_id,
+                "topic": topic,
+                "response_type": response.response_type,
+            }
+
+    # Merge lesson_outline into metadata so iOS can read it
+    final_metadata = dict(response.metadata)
+    if lesson_outline_payload:
+        final_metadata["lesson_outline"] = lesson_outline_payload
+
     return ChatResponse(
         session_id=session.session_id,
         content=response.content,
@@ -902,7 +940,7 @@ async def classroom_chat(
         audio_url=response.audio_url,
         images=response.images,
         actions=response.actions,
-        metadata=response.metadata,
+        metadata=final_metadata,
         openClassroomPayload=response.metadata.get("openClassroomPayload")
     )
 

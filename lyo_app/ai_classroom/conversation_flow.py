@@ -271,6 +271,12 @@ class ConversationManager:
         # Handle based on intent type
         if intent.intent_type in {IntentType.QUIZ_REQUEST, IntentType.PRACTICE}:
             return await self._handle_quiz_request(session, intent, message)
+
+        if intent.intent_type == IntentType.TEST_PREP:
+            return await self._handle_test_prep(session, intent, message)
+
+        if intent.intent_type == IntentType.STUDY_PLAN:
+            return await self._handle_study_plan(session, intent, message)
             
         if intent.intent_type == IntentType.CONTINUE:
             return await self._handle_continue(session)
@@ -458,33 +464,189 @@ class ConversationManager:
         intent: ChatIntent,
         message: str
     ) -> FlowResponse:
-        """Handle quiz generation request"""
+        """Handle quiz generation request — actually generates questions via AI."""
         session.state = ConversationState.TAKING_QUIZ
-        
-        topic = intent.topic or session.current_topic or "your learning"
-        
-        content = (
-            f"📝 Let's test your knowledge of **{topic}**!\n\n"
-            f"I'll give you a series of questions. Ready? Here's your first question..."
-        )
-        
-        actions = []
-        if self._quiz_handler:
-            actions.append({
-                "type": "generate_quiz",
-                "topic": topic,
-                "question_count": 5
-            })
-            
+        topic = intent.topic or session.current_topic or "the topic we just discussed"
+
+        if self._chat_handler:
+            quiz_prompt = (
+                f"Generate a 3-question multiple-choice quiz on the topic: '{topic}'.\n\n"
+                "RULES:\n"
+                "- Output ONLY the quiz blocks. NO intro text, NO 'Here is your quiz:', NO filler.\n"
+                "- Use the EXACT :::quiz smart block format for EVERY question.\n"
+                "- Do NOT use LaTeX ($...$) — write math in plain text (e.g. 'x squared + 2x + 1 = 0').\n\n"
+                "FORMAT (repeat 3 times):\n"
+                ":::quiz\n"
+                "question: [clear question text, math in plain text]\n"
+                "options: [Option A], [Option B], [Option C], [Option D]\n"
+                "answer: [exact text of correct option]\n"
+                "explanation: [1-sentence explanation]\n"
+                ":::"
+            )
+            try:
+                context = session.get_context_messages(limit=5)
+                content = await self._chat_handler(quiz_prompt, context)
+            except Exception as exc:
+                logger.warning(f"Quiz AI generation failed: {exc}")
+                content = (
+                    f"📝 **Quiz: {topic}**\n\n"
+                    ":::quiz\n"
+                    f"question: Which of the following best describes {topic}?\n"
+                    "options: [It is a fundamental concept], [It is rarely used], [It has no practical value], [It only applies in theory]\n"
+                    "answer: It is a fundamental concept\n"
+                    "explanation: Understanding the foundations is key to mastering any subject.\n"
+                    ":::"
+                )
+        else:
+            content = (
+                f"📝 **Quiz: {topic}**\n\n"
+                ":::quiz\n"
+                f"question: Which statement best describes {topic}?\n"
+                "options: [It is a core concept worth studying], [It has no practical applications], "
+                "[It only applies to experts], [It cannot be learned]\n"
+                "answer: It is a core concept worth studying\n"
+                "explanation: Mastering core concepts is the first step in any learning journey.\n"
+                ":::"
+            )
+
         return FlowResponse(
             content=content,
             response_type="quiz",
             state=session.state,
             metadata={
                 "intent": intent.to_dict(),
-                "topic": topic
+                "topic": topic,
+                "quiz_generated": True,
             },
-            actions=actions
+            actions=[{"type": "quiz_inline", "topic": topic}],
+        )
+
+    async def _handle_test_prep(
+        self,
+        session: ConversationSession,
+        intent: ChatIntent,
+        message: str
+    ) -> FlowResponse:
+        """Handle test-prep requests — generates a :::test_prep smart block (NOT a course)."""
+        topic = intent.topic or session.current_topic or "your upcoming exam"
+        session.current_topic = topic
+
+        if self._chat_handler:
+            prep_prompt = (
+                f"The user wants help preparing for a test/exam on: '{topic}'.\n\n"
+                "RULES:\n"
+                "- DO NOT create a full course.\n"
+                "- DO NOT say 'I'll create a course for you'.\n"
+                "- Output a warm intro sentence, then a :::test_prep block to collect exam details, "
+                "followed by 3-5 bullet tips for quick prep.\n"
+                "- Do NOT use LaTeX ($...$) — write math in plain text.\n\n"
+                "FORMAT:\n"
+                "[1-2 sentence encouraging intro]\n\n"
+                ":::test_prep\n"
+                f"topic: {topic}\n"
+                "courses: []\n"
+                "date: null\n"
+                "description: Tell me more about your exam so I can tailor a plan just for you.\n"
+                ":::"  
+            )
+            try:
+                context = session.get_context_messages(limit=4)
+                content = await self._chat_handler(prep_prompt, context)
+            except Exception as exc:
+                logger.warning(f"Test prep handler failed: {exc}")
+                content = (
+                    f"Great — let\'s get you ready for your **{topic}** exam! 🎯\n\n"
+                    ":::test_prep\n"
+                    f"topic: {topic}\n"
+                    "courses: []\n"
+                    "date: null\n"
+                    "description: Share your exam date and what topics it covers.\n"
+                    ":::"
+                )
+        else:
+            content = (
+                f"Let\'s prep for **{topic}**! 🎯\n\n"
+                ":::test_prep\n"
+                f"topic: {topic}\n"
+                "courses: []\n"
+                "date: null\n"
+                "description: Share your exam date and the topics it covers.\n"
+                ":::"
+            )
+
+        return FlowResponse(
+            content=content,
+            response_type="test_prep",
+            state=ConversationState.CHATTING,
+            metadata={"intent": intent.to_dict(), "topic": topic},
+        )
+
+    async def _handle_study_plan(
+        self,
+        session: ConversationSession,
+        intent: ChatIntent,
+        message: str
+    ) -> FlowResponse:
+        """Handle study-plan requests — generates a :::study_plan smart block."""
+        topic = intent.topic or session.current_topic or "your subject"
+        session.current_topic = topic
+
+        if self._chat_handler:
+            plan_prompt = (
+                f"The user wants a structured study plan for: '{topic}'.\n\n"
+                "RULES:\n"
+                "- DO NOT create a course.\n"
+                "- Output a brief motivating sentence, then a :::study_plan block with 3-5 sessions.\n"
+                "- Use realistic dates starting from today.\n"
+                "- Do NOT use LaTeX ($...$) — write math in plain text.\n\n"
+                "FORMAT:\n"
+                "[1-sentence motivating intro]\n\n"
+                ":::study_plan\n"
+                f"title: Study Plan for {topic}\n"
+                "exam_date: null\n"
+                "sessions:\n"
+                "- title: [Session 1 title]\n"
+                "  desc: [What to cover]\n"
+                "  duration: 45\n"
+                "  date: [ISO8601]\n"
+                ":::"
+            )
+            try:
+                context = session.get_context_messages(limit=4)
+                content = await self._chat_handler(plan_prompt, context)
+            except Exception as exc:
+                logger.warning(f"Study plan handler failed: {exc}")
+                content = (
+                    f"Here\'s a focused study plan for **{topic}**! 📅\n\n"
+                    ":::study_plan\n"
+                    f"title: Study Plan for {topic}\n"
+                    "exam_date: null\n"
+                    "sessions:\n"
+                    f"- title: Introduction to {topic}\n"
+                    "  desc: Review core concepts and vocabulary\n"
+                    "  duration: 45\n"
+                    "  date: null\n"
+                    ":::"
+                )
+        else:
+            content = (
+                f"Here\'s a study plan for **{topic}** 📅\n\n"
+                ":::study_plan\n"
+                f"title: Study Plan for {topic}\n"
+                "exam_date: null\n"
+                "sessions:\n"
+                f"- title: Introduction to {topic}\n"
+                "  desc: Review core concepts and vocabulary\n"
+                "  duration: 45\n"
+                "  date: null\n"
+                ":::"
+            )
+
+        return FlowResponse(
+            content=content,
+            response_type="study_plan",
+            state=ConversationState.CHATTING,
+            metadata={"intent": intent.to_dict(), "topic": topic},
         )
         
     async def _handle_continue(self, session: ConversationSession) -> FlowResponse:
@@ -700,31 +862,40 @@ async def _ai_chat_handler(message: str, context: List[Dict], user_context: str 
     """AI chat handler using the resilience manager"""
     try:
         from lyo_app.core.ai_resilience import ai_resilience_manager
+        from lyo_app.ai_classroom.chat_prompt import CHAT_VOICE_GUIDE
         
         # Dynamic System Prompt based on Context
-        base_prompt = "You are Lyo, an expert AI tutor. "
+        base_prompt = (
+            CHAT_VOICE_GUIDE + "\n\n"
+            "CRITICAL FORMATTING RULES:\n"
+            "1. NEVER use LaTeX delimiters ($...$ or $$...$$). "
+            "Write all math in plain readable text, e.g. 'x squared + 2x + 1 = 0' "
+            "or use Unicode like x² + 2x + 1 = 0.\n"
+            "2. Use markdown (**, *, bullet points) freely but no LaTeX.\n"
+            "3. Output ONLY the response text. Do not output JSON. Do not output an array. Just raw string."
+        )
         
         if "member" in user_context:
             system_content = (
-                base_prompt + 
+                base_prompt +
                 "The user is a MEMBER. Focus on clear explanations, exam preparation, and academic concepts. "
                 "Break down complex topics into study-friendly chunks. Use analogies suitable for coursework."
             )
         elif "professional" in user_context:
             system_content = (
-                base_prompt + 
+                base_prompt +
                 "The user is a PROFESSIONAL. Focus on practical application, industry best practices, and efficiency. "
                 "Skip the basics unless asked. Relate concepts to real-world business scenarios."
             )
         elif "hobbyist" in user_context:
             system_content = (
-                base_prompt + 
+                base_prompt +
                 "The user is a HOBBYIST. Focus on fun, creativity, and exploration. "
                 "Encourage experimentation and 'learning by doing'. Keep the tone enthusiastic."
             )
         else:
             system_content = (
-                base_prompt + 
+                base_prompt +
                 "Be clear, encouraging, and helpful. Use markdown for formatting. "
                 "Include emojis sparingly for warmth. Explain concepts step-by-step when needed."
             )

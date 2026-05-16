@@ -515,7 +515,13 @@ class WebSocketManager:
     # ═══════════════════════════════════════════════════════════════════════════════
 
     async def handle_client_message(self, connection_id: str, raw_message: str):
-        """Handle incoming message from client"""
+        """Handle incoming message from client.
+
+        Accepts multiple message formats:
+          1. Full payload:  {"event_type": "user_action", "action_intent": "continue", ...}
+          2. iOS compact:   {"action_intent": "continue", "session_id": "...", ...}
+          3. Heartbeat:     "ping"
+        """
 
         if connection_id not in self.connections:
             logger.warning(f"⚠️ Message from unknown connection: {connection_id}")
@@ -526,30 +532,70 @@ class WebSocketManager:
         connection.messages_received += 1
         self.stats["messages_received"] += 1
 
-        try:
-            # Parse message
-            message_data = json.loads(raw_message)
-            event_type = WebSocketEventType(message_data.get("event_type", "user_action"))
+        # Handle plain-text heartbeats
+        if raw_message.strip() in ("ping", "pong"):
+            logger.debug(f"💓 Heartbeat from {connection_id}")
+            return
 
-            # Create appropriate payload
+        try:
+            message_data = json.loads(raw_message)
+        except json.JSONDecodeError:
+            logger.warning(f"⚠️ Non-JSON message from {connection_id}: {raw_message[:80]}")
+            return
+
+        try:
+            # Normalize: iOS sends {"action_intent": "continue"} without event_type
+            if "event_type" not in message_data and "action_intent" in message_data:
+                message_data["event_type"] = WebSocketEventType.USER_ACTION.value
+
+            if "session_id" not in message_data:
+                message_data["session_id"] = connection.session_id
+            if "user_id" not in message_data:
+                message_data["user_id"] = connection.user_id
+
+            raw_event = message_data.get("event_type", "user_action")
+            try:
+                event_type = WebSocketEventType(raw_event)
+            except ValueError:
+                event_type = WebSocketEventType.USER_ACTION
+                message_data["event_type"] = event_type.value
+
             if event_type == WebSocketEventType.USER_ACTION:
-                payload = UserActionPayload(**message_data)
+                try:
+                    payload = UserActionPayload(**message_data)
+                except Exception as parse_err:
+                    # Build minimal payload from just action_intent
+                    logger.warning(f"⚠️ Falling back to minimal UserActionPayload: {parse_err}")
+                    raw_intent = message_data.get("action_intent", "continue")
+                    try:
+                        intent = ActionIntent(raw_intent)
+                    except ValueError:
+                        intent = ActionIntent.CONTINUE
+                    payload = UserActionPayload(
+                        event_type=WebSocketEventType.USER_ACTION,
+                        session_id=connection.session_id,
+                        user_id=connection.user_id,
+                        action_intent=intent,
+                    )
                 await self._handle_user_action(payload, connection)
             else:
-                # Handle other event types
                 payload = WebSocketPayload(**message_data)
                 await self._dispatch_event(payload, connection)
 
         except Exception as e:
-            logger.error(f"❌ Error handling client message: {e}")
-            # Send error response
-            error_payload = WebSocketPayload(
-                event_type=WebSocketEventType.ERROR,
-                session_id=connection.session_id,
-                user_id=connection.user_id,
-                data={"error": "Invalid message format", "details": str(e)}
-            )
-            await self.send_to_connection(connection_id, error_payload)
+            logger.error(f"❌ Error handling client message from {connection_id}: {e}", exc_info=True)
+            try:
+                error_payload = WebSocketPayload(
+                    event_type=WebSocketEventType.ERROR,
+                    session_id=connection.session_id,
+                    user_id=connection.user_id,
+                    data={"error": "Message handling failed", "details": str(e)}
+                )
+                await self.send_to_connection(connection_id, error_payload)
+            except Exception:
+                pass
+
+
 
     async def _handle_user_action(self, payload: UserActionPayload, connection: ClientConnection):
         """Handle user action payload"""
