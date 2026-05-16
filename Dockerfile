@@ -1,4 +1,4 @@
-# Production-ready Dockerfile for LyoApp Backend
+# Production-ready Dockerfile for LyoApp Backend - STABILIZED
 FROM python:3.11-slim as builder
 
 # Install system dependencies
@@ -38,8 +38,12 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
-    PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc_dir
+    PYTHONPATH=/app
+
+# --- CACHE BUSTER START ---
+# This forces Railway to re-copy all files even if it thinks nothing changed
+RUN echo "Fresh Build Triggered at: $(date)" > /build_timestamp.txt
+# --- CACHE BUSTER END ---
 
 # Copy application code
 COPY --chown=app:app . .
@@ -50,15 +54,6 @@ RUN mkdir -p uploads/avatars uploads/documents uploads/temp && chown -R app:app 
 # Switch to non-root user
 USER app
 
-# Health check (respect dynamic PORT; default to 8080)
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
-
-# Expose Cloud Run default port (8080) but allow override via PORT env
-ENV PORT=8080
-EXPOSE 8080
-
-# Start application (dynamic port)
-# Force fresh build
-ENV BUILD_ID=STABILIZATION_v4
-CMD ["bash", "-c", "mkdir -p /tmp/prometheus_multiproc_dir && gunicorn lyo_app.lyo_main_v2:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${WORKERS:-2} --timeout 300"]
+# Start application using the STABILIZED entrypoint
+# We use uvicorn directly to simplify the process and avoid Gunicorn overhead for now
+CMD ["bash", "-c", "uvicorn lyo_app.STABILIZED_MAIN:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips=*"]
