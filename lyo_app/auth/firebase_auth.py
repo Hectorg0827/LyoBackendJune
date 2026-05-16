@@ -67,18 +67,26 @@ class FirebaseAuthService:
                 logger.info("Using Application Default Credentials for Firebase")
                 try:
                     cred = credentials.ApplicationDefault()
-                except ValueError:
-                    # If ADC is missing (e.g. on Railway), just pass None so it uses unauthenticated
-                    # public key verification, which works for verifying ID tokens if project ID is set.
-                    cred = None
+                except Exception as e:
+                    logger.warning(f"Failed to get ADC credentials: {e}. Using MockCredential for verification.")
+                    import google.auth.credentials
+                    class MockCredential(credentials.Base):
+                        def get_credential(self):
+                            return google.auth.credentials.AnonymousCredentials()
+                    cred = MockCredential()
             
             if project_id:
                 os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
                 
             options = {'projectId': project_id} if project_id else {}
-            firebase_admin.initialize_app(cred, options=options)
-            self._initialized = True
-            logger.info(f"Firebase initialized with project: {project_id}")
+            
+            try:
+                firebase_admin.initialize_app(cred, options=options)
+                self._initialized = True
+                logger.info(f"Firebase initialized with project: {project_id}")
+            except Exception as init_err:
+                logger.error(f"Failed to initialize firebase_admin: {init_err}")
+                self._initialized = False
             
         except Exception as e:
             logger.error(f"Firebase initialization failed: {e}")
@@ -124,13 +132,15 @@ class FirebaseAuthService:
         except Exception as e:
             error_message = str(e)
             
-            # Check for audience mismatch OR permission issues (INSUFFICIENT_PERMISSION)
-            # Permission errors happen when checking revocation across projects without IAM roles
+            # Check for audience mismatch OR permission issues OR generic errors caused by missing credentials
             should_fallback = (
                 "audience" in error_message.lower() or 
                 "aud" in error_message.lower() or
                 "INSUFFICIENT_PERMISSION" in error_message or
-                "permission" in error_message.lower()
+                "permission" in error_message.lower() or
+                "credential" in error_message.lower() or
+                "app" in error_message.lower() or
+                True  # Always fallback if standard Firebase verify fails and it wasn't expired/revoked
             )
             
             if should_fallback:
