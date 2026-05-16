@@ -48,12 +48,15 @@ RUN echo "Fresh Build Triggered at: $(date)" > /build_timestamp.txt
 # Copy application code
 COPY --chown=app:app . .
 
+# Health check (very generous start period)
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=5 \
+    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
+
 # Create uploads directory
 RUN mkdir -p uploads/avatars uploads/documents uploads/temp && chown -R app:app uploads
 
 # Switch to non-root user
 USER app
 
-# Start application using the STABILIZED entrypoint
-# We use uvicorn directly to simplify the process and avoid Gunicorn overhead for now
-CMD ["bash", "-c", "uvicorn lyo_app.STABILIZED_MAIN:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips=*"]
+# Start application using the STABILIZED bootloader
+CMD ["bash", "-c", "uvicorn lyo_app.STABILIZED_MAIN:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers"]
