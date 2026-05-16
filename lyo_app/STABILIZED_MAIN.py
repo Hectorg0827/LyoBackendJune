@@ -17,6 +17,23 @@ app = FastAPI(title="LyoApp Stabilized Bootloader")
 async def simple_health():
     return {"status": "alive", "boot_stage": "initialized", "timestamp": time.time()}
 
+@app.get("/db-check")
+async def direct_db_check():
+    try:
+        from lyo_app.core.database import engine
+        pool = engine.pool
+        return {
+            "status": "connected",
+            "pool": {
+                "size": getattr(pool, "_size", "unknown"),
+                "overflow": getattr(pool, "_max_overflow", "unknown"),
+                "timeout": getattr(pool, "_timeout", "unknown"),
+                "checked_out": pool.checkedout(),
+            }
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/")
 async def root():
     return {
