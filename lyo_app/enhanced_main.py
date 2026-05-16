@@ -145,6 +145,20 @@ async def _init_vertex_safe():
         return False
 
 
+def _log_startup_task_result(task: asyncio.Task) -> None:
+    """Log completion and errors for fire-and-forget startup tasks."""
+    if task.cancelled():
+        logger.warning(f"Startup task {task.get_name()} cancelled")
+        return
+    if exc := task.exception():
+        logger.error(
+            f"Startup background task {task.get_name()} failed: {exc}",
+            exc_info=exc,
+        )
+    else:
+        logger.info(f"Startup background task {task.get_name()} completed successfully")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup & shutdown lifecycle with parallel initialization."""
@@ -153,16 +167,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("🚀 Starting LyoBackend with enhanced features...")
     setup_logging()
     
-    # Database must init first (dependencies need it)
+    # Database initialization
     try:
-        print(">>> [LIFESPAN] Initializing database...", flush=True)
+        print(">>> [LIFESPAN] Initializing database (background task)...", flush=True)
         logger.info("⏳ Initializing database...")
-        await init_db()
-        print(">>> [LIFESPAN] Database initialized", flush=True)
-        logger.info("✅ Database initialized")
+        # Create a task for init_db instead of awaiting it to prevent startup hang
+        # This allows the app to start and respond to /debug/db-pool
+        db_init_task = asyncio.create_task(init_db(), name="db_init")
+        db_init_task.add_done_callback(_log_startup_task_result)
+        app.state.db_init_task = db_init_task
+        print(">>> [LIFESPAN] Database initialization task scheduled", flush=True)
     except Exception as e:
-        print(f">>> [LIFESPAN] Database initialization FAILED: {e}", flush=True)
-        logger.error(f"❌ Database initialization failed: {e}")
+        print(f">>> [LIFESPAN] Database initialization scheduling FAILED: {e}", flush=True)
+        logger.error(f"❌ Database initialization scheduling failed: {e}")
     
     # Sentry (synchronous, fast)
     if (
