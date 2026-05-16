@@ -174,8 +174,8 @@ class Settings(BaseSettings):
     cdn_base_url: Optional[str] = Field(default=None, description="CDN base URL for content delivery")
     
     # Database Optimization
-    database_pool_size: int = Field(default=5, description="Database connection pool size")
-    database_max_overflow: int = Field(default=5, description="Database max overflow connections")
+    database_pool_size: int = Field(default=20, description="Database connection pool size")
+    database_max_overflow: int = Field(default=20, description="Database max overflow connections")
     database_pool_timeout: int = Field(default=30, description="Database pool timeout")
     database_pool_recycle: int = Field(default=3600, description="Database pool recycle time")
     

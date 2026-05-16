@@ -72,7 +72,7 @@ class EnhancedSettings(BaseSettings):
     )
     DATABASE_ECHO: bool = Field(False, description="Echo SQL queries")
     DATABASE_POOL_SIZE: int = Field(20, description="Database connection pool size")
-    DATABASE_MAX_OVERFLOW: int = Field(30, description="Database max overflow connections")
+    DATABASE_MAX_OVERFLOW: int = Field(20, description="Database max overflow connections")
     DATABASE_POOL_TIMEOUT: int = Field(30, description="Database pool timeout (seconds)")
     DATABASE_POOL_RECYCLE: int = Field(3600, description="Database pool recycle time (seconds)")
     

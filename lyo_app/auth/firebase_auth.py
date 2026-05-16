@@ -132,15 +132,15 @@ class FirebaseAuthService:
         except Exception as e:
             error_message = str(e)
             
-            # Check for audience mismatch OR permission issues OR generic errors caused by missing credentials
+            # Check for audience mismatch OR permission issues OR missing project ID
             should_fallback = (
                 "audience" in error_message.lower() or 
                 "aud" in error_message.lower() or
                 "INSUFFICIENT_PERMISSION" in error_message or
                 "permission" in error_message.lower() or
                 "credential" in error_message.lower() or
-                "app" in error_message.lower() or
-                True  # Always fallback if standard Firebase verify fails and it wasn't expired/revoked
+                "project id" in error_message.lower() or
+                "app" in error_message.lower()
             )
             
             if should_fallback:
