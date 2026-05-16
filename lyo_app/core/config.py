@@ -35,8 +35,8 @@ class Settings(BaseSettings):
         description="Database URL"
     )
     database_echo: bool = Field(default=False, description="Echo SQL queries")
-    connection_pool_size: int = Field(default=5, description="Database connection pool size")
-    max_overflow: int = Field(default=5, description="Database max overflow connections")
+    connection_pool_size: int = Field(default=20, description="Database connection pool size")
+    max_overflow: int = Field(default=20, description="Database max overflow connections")
     
     # Security settings
     secret_key: str = Field(
@@ -279,6 +279,8 @@ class Settings(BaseSettings):
     def validate_cors_origins(cls, v):
         """Validate CORS origins format."""
         for origin in v:
+            if origin == '*':
+                continue
             if not origin.startswith(('http://', 'https://')):
                 raise ValueError(f"CORS origin '{origin}' must start with http:// or https://")
         return v

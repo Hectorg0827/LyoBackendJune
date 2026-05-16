@@ -65,8 +65,16 @@ class FirebaseAuthService:
             # 3. Fallback to ADC
             else:
                 logger.info("Using Application Default Credentials for Firebase")
-                cred = credentials.ApplicationDefault()
+                try:
+                    cred = credentials.ApplicationDefault()
+                except ValueError:
+                    # If ADC is missing (e.g. on Railway), just pass None so it uses unauthenticated
+                    # public key verification, which works for verifying ID tokens if project ID is set.
+                    cred = None
             
+            if project_id:
+                os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+                
             options = {'projectId': project_id} if project_id else {}
             firebase_admin.initialize_app(cred, options=options)
             self._initialized = True
