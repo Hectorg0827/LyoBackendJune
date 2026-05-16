@@ -39,10 +39,11 @@ def get_engine_config():
         })
     else:
         # PostgreSQL/MySQL configuration
+        # Force a minimum of 20 to prevent QueuePool overflow crashes regardless of environment variables
         config.update({
-            "pool_size": settings.connection_pool_size,
-            "max_overflow": settings.max_overflow,
-            "pool_timeout": 30,
+            "pool_size": max(20, settings.connection_pool_size),
+            "max_overflow": max(20, settings.max_overflow),
+            "pool_timeout": 60,  # Increased timeout slightly to give connections more time during spikes
         })
     
     return config
@@ -175,6 +176,9 @@ async def init_db() -> None:
 
         # Stage B1 — per-user learning profile (fed into chat context)
         from lyo_app.learning_profile.models import LearningProfile  # noqa: F401
+
+        # Stage B2 — persistent study plans created from chat
+        from lyo_app.study_plans.models import StudyPlan  # noqa: F401
         
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
