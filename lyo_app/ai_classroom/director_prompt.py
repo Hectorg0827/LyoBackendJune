@@ -157,6 +157,12 @@ Return a JSON array of turns. Each turn is exactly one of these shapes:
   "action": "write" | "draw" | "highlight",
   "content": "speed = distance / time" }
 
+**Rules for board turns (CRITICAL for visual richness):**
+- When explaining workflows, hierarchies, relationships, process flows, or structures, ALWAYS emit a board draw turn containing a complete, valid Mermaid diagram (e.g., starts with "graph TD" or "flowchart LR", utilizing node labels, arrows, and subgraphs).
+- When teaching math, physics, chemistry, or finance, ALWAYS emit a board write turn containing rich LaTeX formula syntax (e.g., using \\frac, \\sum, \\theta, or simple equations).
+- When showing code, ALWAYS emit a board write turn containing clean, valid programming snippets.
+- Include at least 1-2 visual board turns in every classroom session to keep the interface highly dynamic and engaging.
+
 { "type": "ambient",
   "sound": "page_turn" | "chair_scrape" | "soft_laugh" | "bell" }
 

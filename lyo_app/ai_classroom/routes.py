@@ -728,25 +728,25 @@ async def classroom_chat(
         is_course_request = detector.should_trigger_course_generation(detected_intent)
     else:
         # Fallback keyword detection with multiple patterns
-        # Exclude test-prep / study-plan from course creation flow
-        message_lower_check = request.message.lower()
-        _no_course_kws = [
-            "test prep", "prepare for a test", "prepare for the test",
-            "have a test", "have an exam", "upcoming test", "upcoming exam",
-            "midterm", "final exam", "study plan", "study schedule",
-            "revision plan", "quiz me", "quiz on", "test me",
-        ]
-        if any(kw in message_lower_check for kw in _no_course_kws):
-            is_course_request = False
-        else:
-            is_course_request = (
-                # Standard format
-                (("course" in message_lower) and ("create" in message_lower))
-                # iOS system prompt format
-                or ("curriculum designer" in message_lower)
-                or ("structured learning course" in message_lower)
-                or ("create a structured learning course for:" in message_lower)
-            )
+        is_course_request = (
+            # Standard format
+            (("course" in message_lower) and ("create" in message_lower))
+            # iOS system prompt format
+            or ("curriculum designer" in message_lower)
+            or ("structured learning course" in message_lower)
+            or ("create a structured learning course for:" in message_lower)
+        )
+
+    # FINAL OVERRIDE: Exclude test-prep / study-plan from course creation flow
+    message_lower_check = request.message.lower()
+    _no_course_kws = [
+        "test prep", "prepare for a test", "prepare for the test",
+        "have a test", "have an exam", "upcoming test", "upcoming exam",
+        "midterm", "final exam", "study plan", "study schedule",
+        "revision plan", "quiz me", "quiz on", "test me",
+    ]
+    if any(kw in message_lower_check for kw in _no_course_kws):
+        is_course_request = False
 
 
     generated_course_id: Optional[str] = None
