@@ -974,6 +974,26 @@ user_level: "beginner"
             elif "```" in text:
                 text = text.split("```")[1].strip()
 
+            # Ensure we return a clean JSON array string (starting with [ and ending with ])
+            try:
+                import json
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    # Extract the first list value found (e.g., 'turns', 'scene', 'components')
+                    list_extracted = False
+                    for key, val in parsed.items():
+                        if isinstance(val, list):
+                            text = json.dumps(val)
+                            list_extracted = True
+                            break
+                    if not list_extracted:
+                        # Fallback: if no list is found inside the dict, wrap the dict in a list
+                        text = json.dumps([parsed])
+                elif isinstance(parsed, list):
+                    text = json.dumps(parsed)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to normalize instruction JSON content: {e}")
+
             return text
 
         except Exception as e:

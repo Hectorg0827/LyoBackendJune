@@ -179,7 +179,7 @@ class AIResilienceManager:
             self.models = {
                 "gemini-2.5-flash": AIModelConfig(
                     name="Google Gemini 2.5 Flash",
-                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
                     api_key=gemini_key,
                     max_tokens=4000,
                     priority=1,
@@ -195,7 +195,7 @@ class AIResilienceManager:
                 ),
                 "gemini-2.5-pro": AIModelConfig(
                     name="Google Gemini 2.5 Pro",
-                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
                     api_key=gemini_key,
                     max_tokens=8000,
                     priority=2,
