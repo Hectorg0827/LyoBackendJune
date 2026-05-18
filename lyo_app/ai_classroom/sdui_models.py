@@ -82,7 +82,7 @@ class ComponentBase(BaseModel):
 
     component_id: str = Field(default_factory=lambda: str(uuid4()))
     type: ComponentType
-    priority: int = Field(default=0, ge=0, le=10, description="Render priority (0=highest)")
+    priority: int = Field(default=0, ge=0, le=1000, description="Render priority (0=highest)")
     animation: AnimationType = Field(default=AnimationType.FADE_IN)
     delay_ms: int = Field(default=0, ge=0, le=5000, description="Delay before showing")
     duration_ms: Optional[int] = Field(default=None, ge=100, description="Auto-hide after duration")
@@ -516,7 +516,7 @@ class WebSocketPayload(BaseModel):
 
     # Message routing
     room_id: Optional[str] = None  # For future multi-user features
-    priority: int = Field(default=0, ge=0, le=10)
+    priority: int = Field(default=0, ge=0, le=1000)
 
     class Config:
         use_enum_values = True
