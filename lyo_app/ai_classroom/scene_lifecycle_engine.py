@@ -932,32 +932,18 @@ class SceneCompiler:
     async def _generate_instruction_content(self, context: ContextSnapshot) -> str:
         """Generate dynamic instruction content using the Classroom Director System Prompt"""
         try:
-            tutor_agent = self.ai_service  # TutorAgent instance
-
             from lyo_app.ai_classroom.director_prompt import CLASSROOM_DIRECTOR_PROMPT
+            from lyo_app.core.ai_resilience import ai_resilience_manager
             
             topic = context.topic or "general learning"
             course_title = context.course_title or topic
             session_number = context.lesson_index + 1
-            user_name = "Learner" # Default, could be extracted from context if available
+            user_name = "Learner"
 
             logger.info(
-                f"📝 Generating instruction: lesson_title={context.lesson_title!r}, "
+                f"📝 Generating instruction via AI Resilience Manager: lesson_title={context.lesson_title!r}, "
                 f"lesson_index={context.lesson_index}, total={context.total_lessons}, "
                 f"topic={topic!r}, course={course_title!r}"
-            )
-
-            # Map classroom context to TutorAgent's UserContext
-            agent_context = AgentUserContext(
-                user_id=context.user_id,
-                course_id=context.course_id,
-                current_topic=context.topic,
-                completed_lessons=[
-                    s.concept_id for s in context.knowledge_states if s.mastery_level > 0.8
-                ],
-                skill_level="beginner" if context.preferred_difficulty < 0.4 else (
-                    "advanced" if context.preferred_difficulty > 0.7 else "developing"
-                ),
             )
 
             input_block = f"""
@@ -967,23 +953,21 @@ session_number: {session_number}
 user_name: "{user_name}"
 user_memory: "Likes clear and concise explanations."
 last_session_recap: ""
-user_level: "{agent_context.skill_level}"
+user_level: "beginner"
 """
             prompt = CLASSROOM_DIRECTOR_PROMPT + "\n\n" + input_block
 
-            # Try structured chat first
-            if hasattr(tutor_agent, "structured_chat"):
-                json_response = await tutor_agent.structured_chat(prompt)
-                if json_response:
-                    return json_response
-
-            # Fallback to standard chat
-            response = await tutor_agent.chat(
-                user_message=prompt,
-                context=agent_context,
+            # Call the resilient AI manager with Gemini and OpenAI fallbacks
+            response = await ai_resilience_manager.chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON containing a list of director turns."},
+                    {"role": "user", "content": prompt}
+                ],
+                provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                response_format={"type": "json_object"}
             )
 
-            text = response.message
+            text = response.get("content", "").strip()
             # Remove Markdown fences if any
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0].strip()
@@ -993,7 +977,7 @@ user_level: "{agent_context.skill_level}"
             return text
 
         except Exception as e:
-            logger.error(f"❌ TutorAgent instruction generation failed: {e}")
+            logger.error(f"❌ TutorAgent resilient instruction generation failed: {e}")
             topic = context.topic or "this concept"
             fallback_json = f"""[
                 {{"type": "speech", "speaker": "Teacher", "text": "Let's explore {topic} together. I'll guide you through the key ideas step by step."}}
@@ -1003,70 +987,71 @@ user_level: "{agent_context.skill_level}"
     async def _generate_quiz_question(self, context: ContextSnapshot) -> QuizCard:
         """Generate dynamic quiz question using AI"""
         from lyo_app.ai_classroom.sdui_models import QuizOption
+        from lyo_app.core.ai_resilience import ai_resilience_manager
         import json as _json
 
         topic = context.topic or "the current concept"
 
-        if self.ai_service:
-            try:
-                agent_context = AgentUserContext(
-                    user_id=context.user_id,
-                    course_id=context.course_id,
-                    current_topic=context.topic,
+        try:
+            prompt = (
+                f"Generate a single multiple-choice quiz question about {topic}. "
+                f"Return ONLY valid JSON (no markdown) with this exact structure: "
+                f'{{"question": "...", "options": ['
+                f'{{"id": "a", "label": "...", "is_correct": false}}, '
+                f'{{"id": "b", "label": "...", "is_correct": true}}, '
+                f'{{"id": "c", "label": "...", "is_correct": false}}, '
+                f'{{"id": "d", "label": "...", "is_correct": false}}'
+                f']}}'
+            )
+
+            # Call the resilient AI manager with Gemini and OpenAI fallbacks
+            response = await ai_resilience_manager.chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON quiz questions."},
+                    {"role": "user", "content": prompt}
+                ],
+                provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                response_format={"type": "json_object"}
+            )
+
+            # Parse the JSON response from the AI
+            raw = response.get("content", "").strip()
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            data = _json.loads(raw)
+
+            options = [
+                QuizOption(
+                    id=opt["id"],
+                    label=opt["label"],
+                    is_correct=opt.get("is_correct", False),
                 )
+                for opt in data["options"]
+            ]
 
-                prompt = (
-                    f"Generate a single multiple-choice quiz question about {topic}. "
-                    f"Return ONLY valid JSON (no markdown) with this exact structure: "
-                    f'{{"question": "...", "options": ['
-                    f'{{"id": "a", "label": "...", "is_correct": false}}, '
-                    f'{{"id": "b", "label": "...", "is_correct": true}}, '
-                    f'{{"id": "c", "label": "...", "is_correct": false}}, '
-                    f'{{"id": "d", "label": "...", "is_correct": false}}'
-                    f']}}'
-                )
+            return QuizCard(
+                question=data["question"],
+                options=options,
+                allow_multiple_attempts=True,
+                concept_id=context.topic or "current_concept",
+            )
 
-                response = await self.ai_service.chat(
-                    user_message=prompt,
-                    context=agent_context,
-                )
-
-                # Parse the JSON response from the AI
-                raw = response.message.strip()
-                # Strip markdown fences if present
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                data = _json.loads(raw)
-
-                options = [
-                    QuizOption(
-                        id=opt["id"],
-                        label=opt["label"],
-                        is_correct=opt.get("is_correct", False),
-                    )
-                    for opt in data["options"]
-                ]
-
-                return QuizCard(
-                    question=data["question"],
-                    options=options,
-                    allow_multiple_attempts=True,
-                    concept_id=context.topic or "current_concept",
-                )
-
-            except Exception as e:
-                logger.error(f"❌ AI quiz generation failed, using fallback: {e}")
+        except Exception as e:
+            logger.error(f"❌ Resilient AI quiz generation failed, using fallback: {e}")
 
         # Fallback static question (only when AI is unavailable)
+        options = [
+            QuizOption(id="a", label=f"Understanding {topic}", is_correct=True),
+            QuizOption(id="b", label="Applying the concept", is_correct=False),
+            QuizOption(id="c", label="Reviewing the basics", is_correct=False),
+            QuizOption(id="d", label="None of the above", is_correct=False)
+        ]
         return QuizCard(
-            question=f"Which of the following best describes {topic}?",
-            options=[
-                QuizOption(id="a", label="Option A", is_correct=False),
-                QuizOption(id="b", label="Option B", is_correct=True),
-                QuizOption(id="c", label="Option C", is_correct=False),
-            ],
+            question=f"Which of the following represents the core objective when studying {topic}?",
+            options=options,
             allow_multiple_attempts=True,
-            concept_id=context.topic or "current_concept",
+            concept_id=context.topic or "current_concept"
         )
 
 
