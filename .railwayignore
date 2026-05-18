@@ -59,6 +59,7 @@ ios_integration/
 
 # Misc test scripts (kept in git but not needed for the deployed image)
 test_*.py
+!lyo_app/ai_agents/multi_agent_v2/agents/test_prep_agent.py
 verify_*.py
 diag_*.py
 diagnostic_*.py

@@ -10,6 +10,10 @@ Model Strategy:
 Exports all agents for external use.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent, AgentMetrics
 from lyo_app.ai_agents.multi_agent_v2.agents.orchestrator_agent import (
     OrchestratorAgent,
@@ -58,11 +62,17 @@ from lyo_app.ai_agents.multi_agent_v2.agents.tutor_agent import (
     TutorExplanation
 )
 
-# Test Prep Agent
-from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import (
-    TestPrepAgent,
-    TestPrepExtraction
-)
+# Test Prep Agent. This module is optional in some deployment snapshots;
+# keep the package importable so unrelated Lyo2 routes still register.
+try:
+    from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import (
+        TestPrepAgent,
+        TestPrepExtraction
+    )
+except ModuleNotFoundError as exc:
+    logger.warning("Test prep agent module unavailable: %s", exc)
+    TestPrepAgent = None
+    TestPrepExtraction = None
 
 # Exercise Validator
 from lyo_app.ai_agents.multi_agent_v2.agents.exercise_validator import (

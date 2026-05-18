@@ -118,6 +118,19 @@ class Settings(BaseSettings):
         extra='ignore'
     )
 
+    @field_validator("DEBUG", mode='before')
+    @classmethod
+    def parse_debug_flag(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "debug", "development"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "release", "production", "prod", "staging"}:
+                return False
+        return v
+
     @model_validator(mode='after')
     def build_urls(self) -> 'Settings':
         """Build Redis and Celery URLs if not provided."""

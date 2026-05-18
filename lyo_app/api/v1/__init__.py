@@ -160,7 +160,7 @@ except Exception as e:
 
 try:
     logger.info("DEBUG: Attempting to import learning profile router")
-    from ..learning_profile.routes import router as learning_profile_router
+    from lyo_app.learning_profile.routes import router as learning_profile_router
     logger.info(f"DEBUG: Imported router with {len(learning_profile_router.routes)} routes")
     api_router.include_router(learning_profile_router)
     logger.info("✅ Learning profile router loaded")
@@ -169,6 +169,16 @@ except Exception as e:
     logger.error(f"❌ Failed to load learning profile router: {e}")
     logger.error(f"   Traceback: {traceback.format_exc()}")
     logger.error(f"DEBUG: Failed to load learning profile router: {e}")
+
+try:
+    logger.info("DEBUG: Attempting to import study plans router")
+    from lyo_app.study_plans.routes import router as study_plans_router
+    logger.info(f"DEBUG: Imported study plans router with {len(study_plans_router.routes)} routes")
+    api_router.include_router(study_plans_router)
+    logger.info("Study plans router loaded")
+except Exception as e:
+    logger.error(f"Failed to load study plans router: {e}")
+    logger.error(f"   Traceback: {traceback.format_exc()}")
 
 logger.info(f"DEBUG: Final api_router has {len(api_router.routes)} routes")
 

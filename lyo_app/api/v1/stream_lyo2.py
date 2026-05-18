@@ -15,7 +15,28 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision
-from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
+try:
+    from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
+except ModuleNotFoundError as exc:
+    logger = logging.getLogger(__name__)
+    logger.warning("Test prep agent module unavailable; using fallback clarification flow: %s", exc)
+
+    class _FallbackTestPrepData:
+        subject = None
+        topics = []
+        test_date = None
+        readiness = None
+        has_materials = False
+        missing_critical_info = ["subject", "topics"]
+        follow_up_question = (
+            "What subject is your test on, and what topics should we focus on? "
+            "You can also upload notes, a study guide, or a syllabus."
+        )
+
+    class TestPrepAgent:
+        async def analyze_test_prep(self, request):
+            from types import SimpleNamespace
+            return SimpleNamespace(success=True, data=_FallbackTestPrepData())
 from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel

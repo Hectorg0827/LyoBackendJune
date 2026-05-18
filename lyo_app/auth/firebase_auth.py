@@ -30,6 +30,7 @@ class FirebaseAuthService:
     
     def __init__(self):
         self._initialized = False
+        self._public_verification_only = False
         self._initialize()
     
     def _initialize(self):
@@ -45,7 +46,9 @@ class FirebaseAuthService:
         try:
             from firebase_admin import credentials
             
-            # Priority: Firebase credentials file > JSON env var > ADC
+            # Priority: Firebase credentials file > JSON env var.
+            # Do not fall back to Application Default Credentials on Railway: ADC
+            # probes GCP metadata endpoints and can stall /auth/firebase requests.
             cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
             cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
             project_id = os.getenv("FIREBASE_PROJECT_ID") or os.getenv("GCP_PROJECT_ID", "lyo-app")
@@ -62,18 +65,11 @@ class FirebaseAuthService:
                 logger.info("Loading Firebase credentials from JSON env var")
                 cred_dict = json.loads(cred_json)
                 cred = credentials.Certificate(cred_dict)
-            # 3. Fallback to ADC
             else:
-                logger.info("Using Application Default Credentials for Firebase")
-                try:
-                    cred = credentials.ApplicationDefault()
-                except Exception as e:
-                    logger.warning(f"Failed to get ADC credentials: {e}. Using MockCredential for verification.")
-                    import google.auth.credentials
-                    class MockCredential(credentials.Base):
-                        def get_credential(self):
-                            return google.auth.credentials.AnonymousCredentials()
-                    cred = MockCredential()
+                logger.warning("No explicit Firebase credentials configured; using public ID-token verification only")
+                self._public_verification_only = True
+                self._initialized = False
+                return
             
             # FORCE project_id to 'lyo-app' if not provided to avoid "A project ID is required" errors
             active_project_id = project_id or "lyo-app"
@@ -94,7 +90,22 @@ class FirebaseAuthService:
     
     def is_available(self) -> bool:
         """Check if Firebase authentication is available."""
-        return FIREBASE_AVAILABLE and self._initialized
+        return FIREBASE_AVAILABLE and (self._initialized or self._public_verification_only)
+
+    def _verify_token_with_public_keys(self, id_token: str, expected_audience: str) -> Dict[str, Any]:
+        """Verify a Firebase ID token using Google's public certificates."""
+        import google.auth.transport.requests
+        import google.oauth2.id_token
+
+        request = google.auth.transport.requests.Request()
+        decoded_token = google.oauth2.id_token.verify_firebase_token(
+            id_token,
+            request,
+            audience=expected_audience,
+        )
+        if 'uid' not in decoded_token and 'sub' in decoded_token:
+            decoded_token['uid'] = decoded_token['sub']
+        return decoded_token
     
     async def verify_firebase_token(self, id_token: str) -> Dict[str, Any]:
         """
@@ -120,6 +131,13 @@ class FirebaseAuthService:
         
         # Get the expected audience from environment (the iOS Firebase project)
         expected_audience = os.getenv("FIREBASE_PROJECT_ID", "lyo-app")
+
+        if self._public_verification_only:
+            try:
+                return self._verify_token_with_public_keys(id_token, expected_audience)
+            except Exception as e:
+                logger.error(f"Token verification failed: {e}")
+                raise ValueError(f"Token verification failed: {str(e)}")
         
         try:
             # First, try standard verification
@@ -153,20 +171,7 @@ class FirebaseAuthService:
                 
                 # Try verification without audience check using Google's public keys
                 try:
-                    import google.auth.transport.requests
-                    import google.oauth2.id_token
-                    
-                    # Verify using Google's public keys (validates signature and expiry)
-                    request = google.auth.transport.requests.Request()
-                    decoded_token = google.oauth2.id_token.verify_firebase_token(
-                        id_token, 
-                        request,
-                        audience=expected_audience  # Use iOS project ID as audience
-                    )
-                    
-                    # CRITICAL FIX: Ensure 'uid' is present (google.oauth2 returns 'sub')
-                    if 'uid' not in decoded_token and 'sub' in decoded_token:
-                        decoded_token['uid'] = decoded_token['sub']
+                    decoded_token = self._verify_token_with_public_keys(id_token, expected_audience)
                     
                     logger.info(f"✅ Cross-project token verification successful for uid: {decoded_token.get('uid')}")
                     return decoded_token

@@ -248,6 +248,18 @@ class EnhancedSettings(BaseSettings):
     # VALIDATORS
     # ============================================================================
     
+    @validator('DEBUG', pre=True)
+    def parse_debug_flag(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized in {'1', 'true', 'yes', 'on', 'debug', 'development'}:
+                return True
+            if normalized in {'0', 'false', 'no', 'off', 'release', 'production', 'prod', 'staging'}:
+                return False
+        return v
+
     @validator('ENVIRONMENT')
     def validate_environment(cls, v):
         allowed_envs = ['development', 'staging', 'production']

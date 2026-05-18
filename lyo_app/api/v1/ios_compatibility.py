@@ -52,6 +52,22 @@ async def get_feed_alias(
     }
 
 
+@router.get("/posts/feed")
+async def get_posts_feed_alias(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=50),
+    content_type: Optional[str] = Query(None),
+    current_user: Any = Depends(get_current_user_or_guest),
+):
+    """GET /api/v1/posts/feed - iOS compatibility alias for the feed surface."""
+    return await get_feed_alias(
+        skip=offset,
+        limit=limit,
+        content_type=content_type,
+        current_user=current_user,
+    )
+
+
 @router.get("/analytics/progress")
 async def get_progress_analytics(
     current_user: Any = Depends(get_current_user_or_guest),

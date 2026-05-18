@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     redis_port: str = Field(default="6379", description="Redis port")
     redis_url: Optional[str] = Field(default=None, description="Redis URL for caching and Celery (optional, built from host/port if not set)")
     
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug_flag(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "debug", "development"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "release", "production", "prod", "staging"}:
+                return False
+        return v
+
     @property
     def effective_redis_url(self) -> str:
         """Get the effective Redis URL, building from host/port if REDIS_URL not set."""

@@ -96,7 +96,7 @@ async def load_main_app():
 # I will merge the routes from enhanced_main here.
 try:
     from lyo_app.enhanced_main import app as real_app
-    app.mount("/api", real_app) 
-    logger.info("✅ Mounted main app under /api")
+    app.mount("/", real_app)
+    logger.info("✅ Mounted main app at root")
 except Exception as e:
     logger.warning(f"Could not mount main app immediately: {e}")
