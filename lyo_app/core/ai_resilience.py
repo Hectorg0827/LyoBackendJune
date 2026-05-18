@@ -332,6 +332,8 @@ class AIResilienceManager:
         max_tokens: int = 1000,
         provider_order: List[str] = None,
         use_cache: bool = True,
+        response_format: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> Dict[str, Any]:
         """Get chat completion with fallback across providers."""
         # Lazy initialization if lifespan failed
@@ -389,12 +391,15 @@ class AIResilienceManager:
                         continue
 
                     async def _openai_call():
-                        return await self.openai_client.chat.completions.create(
-                            model=model_name,
-                            messages=messages,
-                            temperature=temperature,
-                            max_tokens=max_tokens
-                        )
+                        call_kwargs = {
+                            "model": model_name,
+                            "messages": messages,
+                            "temperature": temperature,
+                            "max_tokens": max_tokens
+                        }
+                        if response_format:
+                            call_kwargs["response_format"] = response_format
+                        return await self.openai_client.chat.completions.create(**call_kwargs)
 
                     res = await cb.call(_openai_call)
                     result = {
@@ -407,7 +412,7 @@ class AIResilienceManager:
                     print(f">>> [PID {os.getpid()}]   ✅ OpenAI {model_name} SUCCESS", flush=True)
                 else:
                     result = await self._call_model_with_messages(
-                        model_name, model, messages, temperature, max_tokens
+                        model_name, model, messages, temperature, max_tokens, response_format=response_format
                     )
                     print(f">>> [PID {os.getpid()}]   ✅ Gemini {model_name} SUCCESS", flush=True)
                 
@@ -430,12 +435,13 @@ class AIResilienceManager:
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         cb = self.circuit_breakers[model_name]
 
         async def make_call():
             return await self._make_api_call_with_messages(
-                model_name, model, messages, temperature, max_tokens
+                model_name, model, messages, temperature, max_tokens, response_format=response_format
             )
 
         return await cb.call(make_call)
@@ -447,6 +453,7 @@ class AIResilienceManager:
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not model.api_key:
             raise Exception(f"No API key configured for {model.name}")
@@ -506,6 +513,9 @@ class AIResilienceManager:
                 "topK": 40,
             },
         }
+        
+        if response_format and response_format.get("type") == "json_object":
+            payload["generationConfig"]["responseMimeType"] = "application/json"
         
         # Add system instruction if present
         if system_parts:

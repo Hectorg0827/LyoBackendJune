@@ -1077,6 +1077,11 @@ user_level: "{agent_context.skill_level}"
 class SceneLifecycleEngine:
     """Master orchestrator of the four-phase scene lifecycle"""
 
+    # Class-level state tracking to persist across transient instances
+    _active_scenes: Dict[str, Scene] = {}
+    _session_contexts: Dict[str, Any] = {}
+    _session_lesson_indices: Dict[str, int] = {}
+
     def __init__(self, db: AsyncSession, websocket_manager: Optional[Any] = None):
         # Phase components
         self.trigger_listener = TriggerListener()
@@ -1096,10 +1101,10 @@ class SceneLifecycleEngine:
         self.db = db
         self.websocket_manager = websocket_manager
 
-        # State tracking
-        self.active_scenes: Dict[str, Scene] = {}
-        self.session_contexts: Dict[str, ContextSnapshot] = {}
-        self.session_lesson_indices: Dict[str, int] = {}  # session_id → current lesson_index
+        # State tracking (shared class-level dicts to persist across transient instances)
+        self.active_scenes = SceneLifecycleEngine._active_scenes
+        self.session_contexts = SceneLifecycleEngine._session_contexts
+        self.session_lesson_indices = SceneLifecycleEngine._session_lesson_indices
 
         # Register default handlers
         self._register_handlers()
@@ -1157,6 +1162,17 @@ class SceneLifecycleEngine:
                 action_intent = (trigger.action_data or {}).get("action_intent")
                 if action_intent == ActionIntent.CONTINUE and scene.scene_type != SceneType.CHALLENGE:
                     old_idx = self.session_lesson_indices.get(trigger.session_id, 0)
+                    
+                    # Update from ConversationSession if it exists to be doubly robust
+                    try:
+                        from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
+                        cm = get_conversation_manager()
+                        conv_session = cm.get_session(trigger.session_id)
+                        if conv_session:
+                            old_idx = max(old_idx, conv_session.current_lesson_index)
+                    except Exception:
+                        conv_session = None
+                    
                     new_idx = old_idx + 1
                     # Wrap around if we've passed the last lesson
                     if context.total_lessons > 0 and new_idx >= context.total_lessons:
@@ -1164,15 +1180,12 @@ class SceneLifecycleEngine:
                         logger.info(f"📚 Course completed! Wrapping to lesson 0")
                     self.session_lesson_indices[trigger.session_id] = new_idx
                     logger.info(f"📖 Advanced lesson index: {old_idx} → {new_idx}")
-                    # Also update ConversationSession if it exists
-                    try:
-                        from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
-                        cm = get_conversation_manager()
-                        conv_session = cm.get_session(trigger.session_id)
-                        if conv_session:
+                    
+                    if conv_session:
+                        try:
                             conv_session.current_lesson_index = new_idx
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
 
             total_time = (time.time() - start_time) * 1000
             logger.info(f"✅ LIFECYCLE COMPLETE: {scene.scene_id} in {total_time:.0f}ms")

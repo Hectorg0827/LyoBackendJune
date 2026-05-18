@@ -874,6 +874,20 @@ async def debug_db_pool():
     }
 
 
+@app.get("/db-check")
+async def db_check():
+    from lyo_app.core.database import engine
+    pool = engine.pool
+    return {
+        "size": getattr(pool, "_size", "unknown"),
+        "max_overflow": getattr(pool, "_max_overflow", "unknown"),
+        "timeout": getattr(pool, "_timeout", "unknown"),
+        "checked_out": pool.checkedout(),
+        "overflow": pool.overflow(),
+        "pool_class": pool.__class__.__name__,
+    }
+
+
 @app.get("/healthz")
 async def healthz_alias():
     """Compatibility health endpoint."""

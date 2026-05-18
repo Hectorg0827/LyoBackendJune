@@ -57,7 +57,7 @@ user_level: "developing"
             messages=messages,
             temperature=0.4,
             max_tokens=2500,
-            response_format={"type": "json_object"} if False else None
+            response_format={"type": "json_object"} if True else None
         )
         print("CLASSROOM SCRIPT JSON:")
         print(response.get("content") or response.get("response"))

@@ -11,6 +11,7 @@ This agent provides intelligent tutoring capabilities:
 """
 
 import asyncio
+import os
 import logging
 from typing import Optional, Dict, Any, List
 from enum import Enum
@@ -133,7 +134,12 @@ class TutorAgent:
         self.model = None
         
         # Initialize Gemini
-        api_key = getattr(settings, 'google_api_key', None) or getattr(settings, 'gemini_api_key', None)
+        api_key = (
+            getattr(settings, 'google_api_key', None) or 
+            getattr(settings, 'gemini_api_key', None) or
+            os.getenv("GEMINI_API_KEY") or
+            os.getenv("GOOGLE_API_KEY")
+        )
         if api_key:
             try:
                 genai.configure(api_key=api_key)

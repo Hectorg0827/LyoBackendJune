@@ -216,20 +216,25 @@ async def _register_lifecycle_handlers(
 ):
     """Register handlers to connect WebSocket events to Scene Lifecycle Engine"""
 
+    if "user_action" in ws_manager.event_handlers and len(ws_manager.event_handlers["user_action"]) > 0:
+        logger.debug("ℹ️ event_handler 'user_action' already registered, skipping duplicate registration")
+        return
+
     async def handle_user_action_event(payload: UserActionPayload, connection):
         """Handle user actions from WebSocket and trigger scene lifecycle"""
         try:
-            # Convert WebSocket user action to Scene Lifecycle trigger
-            scene = await lifecycle_engine.handle_user_action(
-                user_id=payload.user_id or connection.user_id,
-                session_id=payload.session_id,
-                action_intent=ActionIntent(payload.action_intent),
-                action_data=payload.answer_data,
-                component_id=payload.component_id
-            )
-
-            # Scene will be automatically streamed by the lifecycle engine
-            logger.info(f"🎯 User action processed: {payload.action_intent} → scene {scene.scene_id}")
+            # Get a fresh DB session dynamically to prevent connection pooling / leak issues over long-lived websockets
+            async for db in get_async_session():
+                engine = SceneLifecycleEngine(db, ws_manager)
+                scene = await engine.handle_user_action(
+                    user_id=payload.user_id or connection.user_id,
+                    session_id=payload.session_id,
+                    action_intent=ActionIntent(payload.action_intent),
+                    action_data=payload.answer_data,
+                    component_id=payload.component_id
+                )
+                logger.info(f"🎯 User action processed dynamically: {payload.action_intent} → scene {scene.scene_id}")
+                break
 
         except Exception as e:
             logger.error(f"❌ User action handling failed: {e}")
