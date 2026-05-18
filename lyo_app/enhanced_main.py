@@ -167,60 +167,60 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("🚀 Starting LyoBackend with enhanced features...")
     setup_logging()
     
-    # Database initialization
-    try:
-        print(">>> [LIFESPAN] Initializing database (background task)...", flush=True)
-        logger.info("⏳ Initializing database...")
-        # Create a task for init_db instead of awaiting it to prevent startup hang
-        # This allows the app to start and respond to /debug/db-pool
-        db_init_task = asyncio.create_task(init_db(), name="db_init")
-        db_init_task.add_done_callback(_log_startup_task_result)
-        app.state.db_init_task = db_init_task
-        print(">>> [LIFESPAN] Database initialization task scheduled", flush=True)
-    except Exception as e:
-        print(f">>> [LIFESPAN] Database initialization scheduling FAILED: {e}", flush=True)
-        logger.error(f"❌ Database initialization scheduling failed: {e}")
-    
-    # Sentry (synchronous, fast)
-    if (
-        hasattr(settings, "SENTRY_DSN")
-        and getattr(settings, "SENTRY_DSN", None)
-        and SENTRY_AVAILABLE
-    ):
-        sentry_sdk.init(
-            dsn=settings.SENTRY_DSN,
-            environment=settings.ENVIRONMENT,
-            release=settings.APP_VERSION,
-            traces_sample_rate=0.1 if settings.is_production() else 1.0,
-        )
-        logger.info("✓ Sentry monitoring initialized")
-    
-    # PARALLEL INITIALIZATION - Major performance boost!
-    # Re-enabled after isolating boot performance to library import times
-    logger.info("Initializing services (AI/Firebase/Vertex)...")
-    init_tasks = [
-        _init_redis_safe(),
-        _init_storage_safe(),
-        _init_ai_safe(),
-        _init_firebase_safe(),
-        _init_vertex_safe(),
-    ]
-    
-    results = await asyncio.gather(*init_tasks, return_exceptions=True)
-    successful = sum(1 for r in results if not isinstance(r, Exception))
-    
-    # Wire chat stores with the cache manager (best-effort; stores work without it)
-    try:
-        from lyo_app.core.cache_manager import IntelligentCacheManager
-        from lyo_app.chat.stores import initialize_stores
-        initialize_stores(IntelligentCacheManager())
-        logger.info("✅ Chat stores initialized with cache manager")
-    except Exception as e:
-        logger.warning(f"Chat store cache initialization skipped: {e}")
+    # Offload all heavy/potentially-blocking initializations to a background task
+    async def run_async_initializations():
+        try:
+            print(">>> [LIFESPAN] Database initialization starting...", flush=True)
+            await init_db()
+            print(">>> [LIFESPAN] Database initialization successful!", flush=True)
+        except Exception as e:
+            print(f">>> [LIFESPAN] Database initialization FAILED: {e}", flush=True)
+            
+        try:
+            if (
+                hasattr(settings, "SENTRY_DSN")
+                and getattr(settings, "SENTRY_DSN", None)
+                and SENTRY_AVAILABLE
+            ):
+                sentry_sdk.init(
+                    dsn=settings.SENTRY_DSN,
+                    environment=settings.ENVIRONMENT,
+                    release=settings.APP_VERSION,
+                    traces_sample_rate=0.1 if settings.is_production() else 1.0,
+                )
+                print(">>> [LIFESPAN] Sentry initialized", flush=True)
+        except Exception as e:
+            print(f">>> [LIFESPAN] Sentry initialization failed: {e}", flush=True)
 
-    elapsed = time.time() - start_time
-    logger.info(f"🎉 LyoBackend startup completed in {elapsed:.2f}s ({successful}/5 services)")
+        print(">>> [LIFESPAN] Initializing parallel services in background...", flush=True)
+        init_tasks = [
+            _init_redis_safe(),
+            _init_storage_safe(),
+            _init_ai_safe(),
+            _init_firebase_safe(),
+            _init_vertex_safe(),
+        ]
+        results = await asyncio.gather(*init_tasks, return_exceptions=True)
+        successful = sum(1 for r in results if not isinstance(r, Exception))
+        print(f">>> [LIFESPAN] Parallel services initialized: {successful}/5 services successful. Results: {results}", flush=True)
+
+        try:
+            from lyo_app.core.cache_manager import IntelligentCacheManager
+            from lyo_app.chat.stores import initialize_stores
+            initialize_stores(IntelligentCacheManager())
+            print(">>> [LIFESPAN] Chat stores initialized in background", flush=True)
+        except Exception as e:
+            print(f">>> [LIFESPAN] Chat store cache initialization skipped: {e}", flush=True)
+
+        elapsed = time.time() - start_time
+        print(f">>> [LIFESPAN] Background initialization completed in {elapsed:.2f}s", flush=True)
+
+    # Schedule the initializations as a fire-and-forget task in the background
+    init_task = asyncio.create_task(run_async_initializations(), name="lifespan_bg_init")
+    init_task.add_done_callback(_log_startup_task_result)
+    app.state.lifespan_bg_init = init_task
     
+    print(">>> [LIFESPAN] Startup background task scheduled successfully. Yielding instantly!", flush=True)
     yield
     
     logger.info("Shutting down LyoBackend...")
