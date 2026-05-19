@@ -298,27 +298,37 @@ class ContextAssembler:
                     course_title = row.title
                     topic = topic or row.topic
             except ValueError:
-                # It's a UUID, so it might be a ChatCourse or GeneratedCourseModel
+                # It's a UUID, so it might be a GraphCourse, ChatCourse or GeneratedCourseModel
                 try:
-                    from lyo_app.chat.models import ChatCourse
+                    from lyo_app.ai_classroom.models import GraphCourse
                     from sqlalchemy import select
                     result = await self.db.execute(
-                        select(ChatCourse.title, ChatCourse.topic).where(ChatCourse.id == course_id)
+                        select(GraphCourse.title, GraphCourse.subject).where(GraphCourse.id == course_id)
                     )
                     row = result.first()
                     if row:
                         course_title = row.title
-                        topic = topic or row.topic
+                        topic = topic or row.subject
                     else:
-                        # Try GeneratedCourseModel
-                        from lyo_app.ai_agents.multi_agent_v2.pipeline.job_queue import GeneratedCourseModel
+                        # Try ChatCourse
+                        from lyo_app.chat.models import ChatCourse
                         result = await self.db.execute(
-                            select(GeneratedCourseModel.title, GeneratedCourseModel.topic).where(GeneratedCourseModel.id == course_id)
+                            select(ChatCourse.title, ChatCourse.topic).where(ChatCourse.id == course_id)
                         )
                         row = result.first()
                         if row:
                             course_title = row.title
                             topic = topic or row.topic
+                        else:
+                            # Try GeneratedCourseModel
+                            from lyo_app.ai_agents.multi_agent_v2.pipeline.job_queue import GeneratedCourseModel
+                            result = await self.db.execute(
+                                select(GeneratedCourseModel.title, GeneratedCourseModel.topic).where(GeneratedCourseModel.id == course_id)
+                            )
+                            row = result.first()
+                            if row:
+                                course_title = row.title
+                                topic = topic or row.topic
                 except Exception as e:
                     logger.warning(f"⚠️ Could not query UUID course models: {e}")
             except Exception as e:
@@ -366,7 +376,43 @@ class ContextAssembler:
             logger.info(f"📚 Course {course_id} has {total_lessons} lessons")
 
         except ValueError:
-            # It's a UUID, try getting lesson from ChatCourse or GeneratedCourseModel
+            # It's a UUID, try getting lesson from GraphCourse first, then ChatCourse or GeneratedCourseModel
+            try:
+                from lyo_app.ai_classroom.models import GraphCourse, LearningNode
+                from sqlalchemy import select
+                
+                # Check if this course exists in GraphCourse
+                course_result = await self.db.execute(
+                    select(GraphCourse).where(GraphCourse.id == course_id)
+                )
+                course_exists = course_result.scalar_one_or_none()
+                
+                if course_exists:
+                    # Query all nodes for this course
+                    nodes_result = await self.db.execute(
+                        select(LearningNode)
+                        .where(LearningNode.course_id == course_id)
+                        .order_by(LearningNode.sequence_order)
+                    )
+                    nodes = nodes_result.scalars().all()
+                    
+                    # Filter for narrative/lesson nodes
+                    narrative_nodes = [n for n in nodes if n.node_type in ("narrative", "hook", "summary")]
+                    
+                    total_lessons = len(narrative_nodes)
+                    if total_lessons > 0:
+                        if 0 <= lesson_index < total_lessons:
+                            target_node = narrative_nodes[lesson_index]
+                            keywords = target_node.content.get("keywords") or ["Overview"]
+                            keyword = keywords[0] if keywords else "Overview"
+                            lesson_title = f"Lesson {lesson_index + 1}: {keyword.title()}"
+                            lesson_content = target_node.content.get("narration", "")
+                            logger.info(f"📖 Resolved GraphCourse lesson {lesson_index}: {lesson_title}")
+                    return lesson_title, lesson_content, total_lessons
+            except Exception as e:
+                logger.warning(f"⚠️ Could not query GraphCourse for lessons: {e}")
+
+            # Fallback to other UUID models (ChatCourse or GeneratedCourseModel)
             try:
                 from lyo_app.chat.models import ChatCourse
                 from sqlalchemy import select

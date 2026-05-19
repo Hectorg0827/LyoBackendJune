@@ -627,6 +627,21 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Living Classroom routes not available: {e}")
 
+    # ── Living Classroom: HTTP routes (Chat and Playback) ──
+    try:
+        from lyo_app.ai_classroom.routes import router as ai_classroom_router
+        app.include_router(ai_classroom_router)
+        logger.info("✅ AI Classroom HTTP routes integrated!")
+    except ImportError as e:
+        logger.warning(f"⚠️ AI Classroom HTTP routes not available: {e}")
+
+    try:
+        from lyo_app.ai_classroom.playback_routes import router as playback_router
+        app.include_router(playback_router)
+        logger.info("✅ AI Classroom Playback routes integrated!")
+    except ImportError as e:
+        logger.warning(f"⚠️ AI Classroom Playback routes not available: {e}")
+
     # ── Living Classroom: Production Monitoring Dashboard ──
     try:
         from lyo_app.ai_classroom.monitoring_dashboard import router as monitoring_router
