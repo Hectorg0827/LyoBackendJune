@@ -493,12 +493,6 @@ def create_app() -> FastAPI:
         from lyo_app.community.routes import router as community_router
         app.include_router(community_router, prefix="/community", tags=["community"])
         app.include_router(community_router, prefix="/api/v1/community", tags=["community"])
-        # Also mount community at /api/v1 so the iOS-expected nested routes
-        # (e.g. GET/POST /api/v1/posts/{id}/comments) resolve. The feeds router
-        # is registered earlier at /api/v1, so any overlapping /posts routes are
-        # still served by feeds (first match wins); this only adds the nested
-        # comment/like endpoints the feeds router does not provide.
-        app.include_router(community_router, prefix="/api/v1", tags=["community"])
     except ImportError:
         pass
     try:

@@ -3,9 +3,10 @@ Feeds routes for social interactions, posts, comments, and reactions.
 Provides FastAPI endpoints for the feeds module.
 """
 
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.routes import get_current_user
@@ -254,6 +255,70 @@ async def delete_comment(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to delete this comment"
+        )
+
+
+# Nested post-comment endpoints (iOS contract: /api/v1/posts/{id}/comments)
+class PostCommentCreate(BaseModel):
+    """Body for creating a comment via the nested /posts/{post_id}/comments route.
+
+    ``post_id`` comes from the path, so it is intentionally omitted here.
+    """
+
+    content: str = Field(..., min_length=1, max_length=1000)
+    parent_comment_id: Optional[int] = Field(
+        None, description="Parent comment ID for replies"
+    )
+
+
+@router.get("/posts/{post_id}/comments", response_model=List[CommentRead])
+async def list_post_comments(
+    post_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)]
+) -> List[CommentRead]:
+    """
+    List all comments for a post, ordered by creation time.
+
+    Serves the iOS GET /api/v1/posts/{id}/comments contract against the
+    feeds Comment store (consistent with POST /api/v1/posts).
+    """
+    comments = await feeds_service.get_comments_by_post(db, post_id)
+    return [CommentRead.model_validate(c) for c in comments]
+
+
+@router.post(
+    "/posts/{post_id}/comments",
+    response_model=CommentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_post_comment(
+    post_id: int,
+    comment_data: PostCommentCreate,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+) -> CommentRead:
+    """
+    Create a comment on a post.
+
+    Serves the iOS POST /api/v1/posts/{id}/comments contract. The post id is
+    taken from the path; the request body carries only the comment content
+    (and an optional parent comment for replies).
+    """
+    try:
+        comment = await feeds_service.create_comment(
+            db,
+            current_user.id,
+            CommentCreate(
+                post_id=post_id,
+                content=comment_data.content,
+                parent_comment_id=comment_data.parent_comment_id,
+            ),
+        )
+        return CommentRead.model_validate(comment)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
 
 
