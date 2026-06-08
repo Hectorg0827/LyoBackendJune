@@ -17,6 +17,7 @@ from lyo_app.ai_agents.orchestrator import ai_orchestrator
 from lyo_app.learning.models import Course, Lesson
 from lyo_app.ai_study.models import StudySession, StudyMessage
 from lyo_app.core.ai_resilience import ai_resilience_manager
+from lyo_app.core.skill_extraction import infer_subject
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,7 @@ class StudySessionService:
                         resource_type=resource_type,
                         resource_title=course.title,
                         difficulty_level=course.difficulty_level or "intermediate",
-                        subject_area=course.category or "general",
+                        subject_area=course.category or infer_subject(course.title, getattr(course, "description", None)),
                         learning_objectives=course.learning_objectives or []
                     )
             
@@ -352,17 +353,19 @@ class StudySessionService:
                         resource_type=resource_type,
                         resource_title=lesson.title,
                         difficulty_level=course.difficulty_level if course else "intermediate",
-                        subject_area=course.category if course else "general",
+                        subject_area=(course.category if course and course.category else None) or infer_subject(lesson.title, getattr(course, "title", None) if course else None),
                         learning_objectives=lesson.learning_objectives or []
                     )
             
-            # Default fallback context
+            # Default fallback context (topic/custom sessions): derive the
+            # subject from the resource identifier/topic rather than tagging
+            # every AI session "general", which degraded recommendations.
             return StudySessionContext(
                 resource_id=resource_id,
                 resource_type=resource_type,
                 resource_title=f"Study Topic {resource_id}",
                 difficulty_level="intermediate",
-                subject_area="general",
+                subject_area=infer_subject(resource_id),
                 learning_objectives=["Master the fundamentals", "Apply knowledge practically"]
             )
             
@@ -374,7 +377,7 @@ class StudySessionService:
                 resource_type=resource_type,
                 resource_title="Study Session",
                 difficulty_level="intermediate",
-                subject_area="general",
+                subject_area=infer_subject(resource_id),
                 learning_objectives=[]
             )
     

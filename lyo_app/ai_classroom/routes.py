@@ -40,6 +40,7 @@ from lyo_app.auth.dependencies import get_current_user
 from lyo_app.models.enhanced import User
 from lyo_app.core.database import get_async_session as get_db, AsyncSessionLocal
 from lyo_app.ai_classroom.models import GraphCourse, LearningNode, LearningEdge, NodeType
+from lyo_app.core.skill_extraction import infer_subject, estimate_reading_seconds
 from lyo_app.core.context_engine import ContextEngine
 from lyo_app.personalization.soft_skills import SoftSkillsService, SoftSkillAnalyzer
 from lyo_app.services.analytics_service import analytics_service
@@ -470,7 +471,7 @@ async def _create_minimal_graph_course(
             "duration_hint": 8.0,
         },
         sequence_order=0,
-        estimated_seconds=10,
+        estimated_seconds=estimate_reading_seconds(hook_narration),
     )
     lesson_node = LearningNode(
         course_id=course.id,
@@ -483,7 +484,7 @@ async def _create_minimal_graph_course(
             "duration_hint": 20.0,
         },
         sequence_order=1,
-        estimated_seconds=30,
+        estimated_seconds=estimate_reading_seconds(lesson_narration),
     )
     interaction_node = LearningNode(
         course_id=course.id,
@@ -496,7 +497,11 @@ async def _create_minimal_graph_course(
             "visual_prompt": f"A simple quiz card about {topic}",
         },
         sequence_order=2,
-        estimated_seconds=20,
+        # Reading the prompt + options plus thinking/answering time.
+        estimated_seconds=estimate_reading_seconds(
+            quiz_prompt + " " + " ".join(o.get("label", "") for o in quiz_options),
+            extra_seconds=10,
+        ),
     )
     summary_node = LearningNode(
         course_id=course.id,
@@ -509,7 +514,7 @@ async def _create_minimal_graph_course(
             "duration_hint": 10.0,
         },
         sequence_order=3,
-        estimated_seconds=15,
+        estimated_seconds=estimate_reading_seconds(summary_narration),
     )
 
     db.add_all([hook_node, lesson_node, interaction_node, summary_node])

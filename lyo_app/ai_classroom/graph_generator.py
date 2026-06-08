@@ -46,6 +46,7 @@ from lyo_app.ai_agents.multi_agent_v2.schemas.course_schemas import (
     QuizQuestion
 )
 from lyo_app.core.ai_resilience import AIResilienceManager
+from lyo_app.core.skill_extraction import infer_subject
 
 logger = logging.getLogger(__name__)
 
@@ -593,7 +594,8 @@ Generate only the transition script.
             title="Quick Check",
             script_text="Let's see if you've got this! " + question_data["question"],
             visual_cue="Quick check time",
-            duration_seconds=15,
+            # Time to read the question plus a buffer to think and answer.
+            duration_seconds=self._estimate_duration(question_data["question"]) + 10,
             sequence_in_course=self._next_sequence(),
             module_index=context_node.module_index,
             lesson_index=context_node.lesson_index,
@@ -795,14 +797,19 @@ Generate only the transition script.
         return None
     
     def _extract_subject(self, curriculum: CurriculumStructure) -> str:
-        """Extract subject from curriculum"""
-        # Simple extraction from title
-        title_lower = curriculum.course_title.lower()
-        subjects = ["python", "javascript", "math", "science", "history", "english"]
-        for subj in subjects:
-            if subj in title_lower:
-                return subj.capitalize()
-        return "General"
+        """Derive the course subject/skill tag from its actual content.
+
+        Scans the title, description and module titles against a curated
+        subject taxonomy, falling back to the most salient phrase in the
+        title so recommendations receive a meaningful tag rather than the
+        generic "General".
+        """
+        module_titles = " ".join(m.title for m in curriculum.modules)
+        return infer_subject(
+            curriculum.course_title,
+            curriculum.course_description,
+            module_titles,
+        )
     
     def _map_difficulty(self, curriculum: CurriculumStructure) -> str:
         """Map curriculum to difficulty string"""
