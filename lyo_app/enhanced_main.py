@@ -493,6 +493,12 @@ def create_app() -> FastAPI:
         from lyo_app.community.routes import router as community_router
         app.include_router(community_router, prefix="/community", tags=["community"])
         app.include_router(community_router, prefix="/api/v1/community", tags=["community"])
+        # Also mount community at /api/v1 so the iOS-expected nested routes
+        # (e.g. GET/POST /api/v1/posts/{id}/comments) resolve. The feeds router
+        # is registered earlier at /api/v1, so any overlapping /posts routes are
+        # still served by feeds (first match wins); this only adds the nested
+        # comment/like endpoints the feeds router does not provide.
+        app.include_router(community_router, prefix="/api/v1", tags=["community"])
     except ImportError:
         pass
     try:
@@ -626,6 +632,18 @@ def create_app() -> FastAPI:
         logger.info("✅ Living Classroom WebSocket routes integrated - Real-time scene streaming active!")
     except ImportError as e:
         logger.warning(f"⚠️ Living Classroom routes not available: {e}")
+
+    # ── Classroom: card-based lesson stream WebSocket ──
+    # The iOS LyoClassroomService connects to
+    # /api/v1/classroom/ws/lesson/{topic}. The handler lives in
+    # lyo_app.classroom.routes (prefix "/classroom"), so mounting it at
+    # "/api/v1" yields the full /api/v1/classroom/ws/lesson/{topic} path.
+    try:
+        from lyo_app.classroom.routes import router as classroom_lesson_router
+        app.include_router(classroom_lesson_router, prefix="/api/v1")
+        logger.info("✅ Classroom lesson-stream WebSocket integrated at /api/v1/classroom/ws/lesson/{topic}!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Classroom lesson-stream routes not available: {e}")
 
     # ── Living Classroom: HTTP routes (Chat and Playback) ──
     try:
