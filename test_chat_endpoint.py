@@ -6,7 +6,8 @@ import requests
 import json
 
 BASE_URL = "https://lyo-backend-production-830162750094.us-central1.run.app"
-API_KEY = "lyo_sk_live_S5ALtW3WDjhF-TAgn767ORCCga4Nx52xBlAkMHg2-TQ"
+import os
+API_KEY = os.environ.get("LYO_API_KEY", "")
 
 def test_chat_endpoint():
     """Test the chat endpoint"""

@@ -6,7 +6,8 @@ import time
 
 # URL and Key from user logs
 BASE_URL = "https://lyo-backend-production-5oq7jszolq-uc.a.run.app"
-API_KEY = "lyo_sk_live_S5ALtW3WDjhF-TAgn767ORCCga4Nx52xBlAkMHg2-TQ"
+import os
+API_KEY = os.environ.get("LYO_API_KEY", "")
 
 def test_guest_course_generation():
     endpoint = f"{BASE_URL}/api/v1/classroom/chat"

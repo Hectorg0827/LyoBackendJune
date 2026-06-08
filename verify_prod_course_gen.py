@@ -6,7 +6,8 @@ import sys
 
 # URL from the deployment log and user report
 URL = "https://lyo-backend-830162750094.us-central1.run.app/api/v1/classroom/chat"
-API_KEY = "lyo_sk_live_S5ALtW3WDjhF-TAgn767ORCCga4Nx52xBlAkMHg2-TQ"
+import os
+API_KEY = os.environ.get("LYO_API_KEY", "")
 
 def verify_prod():
     print(f"🧪 Verifying Production Fix at: {URL}")

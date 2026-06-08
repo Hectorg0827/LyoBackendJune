@@ -3,7 +3,8 @@ import json
 import time
 
 BASE_URL = "http://localhost:8000"
-API_KEY = "lyo_sk_live_S5ALtW3WDjhF-TAgn767ORCCga4Nx52xBlAkMHg2-TQ"
+import os
+API_KEY = os.environ.get("LYO_API_KEY", "")
 
 def headers():
     return {"Content-Type": "application/json", "X-API-Key": API_KEY}

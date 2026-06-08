@@ -3,7 +3,8 @@ import json
 import time
 
 BASE_URL = "https://lyo-backend-830162750094.us-central1.run.app"
-API_KEY = "lyo_sk_live_S5ALtW3WDjhF-TAgn767ORCCga4Nx52xBlAkMHg2-TQ"
+import os
+API_KEY = os.environ.get("LYO_API_KEY", "")
 
 def run_test(name, endpoint, payload, expected_type=None):
     print(f"\n--- Testing {name} ---")
