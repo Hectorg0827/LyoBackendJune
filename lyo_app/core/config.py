@@ -44,11 +44,14 @@ class Settings(BaseSettings):
         description="Secret key for JWT tokens"
     )
     algorithm: str = Field(default="HS256", description="JWT algorithm")
+    # Keep these in sync with core.settings JWT_* (asserted by
+    # tests/test_config_consistency.py) so tokens minted via either signing
+    # path share one expiry policy.
     access_token_expire_minutes: int = Field(
-        default=30, description="Access token expiration time in minutes"
+        default=60, description="Access token expiration time in minutes"
     )
     refresh_token_expire_days: int = Field(
-        default=7, description="Refresh token expiration time in days"
+        default=30, description="Refresh token expiration time in days"
     )
     
     # Monitoring settings

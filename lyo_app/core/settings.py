@@ -34,9 +34,11 @@ class Settings(BaseSettings):
     CELERY_TASK_TIMEOUT: int = 1200  # 20 minutes
     
     # JWT Configuration
-    JWT_SECRET_KEY: str = Field(default="dev_jwt_secret_key", env="JWT_SECRET_KEY")
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # JWT_SECRET_KEY falls back to SECRET_KEY (see derive_jwt_secret below) so
+    # that setting a single SECRET_KEY in Railway secures both signing paths.
+    JWT_SECRET_KEY: str = Field(default="", env="JWT_SECRET_KEY")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60, env="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30, env="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
     JWT_ALGORITHM: str = "HS256"
     
     # CORS
@@ -130,6 +132,45 @@ class Settings(BaseSettings):
             if normalized in {"0", "false", "no", "off", "release", "production", "prod", "staging"}:
                 return False
         return v
+
+    # Known insecure development defaults that must never sign production tokens.
+    _INSECURE_SECRETS = {
+        "", "dev_jwt_secret_key", "dev_secret_key", "changeme", "secret",
+        "dev-only-insecure-secret-key-change-in-production-123456",
+    }
+
+    @model_validator(mode='after')
+    def derive_jwt_secret(self) -> 'Settings':
+        """Source the JWT signing key and refuse insecure defaults in production.
+
+        Historically this module signed JWTs with its own JWT_SECRET_KEY env
+        var (default 'dev_jwt_secret_key') while other config modules read
+        SECRET_KEY — so a deployment that set only SECRET_KEY still signed
+        tokens with the publicly-known dev default. Now JWT_SECRET_KEY falls
+        back to SECRET_KEY, and production refuses to boot with either left
+        at a known-insecure default.
+        """
+        if not self.JWT_SECRET_KEY:
+            self.JWT_SECRET_KEY = self.SECRET_KEY
+
+        if self.ENVIRONMENT == "production":
+            problems = []
+            if self.SECRET_KEY in self._INSECURE_SECRETS or len(self.SECRET_KEY) < 32:
+                problems.append(
+                    "SECRET_KEY is unset/insecure — set a strong unique value "
+                    "in Railway project variables"
+                )
+            if self.JWT_SECRET_KEY in self._INSECURE_SECRETS or len(self.JWT_SECRET_KEY) < 32:
+                problems.append(
+                    "JWT_SECRET_KEY is unset/insecure — set JWT_SECRET_KEY or a "
+                    "strong SECRET_KEY (it is used as the fallback)"
+                )
+            if problems:
+                raise ValueError(
+                    "Refusing to start in production with insecure token secrets: "
+                    + "; ".join(problems)
+                )
+        return self
 
     @model_validator(mode='after')
     def build_urls(self) -> 'Settings':
