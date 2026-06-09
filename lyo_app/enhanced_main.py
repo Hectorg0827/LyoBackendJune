@@ -387,6 +387,19 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
+    # `feeds_router` above resolves to feeds.enhanced_routes (algorithmic feed
+    # endpoints under /api/v1/feeds/*) whenever that module imports, so its
+    # ImportError fallback to the basic CRUD router never fires. The iOS social
+    # contract — POST /api/v1/posts, GET/DELETE /api/v1/posts/{id},
+    # /api/v1/posts/{id}/reactions, GET/POST /api/v1/posts/{id}/comments — lives
+    # in feeds.routes, so mount it explicitly and unconditionally here. Its
+    # paths (/posts*, /comments*) don't overlap the enhanced router's /feeds/*.
+    try:
+        from lyo_app.feeds.routes import router as feeds_crud_router
+        app.include_router(feeds_crud_router, prefix="/api/v1")
+        logger.info("✅ Feeds CRUD routes integrated at /api/v1 (posts, comments, reactions)")
+    except ImportError as e:
+        logger.warning(f"⚠️ Feeds CRUD routes not available: {e}")
     if storage_router:
         app.include_router(storage_router)
     # app.include_router(ads_router)  # TODO: Monetization module incomplete
