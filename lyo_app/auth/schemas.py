@@ -56,6 +56,7 @@ class UserRead(UserBase):
     id: Union[int, UUID] = Field(..., description="User's unique ID (int or UUID depending on model)")
     is_active: bool = Field(..., description="Whether the user account is active")
     is_verified: bool = Field(..., description="Whether the user's email is verified")
+    is_superuser: bool = Field(default=False, description="Whether the user has admin privileges")
     created_at: datetime = Field(..., description="User registration timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last profile update timestamp")
     last_login: Optional[datetime] = Field(None, description="Last login timestamp")

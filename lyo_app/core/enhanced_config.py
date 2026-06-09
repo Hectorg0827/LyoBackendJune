@@ -51,7 +51,7 @@ class EnhancedSettings(BaseSettings):
         "dev-only-insecure-secret-key-change-in-production-123456",
         description="Secret key for signing tokens"
     )
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60 * 24 * 7, description="Access token expiration (minutes)")  # 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, description="Access token expiration (minutes)")
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, description="Refresh token expiration (days)")
     PASSWORD_MIN_LENGTH: int = Field(8, description="Minimum password length")
     
@@ -352,10 +352,22 @@ class EnhancedSettings(BaseSettings):
         }
     
     def get_cors_config(self) -> Dict[str, Any]:
-        """Get CORS configuration"""
+        """Get CORS configuration.
+
+        The CORS spec forbids credentialed requests against a wildcard origin,
+        and browsers reject that combination outright. If CORS_ORIGINS is a
+        wildcard we force credentials off so the wildcard still works for
+        native/mobile clients (which send no Origin header and are exempt from
+        CORS anyway). Credentialed web clients must set explicit origins via
+        the CORS_ORIGINS env var (e.g. CORS_ORIGINS=["https://app.lyo.com"]).
+        """
+        origins = self.CORS_ORIGINS
+        allow_credentials = self.CORS_CREDENTIALS
+        if "*" in origins:
+            allow_credentials = False
         return {
-            'allow_origins': self.CORS_ORIGINS,
-            'allow_credentials': self.CORS_CREDENTIALS,
+            'allow_origins': origins,
+            'allow_credentials': allow_credentials,
             'allow_methods': self.CORS_METHODS,
             'allow_headers': self.CORS_HEADERS
         }
@@ -514,10 +526,26 @@ def validate_settings():
     
     errors = []
     
+    # Known insecure defaults that must never reach production.
+    INSECURE_SECRET_DEFAULTS = {
+        "dev-only-insecure-secret-key-change-in-production-123456",
+        "dev_secret_key",
+        "dev_jwt_secret_key",
+        "changeme",
+        "secret",
+    }
+
     # Check required secrets (only in production)
     if settings.is_production():
         if not settings.SECRET_KEY or len(settings.SECRET_KEY) < 32:
             errors.append("SECRET_KEY must be at least 32 characters long")
+        # Length alone is not enough — the shipped dev default is 56 chars.
+        if settings.SECRET_KEY in INSECURE_SECRET_DEFAULTS:
+            errors.append(
+                "SECRET_KEY is the insecure built-in default. Set a strong, "
+                "unique SECRET_KEY environment variable (e.g. in Railway "
+                "project variables) before deploying to production."
+            )
         
         # Support both GOOGLE_API_KEY and GEMINI_API_KEY
         if not settings.get_gemini_api_key():

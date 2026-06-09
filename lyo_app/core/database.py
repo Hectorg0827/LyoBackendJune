@@ -189,7 +189,17 @@ async def init_db() -> None:
 
         # Stage B2 — persistent study plans created from chat
         from lyo_app.study_plans.models import StudyPlan  # noqa: F401
-        
+
+        # Canonical skill graph — must be registered before evolution goals,
+        # whose goal_skill_mappings table holds a foreign key to skills.id.
+        # Without it, Base.metadata.create_all() raises NoReferencedTableError.
+        from lyo_app.skills.models import Skill, SkillEdge, SkillTag  # noqa: F401
+        from lyo_app.evolution.goals_models import (  # noqa: F401
+            UserGoal,
+            GoalSkillMapping,
+            GoalProgressSnapshot,
+        )
+
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
         await conn.run_sync(Base.metadata.create_all)

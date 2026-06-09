@@ -1,5 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Any
+from typing import Any, Optional
 import asyncio
 import logging
 import json
@@ -20,10 +20,50 @@ router = APIRouter(
 AUTO_ADVANCE_TIMEOUT = 120  # 2 minutes
 
 
+async def _authenticate_lesson_ws(websocket: WebSocket) -> Optional[str]:
+    """Authenticate a lesson WebSocket from its query parameters.
+
+    The browser/iOS client connects with either ``?token=<jwt>`` (a logged-in
+    user) or ``?api_key=lyo_sk_...`` (a provisioned guest/session key), matching
+    the convention used by the other classroom WebSocket. Returns an opaque
+    identity string on success, or ``None`` if authentication fails — callers
+    must close the socket in that case so the AI generation budget can't be
+    consumed anonymously.
+    """
+    token = websocket.query_params.get("token")
+    api_key = websocket.query_params.get("api_key")
+
+    # JWT (registered user)
+    if token:
+        try:
+            from lyo_app.auth.jwt_auth import verify_token_async
+            token_data = await verify_token_async(token, expected_type="access")
+            if token_data and token_data.user_id:
+                return f"user:{token_data.user_id}"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Lesson WS JWT auth failed: {e}")
+
+    # API key (guest/session) — validated against the database, not trusted blindly.
+    if api_key:
+        try:
+            from lyo_app.core.database import AsyncSessionLocal
+            from lyo_app.auth.api_key_auth import validate_api_key
+            async with AsyncSessionLocal() as db:
+                key_obj = await validate_api_key(api_key, db)
+                if key_obj:
+                    return f"apikey:{getattr(key_obj, 'id', 'valid')}"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Lesson WS API-key auth failed: {e}")
+
+    return None
+
+
 @router.websocket("/ws/lesson/{topic}")
 async def websocket_lesson_stream(websocket: WebSocket, topic: str):
     """
     Interactive WebSocket endpoint for the Lyo Classroom lesson.
+
+    Auth: pass ?token=<jwt> or ?api_key=lyo_sk_... as a query parameter.
 
     Protocol:
       SERVER → CLIENT  { card: <card_data>, card_index: N, total_cards: 7 }
@@ -34,6 +74,14 @@ async def websocket_lesson_stream(websocket: WebSocket, topic: str):
     confirm before sending the next.  This keeps the WebSocket alive
     between slides and makes the "Continue" button actually meaningful.
     """
+    # Authenticate BEFORE accepting so anonymous clients can't trigger
+    # (paid) AI lesson generation. 4401 = application "Unauthorized".
+    identity = await _authenticate_lesson_ws(websocket)
+    if not identity:
+        await websocket.close(code=4401)
+        logger.info(f"[{topic}] Rejected unauthenticated lesson WS connection")
+        return
+
     await websocket.accept()
 
     generator = ContentGenerator()
