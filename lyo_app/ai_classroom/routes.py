@@ -294,17 +294,18 @@ async def upgrade_course_in_background(
             await db.execute(delete(LearningNode).where(LearningNode.course_id == course_id))
             await db.execute(delete(LearningEdge).where(LearningEdge.course_id == course_id))
             
-            # Update course metadata
-            existing_course.title = generated_course.curriculum.title
-            existing_course.description = generated_course.curriculum.description
+            # Update course metadata (CurriculumStructure fields are
+            # course_title/course_description; GraphCourse has no version column)
+            existing_course.title = generated_course.curriculum.course_title
+            existing_course.description = generated_course.curriculum.course_description
             existing_course.estimated_minutes = int(generated_course.curriculum.total_estimated_hours * 60)
-            existing_course.version = existing_course.version + 1
+            existing_course.updated_at = datetime.utcnow()
             
             # Generate full graph structure
             graph_generator = GraphCourseGenerator(
                 config=GraphGenerationConfig(
                     add_hook_nodes=True,
-                    add_interaction_checkpoints=True,
+                    add_review_checkpoints=True,
                     target_node_duration_minutes=1.5
                 )
             )

@@ -177,19 +177,19 @@ Generate only the transition script.
         self._node_sequence = 0
         warnings: List[str] = []
         
-        # Create the graph course
+        # Create the graph course. Column names must match
+        # lyo_app.ai_classroom.models.GraphCourse exactly; JSON columns take
+        # native lists, not pre-serialized strings.
         course = GraphCourse(
             id=str(uuid4()),
             title=curriculum.course_title,
             description=curriculum.course_description,
             subject=self._extract_subject(curriculum),
-            estimated_duration_minutes=int(curriculum.total_estimated_hours * 60),
-            difficulty_level=self._map_difficulty(curriculum),
-            prerequisites=json.dumps(self._extract_prerequisites(curriculum)),
-            learning_objectives=json.dumps(self._extract_objectives(curriculum)),
-            tags=json.dumps(self._extract_tags(curriculum)),
+            estimated_minutes=int(curriculum.total_estimated_hours * 60),
+            difficulty=self._map_difficulty(curriculum),
+            prerequisites=self._extract_prerequisites(curriculum),
+            learning_objectives=self._extract_objectives(curriculum),
             created_by=creator_id,
-            version=1,
             is_published=False
         )
         
@@ -369,6 +369,46 @@ Generate only the transition script.
         
         return nodes
     
+    def _make_node(
+        self,
+        course: GraphCourse,
+        node_type: str,
+        title: str,
+        narration: str,
+        visual_prompt: str,
+        *,
+        estimated_seconds: Optional[int] = None,
+        interaction_type: Optional[str] = None,
+        extra_content: Optional[Dict[str, Any]] = None,
+    ) -> LearningNode:
+        """Build a LearningNode matching the actual model schema.
+
+        The model stores presentation fields (title, narration, visual prompt,
+        structural metadata) in the ``content`` JSON column — there are no
+        dedicated columns for them. The keys here mirror what the playback
+        engine already reads for minimally generated courses.
+        """
+        content: Dict[str, Any] = {
+            "title": title,
+            "narration": narration,
+            "visual_prompt": visual_prompt,
+        }
+        if extra_content:
+            content.update(extra_content)
+        return LearningNode(
+            id=str(uuid4()),
+            course_id=course.id,
+            node_type=node_type,
+            content=content,
+            estimated_seconds=(
+                estimated_seconds
+                if estimated_seconds is not None
+                else self._estimate_duration(narration)
+            ),
+            sequence_order=self._next_sequence(),
+            interaction_type=interaction_type,
+        )
+
     async def _convert_lesson_to_nodes(
         self,
         db: AsyncSession,
@@ -379,23 +419,20 @@ Generate only the transition script.
     ) -> List[LearningNode]:
         """Convert a lesson's content blocks into learning nodes"""
         nodes: List[LearningNode] = []
-        
+
         # Create introduction narrative node
-        intro_node = LearningNode(
-            id=str(uuid4()),
-            course_id=course.id,
-            node_type=NodeType.NARRATIVE.value,
+        intro_node = self._make_node(
+            course,
+            NodeType.NARRATIVE.value,
             title=f"Introduction: {lesson_content.title}",
-            script_text=lesson_content.introduction,
-            visual_cue=f"Introducing {lesson_content.title}",
-            duration_seconds=self._estimate_duration(lesson_content.introduction),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            lesson_index=les_idx,
-            metadata=json.dumps({
+            narration=lesson_content.introduction,
+            visual_prompt=f"Introducing {lesson_content.title}",
+            extra_content={
+                "module_index": mod_idx,
+                "lesson_index": les_idx,
                 "lesson_id": lesson_content.lesson_id,
-                "lesson_type": lesson_content.lesson_type.value
-            })
+                "lesson_type": lesson_content.lesson_type.value,
+            },
         )
         db.add(intro_node)
         nodes.append(intro_node)
@@ -416,17 +453,13 @@ Generate only the transition script.
         # Create key takeaways node
         if lesson_content.key_takeaways:
             takeaways_script = self._format_takeaways(lesson_content.key_takeaways)
-            takeaway_node = LearningNode(
-                id=str(uuid4()),
-                course_id=course.id,
-                node_type=NodeType.SUMMARY.value,
+            takeaway_node = self._make_node(
+                course,
+                NodeType.SUMMARY.value,
                 title=f"Key Takeaways: {lesson_content.title}",
-                script_text=takeaways_script,
-                visual_cue="Key takeaways summary",
-                duration_seconds=self._estimate_duration(takeaways_script),
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx
+                narration=takeaways_script,
+                visual_prompt="Key takeaways summary",
+                extra_content={"module_index": mod_idx, "lesson_index": les_idx},
             )
             db.add(takeaway_node)
             nodes.append(takeaway_node)
@@ -450,18 +483,17 @@ Generate only the transition script.
                 block.content,
                 block.title
             )
-            node = LearningNode(
-                id=str(uuid4()),
-                course_id=course.id,
-                node_type=NodeType.NARRATIVE.value,
+            node = self._make_node(
+                course,
+                NodeType.NARRATIVE.value,
                 title=block.title,
-                script_text=script,
-                visual_cue=f"Explanation: {block.title}",
-                duration_seconds=self._estimate_duration(script),
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx,
-                metadata=json.dumps({"original_content": block.content[:500]})
+                narration=script,
+                visual_prompt=f"Explanation: {block.title}",
+                extra_content={
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx,
+                    "original_content": block.content[:500],
+                },
             )
             db.add(node)
             return node
@@ -469,47 +501,45 @@ Generate only the transition script.
         elif isinstance(block, CodeBlock):
             # Code blocks become explanation nodes with code display
             code_script = self._generate_code_explanation(block)
-            node = LearningNode(
-                id=str(uuid4()),
-                course_id=course.id,
-                node_type=NodeType.EXPLANATION.value,
+            node = self._make_node(
+                course,
+                NodeType.EXPLANATION.value,
                 title=block.title,
-                script_text=code_script,
-                visual_cue=f"Code: {block.language}",
-                duration_seconds=self._estimate_duration(code_script),
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx,
-                metadata=json.dumps({
+                narration=code_script,
+                visual_prompt=f"Code: {block.language}",
+                extra_content={
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx,
                     "code": block.code,
                     "language": block.language,
-                    "filename": block.filename
-                })
+                    "filename": block.filename,
+                },
             )
             db.add(node)
             return node
             
         elif isinstance(block, ExerciseBlock):
             # Exercise blocks become interaction nodes
-            node = LearningNode(
-                id=str(uuid4()),
-                course_id=course.id,
-                node_type=NodeType.INTERACTION.value,
+            node = self._make_node(
+                course,
+                NodeType.INTERACTION.value,
                 title=block.title,
-                script_text=f"Let's practice! {block.instructions}",
-                visual_cue="Exercise time",
-                duration_seconds=30,  # Interaction nodes have variable duration
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx,
+                narration=f"Let's practice! {block.instructions}",
+                visual_prompt="Exercise time",
+                estimated_seconds=self._estimate_duration(block.instructions) + 30,
                 interaction_type="exercise",
-                interaction_data=json.dumps({
-                    "instructions": block.instructions,
-                    "hints": block.hints,
-                    "solution": block.solution,
-                    "difficulty": block.difficulty
-                }),
-                metadata=json.dumps({"expected_output": block.expected_output})
+                extra_content={
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx,
+                    "prompt": block.instructions,
+                    "interaction": {
+                        "instructions": block.instructions,
+                        "hints": block.hints,
+                        "solution": block.solution,
+                        "difficulty": block.difficulty,
+                    },
+                    "expected_output": block.expected_output,
+                },
             )
             db.add(node)
             return node
@@ -529,17 +559,13 @@ Generate only the transition script.
             module.description
         )
         
-        node = LearningNode(
-            id=str(uuid4()),
-            course_id=course.id,
-            node_type=NodeType.HOOK.value,
+        node = self._make_node(
+            course,
+            NodeType.HOOK.value,
             title=f"Module {mod_idx + 1}: {module.title}",
-            script_text=hook_script,
-            visual_cue=f"Welcome to {module.title}",
-            duration_seconds=self._estimate_duration(hook_script),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            is_checkpoint=True  # Mark as checkpoint for tracking
+            narration=hook_script,
+            visual_prompt=f"Welcome to {module.title}",
+            extra_content={"module_index": mod_idx, "is_checkpoint": True},
         )
         db.add(node)
         return node
@@ -558,17 +584,13 @@ Generate only the transition script.
             outcomes
         )
         
-        node = LearningNode(
-            id=str(uuid4()),
-            course_id=course.id,
-            node_type=NodeType.SUMMARY.value,
+        node = self._make_node(
+            course,
+            NodeType.SUMMARY.value,
             title=f"Summary: {module.title}",
-            script_text=summary_script,
-            visual_cue="Module complete!",
-            duration_seconds=self._estimate_duration(summary_script),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            is_checkpoint=True
+            narration=summary_script,
+            visual_prompt="Module complete!",
+            extra_content={"module_index": mod_idx, "is_checkpoint": True},
         )
         db.add(node)
         return node
@@ -587,21 +609,24 @@ Generate only the transition script.
         if not question_data:
             return None
         
-        node = LearningNode(
-            id=str(uuid4()),
-            course_id=course.id,
-            node_type=NodeType.INTERACTION.value,
+        context_content = context_node.content or {}
+        node = self._make_node(
+            course,
+            NodeType.INTERACTION.value,
             title="Quick Check",
-            script_text="Let's see if you've got this! " + question_data["question"],
-            visual_cue="Quick check time",
+            narration="Let's see if you've got this! " + question_data["question"],
+            visual_prompt="Quick check time",
             # Time to read the question plus a buffer to think and answer.
-            duration_seconds=self._estimate_duration(question_data["question"]) + 10,
-            sequence_in_course=self._next_sequence(),
-            module_index=context_node.module_index,
-            lesson_index=context_node.lesson_index,
+            estimated_seconds=self._estimate_duration(question_data["question"]) + 10,
             interaction_type=question_data["type"],
-            interaction_data=json.dumps(question_data),
-            correct_answer=question_data.get("correct_answer")
+            extra_content={
+                "module_index": context_content.get("module_index"),
+                "lesson_index": context_content.get("lesson_index"),
+                "prompt": question_data["question"],
+                "explanation": question_data.get("explanation"),
+                "correct_answer": question_data.get("correct_answer"),
+                "interaction": question_data,
+            },
         )
         db.add(node)
         return node
@@ -617,18 +642,18 @@ Generate only the transition script.
         """Create a placeholder node for missing content"""
         script = f"This lesson covers {lesson_outline.title}. {lesson_outline.description}"
         
-        node = LearningNode(
-            id=str(uuid4()),
-            course_id=course.id,
-            node_type=NodeType.NARRATIVE.value,
+        node = self._make_node(
+            course,
+            NodeType.NARRATIVE.value,
             title=lesson_outline.title,
-            script_text=script,
-            visual_cue=lesson_outline.title,
-            duration_seconds=self._estimate_duration(script),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            lesson_index=les_idx,
-            metadata=json.dumps({"placeholder": True, "lesson_id": lesson_outline.id})
+            narration=script,
+            visual_prompt=lesson_outline.title,
+            extra_content={
+                "module_index": mod_idx,
+                "lesson_index": les_idx,
+                "placeholder": True,
+                "lesson_id": lesson_outline.id,
+            },
         )
         db.add(node)
         return node
@@ -644,10 +669,12 @@ Generate only the transition script.
         """Create an edge between two nodes"""
         edge = LearningEdge(
             id=str(uuid4()),
-            source_node_id=source.id,
-            target_node_id=target.id,
+            course_id=source.course_id,
+            from_node_id=source.id,
+            to_node_id=target.id,
             condition=condition,
-            priority=priority
+            # Higher-priority edges win when multiple conditions match.
+            weight=float(priority) if priority else 1.0,
         )
         db.add(edge)
     
@@ -696,28 +723,27 @@ Generate only the transition script.
         interaction_node: LearningNode
     ) -> Optional[LearningNode]:
         """Create a remediation node for a failed interaction"""
-        interaction_data = json.loads(interaction_node.interaction_data or "{}")
-        
+        interaction_content = interaction_node.content or {}
+        interaction_data = interaction_content.get("interaction") or {}
+        interaction_title = interaction_content.get("title", "this concept")
+
         # Generate remediation script
         remediation_script = self._generate_remediation_script(
-            interaction_node.title,
+            interaction_title,
             interaction_data
         )
-        
-        node = LearningNode(
-            id=str(uuid4()),
-            course_id=course.id,
-            node_type=NodeType.REMEDIATION.value,
-            title=f"Let's Review: {interaction_node.title}",
-            script_text=remediation_script,
-            visual_cue="Review time",
-            duration_seconds=self._estimate_duration(remediation_script),
-            sequence_in_course=self._next_sequence(),
-            module_index=interaction_node.module_index,
-            lesson_index=interaction_node.lesson_index,
-            parent_node_id=interaction_node.id,
-            remediation_hop=1,
-            metadata=json.dumps({"for_interaction": interaction_node.id})
+
+        node = self._make_node(
+            course,
+            NodeType.REMEDIATION.value,
+            title=f"Let's Review: {interaction_title}",
+            narration=remediation_script,
+            visual_prompt="Review time",
+            extra_content={
+                "module_index": interaction_content.get("module_index"),
+                "lesson_index": interaction_content.get("lesson_index"),
+                "for_interaction": interaction_node.id,
+            },
         )
         db.add(node)
         return node
@@ -742,8 +768,7 @@ Generate only the transition script.
                         id=str(uuid4()),
                         name=concept_name,
                         description=outcome,
-                        course_id=course.id,
-                        difficulty_weight=1.0
+                        subject=course.subject,
                     )
                     db.add(concept)
                     seen_concepts.add(concept_name)
@@ -754,9 +779,7 @@ Generate only the transition script.
     async def _count_edges(self, db: AsyncSession, course_id: str) -> int:
         """Count edges for the course"""
         result = await db.execute(
-            select(LearningEdge)
-            .join(LearningNode, LearningEdge.source_node_id == LearningNode.id)
-            .where(LearningNode.course_id == course_id)
+            select(LearningEdge).where(LearningEdge.course_id == course_id)
         )
         return len(result.scalars().all())
     
@@ -870,13 +893,13 @@ Generate only the transition script.
                 target_duration=int(self.config.target_node_duration_minutes * 60)
             )
             
-            response = await self.ai_manager.generate_with_fallback(
-                prompt=prompt,
+            response = await self.ai_manager.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,
                 temperature=0.7
             )
-            
-            return response.get("content", content)
+
+            return response.get("content") or content
             
         except Exception as e:
             logger.warning(f"Script generation failed: {e}")
@@ -894,13 +917,13 @@ Generate only the transition script.
                 duration=20
             )
             
-            response = await self.ai_manager.generate_with_fallback(
-                prompt=prompt,
+            response = await self.ai_manager.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
                 temperature=0.8
             )
-            
-            return response.get("content", f"Welcome to {topic}! This is going to be exciting.")
+
+            return response.get("content") or f"Welcome to {topic}! This is going to be exciting."
             
         except Exception as e:
             logger.warning(f"Hook generation failed: {e}")
@@ -926,7 +949,7 @@ Generate only the transition script.
     ) -> Optional[Dict[str, Any]]:
         """Generate a quick check question"""
         # For now, generate a simple true/false question
-        topic = context_node.title
+        topic = (context_node.content or {}).get("title", "this topic")
         return {
             "type": "true_false",
             "question": f"You've just learned about {topic}. Do you feel confident with this concept?",
