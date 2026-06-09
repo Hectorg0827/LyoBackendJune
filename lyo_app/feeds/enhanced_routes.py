@@ -1,6 +1,6 @@
 """
-Enhanced Feed API Routes with TikTok-style Addictive Algorithm
-Production-ready feed system with psychological engagement optimization
+Enhanced Feed API Routes with personalized ranking algorithm
+Production-ready feed system with interest-based engagement optimization
 """
 
 import asyncio
@@ -45,7 +45,7 @@ class FeedItemResponse(BaseModel):
     engagement_stats: Dict[str, int]
     metadata: Dict[str, Any]
     relevance_score: float
-    addiction_score: float
+    engagement_score: float
     timestamp: datetime
     
 class FeedResponse(BaseModel):
@@ -108,13 +108,12 @@ async def get_personalized_feed(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get ultra-addictive personalized feed using TikTok-style algorithm
-    
+    Get a personalized, engagement-ranked feed
+
     Features:
-    - Psychological profiling and targeting
-    - Variable ratio reinforcement
-    - Dopamine optimization
-    - Binge-watching patterns
+    - Interest-based personalization
+    - Relevance ranking
+    - Session pacing
     - Real-time personalization
     """
     
@@ -161,11 +160,11 @@ async def get_personalized_feed(
                     'mood': item.get('mood'),
                     'trigger': item.get('trigger'),
                     'priority_boost': item.get('priority_boost', False),
-                    'curiosity_gap': item.get('curiosity_gap', False),
-                    'surprise_reward': item.get('surprise_reward', False)
+                    'preview_hook': item.get('curiosity_gap', False),
+                    'bonus_reward': item.get('surprise_reward', False)
                 },
                 relevance_score=item.get('relevance_score', 0.0),
-                addiction_score=item.get('addiction_score', 0.0),
+                engagement_score=item.get('addiction_score', 0.0),
                 timestamp=item.get('created_at', datetime.utcnow())
             )
             response_items.append(response_item)
@@ -191,8 +190,8 @@ async def get_personalized_feed(
             personalization_data={
                 'attention_span': user_profile.attention_span_seconds,
                 'preferred_types': user_profile.preferred_content_types,
-                'dopamine_pattern': user_profile.dopamine_response_pattern,
-                'addiction_level': user_profile.addiction_level,
+                'reward_pattern': user_profile.dopamine_response_pattern,
+                'engagement_level': user_profile.addiction_level,
                 'emotional_state': user_profile.emotional_state
             },
             performance_metrics={
@@ -252,11 +251,11 @@ async def track_interaction(
     """
     Track user interaction with feed content for algorithm optimization
     
-    This endpoint is crucial for the addictive algorithm as it:
-    - Updates user psychological profile
+    This endpoint powers personalization, as it:
+    - Updates the user's interest profile
     - Adjusts content recommendations
-    - Optimizes dopamine triggers
-    - Improves binge-watching patterns
+    - Refines relevance ranking
+    - Improves session pacing
     """
     
     try:
@@ -309,24 +308,24 @@ async def get_feed_analytics(
                 'total_content_consumed': 234,
                 'completion_rate': 0.78,
                 'return_rate': 0.85,
-                'binge_sessions': 8,
+                'extended_sessions': 8,
                 'peak_engagement_hours': [20, 21, 22],
-                'addiction_score': 0.72
+                'engagement_score': 0.72
             },
             content_performance={
                 'top_categories': ['educational', 'entertainment', 'tutorials'],
                 'avg_engagement_rate': 0.15,
                 'viral_content_count': 3,
-                'most_addictive_duration': '45-90 seconds',
+                'optimal_clip_duration': '45-90 seconds',
                 'optimal_posting_times': ['8:00 AM', '1:00 PM', '8:00 PM']
             },
             algorithm_metrics={
                 'personalization_accuracy': 0.89,
                 'diversity_score': 0.25,
                 'novelty_injection_rate': 0.15,
-                'dopamine_optimization_score': 0.82,
-                'attention_capture_rate': 0.94,
-                'binge_trigger_success': 0.67
+                'engagement_optimization_score': 0.82,
+                'retention_rate': 0.94,
+                'session_continuation_rate': 0.67
             },
             recommendations=[
                 'Increase short-form content (15-30s) during peak hours',
@@ -510,13 +509,13 @@ async def get_binge_mode_feed(
     # Apply binge-watching optimizations
     optimized_feed = []
     for i, item in enumerate(binge_feed):
-        # Add binge-specific metadata
-        item['binge_optimization'] = {
+        # Add session-pacing metadata
+        item['session_pacing'] = {
             'position_in_session': i + 1,
             'energy_level': 'high' if i < 5 else 'medium' if i < limit * 0.7 else 'low',
-            'dopamine_trigger': i % 7 == 0,  # Every 7th item
-            'attention_refresher': i % 12 == 0,  # Every 12th item
-            'cliffhanger_probability': 0.8 if i == limit - 1 else 0.2
+            'highlight_moment': i % 7 == 0,  # Every 7th item
+            'pacing_break': i % 12 == 0,  # Every 12th item
+            'continuation_hook_probability': 0.8 if i == limit - 1 else 0.2
         }
         
         optimized_feed.append(item)
@@ -526,14 +525,14 @@ async def get_binge_mode_feed(
         'session_metadata': {
             'target_duration_minutes': session_target_minutes,
             'estimated_completion_rate': 0.75,
-            'binge_optimization_score': 0.88,
-            'attention_retention_strategy': 'variable_rewards',
+            'session_pacing_score': 0.88,
+            'pacing_strategy': 'balanced',
             'content_mix': content_mix
         },
-        'user_binge_profile': {
+        'user_session_profile': {
             'tendency_score': user_profile.binge_watching_tendency,
             'optimal_session_length': user_profile.attention_span_seconds * 20,  # Estimate
-            'preferred_binge_times': user_profile.peak_engagement_hours
+            'preferred_active_times': user_profile.peak_engagement_hours
         }
     }
 
@@ -615,14 +614,14 @@ async def get_algorithm_debug_info(
         raise HTTPException(status_code=403, detail="Admin privileges required")
 
     return {
-        'algorithm_version': '2.0_addictive',
+        'algorithm_version': '2.0',
         'active_features': {
-            'psychological_profiling': True,
-            'dopamine_optimization': True,
-            'binge_optimization': True,
-            'curiosity_gap_injection': True,
-            'variable_ratio_reinforcement': True,
-            'attention_hijacking': True
+            'personalized_ranking': True,
+            'engagement_optimization': True,
+            'session_pacing': True,
+            'preview_hooks': True,
+            'spaced_recommendations': True,
+            'relevance_ranking': True
         },
         'user_profiles_cached': len(addictive_feed_algorithm.user_profiles),
         'error_counts': addictive_feed_algorithm.error_counts if hasattr(addictive_feed_algorithm, 'error_counts') else {},
