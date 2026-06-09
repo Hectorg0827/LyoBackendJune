@@ -949,8 +949,9 @@ if __name__ == "__main__":  # pragma: no cover
     import uvicorn
 
     port = int(os.getenv("PORT", getattr(settings, "PORT", 8000)))
+    # Launch THIS app, not lyo_app.main (a different legacy app object).
     uvicorn.run(
-        "lyo_app.main:app",
+        "lyo_app.enhanced_main:app",
         host="0.0.0.0",
         port=port,
         workers=getattr(settings, "WORKERS", 1),
