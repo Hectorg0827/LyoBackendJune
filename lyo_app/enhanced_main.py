@@ -26,7 +26,7 @@ pid = os.getpid()
 print(f">>> [PID {pid}] BOOTSTRAP STARTING (enhanced_main.py)...", flush=True)
 
 print(f">>> [PID {pid}] BOOTSTRAP: Loading FastAPI...", flush=True)
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 print(f">>> [PID {pid}] BOOTSTRAP: FastAPI loaded", flush=True)
@@ -768,9 +768,17 @@ def create_app() -> FastAPI:
             health_status["services"]["vertex_ai"] = f"error: {e}"
         return health_status
 
+    from lyo_app.auth.routes import get_current_user as _get_current_user
+
+    async def get_admin_user(current_user=Depends(_get_current_user)):
+        """Require an authenticated superuser for operational endpoints."""
+        if not getattr(current_user, "is_superuser", False):
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+        return current_user
+
     @app.post("/admin/reset-circuit-breakers")
-    async def reset_circuit_breakers():
-        """Reset all AI circuit breakers to CLOSED state."""
+    async def reset_circuit_breakers(current_user=Depends(get_admin_user)):
+        """Reset all AI circuit breakers to CLOSED state. Admin only."""
         try:
             from lyo_app.core.ai_resilience import ai_resilience_manager
             ai_resilience_manager.reset_circuit_breakers()
@@ -901,31 +909,34 @@ async def root():  # noqa: D401
     }
 
 
-@app.get("/debug/db-pool")
-async def debug_db_pool():
-    from lyo_app.core.database import engine
-    pool = engine.pool
-    return {
-        "size": getattr(pool, "_size", "unknown"),
-        "max_overflow": getattr(pool, "_max_overflow", "unknown"),
-        "timeout": getattr(pool, "_timeout", "unknown"),
-        "checked_out": pool.checkedout(),
-        "overflow": pool.overflow(),
-    }
+# Connection-pool introspection is development-only: it leaks capacity
+# details that help attackers plan resource-exhaustion attacks.
+if settings.is_development():
 
+    @app.get("/debug/db-pool")
+    async def debug_db_pool():
+        from lyo_app.core.database import engine
+        pool = engine.pool
+        return {
+            "size": getattr(pool, "_size", "unknown"),
+            "max_overflow": getattr(pool, "_max_overflow", "unknown"),
+            "timeout": getattr(pool, "_timeout", "unknown"),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+        }
 
-@app.get("/db-check")
-async def db_check():
-    from lyo_app.core.database import engine
-    pool = engine.pool
-    return {
-        "size": getattr(pool, "_size", "unknown"),
-        "max_overflow": getattr(pool, "_max_overflow", "unknown"),
-        "timeout": getattr(pool, "_timeout", "unknown"),
-        "checked_out": pool.checkedout(),
-        "overflow": pool.overflow(),
-        "pool_class": pool.__class__.__name__,
-    }
+    @app.get("/db-check")
+    async def db_check():
+        from lyo_app.core.database import engine
+        pool = engine.pool
+        return {
+            "size": getattr(pool, "_size", "unknown"),
+            "max_overflow": getattr(pool, "_max_overflow", "unknown"),
+            "timeout": getattr(pool, "_timeout", "unknown"),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "pool_class": pool.__class__.__name__,
+        }
 
 
 @app.get("/healthz")

@@ -22,7 +22,9 @@ import hashlib
 from collections import defaultdict, deque
 
 from pydantic import BaseModel
-import aioredis
+# redis.asyncio replaces the abandoned aioredis package, which crashes on
+# import under Python 3.11 (duplicate TimeoutError base class).
+from redis import asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .sdui_models import Scene, Component, SceneType

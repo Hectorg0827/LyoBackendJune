@@ -11,7 +11,9 @@ from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-import aioredis
+# redis.asyncio is the maintained successor to the abandoned aioredis package,
+# which crashes on import under Python 3.11 (duplicate TimeoutError base class).
+from redis import asyncio as aioredis
 import logging
 from functools import wraps
 from lyo_app.core.config import settings
@@ -131,7 +133,8 @@ class ResponseCache:
         """Initialize Redis connection if available"""
         try:
             if hasattr(settings, 'redis_url') and settings.redis_url:
-                self.redis_client = await aioredis.from_url(
+                # from_url is synchronous in redis.asyncio; it returns the client.
+                self.redis_client = aioredis.from_url(
                     settings.redis_url,
                     encoding="utf-8",
                     decode_responses=False  # We'll handle encoding ourselves

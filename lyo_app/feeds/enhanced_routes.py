@@ -610,9 +610,10 @@ async def get_algorithm_debug_info(
     current_user: User = Depends(get_current_user)
 ):
     """Get debug information about the feed algorithm (admin only)"""
-    
-    # Add admin check here in production
-    
+
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
     return {
         'algorithm_version': '2.0_addictive',
         'active_features': {
@@ -638,7 +639,12 @@ async def reset_user_profile(
     current_user: User = Depends(get_current_user)
 ):
     """Reset user profile for algorithm debugging"""
-    
+
+    # Only admins may reset another user's profile.
+    if target_user_id is not None and target_user_id != current_user.id:
+        if not getattr(current_user, "is_superuser", False):
+            raise HTTPException(status_code=403, detail="Cannot reset another user's profile")
+
     user_id = target_user_id or current_user.id
     
     # Clear user profile from cache
