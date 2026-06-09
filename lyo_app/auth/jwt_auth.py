@@ -23,12 +23,14 @@ _redis_checked = False
 
 
 def _get_redis_manager():
-    """Lazily get redis_manager for rate limiting."""
+    """Lazily get the canonical async Redis client for rate limiting."""
     global _redis_manager, _redis_checked
     if not _redis_checked:
         try:
-            from lyo_app.core.redis_v2 import redis_manager
-            _redis_manager = redis_manager
+            # Canonical client (also used by enhanced_main); exposes async
+            # incr()/expire() and degrades gracefully when unconnected.
+            from lyo_app.core.redis_client import redis_client
+            _redis_manager = redis_client
         except (ImportError, Exception) as e:
             logger.debug(f"Redis not available for rate limiting: {e}")
             _redis_manager = None
@@ -362,6 +364,9 @@ class RateLimiter:
             try:
                 key = f"rate_limit:{identifier}"
                 current = await redis.incr(key)
+                if current is None:
+                    # Redis not connected — use the in-memory limiter instead.
+                    return self.check_rate_limit(identifier, max_attempts, window_minutes)
                 if current == 1:
                     await redis.expire(key, window_minutes * 60)
                 return current <= max_attempts
