@@ -3,7 +3,8 @@ Authentication routes for user registration, login, and profile management.
 Provides FastAPI endpoints for the authentication module.
 """
 
-from typing import Annotated
+import logging
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
@@ -27,6 +28,8 @@ async def get_api_key(api_key: str = Security(api_key_header)):
             detail="API Key required"
         )
     return api_key
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 auth_service = AuthService()
@@ -381,8 +384,12 @@ class ChangePasswordRequest(BaseModel):
 
 class DeleteAccountRequest(BaseModel):
     """Request model for account deletion."""
-    password: str = Field(..., description="Current password to confirm deletion")
-    reason: str = Field(None, description="Optional reason for leaving")
+    password: Optional[str] = Field(
+        None,
+        description="Current password to confirm deletion (required for "
+                    "password-based accounts; omit for OAuth/Firebase users)",
+    )
+    reason: Optional[str] = Field(None, description="Optional reason for leaving")
 
 
 class UpdateProfileRequest(BaseModel):
@@ -455,28 +462,46 @@ async def delete_account(
             detail="User not found"
         )
     
-    # Verify password
-    if not verify_password(request.password, user.hashed_password):
+    # Password-based accounts must confirm with their password. OAuth/Firebase
+    # users have no usable password, so the authenticated bearer token (already
+    # validated by get_current_user) is sufficient confirmation.
+    is_oauth_user = bool(getattr(user, "firebase_uid", None))
+    if not is_oauth_user:
+        if not request.password or not verify_password(request.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Password is incorrect"
+            )
+
+    # Capture identifiers before the row is deleted (for the confirmation email).
+    email = user.email
+    display_name = user.full_name or user.username
+
+    # Irreversibly anonymize the account (scrub PII, revoke sessions, block
+    # login) within a single transaction. This is foreign-key-safe regardless
+    # of how the ~100 users.id references are configured, so deletion always
+    # succeeds — unlike a hard DELETE, which would violate non-cascading FKs
+    # from other users' rows that reference this user's content.
+    from lyo_app.auth.account_deletion import anonymize_user_account
+    try:
+        summary = await anonymize_user_account(db, user.id)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Account deletion failed for user {current_user.id}: {e}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Password is incorrect"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Account deletion failed; no data was removed. Please retry."
         )
-    
-    # Send deletion confirmation email
+
+    # Send deletion confirmation email (best-effort; never blocks deletion).
     try:
         from lyo_app.auth.email_sender import email_sender
-        await email_sender.send_account_deletion_confirmation(
-            user.email,
-            user.full_name or user.username
-        )
-    except Exception as e:
-        pass  # Don't fail deletion if email fails
-    
-    # Delete user (cascade will handle related data)
-    await db.delete(user)
-    await db.commit()
-    
-    return {"message": "Account deleted successfully"}
+        await email_sender.send_account_deletion_confirmation(email, display_name)
+    except Exception:
+        pass
+
+    return {"message": "Account deleted successfully", **summary}
 
 
 @router.put("/profile")
