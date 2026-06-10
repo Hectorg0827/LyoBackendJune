@@ -384,11 +384,43 @@ async def update_my_badge(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update user's badge settings (e.g., equip/unequip)."""
+    """Update the current user's badge settings (e.g. equip/unequip).
+
+    ``badge_id`` is the Badge id (as returned in UserBadgeRead.badge_id).
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from lyo_app.gamification.models import UserBadge
+
     try:
-        # Implementation would update user badge settings
-        # Simplified for now
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Badge update not implemented yet")
+        result = await db.execute(
+            select(UserBadge)
+            .where(
+                UserBadge.user_id == current_user.id,
+                UserBadge.badge_id == badge_id,
+            )
+            .options(selectinload(UserBadge.badge))
+        )
+        user_badge = result.scalar_one_or_none()
+        if not user_badge:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Badge not found in your collection",
+            )
+
+        if badge_data.is_equipped is not None:
+            user_badge.is_equipped = badge_data.is_equipped
+
+        await db.commit()
+
+        # Re-fetch with the badge relationship eagerly loaded so the response
+        # serializes outside the session without a lazy-load (MissingGreenlet).
+        result = await db.execute(
+            select(UserBadge)
+            .where(UserBadge.id == user_badge.id)
+            .options(selectinload(UserBadge.badge))
+        )
+        return result.scalar_one()
     except HTTPException:
         raise
     except Exception as e:
