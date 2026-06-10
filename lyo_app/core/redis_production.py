@@ -246,7 +246,13 @@ class RedisPubSub:
     @property
     def client(self) -> Optional[Redis]:
         return get_redis_pubsub()
-    
+
+    async def ping(self) -> bool:
+        """Health-check the underlying Redis connection."""
+        if not self.client:
+            raise RuntimeError("Redis pub/sub client unavailable")
+        return await self.client.ping()
+
     async def publish(self, channel: str, message: Dict[str, Any]) -> bool:
         """Publish message to channel."""
         if not self.client: return False

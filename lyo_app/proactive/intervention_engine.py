@@ -138,12 +138,12 @@ class InterventionEngine:
         # Get course progress
         stmt = select(CourseEnrollment).where(
             CourseEnrollment.user_id == user_id
-        ).order_by(desc(CourseEnrollment.progress)).limit(1)
+        ).order_by(desc(CourseEnrollment.progress_percentage)).limit(1)
         result = await db.execute(stmt)
         enrollment = result.scalar_one_or_none()
 
         if enrollment:
-            state.current_course_progress = enrollment.progress or 0.0
+            state.current_course_progress = enrollment.progress_percentage or 0.0
 
         # Get primary subject (most practiced)
         stmt = select(

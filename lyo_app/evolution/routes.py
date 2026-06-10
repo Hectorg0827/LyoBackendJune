@@ -130,8 +130,8 @@ async def delete_goal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Soft-delete a goal by setting its status to ABANDONED."""
-    goal = await update_goal_status(db, goal_id, GoalStatus.ABANDONED)
+    """Soft-delete a goal by setting its status to DROPPED."""
+    goal = await update_goal_status(db, goal_id, GoalStatus.DROPPED)
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     if goal.user_id != user.id:

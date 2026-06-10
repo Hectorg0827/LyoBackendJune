@@ -25,7 +25,7 @@ async def create_user_goal(db: AsyncSession, goal_in: UserGoalCreate) -> UserGoa
     db.add(db_goal)
     await db.commit()
     await db.refresh(db_goal)
-    
+
     if goal_in.skill_mappings:
         for mapping in goal_in.skill_mappings:
             db_mapping = GoalSkillMapping(
@@ -35,9 +35,23 @@ async def create_user_goal(db: AsyncSession, goal_in: UserGoalCreate) -> UserGoa
             )
             db.add(db_mapping)
         await db.commit()
-        await db.refresh(db_goal)
-        
-    return db_goal
+
+    # Re-fetch with relationships eagerly loaded so the response can serialize
+    # outside the async session without triggering MissingGreenlet.
+    return await _get_goal_with_relations(db, db_goal.id)
+
+
+async def _get_goal_with_relations(db: AsyncSession, goal_id: int) -> Optional[UserGoal]:
+    """Load a goal with skill_mappings + progress_snapshots eagerly loaded."""
+    result = await db.execute(
+        select(UserGoal)
+        .where(UserGoal.id == goal_id)
+        .options(
+            selectinload(UserGoal.skill_mappings),
+            selectinload(UserGoal.progress_snapshots),
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_user_goals(db: AsyncSession, user_id: int, status: Optional[GoalStatus] = None) -> List[UserGoal]:
@@ -68,8 +82,8 @@ async def update_goal_status(db: AsyncSession, goal_id: int, new_status: GoalSta
         if new_status == GoalStatus.ACHIEVED:
             db_goal.completed_at = datetime.utcnow()
         await db.commit()
-        await db.refresh(db_goal)
-        
+        return await _get_goal_with_relations(db, goal_id)
+
     return db_goal
 
 

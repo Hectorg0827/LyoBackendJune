@@ -34,11 +34,11 @@ class DropoutPredictor:
             'critical': 0.85
         }
 
-    async def calculate_churn_risk(
+    async def calculate_dropout_risk(
         self,
         user_id: int,
         db: AsyncSession
-    ) -> Tuple[float, str, List[str]]:
+    ) -> Tuple[float, str, List[str], Dict]:
         """
         Calculate churn risk score and identify risk factors.
 
@@ -88,7 +88,8 @@ class DropoutPredictor:
         # Store risk score
         await self._store_risk_score(user_id, risk_score, risk_level, risk_factors, metrics, db)
 
-        return risk_score, risk_level, risk_factors
+        # Callers (predictive + proactive routes) also consume the metrics dict.
+        return risk_score, risk_level, risk_factors, metrics
 
     def _get_risk_level(self, risk_score: float) -> str:
         """Convert numerical risk score to categorical level."""
