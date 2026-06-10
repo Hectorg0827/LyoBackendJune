@@ -210,12 +210,6 @@ class IntentAnalysisResponse(BaseModel):
 # Routes
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session."""
-    async for session in get_async_session():
-        yield session
-
-
 def _course_to_item(course: GraphCourse, total_nodes: int) -> GraphCourseItemRead:
     return GraphCourseItemRead(
         id=course.id,
