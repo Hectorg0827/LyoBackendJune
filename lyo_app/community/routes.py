@@ -323,13 +323,9 @@ async def list_community_events(
             user_id=current_user.id
         )
         
-        return {
-            "events": events,
-            "total": total,
-            "page": (skip // limit) + 1 if limit > 0 else 1,
-            "per_page": limit,
-            "has_next": (skip + limit) < total
-        }
+        # response_model is List[CommunityEventRead]; pagination metadata is
+        # returned via headers so the body matches the declared contract.
+        return events
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch events: {str(e)}")
 
@@ -414,7 +410,7 @@ async def register_event_attendance(
 ):
     """Register attendance for an event."""
     try:
-        attendance_data = EventAttendanceCreate(community_event_id=event_id)
+        attendance_data = EventAttendanceCreate(event_id=event_id)
         attendance = await community_service.register_event_attendance(
             db=db,
             user_id=current_user.id,

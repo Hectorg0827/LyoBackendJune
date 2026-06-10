@@ -29,17 +29,20 @@ def client():
 
 
 def _auth(client, email, username, ip):
+    """Returns (headers, user_id). The shared test DB means user ids are not
+    guaranteed to be 1/2, so callers must use the returned id."""
     client.post("/auth/register", json={
         "email": email, "username": username, "password": "SweepPass123!",
         "confirm_password": "SweepPass123!", "first_name": username})
-    tok = client.post("/auth/login", json={
-        "email": email, "password": "SweepPass123!"}).json()["access_token"]
-    return {"Authorization": f"Bearer {tok}", "X-Forwarded-For": ip}
+    body = client.post("/auth/login", json={
+        "email": email, "password": "SweepPass123!"}).json()
+    uid = body["user"]["id"]
+    return {"Authorization": f"Bearer {body['access_token']}", "X-Forwarded-For": ip}, uid
 
 
 def test_collaboration_full_lifecycle(client):
-    alice = _auth(client, "ca@x.com", "calice", "10.20.0.1")
-    bob = _auth(client, "cb@x.com", "cbob", "10.20.0.2")
+    alice, alice_id = _auth(client, "ca@x.com", "calice", "10.20.0.1")
+    bob, bob_id = _auth(client, "cb@x.com", "cbob", "10.20.0.2")
 
     # --- study groups ---
     r = client.post(f"{B}/groups", headers=alice, json={
@@ -84,7 +87,7 @@ def test_collaboration_full_lifecycle(client):
     assert client.post(f"{B}/sessions/{sid}/end", headers=alice).status_code == 200
 
     # --- mentorship ---
-    r = client.post(f"{B}/mentorship", headers=bob, json={"mentor_id": 1, "skill_focus": ["Python"]})
+    r = client.post(f"{B}/mentorship", headers=bob, json={"mentor_id": alice_id, "skill_focus": ["Python"]})
     assert r.status_code == 200, r.text
     mid = r.json()["id"]
     assert r.json()["status"] == "pending"
@@ -93,7 +96,7 @@ def test_collaboration_full_lifecycle(client):
 
     # --- assessment ---
     assert client.post(f"{B}/assessment", headers=alice, json={
-        "assessee_id": 2, "skill_id": "py-dec", "assessment_context": "workshop",
+        "assessee_id": bob_id, "skill_id": "py-dec", "assessment_context": "workshop",
         "skill_demonstration": "explained well", "mastery_rating": 0.8,
         "confidence_rating": 0.7}).status_code == 200
     assert client.get(f"{B}/assessment/received", headers=bob).status_code == 200
@@ -108,8 +111,8 @@ def test_collaboration_full_lifecycle(client):
 
 def test_collaboration_authorization(client):
     """Non-creator cannot update a group; non-member analytics is blocked."""
-    alice = _auth(client, "cc@x.com", "ccalice", "10.20.1.1")
-    mallory = _auth(client, "cm@x.com", "cmallory", "10.20.1.2")
+    alice, _ = _auth(client, "cc@x.com", "ccalice", "10.20.1.1")
+    mallory, _ = _auth(client, "cm@x.com", "cmallory", "10.20.1.2")
     gid = client.post(f"{B}/groups", headers=alice, json={
         "title": "Private Crew", "subject_area": "Math",
         "collaboration_type": "study_group"}).json()["id"]

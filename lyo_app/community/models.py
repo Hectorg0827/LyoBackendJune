@@ -160,7 +160,8 @@ class CommunityEvent(Base):
     start_time = Column(DateTime, nullable=False, index=True)
     end_time = Column(DateTime, nullable=False)
     timezone = Column(String(50), nullable=False, default="UTC")
-    
+    max_attendees = Column(Integer, nullable=True)  # None = unlimited capacity
+
     # Associations
     organizer_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     study_group_id = Column(Integer, ForeignKey("study_groups.id"), nullable=True, index=True)
@@ -473,7 +474,11 @@ class CommunityPost(Base):
     
     # Author
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    
+    # Denormalized author info (snapshot at post time for cheap feed rendering)
+    author_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    author_avatar: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    author_level: Mapped[int] = mapped_column(Integer, default=1)
+
     # Content
     content: Mapped[str] = mapped_column(Text, nullable=False)
     media_urls = Column(JSON, nullable=True)  # List of media URLs
@@ -491,7 +496,8 @@ class CommunityPost(Base):
     is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # Hidden by moderation
-    
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # Soft delete
+
     # Denormalized counts (for performance)
     like_count: Mapped[int] = mapped_column(Integer, default=0)
     comment_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -518,14 +524,20 @@ class PostComment(Base):
     post_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("community_posts.id"), index=True)
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("post_comments.id"), nullable=True)  # For replies
-    
+    # Denormalized author info + counters (snapshot for cheap rendering)
+    author_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    author_avatar: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    like_count: Mapped[int] = mapped_column(Integer, default=0)
+    reply_count: Mapped[int] = mapped_column(Integer, default=0)
+
     # Content
     content: Mapped[str] = mapped_column(Text, nullable=False)
     
     # Status
     is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
-    
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # Soft delete
+
     # Denormalized counts
     like_count: Mapped[int] = mapped_column(Integer, default=0)
     reply_count: Mapped[int] = mapped_column(Integer, default=0)

@@ -1506,8 +1506,8 @@ class CommunityService:
         
         db_post = CommunityPost(
             author_id=author_id,
-            author_name=user.display_name or user.username or f"User {author_id}",
-            author_avatar=user.avatar_url,
+            author_name=getattr(user, "full_name", None) or user.username or f"User {author_id}",
+            author_avatar=getattr(user, "avatar_url", None),
             author_level=getattr(user, 'level', 1) or 1,
             content=post_data.content,
             media_urls=post_data.media_urls or [],
@@ -1536,8 +1536,10 @@ class CommunityService:
         author_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Get posts with filtering and pagination."""
-        from lyo_app.community.models import CommunityPost, PostLike, PostBookmark, UserBlock
-        
+        from lyo_app.community.models import (
+            CommunityPost, PostLike, PostBookmark, UserBlock, PostVisibility,
+        )
+
         # Get blocked user IDs
         blocked_result = await db.execute(
             select(UserBlock.blocked_id).where(UserBlock.blocker_id == user_id)
@@ -1900,8 +1902,8 @@ class CommunityService:
         db_comment = PostComment(
             post_id=post_id,
             author_id=author_id,
-            author_name=user.display_name or user.username or f"User {author_id}",
-            author_avatar=user.avatar_url,
+            author_name=getattr(user, "full_name", None) or user.username or f"User {author_id}",
+            author_avatar=getattr(user, "avatar_url", None),
             content=comment_data.content,
             parent_id=comment_data.parent_id,
         )
@@ -2444,4 +2446,124 @@ class CommunityService:
             "review_count": total,
             "rating_distribution": distribution
         }
+
+    # ==================================================================
+    # Route-compatibility methods (wire route handlers to the engine)
+    # ==================================================================
+
+    async def get_group_members(
+        self, db: AsyncSession, group_id: int, user_id: int,
+        skip: int = 0, limit: int = 50
+    ) -> List[GroupMembership]:
+        """List approved members of a study group."""
+        result = await db.execute(
+            select(GroupMembership)
+            .where(
+                GroupMembership.study_group_id == group_id,
+                GroupMembership.is_approved == True,  # noqa: E712
+            )
+            .order_by(GroupMembership.joined_at)
+            .offset(skip).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def update_group_membership(
+        self, db: AsyncSession, group_id: int, member_id: int,
+        membership_data, admin_user_id: int
+    ) -> Optional[GroupMembership]:
+        """Update a member's role/approval. Requires owner/admin permission."""
+        if not await self._has_group_permission(
+            db, group_id, admin_user_id, {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise ValueError("You do not have permission to manage this group")
+        membership = (await db.execute(
+            select(GroupMembership).where(
+                GroupMembership.study_group_id == group_id,
+                GroupMembership.user_id == member_id,
+            )
+        )).scalar_one_or_none()
+        if not membership:
+            return None
+        data = membership_data.model_dump(exclude_unset=True)
+        if data.get("role") is not None:
+            membership.role = data["role"]
+        if data.get("is_approved") is not None:
+            membership.is_approved = data["is_approved"]
+            if data["is_approved"] and membership.approved_at is None:
+                membership.approved_at = datetime.utcnow()
+                membership.approved_by_id = admin_user_id
+        await db.commit()
+        await db.refresh(membership)
+        return membership
+
+    async def remove_group_member(
+        self, db: AsyncSession, group_id: int, member_id: int, admin_user_id: int
+    ) -> bool:
+        """Remove a member from a study group. Requires owner/admin permission."""
+        if member_id != admin_user_id and not await self._has_group_permission(
+            db, group_id, admin_user_id, {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise ValueError("You do not have permission to remove members")
+        membership = (await db.execute(
+            select(GroupMembership).where(
+                GroupMembership.study_group_id == group_id,
+                GroupMembership.user_id == member_id,
+            )
+        )).scalar_one_or_none()
+        if not membership:
+            return False
+        await db.delete(membership)
+        await db.commit()
+        return True
+
+    async def register_event_attendance(
+        self, db: AsyncSession, user_id: int, attendance_data
+    ) -> EventAttendance:
+        """Alias used by the route handler."""
+        return await self.register_for_event(db, user_id, attendance_data)
+
+    async def leave_event(self, db: AsyncSession, event_id: int, user_id: int) -> bool:
+        """Cancel a user's attendance for an event."""
+        return await self.cancel_event_registration(db, user_id, event_id)
+
+    async def get_user_study_groups(
+        self, db: AsyncSession, user_id: int, skip: int = 0, limit: int = 20
+    ) -> List[Any]:
+        """Study groups the user is an approved member of."""
+        rows = (await db.execute(
+            select(GroupMembership.study_group_id).where(
+                GroupMembership.user_id == user_id,
+                GroupMembership.is_approved == True,  # noqa: E712
+            )
+        )).all()
+        group_ids = [r[0] for r in rows]
+        if not group_ids:
+            return []
+        groups = (await db.execute(
+            select(StudyGroup).where(StudyGroup.id.in_(group_ids))
+            .offset(skip).limit(limit)
+        )).scalars().all()
+        return list(groups)
+
+    async def get_user_community_events(
+        self, db: AsyncSession, user_id: int, upcoming_only: bool = True,
+        skip: int = 0, limit: int = 20
+    ) -> List[CommunityEvent]:
+        """Events the user organizes or is attending."""
+        attending = (await db.execute(
+            select(EventAttendance.event_id).where(EventAttendance.user_id == user_id)
+        )).all()
+        attending_ids = [r[0] for r in attending]
+        conds = [CommunityEvent.organizer_id == user_id]
+        if attending_ids:
+            conds.append(CommunityEvent.id.in_(attending_ids))
+        stmt = select(CommunityEvent).where(or_(*conds))
+        if upcoming_only:
+            stmt = stmt.where(CommunityEvent.start_time >= datetime.utcnow())
+        stmt = stmt.order_by(CommunityEvent.start_time).offset(skip).limit(limit)
+        return list((await db.execute(stmt)).scalars().all())
+
+    async def get_user_community_stats(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
+        """Alias used by the route handler."""
+        return await self.get_community_stats(db, user_id)
 

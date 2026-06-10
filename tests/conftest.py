@@ -3,6 +3,22 @@ Pytest configuration and fixtures for testing.
 Provides database and service fixtures for tests.
 """
 
+import os
+import tempfile
+
+# App-booting tests (route contract, collaboration, community, account deletion)
+# all share the app's single global async engine, which is created the first
+# time lyo_app.enhanced_main is imported. The app uses NullPool for SQLite, so a
+# ":memory:" URL gives every connection a separate empty database and writes
+# don't survive across requests. Pin a persistent on-disk SQLite file here —
+# before any test module imports the app — so all of them share one DB and
+# data persists across requests deterministically.
+os.environ.setdefault("ENVIRONMENT", "development")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-at-least-32-characters-long-xx")
+os.environ["DATABASE_URL"] = (
+    f"sqlite+aiosqlite:///{os.path.join(tempfile.mkdtemp(), 'lyo_test.db')}"
+)
+
 import asyncio
 import pytest
 import pytest_asyncio
