@@ -163,8 +163,8 @@ class PeerInteractionCreate(BaseModel):
     parent_interaction_id: Optional[int] = None  # For threaded responses
     
     @field_validator('content')
-    def validate_content_length(cls, v, values):
-        interaction_type = values.get('interaction_type')
+    def validate_content_length(cls, v, info):
+        interaction_type = info.data.get('interaction_type')
         if interaction_type in [InteractionType.HINT, InteractionType.ENCOURAGEMENT]:
             return v  # No specific validation for these
         if len(v.strip()) < 10:
@@ -216,8 +216,8 @@ class CollaborativeLearningSessionCreate(BaseModel):
     recurrence_pattern: Optional[Dict[str, Any]] = None
     
     @field_validator('scheduled_end')
-    def validate_end_after_start(cls, v, values):
-        start = values.get('scheduled_start')
+    def validate_end_after_start(cls, v, info):
+        start = info.data.get('scheduled_start')
         if start and v <= start:
             raise ValueError('Session end time must be after start time')
         return v

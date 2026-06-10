@@ -135,7 +135,8 @@ class PeerInteraction(Base):
     
     # Participants
     initiator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    recipient_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Nullable: a question broadcast to a whole group has no single recipient.
+    recipient_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     group_id = Column(Integer, ForeignKey("collaborative_study_groups.id"), index=True)
     
     # Interaction details
