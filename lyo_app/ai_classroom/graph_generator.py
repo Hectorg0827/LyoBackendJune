@@ -384,17 +384,19 @@ Generate only the transition script.
             id=str(uuid4()),
             course_id=course.id,
             node_type=NodeType.NARRATIVE.value,
-            title=f"Introduction: {lesson_content.title}",
-            script_text=lesson_content.introduction,
-            visual_cue=f"Introducing {lesson_content.title}",
-            duration_seconds=self._estimate_duration(lesson_content.introduction),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            lesson_index=les_idx,
-            metadata=json.dumps({
+            content={
+                "title": f"Introduction: {lesson_content.title}",
+                "narration": lesson_content.introduction,
+                "visual_prompt": f"Introducing {lesson_content.title}",
+                "keywords": ["Introduction"],
+                "audio_mood": "calm",
                 "lesson_id": lesson_content.lesson_id,
-                "lesson_type": lesson_content.lesson_type.value
-            })
+                "lesson_type": lesson_content.lesson_type.value,
+                "module_index": mod_idx,
+                "lesson_index": les_idx
+            },
+            estimated_seconds=self._estimate_duration(lesson_content.introduction),
+            sequence_order=self._next_sequence()
         )
         db.add(intro_node)
         nodes.append(intro_node)
@@ -419,13 +421,17 @@ Generate only the transition script.
                 id=str(uuid4()),
                 course_id=course.id,
                 node_type=NodeType.SUMMARY.value,
-                title=f"Key Takeaways: {lesson_content.title}",
-                script_text=takeaways_script,
-                visual_cue="Key takeaways summary",
-                duration_seconds=self._estimate_duration(takeaways_script),
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx
+                content={
+                    "title": f"Key Takeaways: {lesson_content.title}",
+                    "narration": takeaways_script,
+                    "visual_prompt": "Key takeaways summary",
+                    "keywords": ["Summary"],
+                    "audio_mood": "calm",
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx
+                },
+                estimated_seconds=self._estimate_duration(takeaways_script),
+                sequence_order=self._next_sequence()
             )
             db.add(takeaway_node)
             nodes.append(takeaway_node)
@@ -453,14 +459,18 @@ Generate only the transition script.
                 id=str(uuid4()),
                 course_id=course.id,
                 node_type=NodeType.NARRATIVE.value,
-                title=block.title,
-                script_text=script,
-                visual_cue=f"Explanation: {block.title}",
-                duration_seconds=self._estimate_duration(script),
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx,
-                metadata=json.dumps({"original_content": block.content[:500]})
+                content={
+                    "title": block.title,
+                    "narration": script,
+                    "visual_prompt": f"Explanation: {block.title}",
+                    "keywords": ["Concept"],
+                    "audio_mood": "calm",
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx,
+                    "original_content": block.content[:500]
+                },
+                estimated_seconds=self._estimate_duration(script),
+                sequence_order=self._next_sequence()
             )
             db.add(node)
             return node
@@ -471,19 +481,21 @@ Generate only the transition script.
             node = LearningNode(
                 id=str(uuid4()),
                 course_id=course.id,
-                node_type=NodeType.EXPLANATION.value,
-                title=block.title,
-                script_text=code_script,
-                visual_cue=f"Code: {block.language}",
-                duration_seconds=self._estimate_duration(code_script),
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx,
-                metadata=json.dumps({
+                node_type=NodeType.NARRATIVE.value,
+                content={
+                    "title": block.title,
+                    "narration": code_script,
+                    "visual_prompt": f"Code: {block.language}",
+                    "keywords": ["Code", block.language],
+                    "audio_mood": "calm",
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx,
                     "code": block.code,
                     "language": block.language,
                     "filename": block.filename
-                })
+                },
+                estimated_seconds=self._estimate_duration(code_script),
+                sequence_order=self._next_sequence()
             )
             db.add(node)
             return node
@@ -494,21 +506,22 @@ Generate only the transition script.
                 id=str(uuid4()),
                 course_id=course.id,
                 node_type=NodeType.INTERACTION.value,
-                title=block.title,
-                script_text=f"Let's practice! {block.instructions}",
-                visual_cue="Exercise time",
-                duration_seconds=30,  # Interaction nodes have variable duration
-                sequence_in_course=self._next_sequence(),
-                module_index=mod_idx,
-                lesson_index=les_idx,
-                interaction_type="exercise",
-                interaction_data=json.dumps({
-                    "instructions": block.instructions,
+                content={
+                    "title": block.title,
+                    "prompt": block.instructions,
+                    "interaction_type": "short_answer",
+                    "options": [],
+                    "explanation": block.solution,
+                    "visual_prompt": "Exercise time",
                     "hints": block.hints,
-                    "solution": block.solution,
-                    "difficulty": block.difficulty
-                }),
-                metadata=json.dumps({"expected_output": block.expected_output})
+                    "difficulty": block.difficulty,
+                    "expected_output": block.expected_output,
+                    "module_index": mod_idx,
+                    "lesson_index": les_idx
+                },
+                interaction_type="short_answer",
+                estimated_seconds=30,
+                sequence_order=self._next_sequence()
             )
             db.add(node)
             return node
@@ -532,13 +545,17 @@ Generate only the transition script.
             id=str(uuid4()),
             course_id=course.id,
             node_type=NodeType.HOOK.value,
-            title=f"Module {mod_idx + 1}: {module.title}",
-            script_text=hook_script,
-            visual_cue=f"Welcome to {module.title}",
-            duration_seconds=self._estimate_duration(hook_script),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            is_checkpoint=True  # Mark as checkpoint for tracking
+            content={
+                "title": f"Module {mod_idx + 1}: {module.title}",
+                "narration": hook_script,
+                "visual_prompt": f"Welcome to {module.title}",
+                "keywords": ["Introduction"],
+                "audio_mood": "energetic",
+                "module_index": mod_idx,
+                "is_checkpoint": True
+            },
+            estimated_seconds=self._estimate_duration(hook_script),
+            sequence_order=self._next_sequence()
         )
         db.add(node)
         return node
@@ -561,13 +578,17 @@ Generate only the transition script.
             id=str(uuid4()),
             course_id=course.id,
             node_type=NodeType.SUMMARY.value,
-            title=f"Summary: {module.title}",
-            script_text=summary_script,
-            visual_cue="Module complete!",
-            duration_seconds=self._estimate_duration(summary_script),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            is_checkpoint=True
+            content={
+                "title": f"Summary: {module.title}",
+                "narration": summary_script,
+                "visual_prompt": "Module complete!",
+                "keywords": ["Summary"],
+                "audio_mood": "calm",
+                "module_index": mod_idx,
+                "is_checkpoint": True
+            },
+            estimated_seconds=self._estimate_duration(summary_script),
+            sequence_order=self._next_sequence()
         )
         db.add(node)
         return node
@@ -590,16 +611,21 @@ Generate only the transition script.
             id=str(uuid4()),
             course_id=course.id,
             node_type=NodeType.INTERACTION.value,
-            title="Quick Check",
-            script_text="Let's see if you've got this! " + question_data["question"],
-            visual_cue="Quick check time",
-            duration_seconds=15,
-            sequence_in_course=self._next_sequence(),
-            module_index=context_node.module_index,
-            lesson_index=context_node.lesson_index,
+            content={
+                "title": "Quick Check",
+                "prompt": question_data["question"],
+                "interaction_type": question_data["type"],
+                "options": question_data.get("options", []),
+                "explanation": question_data.get("explanation", ""),
+                "visual_prompt": "Quick check time",
+                "narration": "Let's see if you've got this!",
+                "correct_answer": question_data.get("correct_answer"),
+                "module_index": context_node.content.get("module_index", 0) if context_node.content else 0,
+                "lesson_index": context_node.content.get("lesson_index", 0) if context_node.content else 0
+            },
             interaction_type=question_data["type"],
-            interaction_data=json.dumps(question_data),
-            correct_answer=question_data.get("correct_answer")
+            estimated_seconds=15,
+            sequence_order=self._next_sequence()
         )
         db.add(node)
         return node
@@ -619,14 +645,19 @@ Generate only the transition script.
             id=str(uuid4()),
             course_id=course.id,
             node_type=NodeType.NARRATIVE.value,
-            title=lesson_outline.title,
-            script_text=script,
-            visual_cue=lesson_outline.title,
-            duration_seconds=self._estimate_duration(script),
-            sequence_in_course=self._next_sequence(),
-            module_index=mod_idx,
-            lesson_index=les_idx,
-            metadata=json.dumps({"placeholder": True, "lesson_id": lesson_outline.id})
+            content={
+                "title": lesson_outline.title,
+                "narration": script,
+                "visual_prompt": lesson_outline.title,
+                "keywords": ["Overview"],
+                "audio_mood": "calm",
+                "placeholder": True,
+                "lesson_id": lesson_outline.id,
+                "module_index": mod_idx,
+                "lesson_index": les_idx
+            },
+            estimated_seconds=self._estimate_duration(script),
+            sequence_order=self._next_sequence()
         )
         db.add(node)
         return node
@@ -642,10 +673,11 @@ Generate only the transition script.
         """Create an edge between two nodes"""
         edge = LearningEdge(
             id=str(uuid4()),
-            source_node_id=source.id,
-            target_node_id=target.id,
+            course_id=source.course_id,
+            from_node_id=source.id,
+            to_node_id=target.id,
             condition=condition,
-            priority=priority
+            weight=float(priority) if priority > 0 else 1.0
         )
         db.add(edge)
     
@@ -694,11 +726,12 @@ Generate only the transition script.
         interaction_node: LearningNode
     ) -> Optional[LearningNode]:
         """Create a remediation node for a failed interaction"""
-        interaction_data = json.loads(interaction_node.interaction_data or "{}")
+        interaction_data = interaction_node.content or {}
+        title = interaction_node.content.get("title", "Quick Check") if interaction_node.content else "Quick Check"
         
         # Generate remediation script
         remediation_script = self._generate_remediation_script(
-            interaction_node.title,
+            title,
             interaction_data
         )
         
@@ -706,16 +739,20 @@ Generate only the transition script.
             id=str(uuid4()),
             course_id=course.id,
             node_type=NodeType.REMEDIATION.value,
-            title=f"Let's Review: {interaction_node.title}",
-            script_text=remediation_script,
-            visual_cue="Review time",
-            duration_seconds=self._estimate_duration(remediation_script),
-            sequence_in_course=self._next_sequence(),
-            module_index=interaction_node.module_index,
-            lesson_index=interaction_node.lesson_index,
-            parent_node_id=interaction_node.id,
-            remediation_hop=1,
-            metadata=json.dumps({"for_interaction": interaction_node.id})
+            content={
+                "title": f"Let's Review: {title}",
+                "narration": remediation_script,
+                "visual_prompt": "Review time",
+                "original_concept": interaction_node.content.get("prompt") if interaction_node.content else "Concepts",
+                "new_analogy": "Let's look at this from another perspective.",
+                "parent_node_id": interaction_node.id,
+                "remediation_hop": 1,
+                "for_interaction": interaction_node.id,
+                "module_index": interaction_node.content.get("module_index", 0) if interaction_node.content else 0,
+                "lesson_index": interaction_node.content.get("lesson_index", 0) if interaction_node.content else 0
+            },
+            estimated_seconds=self._estimate_duration(remediation_script),
+            sequence_order=self._next_sequence()
         )
         db.add(node)
         return node
@@ -863,8 +900,8 @@ Generate only the transition script.
                 target_duration=int(self.config.target_node_duration_minutes * 60)
             )
             
-            response = await self.ai_manager.generate_with_fallback(
-                prompt=prompt,
+            response = await self.ai_manager.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,
                 temperature=0.7
             )
@@ -887,8 +924,8 @@ Generate only the transition script.
                 duration=20
             )
             
-            response = await self.ai_manager.generate_with_fallback(
-                prompt=prompt,
+            response = await self.ai_manager.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
                 temperature=0.8
             )
@@ -919,7 +956,7 @@ Generate only the transition script.
     ) -> Optional[Dict[str, Any]]:
         """Generate a quick check question"""
         # For now, generate a simple true/false question
-        topic = context_node.title
+        topic = context_node.content.get("title", "this concept") if context_node.content else "this concept"
         return {
             "type": "true_false",
             "question": f"You've just learned about {topic}. Do you feel confident with this concept?",

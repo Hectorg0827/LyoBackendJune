@@ -330,10 +330,7 @@ async def _send_welcome_scene(
         # ⚡ FAST INITIAL HOOK ⚡
         # Send an immediate intro to completely eliminate the perceived wait time!
         try:
-            immediate_json = f"""[
-                {{ "type": "speech", "speaker": "Teacher", "text": "Glad you made it. Give me just a second to pull up my notes for {resolved_topic}..." }},
-                {{ "type": "ambient", "sound": "page_turn" }}
-            ]"""
+            intro_text = f"Glad you made it! Give me just a second to pull up my notes for {resolved_topic}..."
             fast_scene = {
                 "type": "scene_stream",
                 "session_id": connection.session_id,
@@ -346,7 +343,7 @@ async def _send_welcome_scene(
                             {
                                 "component_id": f"fast_msg_{connection.session_id}",
                                 "type": "TeacherMessage",
-                                "text": immediate_json,
+                                "text": intro_text,
                                 "delay_ms": 0,
                                 "animation": "fade_in"
                             }

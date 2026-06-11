@@ -123,7 +123,37 @@ class LessonOutline(BaseModel):
     description: str = Field(..., min_length=20, max_length=500)
     estimated_minutes: int = Field(..., ge=5, le=60)
     learning_outcomes: List[str] = Field(..., min_length=1, max_length=5)
+    prerequisites: List[str] = Field(default_factory=list, description="Lesson IDs that must be completed first")
     
+    @property
+    def lesson_id(self) -> str:
+        return self.id
+        
+    @property
+    def duration_minutes(self) -> int:
+        return self.estimated_minutes
+        
+    @property
+    def objectives(self) -> List[str]:
+        return self.learning_outcomes
+
+    @property
+    def lesson_type(self) -> LessonType:
+        # Check if the title or description suggests a certain type, default to concept
+        desc = self.description.lower()
+        title = self.title.lower()
+        if "quiz" in title or "quiz" in desc or "test" in title:
+            return LessonType.QUIZ
+        elif "project" in title or "project" in desc:
+            return LessonType.PROJECT
+        elif "exercise" in title or "exercise" in desc or "practice" in title:
+            return LessonType.EXERCISE
+        elif "tutorial" in title or "tutorial" in desc or "step-by-step" in desc:
+            return LessonType.TUTORIAL
+        elif "review" in title or "review" in desc or "recap" in title:
+            return LessonType.REVIEW
+        return LessonType.CONCEPT
+
     @field_validator('learning_outcomes')
     @classmethod
     def outcomes_have_content(cls, v: List[str]) -> List[str]:
@@ -363,6 +393,31 @@ class ModuleAssessment(BaseModel):
     passing_score: int = Field(default=70, ge=50, le=100)
     questions: List[QuizQuestion] = Field(..., min_length=3, max_length=20)
 
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_question_types(cls, data: Any) -> Any:
+        if isinstance(data, dict) and 'questions' in data:
+            qs = data['questions']
+            if isinstance(qs, list):
+                mapping = {
+                    "multiplechoicequestion": "multiple_choice",
+                    "truefalsequestion": "true_false",
+                    "fillblankquestion": "fill_blank",
+                    "codingquestion": "coding"
+                }
+                new_qs = []
+                for q in qs:
+                    if isinstance(q, dict) and 'question_type' in q:
+                        q_copy = dict(q)
+                        t = str(q_copy['question_type']).strip().lower()
+                        if t in mapping:
+                            q_copy['question_type'] = mapping[t]
+                        new_qs.append(q_copy)
+                    else:
+                        new_qs.append(q)
+                data['questions'] = new_qs
+        return data
+
 
 class FinalExam(BaseModel):
     """Final comprehensive exam"""
@@ -373,6 +428,31 @@ class FinalExam(BaseModel):
     passing_score: int = Field(default=70, ge=50, le=100)
     questions: List[QuizQuestion] = Field(..., min_length=10, max_length=50)
     weight_per_module: Dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_question_types(cls, data: Any) -> Any:
+        if isinstance(data, dict) and 'questions' in data:
+            qs = data['questions']
+            if isinstance(qs, list):
+                mapping = {
+                    "multiplechoicequestion": "multiple_choice",
+                    "truefalsequestion": "true_false",
+                    "fillblankquestion": "fill_blank",
+                    "codingquestion": "coding"
+                }
+                new_qs = []
+                for q in qs:
+                    if isinstance(q, dict) and 'question_type' in q:
+                        q_copy = dict(q)
+                        t = str(q_copy['question_type']).strip().lower()
+                        if t in mapping:
+                            q_copy['question_type'] = mapping[t]
+                        new_qs.append(q_copy)
+                    else:
+                        new_qs.append(q)
+                data['questions'] = new_qs
+        return data
 
 
 class CourseAssessments(BaseModel):

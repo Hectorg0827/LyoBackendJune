@@ -188,7 +188,9 @@ async def init_db() -> None:
         from lyo_app.learning_profile.models import LearningProfile  # noqa: F401
 
         # Stage B2 — persistent study plans created from chat
-        from lyo_app.study_plans.models import StudyPlan  # noqa: F401
+        from lyo_app.study_plans.models import (  # noqa: F401
+            TestProfile, StudyPlan, StudySession, SessionReminder, PlanEvent
+        )
         
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")

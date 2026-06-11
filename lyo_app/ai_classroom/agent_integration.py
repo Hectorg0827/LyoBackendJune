@@ -360,7 +360,23 @@ Format as JSON with question, options[], and explanations."""
         try:
             # Parse JSON response (adapt to your AssessmentAgent format)
             if isinstance(assessment_response, str):
-                quiz_data = json.loads(assessment_response)
+                raw = assessment_response.strip()
+                # Robustly strip markdown JSON/code fences
+                if "```json" in raw:
+                    raw = raw.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw:
+                    raw = raw.split("```")[1].strip()
+                
+                try:
+                    quiz_data = json.loads(raw)
+                except Exception as json_err:
+                    logger.warning(f"⚠️ json.loads failed for agent assessment, trying ast.literal_eval: {json_err}")
+                    try:
+                        import ast
+                        quiz_data = ast.literal_eval(raw)
+                    except Exception as ast_err:
+                        logger.error(f"❌ Both json.loads and ast.literal_eval failed for agent assessment: {ast_err}")
+                        raise json.JSONDecodeError("Failed to parse quiz JSON in assessment agent", raw, 0)
             else:
                 quiz_data = assessment_response
 
@@ -386,16 +402,34 @@ Format as JSON with question, options[], and explanations."""
 
             components.append(quiz_card)
 
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
-            logger.warning(f"Failed to parse assessment response, using fallback: {e}")
-            # Fallback quiz
+        except (json.JSONDecodeError, KeyError, IndexError, ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse assessment response, using dynamic fallback: {e}")
+            # Fallback quiz - highly robust and topic-specific
             from lyo_app.ai_classroom.sdui_models import QuizOption
             fallback_quiz = QuizCard(
-                question=f"Which statement best describes {request.topic}?",
+                question=f"Which of the following is a primary focus when studying {request.topic}?",
                 options=[
-                    QuizOption(id="a", label="It's a fundamental concept", is_correct=True),
-                    QuizOption(id="b", label="It's not important", is_correct=False),
-                    QuizOption(id="c", label="It's too complex", is_correct=False)
+                    QuizOption(
+                        id="a", 
+                        label=f"Understanding the core principles of {request.topic}", 
+                        is_correct=True,
+                        feedback_correct="Excellent job! Correct.",
+                        feedback_incorrect="Review this core principle."
+                    ),
+                    QuizOption(
+                        id="b", 
+                        label="Avoiding practical applications entirely", 
+                        is_correct=False,
+                        feedback_correct="Excellent job! Correct.",
+                        feedback_incorrect="Practical application is crucial to mastery."
+                    ),
+                    QuizOption(
+                        id="c", 
+                        label="Ignoring the subject foundations", 
+                        is_correct=False,
+                        feedback_correct="Excellent job! Correct.",
+                        feedback_incorrect="Foundations are key to build intermediate skills."
+                    )
                 ]
             )
             components.append(fallback_quiz)

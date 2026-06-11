@@ -175,12 +175,12 @@ class PipelineGates:
         all_lesson_ids = []
         for module in curriculum.modules:
             for lesson in module.lessons:
-                if lesson.lesson_id in all_lesson_ids:
-                    issues.append(f"Duplicate lesson ID: {lesson.lesson_id}")
-                all_lesson_ids.append(lesson.lesson_id)
+                if lesson.id in all_lesson_ids:
+                    issues.append(f"Duplicate lesson ID: {lesson.id}")
+                all_lesson_ids.append(lesson.id)
         
         # Verify module IDs are unique
-        module_ids = [m.module_id for m in curriculum.modules]
+        module_ids = [m.id for m in curriculum.modules]
         if len(module_ids) != len(set(module_ids)):
             issues.append("Duplicate module IDs detected")
         
@@ -206,12 +206,14 @@ class PipelineGates:
         issues = []
         warnings = []
         
-        # Schema validation
-        try:
-            lesson = LessonContent(**lesson_data)
-        except ValidationError as e:
-            error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return GateResult(passed=False, issues=error_msgs, fixable=True)
+        if isinstance(lesson_data, LessonContent):
+            lesson = lesson_data
+        else:
+            try:
+                lesson = LessonContent(**lesson_data)
+            except ValidationError as e:
+                error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
+                return GateResult(passed=False, issues=error_msgs, fixable=True)
         
         # Check lesson ID exists in curriculum
         if lesson.lesson_id not in all_lesson_ids:
@@ -276,57 +278,34 @@ class PipelineGates:
         issues = []
         warnings = []
         
-        # Schema validation
-        try:
-            assessments = CourseAssessments(**data)
-        except ValidationError as e:
-            error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return GateResult(passed=False, issues=error_msgs, fixable=True)
+        if isinstance(data, CourseAssessments):
+            assessments = data
+        else:
+            try:
+                assessments = CourseAssessments(**data)
+            except ValidationError as e:
+                error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
+                return GateResult(passed=False, issues=error_msgs, fixable=True)
         
-        # Get all lesson IDs from curriculum
-        all_lesson_ids = set()
-        for module in curriculum.modules:
-            for lesson in module.lessons:
-                all_lesson_ids.add(lesson.lesson_id)
+        # Get all module IDs from curriculum
+        module_ids = {m.id for m in curriculum.modules}
         
-        # Check every lesson has a quiz
-        lesson_ids_with_quiz = {q.lesson_id for q in assessments.lesson_quizzes}
-        missing_quizzes = all_lesson_ids - lesson_ids_with_quiz
-        if missing_quizzes:
-            warnings.append(f"Missing quizzes for {len(missing_quizzes)} lessons: {list(missing_quizzes)[:3]}...")
-        
-        # Check for extra quizzes (IDs not in curriculum)
-        extra_quizzes = lesson_ids_with_quiz - all_lesson_ids
-        if extra_quizzes:
-            issues.append(f"Quizzes reference unknown lessons: {extra_quizzes}")
-        
-        # Check module assessments
-        module_ids = {m.module_id for m in curriculum.modules}
+        # Check every module has an assessment
+        assessed_module_ids = {a.module_id for a in assessments.module_assessments}
+        missing_modules = module_ids - assessed_module_ids
+        if missing_modules:
+            warnings.append(f"Missing assessments for modules: {missing_modules}")
+            
+        # Check for assessments referencing unknown modules
+        extra_modules = assessed_module_ids - module_ids
+        if extra_modules:
+            issues.append(f"Assessments reference unknown modules: {extra_modules}")
+            
+        # Check answer distribution & count inside module assessments
         for assessment in assessments.module_assessments:
-            if assessment.module_id not in module_ids:
-                issues.append(f"Assessment references unknown module: {assessment.module_id}")
-        
-        # Check answer distribution
-        total_mc = 0
-        answer_distribution = {0: 0, 1: 0, 2: 0, 3: 0}
-        
-        for quiz in assessments.lesson_quizzes:
-            for q in quiz.questions:
-                if hasattr(q, 'correct_answer') and isinstance(q.correct_answer, int):
-                    total_mc += 1
-                    answer_distribution[q.correct_answer] += 1
-        
-        if total_mc > 10:
-            # Check if answers are too concentrated
-            max_concentration = max(answer_distribution.values()) / total_mc
-            if max_concentration > 0.5:
-                warnings.append(f"Answer distribution is skewed - {max_concentration*100:.0f}% are the same option")
-        
-        # Check question counts
-        for quiz in assessments.lesson_quizzes:
-            if len(quiz.questions) < 2:
-                warnings.append(f"Quiz {quiz.lesson_id} has only {len(quiz.questions)} question(s)")
-        
+            if len(assessment.questions) < 1:
+                warnings.append(f"Module assessment {assessment.module_id} has no questions")
+            
         passed = len(issues) == 0
         return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
     
@@ -344,30 +323,26 @@ class PipelineGates:
         issues = []
         warnings = []
         
-        # Schema validation
-        try:
-            qa = QualityReport(**data)
-        except ValidationError as e:
-            error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
-            return GateResult(passed=False, issues=error_msgs, fixable=True)
+        if isinstance(data, QualityReport):
+            qa = data
+        else:
+            try:
+                qa = QualityReport(**data)
+            except ValidationError as e:
+                error_msgs = [f"{err['loc']}: {err['msg']}" for err in e.errors()]
+                return GateResult(passed=False, issues=error_msgs, fixable=True)
         
         # Check for critical issues
-        critical_issues = [i for i in qa.issues if i.severity == "critical"]
-        if critical_issues and qa.approved:
-            issues.append("Cannot approve course with critical issues")
+        critical_issues = [i for i in qa.critical_issues if i.severity == "critical"]
+        if critical_issues and qa.recommendation == "publish":
+            issues.append("Cannot publish/approve course with critical issues")
         
         # Ensure score makes sense relative to issues
-        high_severity_count = sum(1 for i in qa.issues if i.severity in ["critical", "high"])
-        if qa.overall_score >= 9.0 and high_severity_count > 0:
-            warnings.append(f"Score is {qa.overall_score} but {high_severity_count} critical/high issues found")
+        if qa.overall_score >= 90 and len(critical_issues) > 0:
+            warnings.append(f"Overall score is high ({qa.overall_score}) but {len(critical_issues)} critical issues were found")
         
-        if qa.overall_score < 5.0 and len(qa.issues) == 0:
-            warnings.append("Low score but no issues identified - review might be incomplete")
-        
-        # Check component scores are consistent
-        avg_component = (qa.content_accuracy_score + qa.pedagogical_score + qa.engagement_score) / 3
-        if abs(qa.overall_score - avg_component) > 2.0:
-            warnings.append("Overall score doesn't align with component scores")
+        if qa.overall_score < 50 and len(qa.critical_issues) == 0:
+            warnings.append("Low overall score but no critical issues identified - review might be incomplete")
         
         passed = len(issues) == 0
         return GateResult(passed=passed, issues=issues, warnings=warnings, fixable=True)
@@ -397,7 +372,7 @@ class PipelineGates:
         lesson_ids_in_curriculum = set()
         for module in curriculum.modules:
             for lesson in module.lessons:
-                lesson_ids_in_curriculum.add(lesson.lesson_id)
+                lesson_ids_in_curriculum.add(lesson.id)
         
         lesson_ids_generated = {l.lesson_id for l in lessons}
         
@@ -409,11 +384,12 @@ class PipelineGates:
         if extra:
             warnings.append(f"Extra lessons not in curriculum: {extra}")
         
-        # Check assessments cover all lessons
-        quiz_coverage = {q.lesson_id for q in assessments.lesson_quizzes}
-        uncovered = lesson_ids_in_curriculum - quiz_coverage
-        if uncovered:
-            warnings.append(f"{len(uncovered)} lessons without quizzes")
+        # Check assessments cover all modules
+        module_ids_in_curriculum = {m.id for m in curriculum.modules}
+        assessed_modules = {a.module_id for a in assessments.module_assessments}
+        uncovered_modules = module_ids_in_curriculum - assessed_modules
+        if uncovered_modules:
+            warnings.append(f"{len(uncovered_modules)} modules without assessments")
         
         # Final approval check
         if not qa_report.approved:

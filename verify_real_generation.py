@@ -63,6 +63,15 @@ async def verify_generation():
             # 3. Analyze Response
             print(f"[{datetime.utcnow()}] ✅ Response received!")
             
+            # Manually execute background tasks since we are calling classroom_chat directly
+            print(f"[{datetime.utcnow()}] 🔄 Executing scheduled background tasks ({len(background_tasks.tasks)})...")
+            for task in background_tasks.tasks:
+                if asyncio.iscoroutinefunction(task.func):
+                    await task.func(*task.args, **task.kwargs)
+                else:
+                    task.func(*task.args, **task.kwargs)
+            print(f"[{datetime.utcnow()}] ✅ Background tasks execution complete!")
+            
             if not response.generated_course_id:
                 print("❌ FAILED: No generated_course_id in response.")
                 print(f"Response dump: {response}")

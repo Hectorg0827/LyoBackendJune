@@ -458,6 +458,82 @@ class ConversationManager:
             }
         )
         
+    async def _generate_resilient_quiz(self, topic: str) -> str:
+        """Directly call ai_resilience_manager to generate a high-quality quiz on the topic."""
+        try:
+            from lyo_app.core.ai_resilience import ai_resilience_manager
+            
+            quiz_prompt = (
+                f"Generate a 3-question multiple-choice quiz on the topic: '{topic}'.\n\n"
+                "RULES:\n"
+                "- Output ONLY the quiz blocks. NO intro text, NO 'Here is your quiz:', NO filler.\n"
+                "- Use the EXACT :::quiz smart block format for EVERY question.\n"
+                "- Do NOT use LaTeX ($...$) — write math in plain text.\n\n"
+                "FORMAT (repeat 3 times):\n"
+                ":::quiz\n"
+                "question: [clear question text, math in plain text]\n"
+                "options:\n"
+                "- [Option A]\n"
+                "- [Option B]\n"
+                "- [Option C]\n"
+                "- [Option D]\n"
+                "answer: [exact text of correct option]\n"
+                "explanation: [1-sentence explanation]\n"
+                ":::"
+            )
+            
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Lyo's Quiz Generator. Your ONLY job is to generate educational multiple-choice quizzes. "
+                        "You MUST output raw :::quiz smart blocks following the requested format. Do not include introductory or concluding text."
+                    )
+                },
+                {"role": "user", "content": quiz_prompt}
+            ]
+            
+            response = await ai_resilience_manager.chat_completion(
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1500,
+                provider_order=["gemini-2.5-pro", "gpt-4o", "gemini-2.5-flash", "gpt-4o-mini"]
+            )
+            
+            content = response.get("content") or response.get("response") or ""
+            if ":::quiz" in content:
+                logger.info(f"Successfully generated dynamic quiz for '{topic}' using direct resilience call.")
+                return content
+            
+            logger.warning(f"Direct resilient quiz call returned no :::quiz blocks for '{topic}'. Using high-quality topic-aware fallback.")
+        except Exception as e:
+            logger.error(f"Failed to generate resilient quiz for '{topic}': {e}", exc_info=True)
+            
+        # High-quality topic-aware fallback if everything fails
+        return (
+            f"📝 **Quiz: {topic}**\n\n"
+            ":::quiz\n"
+            f"question: Which of the following is a primary focus when studying {topic}?\n"
+            "options:\n"
+            f"- Understanding the core principles and concepts of {topic}\n"
+            f"- Avoiding any practical application of {topic}\n"
+            f"- Focusing exclusively on unrelated subjects\n"
+            f"- Disregarding the foundational elements of {topic}\n"
+            f"answer: Understanding the core principles and concepts of {topic}\n"
+            f"explanation: Studying the core principles of {topic} is essential to mastering the subject.\n"
+            ":::\n\n"
+            ":::quiz\n"
+            f"question: Why is it valuable to learn about {topic}?\n"
+            "options:\n"
+            f"- It builds essential problem-solving skills and domain knowledge\n"
+            f"- It has no value or application whatsoever\n"
+            f"- It is a waste of time and energy\n"
+            f"- It makes learning other subjects much harder\n"
+            f"answer: It builds essential problem-solving skills and domain knowledge\n"
+            f"explanation: Learning {topic} equips you with tools to analyze and solve problems in this domain.\n"
+            ":::"
+        )
+
     async def _handle_quiz_request(
         self,
         session: ConversationSession,
@@ -467,6 +543,7 @@ class ConversationManager:
         """Handle quiz generation request — actually generates questions via AI."""
         session.state = ConversationState.TAKING_QUIZ
         topic = intent.topic or session.current_topic or "the topic we just discussed"
+        content = None
 
         if self._chat_handler:
             quiz_prompt = (
@@ -490,35 +567,17 @@ class ConversationManager:
             try:
                 context = session.get_context_messages(limit=5)
                 content = await self._chat_handler(quiz_prompt, context)
+                
+                # Double check if we actually got :::quiz blocks, else fallback to direct resilient call
+                if not content or ":::quiz" not in content:
+                    logger.warning("Quiz AI response did not contain :::quiz block. Retrying with direct resilience call.")
+                    content = await self._generate_resilient_quiz(topic)
             except Exception as exc:
-                logger.warning(f"Quiz AI generation failed: {exc}")
-                content = (
-                    f"📝 **Quiz: {topic}**\n\n"
-                    ":::quiz\n"
-                    f"question: Which of the following best describes {topic}?\n"
-                    "options:\n"
-                    "- It is a fundamental concept\n"
-                    "- It is rarely used\n"
-                    "- It has no practical value\n"
-                    "- It only applies in theory\n"
-                    "answer: It is a fundamental concept\n"
-                    "explanation: Understanding the foundations is key to mastering any subject.\n"
-                    ":::"
-                )
+                logger.error(f"Quiz AI generation failed: {exc}", exc_info=True)
+                content = await self._generate_resilient_quiz(topic)
         else:
-            content = (
-                f"📝 **Quiz: {topic}**\n\n"
-                ":::quiz\n"
-                f"question: Which statement best describes {topic}?\n"
-                "options:\n"
-                "- It is a core concept worth studying\n"
-                "- It has no practical applications\n"
-                "- It only applies to experts\n"
-                "- It cannot be learned\n"
-                "answer: It is a core concept worth studying\n"
-                "explanation: Mastering core concepts is the first step in any learning journey.\n"
-                ":::"
-            )
+            logger.info("No _chat_handler registered. Generating quiz using direct resilience manager.")
+            content = await self._generate_resilient_quiz(topic)
 
         return FlowResponse(
             content=content,

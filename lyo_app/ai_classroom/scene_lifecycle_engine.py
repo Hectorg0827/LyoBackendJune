@@ -265,6 +265,8 @@ class ContextAssembler:
         # 1) Check the trigger's action_data for an explicit topic
         if trigger.action_data:
             topic = trigger.action_data.get("topic") or trigger.action_data.get("subject")
+            if topic and isinstance(topic, str):
+                topic = topic.replace("**", "").strip()
 
         # 2) Look up the ConversationManager in-memory session
         if not topic:
@@ -274,6 +276,8 @@ class ContextAssembler:
                 conv_session = cm.get_session(trigger.session_id)
                 if conv_session:
                     topic = conv_session.current_topic
+                    if topic and isinstance(topic, str):
+                        topic = topic.replace("**", "").strip()
                     course_id = course_id or conv_session.current_course_id
                     lesson_index = conv_session.current_lesson_index
             except Exception as e:
@@ -283,6 +287,9 @@ class ContextAssembler:
         #    (iOS sends courseId as the WebSocket session_id)
         if not course_id:
             course_id = trigger.session_id
+
+        if course_id and isinstance(course_id, str):
+            course_id = course_id.replace("**", "").strip()
 
         # 4) If we have a course_id, query the Course DB for the title
         if course_id and not course_title:
@@ -379,19 +386,28 @@ class ContextAssembler:
             # It's a UUID, try getting lesson from GraphCourse first, then ChatCourse or GeneratedCourseModel
             try:
                 from lyo_app.ai_classroom.models import GraphCourse, LearningNode
-                from sqlalchemy import select
+                from sqlalchemy import select, or_
                 
-                # Check if this course exists in GraphCourse
+                # Check if this course exists in GraphCourse by ID or Subject/Title (for topic sessions)
                 course_result = await self.db.execute(
-                    select(GraphCourse).where(GraphCourse.id == course_id)
+                    select(GraphCourse)
+                    .where(
+                        or_(
+                            GraphCourse.id == course_id,
+                            GraphCourse.subject == course_id,
+                            GraphCourse.title.ilike(f"%{course_id}%")
+                        )
+                    )
+                    .order_by(GraphCourse.created_at.desc())
+                    .limit(1)
                 )
-                course_exists = course_result.scalar_one_or_none()
+                course_exists = course_result.scalars().first()
                 
                 if course_exists:
                     # Query all nodes for this course
                     nodes_result = await self.db.execute(
                         select(LearningNode)
-                        .where(LearningNode.course_id == course_id)
+                        .where(LearningNode.course_id == course_exists.id)
                         .order_by(LearningNode.sequence_order)
                     )
                     nodes = nodes_result.scalars().all()
@@ -405,8 +421,12 @@ class ContextAssembler:
                             target_node = narrative_nodes[lesson_index]
                             keywords = target_node.content.get("keywords") or ["Overview"]
                             keyword = keywords[0] if keywords else "Overview"
-                            lesson_title = f"Lesson {lesson_index + 1}: {keyword.title()}"
+                            lesson_title = target_node.content.get("title") or f"Lesson {lesson_index + 1}: {keyword.title()}"
                             lesson_content = target_node.content.get("narration", "")
+                            if target_node.content.get("code"):
+                                lang = target_node.content.get("language") or ""
+                                code_str = target_node.content.get("code")
+                                lesson_content += f"\n\nCode Example:\n```{lang}\n{code_str}\n```"
                             logger.info(f"📖 Resolved GraphCourse lesson {lesson_index}: {lesson_title}")
                     return lesson_title, lesson_content, total_lessons
             except Exception as e:
@@ -426,11 +446,19 @@ class ContextAssembler:
                 else:
                     from lyo_app.ai_agents.multi_agent_v2.pipeline.job_queue import GeneratedCourseModel
                     result = await self.db.execute(
-                        select(GeneratedCourseModel.modules).where(GeneratedCourseModel.id == course_id)
+                        select(GeneratedCourseModel.course_data).where(GeneratedCourseModel.id == course_id)
                     )
                     row = result.first()
-                    if row and row.modules:
-                        modules = row.modules
+                    if row and row[0]:
+                        import json as _json
+                        cdata = row[0]
+                        if isinstance(cdata, str):
+                            try:
+                                cdata = _json.loads(cdata)
+                            except Exception:
+                                cdata = {}
+                        if isinstance(cdata, dict):
+                            modules = cdata.get("curriculum", {}).get("modules", [])
                 
                 if modules:
                     # Flatten lessons from modules to find the one matching lesson_index
@@ -980,6 +1008,7 @@ class SceneCompiler:
         try:
             from lyo_app.ai_classroom.director_prompt import CLASSROOM_DIRECTOR_PROMPT
             from lyo_app.core.ai_resilience import ai_resilience_manager
+            import json
             
             topic = context.topic or "general learning"
             course_title = context.course_title or topic
@@ -1000,18 +1029,40 @@ user_name: "{user_name}"
 user_memory: "Likes clear and concise explanations."
 last_session_recap: ""
 user_level: "beginner"
+lesson_title: "{context.lesson_title or topic}"
+lesson_content: {json.dumps(context.lesson_content or "")}
 """
-            prompt = CLASSROOM_DIRECTOR_PROMPT + "\n\n" + input_block
+            # Injecting explicit instruction to use the generated lesson content
+            prompt = (
+                CLASSROOM_DIRECTOR_PROMPT + "\n\n"
+                "## CURRENT LESSON TO TEACH:\n"
+                "You must teach the following content:\n"
+                f"Lesson Title: {context.lesson_title or topic}\n"
+                f"Lesson Content:\n{context.lesson_content or ''}\n\n"
+                "## INPUT STATE:\n"
+                + input_block
+            )
 
-            # Call the resilient AI manager with Gemini and OpenAI fallbacks
+            # Call the resilient AI manager with Gemini and OpenAI fallbacks.
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON containing a list of director turns."},
+                    {"role": "system", "content": "You are a world-class course designer. You script a live class utilizing the provided INPUT FORMAT. CRITICAL REQUIREMENT: You must read `lesson_title` and `lesson_content` from the input, and base the entire lesson and lecture script on that exact `lesson_content`! Teach this exact material step-by-step through a rich conversational flow with the cast. Ensure that Rio, Maya, Sam, Zack, and the Teacher discuss the actual concepts, facts, examples, and code snippets provided in the `lesson_content`. Do NOT invent generic lessons; teach the exact content. Return ONLY valid JSON containing a list of director turns. No prose, no markdown — pure JSON."},
                     {"role": "user", "content": prompt}
                 ],
                 provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
-                response_format={"type": "json_object"}
             )
+
+            # CRITICAL: when every provider has failed, ai_resilience_manager
+            # does NOT raise — it returns a canned apology string with
+            # is_fallback=True. Without this guard, that apology string was
+            # being shipped verbatim to iOS as TeacherMessage.text, which is
+            # exactly the "Experiencing technical issues" bug users hit.
+            if response.get("is_fallback"):
+                logger.warning(
+                    "⚠️ AI resilience returned fallback for instruction — "
+                    "falling back to local template (topic=%r)", topic
+                )
+                raise RuntimeError("ai_resilience returned is_fallback")
 
             text = response.get("content", "").strip()
             # Remove Markdown fences if any
@@ -1020,10 +1071,38 @@ user_level: "beginner"
             elif "```" in text:
                 text = text.split("```")[1].strip()
 
+            # Resilient JSON Array extraction: find first [ and last ]
+            first_bracket = text.find('[')
+            last_bracket = text.rfind(']')
+            if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+                text = text[first_bracket:last_bracket+1].strip()
+
+            # Belt-and-suspenders: if the upstream service somehow returned an
+            # apology string without setting is_fallback (e.g., a Gemini safety
+            # block), reject it before it reaches the user.
+            APOLOGY_PHRASES = (
+                "Experiencing technical issues",
+                "AI services unavailable",
+                "temporarily unable to process",
+            )
+            if any(phrase in text for phrase in APOLOGY_PHRASES):
+                logger.warning("⚠️ AI returned apology string — using local template (topic=%r)", topic)
+                raise RuntimeError("ai_resilience returned apology content")
+
             # Ensure we return a clean JSON array string (starting with [ and ending with ])
             try:
-                import json
-                parsed = json.loads(text)
+                parsed = None
+                try:
+                    parsed = json.loads(text)
+                except Exception as json_err:
+                    logger.warning(f"⚠️ json.loads failed, trying ast.literal_eval: {json_err}")
+                    try:
+                        import ast
+                        parsed = ast.literal_eval(text)
+                    except Exception as ast_err:
+                        logger.error(f"❌ Both json.loads and ast.literal_eval failed: {ast_err}")
+                        raise RuntimeError(f"Failed to parse instruction JSON: {json_err}")
+
                 if isinstance(parsed, dict):
                     # Extract the first list value found (e.g., 'turns', 'scene', 'components')
                     list_extracted = False
@@ -1037,18 +1116,93 @@ user_level: "beginner"
                         text = json.dumps([parsed])
                 elif isinstance(parsed, list):
                     text = json.dumps(parsed)
+                else:
+                    raise RuntimeError("Parsed JSON is neither a list nor a dictionary")
             except Exception as e:
-                logger.warning(f"⚠️ Failed to normalize instruction JSON content: {e}")
+                logger.error(f"❌ JSON normalization failed: {e}")
+                # Clear resilience manager cache so we don't get stuck with a broken cached AI response
+                try:
+                    ai_resilience_manager.request_cache.clear()
+                    logger.info("🧹 Cleared AI Resilience Manager cache due to JSON parsing failure")
+                except Exception as cache_err:
+                    logger.warning(f"Failed to clear cache: {cache_err}")
+                raise
 
             return text
 
         except Exception as e:
             logger.error(f"❌ TutorAgent resilient instruction generation failed: {e}")
-            topic = context.topic or "this concept"
-            fallback_json = f"""[
-                {{"type": "speech", "speaker": "Teacher", "text": "Let's explore {topic} together. I'll guide you through the key ideas step by step."}}
-            ]"""
-            return fallback_json
+            return self._local_instruction_fallback(context)
+
+    def _local_instruction_fallback(self, context: ContextSnapshot) -> str:
+        """Topic-aware multi-turn lesson opener used when every AI provider
+        is down. Better than 'try again later' — gives the user something
+        actually teachable while we recover.
+        """
+        import json
+        import re
+        topic = context.topic or context.course_title or "this concept"
+        course_title = context.course_title or topic
+        session = context.lesson_index + 1
+        total = context.total_lessons or 1
+        lesson_content = context.lesson_content or ""
+
+        if lesson_content:
+            paragraphs = [p.strip() for p in lesson_content.split('\n\n') if p.strip()]
+            main_point = paragraphs[0] if paragraphs else f"Let's dive into {topic}."
+            if main_point.startswith("#"):
+                main_point = re.sub(r'^#+\s*', '', main_point)
+            
+            turns = [
+                {
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": f"Welcome back. Today we're learning about {topic} — lesson {session} of {total}."
+                },
+                {
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": f"Here is the core concept: {main_point}"
+                }
+            ]
+            if len(paragraphs) > 1:
+                sub_point = paragraphs[1]
+                if sub_point.startswith("#"):
+                    sub_point = re.sub(r'^#+\s*', '', sub_point)
+                turns.append({
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": f"To understand this better, remember: {sub_point}"
+                })
+            turns.append({
+                "type": "speech",
+                "speaker": "Teacher",
+                "text": "Let's work through this concept together. When you are ready, tap continue!"
+            })
+        else:
+            turns = [
+                {
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": f"Welcome to {course_title} — lesson {session} of {total}. We're going to keep this focused and practical."
+                },
+                {
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": f"Here's the goal for today: get a clear, working understanding of {topic} — what it is, why it matters, and where you'll see it."
+                },
+                {
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": f"Think of {topic} as a tool. We'll start with the simplest version, then layer on the real-world details so it sticks."
+                },
+                {
+                    "type": "speech",
+                    "speaker": "Teacher",
+                    "text": "When you're ready, tap continue and I'll walk you through the first idea step by step."
+                }
+            ]
+        return json.dumps(turns)
 
     async def _generate_quiz_question(self, context: ContextSnapshot) -> QuizCard:
         """Generate dynamic quiz question using AI"""
@@ -1057,11 +1211,14 @@ user_level: "beginner"
         import json as _json
 
         topic = context.topic or "the current concept"
+        lesson_content = context.lesson_content or ""
 
         try:
             prompt = (
-                f"Generate a single multiple-choice quiz question about {topic}. "
-                f"Return ONLY valid JSON (no markdown) with this exact structure: "
+                f"Generate a single multiple-choice quiz question about the following lesson: '{context.lesson_title or topic}'.\n"
+                f"Lesson Content:\n{lesson_content}\n\n"
+                f"The question must test understanding of the specific concepts described in the Lesson Content.\n"
+                f"Return ONLY valid JSON (no markdown) with this exact structure:\n"
                 f'{{"question": "...", "options": ['
                 f'{{"id": "a", "label": "...", "is_correct": false}}, '
                 f'{{"id": "b", "label": "...", "is_correct": true}}, '
@@ -1070,22 +1227,46 @@ user_level: "beginner"
                 f']}}'
             )
 
-            # Call the resilient AI manager with Gemini and OpenAI fallbacks
+            # Call the resilient AI manager with Gemini and OpenAI fallbacks.
+            # Strict JSON mode dropped here too — see _generate_instruction_content
+            # for the full rationale (Gemini fails hard on strict mode + long prompts).
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON quiz questions."},
+                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON quiz questions. No prose, no markdown — pure JSON."},
                     {"role": "user", "content": prompt}
                 ],
                 provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
-                response_format={"type": "json_object"}
             )
+
+            # When every provider has failed, ai_resilience returns the canned
+            # apology with is_fallback=True. Trip to local fallback below.
+            if response.get("is_fallback"):
+                raise RuntimeError("ai_resilience returned is_fallback")
 
             # Parse the JSON response from the AI
             raw = response.get("content", "").strip()
             # Strip markdown fences if present
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            data = _json.loads(raw)
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw:
+                raw = raw.split("```")[1].strip()
+
+            # Resilient JSON Object extraction: find first { and last }
+            first_brace = raw.find('{')
+            last_brace = raw.rfind('}')
+            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                raw = raw[first_brace:last_brace+1].strip()
+
+            try:
+                data = _json.loads(raw)
+            except Exception as json_err:
+                logger.warning(f"⚠️ json.loads failed for quiz, trying ast.literal_eval: {json_err}")
+                try:
+                    import ast
+                    data = ast.literal_eval(raw)
+                except Exception as ast_err:
+                    logger.error(f"❌ Both json.loads and ast.literal_eval failed for quiz: {ast_err}")
+                    raise RuntimeError(f"Failed to parse quiz JSON: {json_err}")
 
             options = [
                 QuizOption(

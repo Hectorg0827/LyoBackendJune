@@ -26,7 +26,8 @@ from lyo_app.ai_agents.multi_agent_v2.schemas.course_schemas import (
     LessonContent,
     CourseAssessments,
     QualityReport,
-    GeneratedCourse
+    GeneratedCourse,
+    TextBlock
 )
 from lyo_app.ai_agents.multi_agent_v2.agents import (
     OrchestratorAgent,
@@ -518,14 +519,14 @@ class CourseGenerationPipeline(StreamingPipeline):
             "learning_objectives": state.intent.learning_objectives,
             "modules": [
                 {
-                    "module_id": mod.module_id,
+                    "module_id": mod.id,
                     "title": mod.title,
                     "description": mod.description,
                     "lessons": [
                         {
-                            "lesson_id": lesson.lesson_id,
+                            "lesson_id": lesson.id,
                             "title": lesson.title,
-                            "objectives": lesson.objectives
+                            "objectives": lesson.learning_outcomes
                         }
                         for lesson in mod.lessons
                     ]
@@ -595,8 +596,10 @@ class CourseGenerationPipeline(StreamingPipeline):
             ]
         )
         
-        qa_report = await self.qa_agent.execute(
-            self.qa_agent.build_prompt(qa_context)
+        qa_report = await self._execute_with_retry(
+            agent=self.qa_agent,
+            prompt_args={"context": qa_context},
+            step_name="qa_review"
         )
         
         gate_result = await self.gates.gate_5_validate_qa(qa_report)
@@ -690,7 +693,7 @@ class CourseGenerationPipeline(StreamingPipeline):
         
         for module in curriculum.modules:
             for lesson in module.lessons:
-                lesson_titles[lesson.lesson_id] = lesson.title
+                lesson_titles[lesson.id] = lesson.title
         
         for module in curriculum.modules:
             for lesson in module.lessons:

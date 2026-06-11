@@ -309,6 +309,10 @@ class EnhancedErrorHandler:
             'user_agent': error_context.user_agent
         }
         
+        # ALWAYS print/log the error and traceback to stderr/stdout for visibility
+        print(f">>> [ERROR] LyoApp handled exception [{error_context.error_id}]: {error_context.error_type}: {error_context.error_message}", flush=True)
+        print(f">>> [STACKTRACE] for [{error_context.error_id}]:\n{error_context.stack_trace}", flush=True)
+        
         # Log based on severity
         if severity == ErrorSeverity.CRITICAL:
             logger.critical("Critical error occurred", extra=log_data)

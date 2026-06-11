@@ -149,7 +149,7 @@ class StreamingPipeline:
                 for lesson in lessons:
                     gate_result = await self.gates.gate_3_validate_content(lesson)
                     if not gate_result.passed and self.config.enable_auto_fix:
-                        ctx = next(c for c in contexts if c.lesson_outline.lesson_id == lesson.lesson_id)
+                        ctx = next(c for c in contexts if c.lesson_outline.id == lesson.lesson_id)
                         lesson = await self.content_creator.generate_lesson(ctx)
                     validated_lessons.append(lesson)
                 

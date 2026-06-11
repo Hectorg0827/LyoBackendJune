@@ -209,12 +209,6 @@ class IntentAnalysisResponse(BaseModel):
 # Routes
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session."""
-    async for session in get_async_session():
-        yield session
-
-
 def _course_to_item(course: GraphCourse, total_nodes: int) -> GraphCourseItemRead:
     return GraphCourseItemRead(
         id=course.id,
@@ -294,16 +288,16 @@ async def upgrade_course_in_background(
             await db.execute(delete(LearningEdge).where(LearningEdge.course_id == course_id))
             
             # Update course metadata
-            existing_course.title = generated_course.curriculum.title
-            existing_course.description = generated_course.curriculum.description
+            existing_course.title = generated_course.curriculum.course_title
+            existing_course.description = generated_course.curriculum.course_description
             existing_course.estimated_minutes = int(generated_course.curriculum.total_estimated_hours * 60)
-            existing_course.version = existing_course.version + 1
+            
             
             # Generate full graph structure
             graph_generator = GraphCourseGenerator(
                 config=GraphGenerationConfig(
                     add_hook_nodes=True,
-                    add_interaction_checkpoints=True,
+                    add_review_checkpoints=True,
                     target_node_duration_minutes=1.5
                 )
             )
@@ -360,20 +354,21 @@ async def _create_minimal_graph_course(
         import json as _json
 
         narration_prompt = (
-            f"You are an expert educator creating a short micro-lesson on \"{topic}\" "
-            f"for a {level} student.\n\n"
+            f"You are an expert educator creating a short 3-step micro-lesson about \"{topic}\" "
+            f"for a {level} student to teach them immediately.\n\n"
             "Return ONLY valid JSON with these keys:\n"
             "{\n"
-            '  "hook": "A 1-2 sentence engaging hook that draws the student in (15-25 words)",\n'
-            '  "lesson": "A clear 3-4 sentence explanation of the core concept (40-60 words)",\n'
-            '  "quiz_prompt": "A question testing understanding of the concept",\n'
+            '  "hook": "A warm welcome greeting from the teacher introducing the exact topic of the class (15-20 words).",\n'
+            '  "bullet_points": "A clear, descriptive list of 3 bullet points outlining what we will cover today in this lecture, separated by newlines.",\n'
+            '  "lesson": "A detailed 3-4 sentence explanation of the first core concept or definition of this topic (40-60 words).",\n'
+            '  "quiz_prompt": "A multiple-choice question testing understanding of the core concept described in the lesson.",\n'
             '  "quiz_options": [\n'
             '    {"id": "a", "label": "...", "is_correct": false, "feedback": "..."},\n'
             '    {"id": "b", "label": "...", "is_correct": true, "feedback": "..."},\n'
             '    {"id": "c", "label": "...", "is_correct": false, "feedback": "..."}\n'
-            "  ],\n"
-            '  "quiz_explanation": "Brief explanation of the correct answer",\n'
-            '  "summary": "A 1-2 sentence recap and encouragement (15-25 words)"\n'
+            '  ],\n'
+            '  "quiz_explanation": "Brief explanation of the correct answer.",\n'
+            '  "summary": "A 1-2 sentence recap of the lesson and positive encouragement (15-25 words)."\n'
             "}"
         )
 
@@ -390,8 +385,9 @@ async def _create_minimal_graph_course(
         
         ai_data = _json.loads(raw)
 
-        hook_narration = ai_data.get("hook", f"Welcome! Today we are going to learn {topic}. Ready to begin?")
-        lesson_narration = ai_data.get("lesson", f"Let us start with the basics of {topic}.")
+        hook_narration = ai_data.get("hook", f"Welcome! Today we are going to learn about {topic}. Let's get started!")
+        bullet_points = ai_data.get("bullet_points", f"• Core definition of {topic}\n• How it is applied\n• Quick check for understanding")
+        lesson_narration = ai_data.get("lesson", f"Let's start with the basics of {topic}. It is an essential concept.")
         quiz_prompt = ai_data.get("quiz_prompt", f"Quick check: which statement best matches the main idea of {topic}?")
         quiz_options_raw = ai_data.get("quiz_options", None)
         quiz_explanation = ai_data.get("quiz_explanation", f"{topic} is best understood as a structured concept you can apply.")
@@ -413,7 +409,8 @@ async def _create_minimal_graph_course(
         import logging
         logging.getLogger(__name__).warning(f"AI narration failed for minimal graph course, using template: {e}")
         hook_narration = f"Welcome! Today we are going to learn {topic}. Ready to begin?"
-        lesson_narration = f"Let us start with the basics of {topic}. Here is the core idea, in simple terms..."
+        bullet_points = f"• Overview of {topic}\n• Why {topic} matters\n• Practice Quiz"
+        lesson_narration = f"Let's start with the basics of {topic}. Here is the core idea, in simple terms..."
         quiz_prompt = f"Quick check: which statement best matches the main idea of {topic}?"
         quiz_options = None
         quiz_explanation = f"{topic} is best understood as a structured concept you can apply."
@@ -431,7 +428,7 @@ async def _create_minimal_graph_course(
             },
             {
                 "id": "b",
-                "label": "It is a structured concept that explains how something works.",
+                "label": f"It is a structured concept that explains how {topic} works.",
                 "is_correct": True,
                 "feedback": "Exactly -- nice work.",
                 "misconception_tag": None,
@@ -472,6 +469,20 @@ async def _create_minimal_graph_course(
         sequence_order=0,
         estimated_seconds=10,
     )
+    outline_node = LearningNode(
+        course_id=course.id,
+        node_type=NodeType.NARRATIVE.value,
+        content={
+            "title": "Lecture Outline",
+            "narration": f"Here is what we will cover in today's class on {topic}:\n\n{bullet_points}\n\nLet's get ready to dive in!",
+            "visual_prompt": f"A structured presentation slide showing the lecture outline: {bullet_points}",
+            "keywords": [topic, "outline"],
+            "audio_mood": "calm",
+            "duration_hint": 15.0,
+        },
+        sequence_order=1,
+        estimated_seconds=15,
+    )
     lesson_node = LearningNode(
         course_id=course.id,
         node_type=NodeType.NARRATIVE.value,
@@ -482,7 +493,7 @@ async def _create_minimal_graph_course(
             "audio_mood": "calm",
             "duration_hint": 20.0,
         },
-        sequence_order=1,
+        sequence_order=2,
         estimated_seconds=30,
     )
     interaction_node = LearningNode(
@@ -495,7 +506,7 @@ async def _create_minimal_graph_course(
             "explanation": quiz_explanation,
             "visual_prompt": f"A simple quiz card about {topic}",
         },
-        sequence_order=2,
+        sequence_order=3,
         estimated_seconds=20,
     )
     summary_node = LearningNode(
@@ -508,11 +519,11 @@ async def _create_minimal_graph_course(
             "audio_mood": "calm",
             "duration_hint": 10.0,
         },
-        sequence_order=3,
+        sequence_order=4,
         estimated_seconds=15,
     )
 
-    db.add_all([hook_node, lesson_node, interaction_node, summary_node])
+    db.add_all([hook_node, outline_node, lesson_node, interaction_node, summary_node])
     await db.flush()
 
     course.entry_node_id = hook_node.id
@@ -521,6 +532,13 @@ async def _create_minimal_graph_course(
         LearningEdge(
             course_id=course.id,
             from_node_id=hook_node.id,
+            to_node_id=outline_node.id,
+            condition="always",
+            weight=1.0,
+        ),
+        LearningEdge(
+            course_id=course.id,
+            from_node_id=outline_node.id,
             to_node_id=lesson_node.id,
             condition="always",
             weight=1.0,
@@ -952,14 +970,33 @@ async def list_graph_courses(
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List graph courses created by the authenticated user."""
-    result = await db.execute(
-        select(GraphCourse)
-        .where(GraphCourse.created_by == str(current_user.id))
-        .order_by(GraphCourse.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    """List graph courses created by the authenticated user, or public/guest courses."""
+    user_id_str = str(current_user.id)
+    if user_id_str == "guest_session":
+        # Guest users can view all guest/public courses
+        result = await db.execute(
+            select(GraphCourse)
+            .where(or_(GraphCourse.created_by == "guest_session", GraphCourse.created_by.is_(None)))
+            .order_by(GraphCourse.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    else:
+        # Standard logged-in user: get their specific courses plus guest/public fallback courses
+        from sqlalchemy import or_
+        result = await db.execute(
+            select(GraphCourse)
+            .where(
+                or_(
+                    GraphCourse.created_by == user_id_str,
+                    GraphCourse.created_by == "guest_session",
+                    GraphCourse.created_by.is_(None)
+                )
+            )
+            .order_by(GraphCourse.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
     courses = result.scalars().all()
 
     items: List[GraphCourseItemRead] = []
