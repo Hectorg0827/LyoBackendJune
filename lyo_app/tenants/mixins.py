@@ -9,13 +9,17 @@ class TenantMixin:
     """
     
     @declared_attr
-    def organization_id(cls) -> Mapped[int]:
+    def organization_id(cls) -> Mapped[Optional[int]]:
+        # Nullable so tenant-scoped rows can exist before multi-tenancy is
+        # activated (i.e. before any Organization is seeded). A hardcoded
+        # default of 1 previously caused foreign-key violations whenever
+        # org #1 didn't exist (e.g. inserting notification preferences).
         return mapped_column(
-            sa.Integer, 
-            sa.ForeignKey("organizations.id"), 
-            nullable=False, 
+            sa.Integer,
+            sa.ForeignKey("organizations.id"),
+            nullable=True,
             index=True,
-            default=1  # Default to Lyo Inc just in case (though should be set explicitly)
+            default=None,
         )
 
     @declared_attr

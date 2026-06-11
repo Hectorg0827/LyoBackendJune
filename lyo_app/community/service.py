@@ -511,13 +511,14 @@ class CommunityService:
         return db_event
 
     async def get_community_event_by_id(
-        self, 
-        db: AsyncSession, 
-        event_id: int
+        self,
+        db: AsyncSession,
+        event_id: int,
+        user_id: Optional[int] = None,
     ) -> Optional[CommunityEvent]:
         """
         Get community event by ID.
-        
+
         Args:
             db: Database session
             event_id: Event ID

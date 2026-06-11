@@ -86,28 +86,38 @@ async def bootstrap_lyo_inc(
                 api_key=None
             )
         
-        # Step 3: Create Lyo Inc organization
-        result = await db.execute(
-            text("""
-                INSERT INTO organizations (name, slug, plan_tier, contact_email, is_active)
-                VALUES ('Lyo Inc', 'lyo-inc', 'enterprise', 'hector.garcia0827@gmail.com', TRUE)
-                RETURNING id
-            """)
+        # Step 3: Create Lyo Inc organization via the ORM so all model-level
+        # defaults (e.g. monthly_api_calls=0, which is NOT NULL) are applied —
+        # a raw INSERT that omits them violates the NOT NULL constraints.
+        from lyo_app.tenants.models import Organization
+
+        org = Organization(
+            name="Lyo Inc",
+            slug="lyo-inc",
+            plan_tier="enterprise",
+            contact_email="hector.garcia0827@gmail.com",
+            is_active=True,
         )
-        org_id = result.fetchone()[0]
+        db.add(org)
         await db.commit()
+        await db.refresh(org)
+        org_id = org.id
         logger.info(f"Created Lyo Inc organization (id={org_id})")
         
-        # Step 4: Generate API key
+        # Step 4: Generate API key (ORM insert so NOT NULL defaults like
+        # total_requests=0 are applied).
+        from lyo_app.tenants.models import APIKey
+
         full_key, key_prefix, key_hash = generate_api_key()
-        
-        await db.execute(
-            text("""
-                INSERT INTO api_keys (organization_id, key_prefix, key_hash, name, description, is_active)
-                VALUES (:org_id, :key_prefix, :key_hash, 'Lyo iOS App Key', 'Auto-generated for Lyo iOS app', TRUE)
-            """),
-            {"org_id": org_id, "key_prefix": key_prefix, "key_hash": key_hash}
-        )
+
+        db.add(APIKey(
+            organization_id=org_id,
+            key_prefix=key_prefix,
+            key_hash=key_hash,
+            name="Lyo iOS App Key",
+            description="Auto-generated for Lyo iOS app",
+            is_active=True,
+        ))
         await db.commit()
         
         logger.info(f"Created API key for Lyo Inc: {key_prefix}...")
