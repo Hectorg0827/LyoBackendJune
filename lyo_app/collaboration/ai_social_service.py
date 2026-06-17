@@ -242,9 +242,13 @@ class AISocialOrchestrator:
                 ],
                 temperature=0.8, max_tokens=400,
             )
-            content = (resp or {}).get("content") or (resp or {}).get("text")
-            if content:
-                return content.strip(), False
+            # Treat the resilience manager's own "all providers failed" fallback as
+            # degraded so we use our richer, on-topic template instead of its
+            # generic "retry shortly" string.
+            if resp and not resp.get("is_fallback"):
+                content = resp.get("content") or resp.get("text")
+                if content:
+                    return content.strip(), False
         except Exception as e:  # noqa: BLE001
             logger.warning(f"group-challenge LLM unavailable: {e}")
         # Deterministic fallback so the feature still works offline / keyless.
@@ -315,9 +319,10 @@ class AISocialOrchestrator:
                 ],
                 temperature=0.4, max_tokens=300,
             )
-            content = (resp or {}).get("content") or (resp or {}).get("text")
-            if content:
-                return content.strip(), False
+            if resp and not resp.get("is_fallback"):
+                content = resp.get("content") or resp.get("text")
+                if content:
+                    return content.strip(), False
         except Exception as e:  # noqa: BLE001
             logger.warning(f"discussion-summary LLM unavailable: {e}")
         return (

@@ -95,9 +95,12 @@ async def generate_hint(
                 temperature=0.5,
                 max_tokens=200,
             )
-            content = (resp or {}).get("content") or (resp or {}).get("text")
-            if content and content.strip():
-                return content.strip()
+            # Ignore the resilience manager's generic "all providers failed"
+            # fallback so we escalate with our level-appropriate template instead.
+            if resp and not resp.get("is_fallback"):
+                content = resp.get("content") or resp.get("text")
+                if content and content.strip():
+                    return content.strip()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"progressive hint LLM unavailable (level {int(level)}): {e}")
 

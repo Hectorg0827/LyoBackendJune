@@ -246,6 +246,44 @@ def test_plateau_detection_insufficient_history_returns_none(client):
     assert _detect(uid) is None
 
 
+# ---------------------------------------------------------------- Resilience-fallback handling
+def test_social_challenge_ignores_resilience_fallback():
+    """When the AI manager returns its is_fallback response, the challenge uses
+    our on-topic template (degraded=True), not the generic 'retry shortly' text."""
+    from lyo_app.collaboration.ai_social_service import ai_social_orchestrator
+    import lyo_app.core.ai_resilience as res
+
+    class _FallbackAI:
+        async def chat_completion(self, *a, **k):
+            return {"content": "Experiencing technical issues; retry shortly.",
+                    "is_fallback": True}
+
+    orig = res.ai_resilience_manager
+    res.ai_resilience_manager = _FallbackAI()
+    try:
+        text, degraded = asyncio.get_event_loop().run_until_complete(
+            ai_social_orchestrator._llm_challenge("fractions", "Math"))
+    finally:
+        res.ai_resilience_manager = orig
+    assert degraded is True
+    assert "retry shortly" not in text.lower()
+    assert "fractions" in text.lower()
+
+
+def test_progressive_hint_ignores_resilience_fallback():
+    """A leveled hint never surfaces the resilience manager's fallback string."""
+    from lyo_app.ai_classroom.progressive_hints import generate_hint, HintLevel
+
+    class _FallbackAI:
+        async def chat_completion(self, *a, **k):
+            return {"content": "AI services unavailable right now.", "is_fallback": True}
+
+    hint = asyncio.get_event_loop().run_until_complete(
+        generate_hint(HintLevel.CONCEPT, concept="ratios", ai_manager=_FallbackAI()))
+    assert "unavailable" not in hint.lower()
+    assert "ratios" in hint.lower()
+
+
 # ---------------------------------------------------------------- Pillar D (progressive hints)
 def test_hint_level_escalates_with_attempts():
     """More stuck attempts -> higher hint level, clamped to 1..4."""
