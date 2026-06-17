@@ -35,6 +35,36 @@ def _auth(client, email, username, ip):
     return {"Authorization": f"Bearer {body['access_token']}", "X-Forwarded-For": ip}, body["user"]["id"]
 
 
+async def _make_superuser(uid):
+    """Promote a user to superuser (satisfies the instructor gate)."""
+    from sqlalchemy import update
+    from lyo_app.core.database import AsyncSessionLocal
+    from lyo_app.auth.models import User
+    async with AsyncSessionLocal() as db:
+        await db.execute(update(User).where(User.id == uid).values(is_superuser=True))
+        await db.commit()
+
+
+async def _make_graph_course(course_id, *, published=False):
+    """Create a GraphCourse row to act as an AI-drafted course under review."""
+    from lyo_app.core.database import AsyncSessionLocal
+    from lyo_app.ai_classroom.models import GraphCourse
+    async with AsyncSessionLocal() as db:
+        db.add(GraphCourse(id=course_id, title="Intro to Fractions",
+                           subject="math", is_published=published))
+        await db.commit()
+
+
+async def _course_published(course_id):
+    from lyo_app.core.database import AsyncSessionLocal
+    from lyo_app.ai_classroom.models import GraphCourse
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as db:
+        c = (await db.execute(
+            select(GraphCourse).where(GraphCourse.id == course_id))).scalar_one()
+        return c.is_published
+
+
 async def _seed_learner(uid, *, affect="frustrated", masteries=None):
     """Seed a LearnerState + LearnerMastery rows for a user."""
     from lyo_app.core.database import AsyncSessionLocal
@@ -478,3 +508,82 @@ def test_ai_study_pod_and_challenge_and_moderation(client):
     assert mod.status_code == 200, mod.text
     assert "summary" in mod.json()
     assert mod.json()["unanswered_questions"] == []
+
+
+# ---------------------------------------------------------------- Teacher-in-the-loop (#7)
+def test_teacher_routes_require_instructor(client):
+    """A normal (non-instructor, non-superuser) user is forbidden."""
+    headers, _ = _auth(client, "at_stu@x.com", "at_student", "10.70.0.20")
+    r = client.get("/api/v1/teacher/reviews", headers=headers)
+    assert r.status_code == 403, r.text
+
+
+def test_content_review_approve_publishes_course(client):
+    """Submitting a draft holds it unpublished; approving publishes it."""
+    headers, uid = _auth(client, "at_t1@x.com", "at_teacher1", "10.70.0.21")
+    asyncio.get_event_loop().run_until_complete(_make_superuser(uid))
+    cid = "gc-review-approve"
+    asyncio.get_event_loop().run_until_complete(_make_graph_course(cid, published=True))
+
+    sub = client.post("/api/v1/teacher/reviews", headers=headers,
+                      json={"course_id": cid, "qa_score": 82,
+                            "qa_recommendation": "publish_with_minor_fixes"})
+    assert sub.status_code == 200, sub.text
+    rid = sub.json()["id"]
+    assert sub.json()["status"] == "pending"
+    # Submission forces the draft unpublished until a human approves.
+    assert asyncio.get_event_loop().run_until_complete(_course_published(cid)) is False
+
+    # It shows up in the pending queue.
+    q = client.get("/api/v1/teacher/reviews?status=pending", headers=headers)
+    assert q.status_code == 200
+    assert any(rv["id"] == rid for rv in q.json()["reviews"])
+
+    appr = client.post(f"/api/v1/teacher/reviews/{rid}/approve", headers=headers,
+                       json={"notes": "Looks accurate."})
+    assert appr.status_code == 200, appr.text
+    assert appr.json()["status"] == "approved"
+    assert asyncio.get_event_loop().run_until_complete(_course_published(cid)) is True
+
+
+def test_content_review_flag_keeps_unpublished(client):
+    """Flagging a draft keeps it from students."""
+    headers, uid = _auth(client, "at_t2@x.com", "at_teacher2", "10.70.0.22")
+    asyncio.get_event_loop().run_until_complete(_make_superuser(uid))
+    cid = "gc-review-flag"
+    asyncio.get_event_loop().run_until_complete(_make_graph_course(cid, published=False))
+
+    rid = client.post("/api/v1/teacher/reviews", headers=headers,
+                      json={"course_id": cid}).json()["id"]
+    flg = client.post(f"/api/v1/teacher/reviews/{rid}/flag", headers=headers,
+                      json={"notes": "Module 2 has a factual error."})
+    assert flg.status_code == 200, flg.text
+    assert flg.json()["status"] == "flagged"
+    assert asyncio.get_event_loop().run_until_complete(_course_published(cid)) is False
+
+
+def test_scan_at_risk_surfaces_struggling_student(client):
+    """AI flags a plateaued learner; the alert can be listed and resolved."""
+    headers, uid = _auth(client, "at_t3@x.com", "at_teacher3", "10.70.0.23")
+    asyncio.get_event_loop().run_until_complete(_make_superuser(uid))
+    # Seed a clear performance drop for this (instructor's own) user id.
+    asyncio.get_event_loop().run_until_complete(_seed_attempts(
+        uid, [True, True, True, True, True, True, False, False, False, True, False, False]))
+
+    scan = client.post("/api/v1/teacher/students/scan-at-risk", headers=headers)
+    assert scan.status_code == 200, scan.text
+    at_risk = scan.json()["at_risk"]
+    mine = next((a for a in at_risk if a["student_id"] == uid), None)
+    assert mine is not None, f"expected {uid} flagged; got {at_risk}"
+    assert mine["trigger"] in ("performance_drop", "learning_plateau")
+    assert "alert_id" in mine
+
+    alerts = client.get("/api/v1/teacher/students/alerts?status=open", headers=headers)
+    assert alerts.status_code == 200
+    assert any(a["id"] == mine["alert_id"] for a in alerts.json()["alerts"])
+
+    res = client.post(f"/api/v1/teacher/students/alerts/{mine['alert_id']}/resolve",
+                      headers=headers,
+                      json={"status": "resolved", "notes": "Scheduled a 1:1."})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "resolved"

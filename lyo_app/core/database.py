@@ -200,6 +200,9 @@ async def init_db() -> None:
             GoalProgressSnapshot,
         )
 
+        # Teacher-in-the-loop — content review + at-risk student alerts.
+        from lyo_app.teacher.models import ContentReview, StudentAlert  # noqa: F401
+
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
         await conn.run_sync(Base.metadata.create_all)

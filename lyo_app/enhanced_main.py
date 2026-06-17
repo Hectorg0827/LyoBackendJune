@@ -460,6 +460,13 @@ def create_app() -> FastAPI:
         logger.info("✅ Collaborative Learning routes integrated - Peer learning and study groups active!")
     except ImportError as e:
         logger.warning(f"Collaborative Learning routes not available: {e}")
+
+    try:
+        from lyo_app.teacher.routes import router as teacher_router
+        app.include_router(teacher_router)
+        logger.info("✅ Teacher-in-the-loop routes integrated - content review + at-risk alerts active!")
+    except ImportError as e:
+        logger.warning(f"Teacher-in-the-loop routes not available: {e}")
     
     try:
         from lyo_app.adaptive_learning.routes import router as adaptive_router
