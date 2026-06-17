@@ -179,6 +179,73 @@ def test_suggest_content_difficulty_from_seeded_mastery(client):
     assert loop.run_until_complete(_band(strong_uid)) == "hard"
 
 
+# ---------------------------------------------------------------- Pillar F (plateau detection)
+async def _seed_attempts(uid, correctness):
+    """Seed InteractionAttempt rows (oldest first) with distinct timestamps.
+
+    Creates a real GraphCourse + LearningNode first (FK constraints are enforced
+    on the test SQLite DB) and points every attempt at that node.
+    """
+    from datetime import datetime, timedelta
+    from uuid import uuid4
+    from lyo_app.core.database import AsyncSessionLocal
+    from lyo_app.ai_classroom.models import (
+        InteractionAttempt, GraphCourse, LearningNode, NodeType)
+    base = datetime.utcnow() - timedelta(hours=len(correctness))
+    async with AsyncSessionLocal() as db:
+        course = GraphCourse(id=f"course-{uid}", title="T", subject="math")
+        node = LearningNode(
+            id=f"node-{uid}", course_id=course.id,
+            node_type=NodeType.INTERACTION.value, content={}, sequence_order=0)
+        db.add(course)
+        db.add(node)
+        await db.flush()
+        for i, ok in enumerate(correctness):
+            db.add(InteractionAttempt(
+                id=str(uuid4()), user_id=str(uid), node_id=node.id,
+                user_answer="x", is_correct=bool(ok),
+                created_at=base + timedelta(minutes=i)))
+        await db.commit()
+
+
+def _detect(uid):
+    from lyo_app.core.database import AsyncSessionLocal
+    from lyo_app.personalization.service import personalization_engine as pe
+
+    async def _run():
+        async with AsyncSessionLocal() as db:
+            return await pe.detect_plateau(db, uid)
+    return asyncio.get_event_loop().run_until_complete(_run())
+
+
+def test_plateau_detection_consistent_success_advances(client):
+    _, uid = _auth(client, "at_fa@x.com", "at_f_adv", "10.70.0.12")
+    # prior mixed, recent all correct -> consistent success -> advance.
+    asyncio.get_event_loop().run_until_complete(_seed_attempts(
+        uid, [False, True, False, True, True, True, True, True, True, True, True, True]))
+    result = _detect(uid)
+    assert result is not None
+    assert result["trigger"] == "consistent_success"
+    assert result["action"] == "advance"
+
+
+def test_plateau_detection_performance_drop_inserts_review(client):
+    _, uid = _auth(client, "at_fd@x.com", "at_f_drop", "10.70.0.13")
+    # prior strong, recent weak -> performance drop -> insert review.
+    asyncio.get_event_loop().run_until_complete(_seed_attempts(
+        uid, [True, True, True, True, True, True, False, False, False, True, False, False]))
+    result = _detect(uid)
+    assert result is not None
+    assert result["action"] == "insert_review"
+    assert result["trigger"] in ("performance_drop", "learning_plateau")
+
+
+def test_plateau_detection_insufficient_history_returns_none(client):
+    _, uid = _auth(client, "at_fn@x.com", "at_f_none", "10.70.0.14")
+    asyncio.get_event_loop().run_until_complete(_seed_attempts(uid, [True, False]))
+    assert _detect(uid) is None
+
+
 # ---------------------------------------------------------------- Pillar D (progressive hints)
 def test_hint_level_escalates_with_attempts():
     """More stuck attempts -> higher hint level, clamped to 1..4."""

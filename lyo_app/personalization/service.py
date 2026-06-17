@@ -491,6 +491,30 @@ class PersonalizationEngine:
                 reason=["new_learner", "building_baseline"]
             )
         
+        # === Parity F: plateau / drop / breakout detection ===
+        # Reorder the path from real interaction history before the standard
+        # decision logic: insert a review on plateau/drop, challenge on breakout.
+        try:
+            plateau = await self.detect_plateau(db, int(request.learner_id))
+        except (ValueError, TypeError):
+            plateau = None
+        if plateau:
+            if plateau["action"] == "insert_review":
+                return NextActionResponse(
+                    action=ActionType.REVIEW,
+                    difficulty="mixed",
+                    reason=[plateau["trigger"], plateau["reason"]],
+                    spaced_repetition_due=True,
+                    metadata={"plateau": plateau},
+                )
+            if plateau["action"] == "advance":
+                return NextActionResponse(
+                    action=ActionType.CHALLENGE,
+                    difficulty="hard",
+                    reason=[plateau["trigger"], plateau["reason"]],
+                    metadata={"plateau": plateau},
+                )
+
         # === PHASE 2: NEXT BEST UPGRADE ===
         # Proactively check the evolution engine to see if there is a trajectory upgrade
         try:
@@ -636,6 +660,76 @@ class PersonalizationEngine:
         if mastery < 0.75:
             return "medium"
         return "hard"
+
+    async def detect_plateau(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        *,
+        window: int = 6,
+    ) -> Optional[Dict[str, Any]]:
+        """Detect a learning plateau / drop / breakout from real interaction history.
+
+        Parity F: folds the in-memory AdaptiveLearningEngine's trigger logic onto
+        persisted InteractionAttempt rows so the recommendation surface can
+        reorder the path (insert review, advance, or hold). Returns a dict with
+        a `trigger`, suggested `action`, and `reason`, or None when there isn't
+        enough signal. Fails closed (returns None) on any error.
+        """
+        try:
+            from lyo_app.ai_classroom.models import InteractionAttempt
+
+            rows = (await db.execute(
+                select(InteractionAttempt)
+                .where(InteractionAttempt.user_id == str(user_id))
+                .order_by(desc(InteractionAttempt.created_at))
+                .limit(window * 2)
+            )).scalars().all()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"detect_plateau query failed for {user_id}: {e}")
+            return None
+
+        if len(rows) < 4:
+            return None  # not enough history to judge a trend
+
+        # rows are newest-first; split into recent vs prior windows.
+        recent = rows[:window]
+        prior = rows[window:window * 2]
+
+        def _acc(items):
+            return sum(1 for a in items if a.is_correct) / len(items) if items else 0.0
+
+        recent_acc = _acc(recent)
+        prior_acc = _acc(prior) if prior else recent_acc
+
+        # Consistent success -> ready to advance / be challenged.
+        if recent_acc >= 0.85 and len(recent) >= 3:
+            return {
+                "trigger": "consistent_success",
+                "action": "advance",
+                "reason": f"high accuracy ({recent_acc:.0%}) over last {len(recent)} attempts",
+                "recent_accuracy": round(recent_acc, 2),
+            }
+
+        # Performance drop -> insert review.
+        if prior and (prior_acc - recent_acc) >= 0.2:
+            return {
+                "trigger": "performance_drop",
+                "action": "insert_review",
+                "reason": f"accuracy fell from {prior_acc:.0%} to {recent_acc:.0%}",
+                "recent_accuracy": round(recent_acc, 2),
+            }
+
+        # Plateau -> stuck in the mid/low band with no improvement -> review/reorder.
+        if prior and abs(recent_acc - prior_acc) < 0.08 and recent_acc < 0.6:
+            return {
+                "trigger": "learning_plateau",
+                "action": "insert_review",
+                "reason": f"accuracy flat at ~{recent_acc:.0%} with no upward trend",
+                "recent_accuracy": round(recent_acc, 2),
+            }
+
+        return None
 
     async def get_mastery_profile(
         self,
