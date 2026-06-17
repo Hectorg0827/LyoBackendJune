@@ -467,6 +467,13 @@ def create_app() -> FastAPI:
         logger.info("✅ Teacher-in-the-loop routes integrated - content review + at-risk alerts active!")
     except ImportError as e:
         logger.warning(f"Teacher-in-the-loop routes not available: {e}")
+
+    try:
+        from lyo_app.creation.routes import router as creation_router
+        app.include_router(creation_router)
+        logger.info("✅ Teaching-through-creation routes integrated - build-with-me mode active!")
+    except ImportError as e:
+        logger.warning(f"Teaching-through-creation routes not available: {e}")
     
     try:
         from lyo_app.adaptive_learning.routes import router as adaptive_router

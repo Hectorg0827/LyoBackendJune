@@ -587,3 +587,65 @@ def test_scan_at_risk_surfaces_struggling_student(client):
                       json={"status": "resolved", "notes": "Scheduled a 1:1."})
     assert res.status_code == 200, res.text
     assert res.json()["status"] == "resolved"
+
+
+# ---------------------------------------------------------------- Teaching-through-creation (#4)
+def test_creation_project_lifecycle(client):
+    """Start a build, submit work step-by-step, and reach completion."""
+    headers, uid = _auth(client, "at_cr@x.com", "at_creator", "10.70.0.30")
+    # Strong learner -> expect LOW scaffold (autonomy) via mastery band.
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid, affect="engaged", masteries={"python": 0.9}))
+
+    start = client.post("/api/v1/create/projects", headers=headers,
+                        json={"goal": "Build a command-line to-do app in Python",
+                              "skill_id": "python"})
+    assert start.status_code == 200, start.text
+    proj = start.json()
+    pid = proj["id"]
+    assert proj["status"] == "active"
+    assert len(proj["steps"]) >= 3
+    assert proj["steps"][0]["status"] == "active"
+    assert proj["scaffold_level"] == "low"          # high mastery -> low scaffold
+
+    n_steps = len(proj["steps"])
+    # Walk every step with substantive submissions; offline review accepts them.
+    completed = False
+    for i in range(n_steps):
+        r = client.post(f"/api/v1/create/projects/{pid}/submit", headers=headers,
+                        json={"content": f"Here is my detailed work for step {i}: "
+                                         "I built the module and tested it thoroughly."})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["accepted"] is True
+        completed = body["completed"]
+    assert completed is True
+
+    got = client.get(f"/api/v1/create/projects/{pid}", headers=headers)
+    assert got.status_code == 200
+    assert got.json()["status"] == "completed"
+    assert all(s["status"] == "done" for s in got.json()["steps"])
+
+
+def test_creation_thin_submission_is_rejected(client):
+    """A near-empty artifact is sent back for revision (no free advance)."""
+    headers, uid = _auth(client, "at_cr2@x.com", "at_creator2", "10.70.0.31")
+    pid = client.post("/api/v1/create/projects", headers=headers,
+                      json={"goal": "Write a short story about a robot"}).json()["id"]
+    r = client.post(f"/api/v1/create/projects/{pid}/submit", headers=headers,
+                    json={"content": "ok"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["accepted"] is False
+    assert body["advanced"] is False
+    assert body["current_step"] == 0          # stayed on the same step
+
+
+def test_creation_scaffold_tracks_mastery(client):
+    """A weak learner gets HIGH scaffold (more hand-holding)."""
+    headers, uid = _auth(client, "at_cr3@x.com", "at_creator3", "10.70.0.32")
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid, masteries={"music": 0.1}))
+    proj = client.post("/api/v1/create/projects", headers=headers,
+                       json={"goal": "Compose a simple melody", "skill_id": "music"}).json()
+    assert proj["scaffold_level"] == "high"
