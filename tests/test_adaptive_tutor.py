@@ -179,6 +179,116 @@ def test_suggest_content_difficulty_from_seeded_mastery(client):
     assert loop.run_until_complete(_band(strong_uid)) == "hard"
 
 
+# ---------------------------------------------------------------- Pillar E (mastery-gated edges)
+class _FakeDB:
+    """Collects objects passed to .add() (no real session needed)."""
+    def __init__(self):
+        self.added = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+
+def _node(node_type, seq, *, module_index=0, concept_id=None):
+    from lyo_app.ai_classroom.models import LearningNode
+    from uuid import uuid4
+    return LearningNode(
+        id=str(uuid4()), course_id="course-1", node_type=node_type,
+        content={"title": f"node {seq}", "module_index": module_index},
+        sequence_order=seq, concept_id=concept_id,
+    )
+
+
+def test_mastery_gated_edges_emitted():
+    """An interaction node yields MASTERY_LOW (review) + MASTERY_HIGH (skip) edges."""
+    from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator
+    from lyo_app.ai_classroom.models import NodeType, EdgeCondition
+
+    gen = GraphCourseGenerator()
+    inter = _node(NodeType.INTERACTION.value, 0)
+    review = _node(NodeType.SUMMARY.value, 1)
+    skip_to = _node(NodeType.CONTENT.value, 2) if hasattr(NodeType, "CONTENT") \
+        else _node(NodeType.SUMMARY.value, 2)
+    remediation = _node(NodeType.REMEDIATION.value, 99)
+    ordered = [inter, review, skip_to]
+
+    db = _FakeDB()
+    gen._emit_mastery_gated_edges_for_interaction(db, inter, remediation, ordered, 0)
+
+    conds = {e.condition for e in db.added}
+    assert EdgeCondition.MASTERY_LOW.value in conds
+    assert EdgeCondition.MASTERY_HIGH.value in conds
+    # Thresholds are set on every mastery edge.
+    for e in db.added:
+        assert e.mastery_threshold is not None
+    # Targets carry a concept id so the router can evaluate mastery.
+    assert remediation.concept_id is not None
+    assert skip_to.concept_id is not None
+
+
+def test_skip_ahead_never_targets_remediation():
+    """High-mastery skip-ahead must not route into a remediation node."""
+    from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator
+    from lyo_app.ai_classroom.models import NodeType
+
+    gen = GraphCourseGenerator()
+    inter = _node(NodeType.INTERACTION.value, 0)
+    review = _node(NodeType.SUMMARY.value, 1)
+    rem = _node(NodeType.REMEDIATION.value, 2)
+    assert gen._skip_ahead_target([inter, review, rem], 0) is None
+
+
+# ---------------------------------------------------------------- Pillar G (real quick-check)
+def test_quick_check_is_not_self_assessment_fallback():
+    """The fallback quick-check is a real concept T/F, not 'do you feel confident?'."""
+    from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator
+    from lyo_app.ai_classroom.models import NodeType
+
+    class _BoomAI:
+        async def chat_completion(self, *a, **k):
+            raise RuntimeError("no key")
+
+    gen = GraphCourseGenerator(ai_manager=_BoomAI())
+    node = _node(NodeType.SUMMARY.value, 0)
+    q = asyncio.get_event_loop().run_until_complete(
+        gen._generate_quick_check(node, None))
+    assert q["is_self_assessment"] is False
+    assert "feel confident" not in q["question"].lower()
+    assert q["type"] == "true_false"
+
+
+def test_quick_check_reuses_authored_assessment_question():
+    """When a module assessment exists, the quick-check reuses a real question."""
+    from lyo_app.ai_classroom.graph_generator import GraphCourseGenerator
+    from lyo_app.ai_classroom.models import NodeType
+    from lyo_app.ai_agents.multi_agent_v2.schemas.course_schemas import (
+        CourseAssessments, ModuleAssessment, TrueFalseQuestion,
+    )
+
+    assessments = CourseAssessments(module_assessments=[
+        ModuleAssessment(module_id="m0", questions=[
+            TrueFalseQuestion(
+                question_id="q1",
+                statement="Photosynthesis converts light energy into chemical energy.",
+                correct_answer=True,
+                explanation="Plants store light energy as glucose."),
+            TrueFalseQuestion(
+                question_id="q2", statement="The mitochondria is the powerhouse of the cell.",
+                correct_answer=True, explanation="It produces ATP."),
+            TrueFalseQuestion(
+                question_id="q3", statement="Water boils at 100C at sea level.",
+                correct_answer=True, explanation="True at one atmosphere of pressure."),
+        ]),
+    ])
+    gen = GraphCourseGenerator()
+    node = _node(NodeType.SUMMARY.value, 0, module_index=0)
+    q = asyncio.get_event_loop().run_until_complete(
+        gen._generate_quick_check(node, assessments))
+    assert q["is_self_assessment"] is False
+    assert "Photosynthesis" in q["question"]
+    assert q["correct_answer"] == "true"
+
+
 # ---------------------------------------------------------------- Wedge 2 (social)
 def test_ai_peer_matching_pairs_complementary_mastery(client):
     """AI matching pairs a learner strong in X with one weak in X (and vice versa)."""

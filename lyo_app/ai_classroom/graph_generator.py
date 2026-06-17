@@ -70,6 +70,9 @@ class GraphGenerationConfig:
     max_remediation_hops: int = 2          # Max remediation depth
     synthesize_missing_scripts: bool = True  # Generate TTS scripts via LLM
     target_node_duration_minutes: float = 2.0  # Ideal node length
+    emit_mastery_edges: bool = True        # Emit MASTERY_LOW/HIGH edges (Parity E)
+    mastery_low_threshold: float = 0.5     # Below -> route to review/remediation
+    mastery_high_threshold: float = 0.8    # At/above -> allow skip-ahead
 
 
 @dataclass
@@ -604,7 +607,7 @@ Generate only the transition script.
     ) -> Optional[LearningNode]:
         """Create an interaction checkpoint node"""
         # Generate a quick check question based on recent content
-        question_data = self._generate_quick_check(context_node, assessments)
+        question_data = await self._generate_quick_check(context_node, assessments)
         
         if not question_data:
             return None
@@ -687,8 +690,11 @@ Generate only the transition script.
     ) -> int:
         """Generate remediation paths for interaction nodes"""
         count = 0
-        
-        for node in all_nodes:
+
+        # Ordered view so MASTERY_HIGH skip-ahead can target a downstream node.
+        ordered = sorted(all_nodes, key=lambda n: (n.sequence_order or 0))
+
+        for idx, node in enumerate(ordered):
             if node.node_type == NodeType.INTERACTION.value:
                 # Create a remediation node for failed interactions
                 remediation = await self._create_remediation_for_interaction(
@@ -713,8 +719,86 @@ Generate only the transition script.
                         condition=EdgeCondition.ALWAYS.value
                     )
                     count += 1
-        
+
+                    # Parity E: emit mastery-gated edges so the existing router
+                    # (graph_service) produces non-linear, mastery-driven paths.
+                    if self.config.emit_mastery_edges:
+                        self._emit_mastery_gated_edges_for_interaction(
+                            db, node, remediation, ordered, idx
+                        )
+
         return count
+
+    def _emit_mastery_gated_edges_for_interaction(
+        self,
+        db: AsyncSession,
+        interaction: LearningNode,
+        remediation: LearningNode,
+        ordered: List[LearningNode],
+        idx: int,
+    ) -> None:
+        """Attach MASTERY_LOW (route to review) and MASTERY_HIGH (skip-ahead)
+        edges around an interaction node.
+
+        The router (`graph_service._evaluate_edge_condition`) keys mastery on the
+        *target* node's concept_id, so we stamp a stable concept on the targets.
+        Defaults are safe: an unknown concept yields mastery 0 -> MASTERY_LOW
+        wins (review), MASTERY_HIGH never fires (no accidental skip).
+        """
+        concept = self._concept_for_node(interaction)
+
+        # Route low-mastery learners to the remediation node proactively (not
+        # only on an outright FAIL). priority=2 so it outranks the FAIL edge.
+        if remediation.concept_id is None:
+            remediation.concept_id = concept
+        low_edge = LearningEdge(
+            id=str(uuid4()),
+            course_id=interaction.course_id,
+            from_node_id=interaction.id,
+            to_node_id=remediation.id,
+            condition=EdgeCondition.MASTERY_LOW.value,
+            mastery_threshold=self.config.mastery_low_threshold,
+            weight=2.0,
+        )
+        db.add(low_edge)
+
+        # Skip-ahead: high-mastery learners jump past the immediate next node
+        # (typically a review/summary) to the one after it, when available.
+        skip_target = self._skip_ahead_target(ordered, idx)
+        if skip_target is not None:
+            if skip_target.concept_id is None:
+                skip_target.concept_id = self._concept_for_node(skip_target)
+            high_edge = LearningEdge(
+                id=str(uuid4()),
+                course_id=interaction.course_id,
+                from_node_id=interaction.id,
+                to_node_id=skip_target.id,
+                condition=EdgeCondition.MASTERY_HIGH.value,
+                mastery_threshold=self.config.mastery_high_threshold,
+                weight=3.0,
+            )
+            db.add(high_edge)
+
+    @staticmethod
+    def _concept_for_node(node: LearningNode) -> str:
+        """Derive a stable concept id for mastery routing from node metadata."""
+        content = node.content or {}
+        mod_idx = content.get("module_index")
+        if mod_idx is not None:
+            return f"concept_mod_{mod_idx}"
+        return f"concept_{node.id}"
+
+    @staticmethod
+    def _skip_ahead_target(
+        ordered: List[LearningNode], idx: int
+    ) -> Optional[LearningNode]:
+        """The node a high-mastery learner can skip to: the second node after the
+        interaction (skipping the immediate review/summary), if it exists and is
+        a content/summary node (never a remediation)."""
+        target = ordered[idx + 2] if idx + 2 < len(ordered) else None
+        if target is None or target.node_type == NodeType.REMEDIATION.value:
+            return None
+        return target
     
     async def _create_remediation_for_interaction(
         self,
@@ -942,20 +1026,122 @@ Generate only the transition script.
         script += "Amazing progress! Let's keep going."
         return script
     
-    def _generate_quick_check(
+    async def _generate_quick_check(
         self,
         context_node: LearningNode,
         assessments: Optional[CourseAssessments]
     ) -> Optional[Dict[str, Any]]:
-        """Generate a quick check question"""
-        # For now, generate a simple true/false question
-        topic = (context_node.content or {}).get("title", "this topic")
+        """Generate a real knowledge-check question tied to the concept.
+
+        Resolution order (Parity G — replace the "do you feel confident?" stub):
+          1. Reuse a real authored question from the module assessment.
+          2. LLM-generate a concept question via the resilience manager.
+          3. Deterministic concept-based true/false fallback (never a
+             self-assessment).
+        """
+        content = context_node.content or {}
+        topic = content.get("title", "this topic")
+        mod_idx = content.get("module_index")
+
+        # 1. Reuse an authored assessment question for this module if available.
+        authored = self._pick_assessment_question(assessments, mod_idx)
+        if authored is not None:
+            return authored
+
+        # 2. LLM-generated knowledge check.
+        try:
+            llm_q = await self._llm_quick_check(topic, content.get("narration", ""))
+            if llm_q:
+                return llm_q
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"quick-check LLM unavailable for '{topic}': {e}")
+
+        # 3. Deterministic concept-based fallback (a real T/F, not "feel confident").
         return {
             "type": "true_false",
-            "question": f"You've just learned about {topic}. Do you feel confident with this concept?",
+            "question": (
+                f"True or False: the key idea behind {topic} is that it "
+                f"changes how the related concepts connect together."
+            ),
             "correct_answer": "true",
-            "explanation": "Great! If you're not sure, we can review together.",
-            "is_self_assessment": True
+            "explanation": (
+                f"{topic} reframes how the surrounding ideas relate — if that's "
+                f"unclear, we'll review it together."
+            ),
+            "is_self_assessment": False,
+        }
+
+    def _pick_assessment_question(
+        self,
+        assessments: Optional[CourseAssessments],
+        mod_idx: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """Convert an authored module-assessment question into the interaction
+        format. Picks the assessment for this module when indices line up."""
+        if not assessments or not assessments.module_assessments:
+            return None
+        mas = assessments.module_assessments
+        ma = mas[mod_idx] if (mod_idx is not None and 0 <= mod_idx < len(mas)) else mas[0]
+        for q in ma.questions:
+            qtype = getattr(q, "question_type", None)
+            if qtype == "multiple_choice":
+                return {
+                    "type": "multiple_choice",
+                    "question": q.question,
+                    "options": [f"{o.label}) {o.text}" if hasattr(o, "label") else str(o)
+                                for o in q.options],
+                    "correct_answer": q.correct_answer,
+                    "explanation": q.explanation,
+                    "is_self_assessment": False,
+                }
+            if qtype == "true_false":
+                return {
+                    "type": "true_false",
+                    "question": q.statement,
+                    "correct_answer": "true" if q.correct_answer else "false",
+                    "explanation": q.explanation,
+                    "is_self_assessment": False,
+                }
+        return None
+
+    async def _llm_quick_check(
+        self, topic: str, narration: str
+    ) -> Optional[Dict[str, Any]]:
+        """Ask the LLM for one concept-checking true/false question (JSON)."""
+        prompt = (
+            f"Write ONE short true/false knowledge-check about '{topic}'. "
+            "Base it on this lesson narration (may be empty):\n"
+            f"{narration[:800]}\n\n"
+            'Respond as strict JSON: {"statement": "...", "correct_answer": '
+            'true|false, "explanation": "..."}. The statement must test '
+            "understanding of the concept, not the learner's confidence."
+        )
+        response = await self.ai_manager.chat_completion(
+            messages=[
+                {"role": "system", "content": "You write precise concept-check questions."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.5,
+            max_tokens=250,
+            response_format={"type": "json_object"},
+        )
+        text = (response or {}).get("content") or (response or {}).get("text")
+        if not text:
+            return None
+        try:
+            start, end = text.find("{"), text.rfind("}") + 1
+            data = json.loads(text[start:end])
+        except (json.JSONDecodeError, ValueError):
+            return None
+        statement = data.get("statement")
+        if not statement:
+            return None
+        return {
+            "type": "true_false",
+            "question": statement,
+            "correct_answer": "true" if data.get("correct_answer") else "false",
+            "explanation": data.get("explanation", "Let's review if unsure."),
+            "is_self_assessment": False,
         }
     
     def _generate_remediation_script(
