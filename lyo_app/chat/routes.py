@@ -95,10 +95,13 @@ async def get_proactive_greeting(
         try:
             # Get Context Tag (Student vs Professional)
             user_context_tag = await context_engine.get_user_context(db, current_user.id)
-            
-            # Get Detailed Learning Context
-            # TEMPORARILY DISABLED due to greenlet issues
-            learner_context = ""  # await personalization_engine.build_prompt_context(db, str(current_user.id))
+
+            # Get detailed learning context (mastery/affect/recent sessions).
+            # build_prompt_context is defensive (eager-loads, rolls back on
+            # error, returns "" if no state) so it's safe to await here.
+            learner_context = await personalization_engine.build_prompt_context(
+                db, str(current_user.id)
+            )
         except Exception as e:
             await db.rollback()
             logger.warning(f"Failed to build context for greeting: {e}")
@@ -226,10 +229,10 @@ async def chat_endpoint(
             "note_id": request.note_id,
         }
 
-        # Optional learner context (authenticated users only)
-        # TEMPORARILY DISABLED due to greenlet/SQLAlchemy async issues
-        # TODO: Re-enable once personalization service is fixed
-        if current_user and False:  # Disabled for now
+        # Optional learner context (authenticated users only). Injects the
+        # live mastery/affect/continuity profile so the tutor adapts to what
+        # the learner knows. build_prompt_context fails closed (returns "").
+        if current_user:
             try:
                 learner_context = await personalization_engine.build_prompt_context(
                     db,
