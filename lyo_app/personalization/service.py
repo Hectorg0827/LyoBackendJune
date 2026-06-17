@@ -580,6 +580,63 @@ class PersonalizationEngine:
             metadata={"optimal_difficulty": state.optimal_difficulty}
         )
     
+    async def suggest_content_difficulty(
+        self,
+        db: AsyncSession,
+        learner_id: str,
+        skill_id: Optional[str] = None,
+    ) -> str:
+        """Map the learner's mastery to a content difficulty band.
+
+        Returns one of "easy" | "medium" | "hard". This is the bridge that lets
+        adaptive difficulty *drive content* (Parity B): the chat practice agent
+        and quiz generator read this to target a ~70-80% success rate — hard
+        enough to learn, easy enough not to frustrate.
+
+        Resolution order: (1) the specific skill's mastery if known, else
+        (2) the learner's average mastery across skills, else (3) the stored
+        optimal_difficulty on LearnerState. Fails closed to "medium".
+        """
+        try:
+            uid = int(learner_id)
+        except (ValueError, TypeError):
+            return "medium"
+
+        try:
+            # 1. Specific skill (with forgetting-curve-adjusted readiness).
+            if skill_id:
+                mastery, _ = await self.dkt.get_skill_readiness(db, uid, skill_id)
+                if mastery > 0:
+                    return self._mastery_to_band(mastery)
+
+            # 2. Average mastery across all tracked skills.
+            rows = (await db.execute(
+                select(LearnerMastery).where(LearnerMastery.user_id == uid)
+            )).scalars().all()
+            if rows:
+                avg = sum((m.mastery_level or 0.0) for m in rows) / len(rows)
+                return self._mastery_to_band(avg)
+
+            # 3. Stored optimal difficulty on the learner state.
+            state = (await db.execute(
+                select(LearnerState).where(LearnerState.user_id == uid)
+            )).scalar_one_or_none()
+            if state is not None:
+                return self._mastery_to_band(state.optimal_difficulty)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"suggest_content_difficulty failed for {learner_id}: {e}")
+
+        return "medium"
+
+    @staticmethod
+    def _mastery_to_band(mastery: float) -> str:
+        """Mastery probability (0-1) -> difficulty band targeting ~70-80% success."""
+        if mastery < 0.4:
+            return "easy"
+        if mastery < 0.75:
+            return "medium"
+        return "hard"
+
     async def get_mastery_profile(
         self,
         db: AsyncSession,

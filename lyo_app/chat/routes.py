@@ -242,6 +242,11 @@ async def chat_endpoint(
                 if learner_context:
                     context["learner_context"] = learner_context
                     context["learner_id"] = str(current_user.id)
+                # Parity B: let mastery drive content difficulty so practice/quiz
+                # generation targets a ~70-80% success rate for this learner.
+                context["difficulty"] = await personalization_engine.suggest_content_difficulty(
+                    db, str(current_user.id), skill_id=None
+                )
             except Exception as e:
                 # Defensive rollback and continue without personalization
                 try:
@@ -249,7 +254,7 @@ async def chat_endpoint(
                 except Exception:
                     pass
                 logger.warning(f"Personalization context unavailable: {e}")
-                
+
         # 3. Route the message (Now with full context)
         mode, confidence, reasoning = await chat_router.route(
             message=request.message,
@@ -645,9 +650,9 @@ async def chat_stream_endpoint(
                 "note_id": request.note_id,
             }
 
-            # Optional learner context (authenticated users only)
-            # TEMPORARILY DISABLED due to greenlet/SQLAlchemy async issues
-            if current_user and False:  # Disabled for now
+            # Optional learner context (authenticated users only). Mirrors the
+            # non-stream path: build_prompt_context fails closed (returns "").
+            if current_user:
                 try:
                     learner_context = await personalization_engine.build_prompt_context(
                         db,
@@ -657,6 +662,10 @@ async def chat_stream_endpoint(
                     if learner_context:
                         context["learner_context"] = learner_context
                         context["learner_id"] = str(current_user.id)
+                    # Parity B: mastery-driven content difficulty.
+                    context["difficulty"] = await personalization_engine.suggest_content_difficulty(
+                        db, str(current_user.id), skill_id=None
+                    )
                 except Exception as e:
                     # Defensive rollback and continue without personalization
                     try:
@@ -664,7 +673,7 @@ async def chat_stream_endpoint(
                     except Exception:
                         pass
                     logger.warning(f"Personalization context unavailable: {e}")
-            
+
             # 3. Route the message
             mode, confidence, reasoning = await chat_router.route(
                 message=request.message,

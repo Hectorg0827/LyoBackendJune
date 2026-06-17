@@ -150,6 +150,35 @@ def test_chat_endpoint_personalization_path_no_500(client):
     assert r.status_code == 200, r.text
 
 
+# ---------------------------------------------------------------- Pillar B (difficulty drives content)
+def test_difficulty_band_mapping():
+    """Pure mapping check (no DB): the band thresholds target ~70-80% success."""
+    from lyo_app.personalization.service import personalization_engine as pe
+    assert pe._mastery_to_band(0.1) == "easy"
+    assert pe._mastery_to_band(0.5) == "medium"
+    assert pe._mastery_to_band(0.9) == "hard"
+
+
+def test_suggest_content_difficulty_from_seeded_mastery(client):
+    """End-to-end: a learner with low avg mastery gets 'easy', high gets 'hard'."""
+    _, weak_uid = _auth(client, "at_bw@x.com", "at_b_weak", "10.70.0.10")
+    _, strong_uid = _auth(client, "at_bs@x.com", "at_b_strong", "10.70.0.11")
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        weak_uid, masteries={"algebra": 0.1, "geometry": 0.15}))
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        strong_uid, masteries={"algebra": 0.9, "geometry": 0.85}))
+
+    async def _band(uid):
+        from lyo_app.core.database import AsyncSessionLocal
+        from lyo_app.personalization.service import personalization_engine as pe
+        async with AsyncSessionLocal() as db:
+            return await pe.suggest_content_difficulty(db, str(uid))
+
+    loop = asyncio.get_event_loop()
+    assert loop.run_until_complete(_band(weak_uid)) == "easy"
+    assert loop.run_until_complete(_band(strong_uid)) == "hard"
+
+
 # ---------------------------------------------------------------- Wedge 2 (social)
 def test_ai_peer_matching_pairs_complementary_mastery(client):
     """AI matching pairs a learner strong in X with one weak in X (and vice versa)."""
