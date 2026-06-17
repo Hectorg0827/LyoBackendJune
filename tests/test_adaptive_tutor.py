@@ -116,6 +116,26 @@ def test_coaching_directive_injected_into_prompt_context(client):
     assert "Coaching directive:" in ctx
 
 
+# ---------------------------------------------------------------- Wedge 1 (identity)
+def test_learning_identity_endpoint(client):
+    """GET /api/v1/me/identity composes mastery + memory + goals + arc, no 500."""
+    headers, uid = _auth(client, "at_i@x.com", "at_ident", "10.70.0.5")
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid, affect="engaged",
+        masteries={"linear_equations": 0.9, "quadratics": 0.2, "fractions": 0.55}))
+    r = client.get("/api/v1/me/identity", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # The durable identity surface: heatmap + strengths/gaps + arc always present,
+    # even if memory/goals subsystems are empty for a fresh user.
+    assert "mastery_heatmap" in body
+    assert "strengths" in body and "weaknesses" in body
+    assert "active_goals" in body and isinstance(body["active_goals"], list)
+    assert "learning_arc" in body
+    assert "summary" in body["learning_arc"]
+    assert body["learning_arc"]["skills_mastered"] >= 1  # linear_equations mastered
+
+
 def test_chat_endpoint_personalization_path_no_500(client):
     """POST /chat runs the re-enabled personalization path without 500.
 
