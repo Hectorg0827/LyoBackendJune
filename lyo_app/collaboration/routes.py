@@ -169,6 +169,62 @@ async def create_optimal_group(
     )
 
 # ========================================
+# AI SOCIAL ORCHESTRATION (Wedge 2)
+# ========================================
+
+@router.get("/ai/peer-matches")
+async def ai_peer_matches(
+    limit: int = Query(5, le=20),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI-matched peers with complementary mastery (who can teach whom)."""
+    from lyo_app.collaboration.ai_social_service import ai_social_orchestrator
+    matches = await ai_social_orchestrator.match_peers(
+        db, current_user.id, limit=limit)
+    return {"user_id": current_user.id, "matches": matches}
+
+
+@router.post("/ai/study-pods")
+async def ai_form_study_pod(
+    subject: str = Query("General"),
+    max_size: int = Query(4, ge=2, le=8),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Auto-form a study pod from compatible learners with a shared objective."""
+    from lyo_app.collaboration.ai_social_service import ai_social_orchestrator
+    return await ai_social_orchestrator.form_study_pod(
+        db, current_user.id, subject=subject, max_size=max_size)
+
+
+@router.post("/ai/groups/{group_id}/challenge")
+async def ai_group_challenge(
+    group_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate an AI group challenge targeting the pod's shared weak skill."""
+    from lyo_app.collaboration.ai_social_service import ai_social_orchestrator
+    try:
+        return await ai_social_orchestrator.generate_group_challenge(
+            db, group_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/ai/groups/{group_id}/moderation")
+async def ai_group_moderation(
+    group_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI moderation summary: discussion recap, open questions, quiet members."""
+    from lyo_app.collaboration.ai_social_service import ai_social_orchestrator
+    return await ai_social_orchestrator.summarize_group_discussion(db, group_id)
+
+
+# ========================================
 # PEER INTERACTIONS
 # ========================================
 

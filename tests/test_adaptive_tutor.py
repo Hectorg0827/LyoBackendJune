@@ -148,3 +148,57 @@ def test_chat_endpoint_personalization_path_no_500(client):
     r = client.post("/api/v1/chat", headers=headers,
                     json={"message": "Help me understand quadratics"})
     assert r.status_code == 200, r.text
+
+
+# ---------------------------------------------------------------- Wedge 2 (social)
+def test_ai_peer_matching_pairs_complementary_mastery(client):
+    """AI matching pairs a learner strong in X with one weak in X (and vice versa)."""
+    h_a, uid_a = _auth(client, "at_pa@x.com", "at_peer_a", "10.70.0.6")
+    _, uid_b = _auth(client, "at_pb@x.com", "at_peer_b", "10.70.0.7")
+    # A is strong in algebra, weak in geometry; B is the mirror image.
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid_a, affect="engaged",
+        masteries={"algebra": 0.9, "geometry": 0.15}))
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid_b, affect="engaged",
+        masteries={"algebra": 0.15, "geometry": 0.9}))
+
+    r = client.get("/api/v1/collaboration/ai/peer-matches", headers=h_a)
+    assert r.status_code == 200, r.text
+    matches = r.json()["matches"]
+    assert matches, "expected at least one complementary peer"
+    top = next((m for m in matches if m["user_id"] == uid_b), None)
+    assert top is not None, "B should be matched to A"
+    # B can teach A geometry; A can teach B algebra.
+    assert "geometry" in top["they_can_teach_you"]
+    assert "algebra" in top["you_can_teach_them"]
+
+
+def test_ai_study_pod_and_challenge_and_moderation(client):
+    """Forming a pod seeds a shared objective; challenge + moderation don't 500."""
+    h_a, uid_a = _auth(client, "at_pda@x.com", "at_pod_a", "10.70.0.8")
+    _, uid_b = _auth(client, "at_pdb@x.com", "at_pod_b", "10.70.0.9")
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid_a, masteries={"calculus": 0.9, "trig": 0.1}))
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid_b, masteries={"calculus": 0.1, "trig": 0.9}))
+
+    pod = client.post("/api/v1/collaboration/ai/study-pods?subject=Math&max_size=4",
+                      headers=h_a)
+    assert pod.status_code == 200, pod.text
+    pod_body = pod.json()
+    assert pod_body["status"] == "formed"
+    gid = pod_body["group_id"]
+    assert uid_a in pod_body["member_ids"]
+    assert pod_body["objective"]  # a shared objective was derived
+
+    # Challenge generation (LLM falls back to template offline; must still succeed).
+    ch = client.post(f"/api/v1/collaboration/ai/groups/{gid}/challenge", headers=h_a)
+    assert ch.status_code == 200, ch.text
+    assert ch.json()["challenge"]
+
+    # Moderation summary on a fresh group: no interactions yet, must not 500.
+    mod = client.get(f"/api/v1/collaboration/ai/groups/{gid}/moderation", headers=h_a)
+    assert mod.status_code == 200, mod.text
+    assert "summary" in mod.json()
+    assert mod.json()["unanswered_questions"] == []
