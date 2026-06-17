@@ -237,6 +237,34 @@ class PersonalizationEngine:
             "recommendations": await self._get_recommendations(state)
         }
 
+    # Affect/fatigue -> explicit tutoring instruction. Single source of the
+    # emotional-intelligence layer; reused by every tutor path via
+    # build_prompt_context. Mirrors the intent of ai_classroom.AICoach but is
+    # DB-backed (works across stateless workers).
+    _AFFECT_DIRECTIVES = {
+        "frustrated": ("Learner is frustrated. Be warm and encouraging, slow down, "
+                       "give a concrete worked example BEFORE asking a question, and "
+                       "avoid introducing new concepts until they regain footing."),
+        "anxious": ("Learner seems anxious. Reassure them, normalize mistakes, and "
+                    "break the next step into the smallest possible piece."),
+        "bored": ("Learner seems bored/under-challenged. Be concise, skip basics they "
+                  "know, and offer a harder stretch problem or a real-world twist."),
+        "confused": ("Learner is confused. Re-explain with a simpler analogy and check "
+                     "understanding with one small question before moving on."),
+        "flow": ("Learner is in flow. Keep momentum, stay concise, and gently raise "
+                 "difficulty to sustain engagement."),
+        "engaged": ("Learner is engaged. Maintain pace and reinforce progress."),
+    }
+
+    def coaching_directive(self, affect: str, fatigue: float = 0.0, focus: float = 0.7) -> str:
+        """Return a short tutoring instruction derived from affect + fatigue."""
+        directive = self._AFFECT_DIRECTIVES.get((affect or "").lower(), "")
+        if fatigue is not None and fatigue >= 0.7:
+            directive = (directive + " ").strip() + (
+                " The learner is fatigued — keep this turn short and suggest a break soon."
+            )
+        return directive.strip()
+
     async def build_prompt_context(
         self,
         db: AsyncSession,
@@ -294,6 +322,13 @@ class PersonalizationEngine:
                 "Learner state: "
                 f"affect={state.current_affect.value}, fatigue={state.fatigue_level:.2f}, focus={state.focus_level:.2f}"
             )
+            # Emotional-intelligence directive: turn the affect/fatigue signal
+            # into an explicit coaching instruction the tutor must follow.
+            directive = self.coaching_directive(
+                state.current_affect.value, state.fatigue_level, state.focus_level
+            )
+            if directive:
+                parts.append("Coaching directive: " + directive)
         if strengths:
             parts.append("Strengths (mastered): " + ", ".join(strengths))
         if in_progress:

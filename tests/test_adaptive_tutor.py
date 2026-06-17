@@ -84,6 +84,38 @@ def test_greeting_injects_learner_context(client):
     assert r.json().get("context_used") is True
 
 
+# ---------------------------------------------------------------- Pillar C / Wedge 3 (emotional)
+def test_coaching_directive_varies_by_affect():
+    """The emotional layer maps affect -> an explicit tutoring instruction."""
+    from lyo_app.personalization.service import personalization_engine as pe
+    frustrated = pe.coaching_directive("frustrated", fatigue=0.2)
+    bored = pe.coaching_directive("bored", fatigue=0.2)
+    flow = pe.coaching_directive("flow", fatigue=0.2)
+    assert "encourag" in frustrated.lower() and "worked example" in frustrated.lower()
+    assert "concise" in bored.lower()
+    assert "momentum" in flow.lower()
+    assert frustrated != bored != flow
+    # fatigue rider appends a break suggestion
+    tired = pe.coaching_directive("engaged", fatigue=0.85)
+    assert "break" in tired.lower()
+
+
+def test_coaching_directive_injected_into_prompt_context(client):
+    """A frustrated learner's context must carry the coaching directive."""
+    _, uid = _auth(client, "at_e@x.com", "at_emo", "10.70.0.4")
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid, affect="frustrated", masteries={"quadratics": 0.2}))
+
+    async def _build():
+        from lyo_app.core.database import AsyncSessionLocal
+        from lyo_app.personalization.service import personalization_engine
+        async with AsyncSessionLocal() as db:
+            return await personalization_engine.build_prompt_context(db, str(uid))
+
+    ctx = asyncio.get_event_loop().run_until_complete(_build())
+    assert "Coaching directive:" in ctx
+
+
 def test_chat_endpoint_personalization_path_no_500(client):
     """POST /chat runs the re-enabled personalization path without 500.
 
