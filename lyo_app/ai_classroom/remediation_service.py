@@ -20,6 +20,9 @@ from lyo_app.ai_classroom.models import (
     LearningNode, Misconception, MasteryState, InteractionAttempt,
     NodeType, AssetTier
 )
+from lyo_app.ai_classroom.progressive_hints import (
+    generate_hint, hint_level_for_attempt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +120,29 @@ class RemediationService:
             remediation_content = await self._generate_llm_remediation(
                 original_node, user_id, misconception_tag, user_complaint
             )
-        
+
+        # Parity D: progressive hint-leveling. Escalate the follow-up hint based
+        # on how many times this learner has already been remediated on this node
+        # (nudge -> concept -> worked example -> near-solution).
+        try:
+            attempts = await self._remediation_attempts(user_id, original_node.id)
+            level = hint_level_for_attempt(attempts + 1)
+            concept_name = content.get("title") or concept_id or "this concept"
+            try:
+                from lyo_app.core.ai_resilience import ai_resilience_manager
+                hint_ai = ai_resilience_manager
+            except Exception:  # noqa: BLE001
+                hint_ai = None
+            remediation_content["follow_up_hint"] = await generate_hint(
+                level,
+                concept=concept_name,
+                question=content.get("prompt", ""),
+                ai_manager=hint_ai,
+            )
+            remediation_content["hint_level"] = int(level)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"progressive hint leveling skipped: {e}")
+
         # Create remediation node (not persisted - ephemeral)
         remediation_node = LearningNode(
             id=str(uuid.uuid4()),
@@ -336,6 +361,21 @@ Be encouraging but not condescending. Use everyday examples the member can relat
             "follow_up_hint": "Try breaking the problem into smaller parts."
         }
     
+    async def _remediation_attempts(self, user_id: str, node_id: str) -> int:
+        """How many times this learner has already been remediated on this node.
+        Drives progressive hint escalation (Parity D)."""
+        result = await self.db.execute(
+            select(func.count(InteractionAttempt.id))
+            .where(
+                and_(
+                    InteractionAttempt.user_id == user_id,
+                    InteractionAttempt.node_id == node_id,
+                    InteractionAttempt.remediation_shown == True  # noqa: E712
+                )
+            )
+        )
+        return int(result.scalar() or 0)
+
     async def check_remediation_budget(
         self,
         user_id: str,

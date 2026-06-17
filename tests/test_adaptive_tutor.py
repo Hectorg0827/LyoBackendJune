@@ -179,6 +179,38 @@ def test_suggest_content_difficulty_from_seeded_mastery(client):
     assert loop.run_until_complete(_band(strong_uid)) == "hard"
 
 
+# ---------------------------------------------------------------- Pillar D (progressive hints)
+def test_hint_level_escalates_with_attempts():
+    """More stuck attempts -> higher hint level, clamped to 1..4."""
+    from lyo_app.ai_classroom.progressive_hints import hint_level_for_attempt, HintLevel
+    assert hint_level_for_attempt(1) == HintLevel.NUDGE
+    assert hint_level_for_attempt(2) == HintLevel.CONCEPT
+    assert hint_level_for_attempt(3) == HintLevel.WORKED_EXAMPLE
+    assert hint_level_for_attempt(4) == HintLevel.NEAR_SOLUTION
+    assert hint_level_for_attempt(99) == HintLevel.NEAR_SOLUTION  # clamped
+    assert hint_level_for_attempt(0) == HintLevel.NUDGE           # clamped
+
+
+def test_generate_hint_template_fallback_differs_by_level():
+    """Offline (no ai_manager): each level yields a distinct, escalating template."""
+    from lyo_app.ai_classroom.progressive_hints import generate_hint, HintLevel
+
+    async def _h(level):
+        return await generate_hint(level, concept="quadratic equations",
+                                   question="Solve x^2 - 5x + 6 = 0")
+
+    loop = asyncio.get_event_loop()
+    nudge = loop.run_until_complete(_h(HintLevel.NUDGE))
+    concept = loop.run_until_complete(_h(HintLevel.CONCEPT))
+    example = loop.run_until_complete(_h(HintLevel.WORKED_EXAMPLE))
+    near = loop.run_until_complete(_h(HintLevel.NEAR_SOLUTION))
+    assert len({nudge, concept, example, near}) == 4  # all distinct
+    assert "quadratic equations" in nudge
+    assert "example" in example.lower()
+    # The near-solution hint scaffolds the final step without handing it over.
+    assert "step" in near.lower()
+
+
 # ---------------------------------------------------------------- Pillar E (mastery-gated edges)
 class _FakeDB:
     """Collects objects passed to .add() (no real session needed)."""
