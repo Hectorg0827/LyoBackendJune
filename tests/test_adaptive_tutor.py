@@ -649,3 +649,105 @@ def test_creation_scaffold_tracks_mastery(client):
     proj = client.post("/api/v1/create/projects", headers=headers,
                        json={"goal": "Compose a simple melody", "skill_id": "music"}).json()
     assert proj["scaffold_level"] == "high"
+
+
+# ---------------------------------------------------------------- Adaptive simulation (#5)
+def test_sim_engine_pricing_drives_demand():
+    """The deterministic core: raising price above the sweet spot cuts demand."""
+    from lyo_app.simulation.engine import CoffeeShopScenario
+    sc = CoffeeShopScenario()
+    state = sc.initial_state("easy")
+    # cheap price -> high demand; expensive -> low demand (same starting state)
+    _, cheap = sc.apply(state, {"price": 2.0, "restock": 100}, "easy", 0)
+    _, pricey = sc.apply(state, {"price": 6.0, "restock": 100}, "easy", 0)
+    assert cheap["demand"] > pricey["demand"]
+
+
+def test_sim_engine_stockout_hurts_reputation():
+    """Selling out (demand > inventory) drops reputation and flags a stockout."""
+    from lyo_app.simulation.engine import CoffeeShopScenario
+    sc = CoffeeShopScenario()
+    state = sc.initial_state("easy")
+    state["inventory"] = 1          # almost no stock vs ~50 demand
+    new_state, outcome = sc.apply(state, {"price": 3.0, "restock": 0}, "easy", 0)
+    assert outcome["stockout"] is True
+    assert new_state["reputation"] < state["reputation"]
+
+
+def test_sim_engine_cash_accounting():
+    """Cash = prior + revenue - (restock cost + fixed cost + marketing)."""
+    from lyo_app.simulation.engine import CoffeeShopScenario
+    sc = CoffeeShopScenario()
+    state = sc.initial_state("easy")  # cash 200, inventory 40
+    new_state, o = sc.apply(state, {"price": 3.0, "restock": 10, "marketing": 0}, "easy", 0)
+    expected_cash = round(200.0 + o["revenue"]
+                          - (10 * sc.UNIT_COST + sc.FIXED_COST), 2)
+    assert new_state["cash"] == expected_cash
+    assert o["sales"] == min(o["demand"], 40)
+
+
+def test_sim_win_and_lose_conditions():
+    """status() resolves won (>= target), lost (bankrupt or out of days)."""
+    from lyo_app.simulation.engine import CoffeeShopScenario
+    sc = CoffeeShopScenario()
+    obj = sc.objective("easy")  # target = 300, max_days 7
+    assert sc.status({"cash": obj["target_cash"]}, obj, 3) == "won"
+    assert sc.status({"cash": -5.0}, obj, 3) == "lost"
+    assert sc.status({"cash": 250.0}, obj, 7) == "lost"   # ran out of days short
+    assert sc.status({"cash": 250.0}, obj, 3) == "active"
+
+
+def test_sim_difficulty_from_mastery(client):
+    """A strong learner starts the sim on 'hard'; a weak learner on 'easy'."""
+    h_s, uid_s = _auth(client, "at_sim_s@x.com", "at_sim_strong", "10.70.0.40")
+    h_w, uid_w = _auth(client, "at_sim_w@x.com", "at_sim_weak", "10.70.0.41")
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid_s, masteries={"economics": 0.92}))
+    asyncio.get_event_loop().run_until_complete(_seed_learner(
+        uid_w, masteries={"economics": 0.1}))
+
+    s = client.post("/api/v1/simulations", headers=h_s,
+                    json={"scenario": "coffee_shop", "skill_id": "economics"})
+    w = client.post("/api/v1/simulations", headers=h_w,
+                    json={"scenario": "coffee_shop", "skill_id": "economics"})
+    assert s.status_code == 200 and w.status_code == 200, (s.text, w.text)
+    assert s.json()["difficulty"] == "hard"
+    assert w.json()["difficulty"] == "easy"
+
+
+def test_sim_full_turn_loop_reaches_terminal_state(client):
+    """Drive a run over HTTP: each step advances a turn until won/lost."""
+    headers, uid = _auth(client, "at_sim_p@x.com", "at_sim_play", "10.70.0.42")
+    start = client.post("/api/v1/simulations", headers=headers,
+                        json={"scenario": "coffee_shop", "difficulty": "easy"})
+    assert start.status_code == 200, start.text
+    body = start.json()
+    sid = body["id"]
+    assert body["status"] == "active"
+    assert "decision_schema" in body and "price" in body["decision_schema"]
+    max_days = body["objective"]["max_days"]
+
+    final_status = "active"
+    for _ in range(max_days):
+        # A sensible strategy: price near the sweet spot, keep stock up.
+        r = client.post(f"/api/v1/simulations/{sid}/step", headers=headers,
+                        json={"decision": {"price": 3.0, "restock": 55, "marketing": 5}})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert "world_state" in j and "outcome" in j and "narration" in j
+        final_status = j["status"]
+        if final_status != "active":
+            break
+    assert final_status in ("won", "lost")
+
+    # Stepping a finished run is rejected.
+    over = client.post(f"/api/v1/simulations/{sid}/step", headers=headers,
+                       json={"decision": {"price": 3.0, "restock": 10}})
+    assert over.status_code == 400
+
+
+def test_sim_unknown_scenario_rejected(client):
+    headers, _ = _auth(client, "at_sim_x@x.com", "at_sim_x", "10.70.0.43")
+    r = client.post("/api/v1/simulations", headers=headers,
+                    json={"scenario": "nonexistent"})
+    assert r.status_code == 400

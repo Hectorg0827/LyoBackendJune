@@ -206,6 +206,9 @@ async def init_db() -> None:
         # Teaching-through-creation — build-with-me projects + artifacts.
         from lyo_app.creation.models import CreationProject, CreationArtifact  # noqa: F401
 
+        # Adaptive simulation — scenario runs + turns.
+        from lyo_app.simulation.models import Simulation, SimulationTurn  # noqa: F401
+
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
         await conn.run_sync(Base.metadata.create_all)

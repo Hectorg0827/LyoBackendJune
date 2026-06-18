@@ -474,6 +474,13 @@ def create_app() -> FastAPI:
         logger.info("✅ Teaching-through-creation routes integrated - build-with-me mode active!")
     except ImportError as e:
         logger.warning(f"Teaching-through-creation routes not available: {e}")
+
+    try:
+        from lyo_app.simulation.routes import router as simulation_router
+        app.include_router(simulation_router)
+        logger.info("✅ Adaptive simulation routes integrated - scenario engine active!")
+    except ImportError as e:
+        logger.warning(f"Adaptive simulation routes not available: {e}")
     
     try:
         from lyo_app.adaptive_learning.routes import router as adaptive_router
