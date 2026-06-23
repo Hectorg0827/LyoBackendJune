@@ -488,6 +488,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Clips routes not available: {e}")
     
+    # Messaging Router - Direct messages between users
+    try:
+        from lyo_app.routers.messaging import router as messaging_router
+        app.include_router(messaging_router)
+        logger.info("✅ Messaging routes integrated - Direct messages active!")
+    except ImportError as e:
+        logger.warning(f"Messaging routes not available: {e}")
+
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router
@@ -666,7 +674,21 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Relationship routes not available: {e}")
 
+    # Notifications Router - User notification management
+    try:
+        from lyo_app.routers.notifications import router as notifications_router
+        app.include_router(notifications_router)
+        logger.info("✅ Notification routes integrated - User notifications active!")
+    except ImportError as e:
+        logger.warning(f"Notification routes not available: {e}")
 
+    # Discover Router - Educational places and trending content
+    try:
+        from lyo_app.routers.discover import router as discover_router
+        app.include_router(discover_router)
+        logger.info("✅ Discover routes integrated - Places & trending content active!")
+    except ImportError as e:
+        logger.warning(f"Discover routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401

@@ -87,10 +87,29 @@ enum Endpoints {
         case studyPlanDetail(planId: String)
         case studySessions
         
+        // MARK: - Messaging
+        case conversations
+        case conversationMessages(conversationId: String)
+        case createConversation
+        case sendMessage(conversationId: String)
+        case markConversationRead(conversationId: String)
+
+        // MARK: - Discover
+        case discoverPlaces
+        case discoverPlaceDetail(placeId: String)
+        case discoverTrending
+
+        // MARK: - Notifications
+        case notificationsList
+        case notificationRead(notificationId: String)
+        case notificationsReadAll
+        case notificationsUnreadCount
+        case notificationPreferences
+
         // MARK: - Health
         case health
         case healthDetailed
-        
+
         /// Returns the path for this endpoint
         var path: String {
             switch self {
@@ -135,24 +154,48 @@ enum Endpoints {
             case .studyPlanDetail(let planId): return "study/plans/\(planId)"
             case .studySessions: return "study/sessions"
                 
+            // Messaging
+            case .conversations: return "messages/conversations"
+            case .conversationMessages(let conversationId): return "messages/conversations/\(conversationId)"
+            case .createConversation: return "messages/conversations"
+            case .sendMessage(let conversationId): return "messages/conversations/\(conversationId)/messages"
+            case .markConversationRead(let conversationId): return "messages/conversations/\(conversationId)/read"
+
+            // Discover
+            case .discoverPlaces: return "discover/places"
+            case .discoverPlaceDetail(let placeId): return "discover/places/\(placeId)"
+            case .discoverTrending: return "discover/trending"
+
+            // Notifications
+            case .notificationsList: return "notifications"
+            case .notificationRead(let notificationId): return "notifications/\(notificationId)/read"
+            case .notificationsReadAll: return "notifications/read-all"
+            case .notificationsUnreadCount: return "notifications/unread-count"
+            case .notificationPreferences: return "notifications/preferences"
+
             // Health
             case .health: return "health"
             case .healthDetailed: return "health/detailed"
             }
         }
-        
+
         /// Returns the HTTP method for this endpoint
         var method: HTTPMethod {
             switch self {
             case .login, .register, .refreshToken, .logout,
                  .chat, .chatStream, .courseGenerate, .courseComplete,
-                 .selectionExplain, .selectionNote, .selectionHighlight:
+                 .selectionExplain, .selectionNote, .selectionHighlight,
+                 .createConversation, .sendMessage, .markConversationRead,
+                 .notificationRead, .notificationsReadAll:
                 return .post
             case .verifyToken, .chatHistory, .a2uiNegotiate, .a2uiComponents,
                  .courseStatus, .courseFetch, .userProfile, .userPreferences,
                  .userProgress, .studyPlans, .studyPlanDetail, .studySessions,
                  .health, .healthDetailed, .a2uiWebSocket,
-                 .selectionHighlights:
+                 .selectionHighlights,
+                 .conversations, .conversationMessages,
+                 .discoverPlaces, .discoverPlaceDetail, .discoverTrending,
+                 .notificationsList, .notificationsUnreadCount, .notificationPreferences:
                 return .get
             case .selectionHighlightDelete:
                 return .delete
