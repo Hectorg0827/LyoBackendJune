@@ -476,7 +476,8 @@ class GamificationService:
         # In a real implementation, you'd have more sophisticated criteria evaluation
         
         awarded_achievements = []
-        
+        newly_awarded_info = []  # (name, xp_reward) for notifications, created after commit
+
         # Get all active achievements that could be triggered by this action
         result = await db.execute(
             select(Achievement)
@@ -526,8 +527,31 @@ class GamificationService:
                     )
                 
                 awarded_achievements.append(user_achievement)
-        
+                newly_awarded_info.append((
+                    getattr(achievement, "name", None) or "an achievement",
+                    getattr(achievement, "xp_reward", 0) or 0,
+                ))
+
         await db.commit()
+
+        # Emit an in-app notification per newly-unlocked achievement (non-fatal)
+        if newly_awarded_info:
+            try:
+                from lyo_app.routers.notifications import create_notification
+                for name, xp in newly_awarded_info:
+                    xp_suffix = f" +{xp} XP" if xp else ""
+                    await create_notification(
+                        db,
+                        user_id=user_id,
+                        type="achievement",
+                        title="Achievement unlocked!",
+                        body=f'You earned "{name}".{xp_suffix}',
+                        actor_id=None,
+                        target_type="achievement",
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
         return awarded_achievements
 
     async def _evaluate_achievement_criteria(

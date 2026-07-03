@@ -1,6 +1,7 @@
 """
 Notifications Router - Push notification management endpoints
 """
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.core.database import get_db, Base
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -32,6 +35,65 @@ class Notification(Base):
     target_type = Column(String(50), nullable=True)
     is_read = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ── Reusable helpers (used by feeds, gamification, etc.) ──────────────────────
+
+async def get_actor_display_name(db: AsyncSession, user_id: int) -> str:
+    """Resolve a user's display name for use in notification copy."""
+    try:
+        result = await db.execute(
+            select(User.first_name, User.last_name, User.username).where(User.id == user_id)
+        )
+        row = result.first()
+        if not row:
+            return "Someone"
+        first, last, uname = row
+        return " ".join(filter(None, [first, last])) or uname or "Someone"
+    except Exception:  # noqa: BLE001
+        return "Someone"
+
+
+async def create_notification(
+    db: AsyncSession,
+    user_id: int,
+    type: str,
+    title: str,
+    body: str,
+    actor_id: Optional[int] = None,
+    target_id: Optional[str] = None,
+    target_type: Optional[str] = None,
+) -> Optional["Notification"]:
+    """Create a notification for ``user_id``.
+
+    Non-fatal by design: any failure is logged and swallowed so notification
+    creation can never break the primary action (liking, commenting, etc.).
+    Self-notifications (actor_id == user_id) are skipped.
+    """
+    if actor_id is not None and actor_id == user_id:
+        return None
+    try:
+        notif = Notification(
+            user_id=user_id,
+            type=type,
+            title=title,
+            body=body,
+            actor_id=actor_id,
+            target_id=str(target_id) if target_id is not None else None,
+            target_type=target_type,
+            is_read=False,
+            created_at=datetime.utcnow(),
+        )
+        db.add(notif)
+        await db.commit()
+        return notif
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to create notification for user {user_id}: {e}")
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
 
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────
