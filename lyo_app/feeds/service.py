@@ -305,25 +305,34 @@ class FeedsService:
         except Exception:  # noqa: BLE001
             pass
 
-        return db_comment
+        # Re-select with replies eagerly loaded: CommentRead serializes the
+        # `replies` relationship, and a lazy load during response rendering
+        # raises MissingGreenlet under the async session.
+        result = await db.execute(
+            select(Comment)
+            .options(selectinload(Comment.replies))
+            .where(Comment.id == db_comment.id)
+        )
+        return result.scalar_one()
 
     async def get_comments_by_post(
-        self, 
-        db: AsyncSession, 
+        self,
+        db: AsyncSession,
         post_id: int
     ) -> List[Comment]:
         """
         Get all comments for a post, ordered by creation time.
-        
+
         Args:
             db: Database session
             post_id: Post ID
-            
+
         Returns:
             List of comments
         """
         result = await db.execute(
             select(Comment)
+            .options(selectinload(Comment.replies))
             .where(Comment.post_id == post_id)
             .order_by(Comment.created_at)
         )
@@ -961,11 +970,16 @@ class FeedsService:
         # Update content
         comment.content = comment_data.content
         comment.updated_at = datetime.utcnow()
-        
+
         await db.commit()
-        await db.refresh(comment)
-        
-        return comment
+
+        # Reload with replies eagerly loaded for CommentRead serialization
+        result = await db.execute(
+            select(Comment)
+            .options(selectinload(Comment.replies))
+            .where(Comment.id == comment.id)
+        )
+        return result.scalar_one()
 
     async def delete_comment(
         self, 

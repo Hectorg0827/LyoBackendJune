@@ -315,21 +315,9 @@ async def list_community_events(
             user_id=current_user.id
         )
         
-        total = await community_service.get_community_events_count(
-            db=db,
-            event_type=event_type,
-            study_group_id=study_group_id,
-            upcoming_only=upcoming_only,
-            user_id=current_user.id
-        )
-        
-        return {
-            "events": events,
-            "total": total,
-            "page": (skip // limit) + 1 if limit > 0 else 1,
-            "per_page": limit,
-            "has_next": (skip + limit) < total
-        }
+        # response_model is List[CommunityEventRead]; the previous dict
+        # envelope failed response validation and 500'd on every call.
+        return events
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch events: {str(e)}")
 

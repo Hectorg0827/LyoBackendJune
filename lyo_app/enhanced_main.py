@@ -387,6 +387,19 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
+
+    # Basic social feed routes: /posts, /comments, /posts/{id}/reactions,
+    # /follow, /feed, /feed/public, /users/{id}/posts, /users/{id}/stats.
+    # The enhanced feeds router above only serves /api/v1/feeds/*; without
+    # this, the paths the web/Android clients call do not exist and the
+    # notification triggers in feeds/service.py are unreachable.
+    try:
+        from lyo_app.feeds.routes import router as basic_feeds_router
+        app.include_router(basic_feeds_router, tags=["feeds"])
+        logger.info("✅ Basic feeds routes integrated - posts/comments/reactions/follow active!")
+    except ImportError as e:
+        logger.warning(f"Basic feeds routes not available: {e}")
+
     if storage_router:
         app.include_router(storage_router)
     # app.include_router(ads_router)  # TODO: Monetization module incomplete

@@ -497,7 +497,11 @@ async def update_profile(
     
     # Update fields if provided
     if request.full_name is not None:
-        user.full_name = request.full_name
+        # User model stores first_name/last_name; assigning a non-mapped
+        # full_name attribute was a silent no-op that never persisted.
+        parts = request.full_name.strip().split(None, 1)
+        user.first_name = parts[0] if parts else None
+        user.last_name = parts[1] if len(parts) > 1 else None
     if request.bio is not None:
         user.bio = request.bio
     if request.avatar_url is not None:

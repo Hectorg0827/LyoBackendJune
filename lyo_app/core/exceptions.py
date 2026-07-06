@@ -295,7 +295,13 @@ def setup_error_handlers(app):
     
     # Custom exceptions
     app.add_exception_handler(LyoAppException, lyoapp_exception_handler)
-    
+
+    # RFC 7807 problem details (AuthenticationProblem etc.) — without this,
+    # routes using jwt_auth.get_current_user return 500 instead of 401/403
+    # when no token is supplied.
+    from lyo_app.core.problems import ProblemDetail, problem_details_handler
+    app.add_exception_handler(ProblemDetail, problem_details_handler)
+
     # FastAPI exceptions
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
