@@ -505,6 +505,7 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.routers.messaging import router as messaging_router
         app.include_router(messaging_router)
+        app.include_router(messaging_router, prefix="/api/v1")
         logger.info("✅ Messaging routes integrated - Direct messages active!")
     except ImportError as e:
         logger.warning(f"Messaging routes not available: {e}")
@@ -702,6 +703,7 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.routers.notifications import router as notifications_router
         app.include_router(notifications_router)
+        app.include_router(notifications_router, prefix="/api/v1")
         logger.info("✅ Notification routes integrated - User notifications active!")
     except ImportError as e:
         logger.warning(f"Notification routes not available: {e}")
@@ -710,6 +712,7 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.routers.discover import router as discover_router
         app.include_router(discover_router)
+        app.include_router(discover_router, prefix="/api/v1")
         logger.info("✅ Discover routes integrated - Places & trending content active!")
     except ImportError as e:
         logger.warning(f"Discover routes not available: {e}")

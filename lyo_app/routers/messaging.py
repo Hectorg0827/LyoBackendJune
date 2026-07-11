@@ -246,17 +246,18 @@ async def get_conversation_messages(
     total_result = await db.execute(total_q)
     total = total_result.scalar() or 0
 
-    # Paginated messages (newest last)
+    # Paginated messages: page 1 is the most recent window (what a chat UI
+    # opens to); messages within a page stay chronological for display.
     offset = (page - 1) * per_page
     msgs_q = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.desc())
         .offset(offset)
         .limit(per_page)
     )
     msgs_result = await db.execute(msgs_q)
-    msgs = msgs_result.scalars().all()
+    msgs = list(reversed(msgs_result.scalars().all()))
 
     return MessagesListResponse(
         messages=[_message_to_out(m) for m in msgs],

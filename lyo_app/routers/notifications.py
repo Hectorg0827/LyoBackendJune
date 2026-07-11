@@ -69,6 +69,11 @@ async def create_notification(
     Non-fatal by design: any failure is logged and swallowed so notification
     creation can never break the primary action (liking, commenting, etc.).
     Self-notifications (actor_id == user_id) are skipped.
+
+    Transaction boundaries: this helper commits (and on failure rolls back)
+    the caller's ``db`` session, so it must only be called when the session
+    has no other pending changes — i.e. after the caller has committed its
+    own work. Do not call it mid-transaction.
     """
     if actor_id is not None and actor_id == user_id:
         return None
@@ -298,6 +303,11 @@ async def get_notification_history(
         .limit(limit)
     )
     rows = result.scalars().all()
+    total_result = await db.execute(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == current_user.id
+        )
+    )
     return {
         "notifications": [
             {
@@ -310,7 +320,7 @@ async def get_notification_history(
             }
             for n in rows
         ],
-        "total": len(rows),
+        "total": total_result.scalar() or 0,
     }
 
 
