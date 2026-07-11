@@ -69,7 +69,7 @@ jobs:
     - name: Run database migrations
       run: |
         export PYTHONPATH=.
-        alembic upgrade head
+        alembic upgrade heads
 
     - name: Run linting
       run: |

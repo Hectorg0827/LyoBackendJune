@@ -330,13 +330,45 @@ async def create_conversation(
                     for p in existing_conv.participants
                     if p.user_id != current_user.id and p.user is not None
                 ]
+
+                # Real last-message / unread state, same as list_conversations,
+                # so reopening an existing DM shows its preview and badge.
+                last_msg_q = (
+                    select(Message)
+                    .where(Message.conversation_id == existing_conv.id)
+                    .order_by(desc(Message.created_at))
+                    .limit(1)
+                )
+                last_msg = (await db.execute(last_msg_q)).scalar_one_or_none()
+
+                my_last_read = next(
+                    (
+                        p.last_read_at
+                        for p in existing_conv.participants
+                        if p.user_id == current_user.id
+                    ),
+                    None,
+                )
+                unread_filters = [
+                    Message.conversation_id == existing_conv.id,
+                    Message.sender_id != current_user.id,
+                    Message.is_deleted == False,  # noqa: E712
+                ]
+                if my_last_read is not None:
+                    unread_filters.append(Message.created_at > my_last_read)
+                unread_count = (
+                    await db.execute(
+                        select(func.count(Message.id)).where(and_(*unread_filters))
+                    )
+                ).scalar() or 0
+
                 return ConversationOut(
                     id=existing_conv.id,
                     type=existing_conv.type or "direct",
                     name=existing_conv.name,
                     participants=participants_out,
-                    last_message=None,
-                    unread_count=0,
+                    last_message=_message_to_out(last_msg) if last_msg else None,
+                    unread_count=unread_count,
                     updated_at=existing_conv.updated_at.isoformat() if existing_conv.updated_at else "",
                 )
 
