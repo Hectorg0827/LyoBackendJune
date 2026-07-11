@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, and_, desc, case
+from sqlalchemy import func, select, and_, or_, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -312,7 +312,12 @@ async def create_conversation(
             )
             .where(
                 ConversationParticipant.user_id.in_(all_ids),
-                Conversation.type == "direct",
+                # NULL type = legacy rows created before this router set the
+                # column; treat them as direct so old DMs still deduplicate.
+                or_(
+                    Conversation.type == "direct",
+                    Conversation.type.is_(None),
+                ),
             )
             .group_by(ConversationParticipant.conversation_id)
             .having(func.count(ConversationParticipant.user_id) == len(all_ids))
