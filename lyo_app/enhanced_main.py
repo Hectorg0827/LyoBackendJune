@@ -509,6 +509,17 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Messaging routes not available: {e}")
 
+    # Multi-Device Sync Router - cross-device conversation continuity
+    # (REST under both legacy and /api/v1 prefixes, matching community/gamification;
+    #  websocket lives at /api/v1/sync/ws)
+    try:
+        from lyo_app.routers.sync import router as sync_router
+        app.include_router(sync_router, tags=["Multi-Device Sync"])
+        app.include_router(sync_router, prefix="/api/v1", tags=["Multi-Device Sync"])
+        logger.info("✅ Multi-device sync routes integrated - cross-device continuity active!")
+    except ImportError as e:
+        logger.warning(f"Sync routes not available: {e}")
+
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router

@@ -183,13 +183,12 @@ async def sync_websocket(
 
     # Validate token and get user
     try:
-        from lyo_app.auth.jwt_auth import decode_token
-        payload = decode_token(token)
-        user_id = payload.get("sub") or payload.get("user_id")
-        if not user_id:
+        from lyo_app.auth.jwt_auth import verify_token_async
+        token_data = await verify_token_async(token)
+        if not token_data.user_id:
             await websocket.close(code=4001, reason="Invalid token")
             return
-        user_id = int(user_id)
+        user_id = int(token_data.user_id)
     except Exception as e:
         logger.warning(f"WebSocket auth failed: {e}")
         await websocket.close(code=4001, reason="Authentication failed")
