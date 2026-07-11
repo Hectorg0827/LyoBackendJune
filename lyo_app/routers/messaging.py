@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, and_, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -275,10 +275,11 @@ async def get_conversation_messages(
 @router.post("/conversations", response_model=ConversationOut, status_code=201)
 async def create_conversation(
     body: CreateConversationRequest,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new conversation. For 1-on-1 DMs, reuse existing conversation if one exists."""
+    """Create a new conversation. For 1-on-1 DMs, reuse existing conversation if one exists (200, not 201)."""
 
     participant_ids = list(set(body.participant_ids))
     # Remove current user if included (they're added automatically)
@@ -375,6 +376,9 @@ async def create_conversation(
                     )
                 ).scalar() or 0
 
+                # Reused, not created — 200 so clients don't treat this as a
+                # brand-new resource (duplicate rows, wrong analytics).
+                response.status_code = status.HTTP_200_OK
                 return ConversationOut(
                     id=existing_conv.id,
                     type=existing_conv.type or "direct",
