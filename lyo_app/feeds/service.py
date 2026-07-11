@@ -262,6 +262,7 @@ class FeedsService:
             raise ValueError("Post not found")
         
         # Verify parent comment exists if specified
+        parent_comment = None
         if comment_data.parent_comment_id:
             parent_result = await db.execute(
                 select(Comment).where(Comment.id == comment_data.parent_comment_id)
@@ -285,7 +286,9 @@ class FeedsService:
         await db.commit()
         await db.refresh(db_comment)
 
-        # Notify the post author that someone commented (non-fatal)
+        # Notify the post author — and on a threaded reply, the parent
+        # comment's author, who is the person most likely to care (non-fatal;
+        # create_notification skips self-notifications itself)
         try:
             from lyo_app.routers.notifications import create_notification, get_actor_display_name
             actor_name = await get_actor_display_name(db, author_id)
@@ -302,6 +305,17 @@ class FeedsService:
                 target_id=str(comment_data.post_id),
                 target_type="post",
             )
+            if parent_comment is not None and parent_comment.author_id != post.author_id:
+                await create_notification(
+                    db,
+                    user_id=parent_comment.author_id,
+                    type="reply",
+                    title="New reply",
+                    body=f'{actor_name} replied: "{snippet}"',
+                    actor_id=author_id,
+                    target_id=str(comment_data.post_id),
+                    target_type="post",
+                )
         except Exception:  # noqa: BLE001
             pass
 

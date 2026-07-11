@@ -239,9 +239,11 @@ async def get_conversation_messages(
     if not membership_result.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="Not a member of this conversation")
 
-    # Total count
+    # Total count (soft-deleted messages don't consume pagination slots,
+    # matching the unread-count logic)
     total_q = select(func.count(Message.id)).where(
-        Message.conversation_id == conversation_id
+        Message.conversation_id == conversation_id,
+        Message.is_deleted == False,  # noqa: E712
     )
     total_result = await db.execute(total_q)
     total = total_result.scalar() or 0
@@ -251,7 +253,10 @@ async def get_conversation_messages(
     offset = (page - 1) * per_page
     msgs_q = (
         select(Message)
-        .where(Message.conversation_id == conversation_id)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.is_deleted == False,  # noqa: E712
+        )
         .order_by(Message.created_at.desc())
         .offset(offset)
         .limit(per_page)
