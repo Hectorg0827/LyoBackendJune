@@ -20,11 +20,19 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # The organizations table is created by the app's init_db create_all
+    # (tenants models), not by any migration, so it doesn't exist on a fresh
+    # `alembic upgrade heads` lineage. Only attach the FK when it's present;
+    # init_db enforces tenancy at the application layer either way.
+    org_fk = (
+        [sa.ForeignKey('organizations.id')]
+        if sa.inspect(op.get_bind()).has_table('organizations')
+        else []
+    )
     op.create_table(
         'chat_highlights',
         sa.Column('id', sa.String(36), primary_key=True),
-        sa.Column('organization_id', sa.Integer,
-                  sa.ForeignKey('organizations.id'), nullable=False,
+        sa.Column('organization_id', sa.Integer, *org_fk, nullable=False,
                   index=True, server_default='1'),
         sa.Column('user_id', sa.String(36), nullable=False, index=True),
         sa.Column('conversation_id', sa.String(36), nullable=False, index=True),
