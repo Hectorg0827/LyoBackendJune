@@ -295,11 +295,19 @@ async def create_conversation(
     all_ids = sorted([current_user.id] + participant_ids)
     conv_type = "direct" if len(all_ids) == 2 else "group"
 
-    # For direct messages, check if conversation already exists between these two users
+    # For direct messages, check if a *direct* conversation already exists
+    # between these two users (a two-person group thread must not be reused).
     if conv_type == "direct":
         existing_q = (
             select(ConversationParticipant.conversation_id)
-            .where(ConversationParticipant.user_id.in_(all_ids))
+            .join(
+                Conversation,
+                Conversation.id == ConversationParticipant.conversation_id,
+            )
+            .where(
+                ConversationParticipant.user_id.in_(all_ids),
+                Conversation.type == "direct",
+            )
             .group_by(ConversationParticipant.conversation_id)
             .having(func.count(ConversationParticipant.user_id) == len(all_ids))
         )

@@ -310,7 +310,12 @@ class FeedsService:
         # raises MissingGreenlet under the async session.
         result = await db.execute(
             select(Comment)
-            .options(selectinload(Comment.replies))
+            .options(
+                # Two levels: CommentRead serializes replies recursively,
+                # so each loaded reply's own `replies` must be loaded too
+                # or pydantic triggers a lazy load (MissingGreenlet).
+                selectinload(Comment.replies).selectinload(Comment.replies)
+            )
             .where(Comment.id == db_comment.id)
         )
         return result.scalar_one()
@@ -332,7 +337,12 @@ class FeedsService:
         """
         result = await db.execute(
             select(Comment)
-            .options(selectinload(Comment.replies))
+            .options(
+                # Two levels: CommentRead serializes replies recursively,
+                # so each loaded reply's own `replies` must be loaded too
+                # or pydantic triggers a lazy load (MissingGreenlet).
+                selectinload(Comment.replies).selectinload(Comment.replies)
+            )
             .where(Comment.post_id == post_id)
             .order_by(Comment.created_at)
         )
@@ -976,7 +986,12 @@ class FeedsService:
         # Reload with replies eagerly loaded for CommentRead serialization
         result = await db.execute(
             select(Comment)
-            .options(selectinload(Comment.replies))
+            .options(
+                # Two levels: CommentRead serializes replies recursively,
+                # so each loaded reply's own `replies` must be loaded too
+                # or pydantic triggers a lazy load (MissingGreenlet).
+                selectinload(Comment.replies).selectinload(Comment.replies)
+            )
             .where(Comment.id == comment.id)
         )
         return result.scalar_one()
