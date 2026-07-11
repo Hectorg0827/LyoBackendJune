@@ -63,7 +63,10 @@ def upgrade() -> None:
         sa.Column('id', sa.String(36), primary_key=True),
         sa.Column('name', sa.String(200), nullable=False),
         sa.Column('description', sa.Text, nullable=True),
-        sa.Column('subject', sa.String(100), nullable=False, index=True),
+        # No index=True: the column-level default index name
+        # (ix_concepts_subject) collides with the explicit composite index
+        # below, and the composite covers subject-prefix queries anyway.
+        sa.Column('subject', sa.String(100), nullable=False),
         sa.Column('grade_band', sa.String(50), nullable=True),
         sa.Column('parent_concept_id', sa.String(36), sa.ForeignKey('concepts.id'), nullable=True),
         sa.Column('priority', sa.Integer, default=5),
