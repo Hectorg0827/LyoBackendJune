@@ -98,13 +98,14 @@ class GamificationService:
         await self._update_user_level(db, user_id, xp_amount)
         
         # Check for achievements
-        await self._check_achievements(db, user_id, action_type, context_data)
-        
+        _, achievement_notes = await self._check_achievements(db, user_id, action_type, context_data)
+
         # Update streaks if applicable
         if action_type in [XPActionType.LESSON_COMPLETED, XPActionType.DAILY_LOGIN]:
             await self._update_streak(db, user_id, self._action_to_streak_type(action_type))
-        
+
         await db.commit()
+        await self._notify_achievements(db, user_id, achievement_notes)
         return xp_record
 
     async def get_user_xp_summary(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
@@ -249,7 +250,10 @@ class GamificationService:
         self, db: AsyncSession, user_id: int, action_type: XPActionType, context_data: Optional[Dict] = None
     ) -> List[UserAchievement]:
         """Check and award achievements based on user actions."""
-        return await self._check_achievements(db, user_id, action_type, context_data)
+        awarded, achievement_notes = await self._check_achievements(db, user_id, action_type, context_data)
+        await db.commit()
+        await self._notify_achievements(db, user_id, achievement_notes)
+        return awarded
 
     # Streak Operations
     async def update_streak(
@@ -532,27 +536,37 @@ class GamificationService:
                     getattr(achievement, "xp_reward", 0) or 0,
                 ))
 
-        await db.commit()
+        # No commit here: award_xp calls this mid-flow and owns the
+        # transaction — committing here persisted XP/achievement rows even
+        # when a later step of the same award_xp call failed. Callers commit,
+        # then emit the returned notification info via _notify_achievements.
+        return awarded_achievements, newly_awarded_info
 
-        # Emit an in-app notification per newly-unlocked achievement (non-fatal)
-        if newly_awarded_info:
-            try:
-                from lyo_app.routers.notifications import create_notification
-                for name, xp in newly_awarded_info:
-                    xp_suffix = f" +{xp} XP" if xp else ""
-                    await create_notification(
-                        db,
-                        user_id=user_id,
-                        type="achievement",
-                        title="Achievement unlocked!",
-                        body=f'You earned "{name}".{xp_suffix}',
-                        actor_id=None,
-                        target_type="achievement",
-                    )
-            except Exception:  # noqa: BLE001
-                pass
+    async def _notify_achievements(
+        self, db: AsyncSession, user_id: int, newly_awarded_info: List[tuple]
+    ) -> None:
+        """Emit an in-app notification per newly-unlocked achievement.
 
-        return awarded_achievements
+        Non-fatal; must be called only after the caller has committed
+        (create_notification manages its own transaction).
+        """
+        if not newly_awarded_info:
+            return
+        try:
+            from lyo_app.routers.notifications import create_notification
+            for name, xp in newly_awarded_info:
+                xp_suffix = f" +{xp} XP" if xp else ""
+                await create_notification(
+                    db,
+                    user_id=user_id,
+                    type="achievement",
+                    title="Achievement unlocked!",
+                    body=f'You earned "{name}".{xp_suffix}',
+                    actor_id=None,
+                    target_type="achievement",
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _evaluate_achievement_criteria(
         self, db: AsyncSession, user_id: int, criteria: Dict[str, Any], 

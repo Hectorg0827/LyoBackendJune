@@ -155,13 +155,19 @@ async def get_db_session() -> AsyncSession:
 
 async def init_db() -> None:
     """Initialize the database by creating all tables."""
-    async with engine.begin() as conn:
-        # Enable pgvector extension
-        try:
+    # Enable pgvector in its own transaction: on Postgres a failed statement
+    # aborts the enclosing transaction, so attempting this inside the main
+    # engine.begin() block poisoned the whole schema sync when the extension
+    # isn't installed (plain postgres images, SQLite) — every subsequent
+    # statement failed with InFailedSQLTransactionError and no tables were
+    # created.
+    try:
+        async with engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        except Exception:
-            pass # SQLite doesn't support extensions this way
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"pgvector extension not available, continuing without it: {e}")
 
+    async with engine.begin() as conn:
         # Import all models here to ensure they are registered on Base.
         # Each import is independent: one broken module must not prevent
         # create_all from running for everything else (a duplicate-table
