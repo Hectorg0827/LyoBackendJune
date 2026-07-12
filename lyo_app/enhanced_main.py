@@ -396,6 +396,9 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.feeds.routes import router as basic_feeds_router
         app.include_router(basic_feeds_router, tags=["feeds"])
+        # Versioned mount: /api/v1/feeds/posts, /comments, /feed/public, ...
+        # matches the mobile clients' /api/v1 surface and the route tests.
+        app.include_router(basic_feeds_router, prefix="/api/v1/feeds", tags=["feeds"])
         logger.info("✅ Basic feeds routes integrated - posts/comments/reactions/follow active!")
     except ImportError as e:
         logger.warning(f"Basic feeds routes not available: {e}")

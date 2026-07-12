@@ -274,7 +274,7 @@ Keep your response helpful, educational, and personalized to who they are.
         response = {
             "response": response_content,
             "interaction_id": None,
-            "model_used": model_resp.model_used if hasattr(model_resp, 'model_used') else ModelType.GEMMA_ON_DEVICE,
+            "model_used": model_resp.model_used if hasattr(model_resp, 'model_used') else ModelType.GEMMA_4_ON_DEVICE,
             "response_time_ms": model_resp.response_time_ms if hasattr(model_resp, 'response_time_ms') else 0.0,
             "strategy_used": TaskComplexity.MEDIUM,
             "conversation_id": convo.session_id,
@@ -351,7 +351,7 @@ Keep your response helpful, educational, and personalized to who they are.
             user_message=None,
             mentor_response=msg,
             interaction_type="proactive_check_in",
-            model_used=ModelType.GEMMA_ON_DEVICE,
+            model_used=ModelType.GEMMA_4_ON_DEVICE,
             response_time_ms=0.0,
             sentiment_detected=None,
             context_metadata={"reason": reason}
@@ -645,10 +645,15 @@ The member hasn't asked for help - you're reaching out because you care about th
         """Log mentor interaction to database."""
         
         # Convert ModelType to AIModelTypeEnum
+        # Every cloud-hosted ModelType folds into CLOUD_LLM for storage.
         model_enum_mapping = {
-            ModelType.GEMMA_ON_DEVICE: AIModelTypeEnum.GEMMA_ON_DEVICE,
-            ModelType.CLOUD_LLM: AIModelTypeEnum.CLOUD_LLM,
-            ModelType.HYBRID: AIModelTypeEnum.HYBRID
+            ModelType.GEMMA_4_ON_DEVICE: AIModelTypeEnum.GEMMA_ON_DEVICE,
+            ModelType.GEMMA_4_CLOUD: AIModelTypeEnum.CLOUD_LLM,
+            ModelType.CLAUDE_3_5_SONNET: AIModelTypeEnum.CLOUD_LLM,
+            ModelType.GPT_4_TURBO: AIModelTypeEnum.CLOUD_LLM,
+            ModelType.GPT_4_MINI: AIModelTypeEnum.CLOUD_LLM,
+            ModelType.GEMINI_1_5_FLASH: AIModelTypeEnum.CLOUD_LLM,
+            ModelType.HYBRID: AIModelTypeEnum.HYBRID,
         }
         
         interaction = MentorInteraction(

@@ -331,9 +331,8 @@ async def get_community_event(
     """Get a specific community event by ID."""
     try:
         event = await community_service.get_community_event_by_id(
-            db=db, 
-            event_id=event_id, 
-            user_id=current_user.id
+            db=db,
+            event_id=event_id
         )
         if not event:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
@@ -402,8 +401,8 @@ async def register_event_attendance(
 ):
     """Register attendance for an event."""
     try:
-        attendance_data = EventAttendanceCreate(community_event_id=event_id)
-        attendance = await community_service.register_event_attendance(
+        attendance_data = EventAttendanceCreate(event_id=event_id)
+        attendance = await community_service.register_for_event(
             db=db,
             user_id=current_user.id,
             attendance_data=attendance_data
@@ -425,7 +424,7 @@ async def update_event_attendance(
     """Update attendance status for an event."""
     try:
         attendance_data = EventAttendanceUpdate(status=attendance_status)
-        attendance = await community_service.update_event_attendance(
+        attendance = await community_service.update_attendance_for_event(
             db=db,
             event_id=event_id,
             user_id=current_user.id,
@@ -449,10 +448,10 @@ async def leave_event(
     db: AsyncSession = Depends(get_db)
 ):
     """Cancel attendance for an event."""
-    success = await community_service.leave_event(
+    success = await community_service.cancel_event_registration(
         db=db,
-        event_id=event_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        event_id=event_id
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance not found")
@@ -630,7 +629,7 @@ async def get_community_stats(
 ):
     """Get community statistics for the current user."""
     try:
-        stats = await community_service.get_user_community_stats(
+        stats = await community_service.get_community_stats(
             db=db,
             user_id=current_user.id
         )

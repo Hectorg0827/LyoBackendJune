@@ -152,3 +152,42 @@ class RefreshToken(Base):
     
     def __repr__(self) -> str:
         return f"<RefreshToken(id={self.id}, user_id={self.user_id})>"
+
+
+# ---------------------------------------------------------------------------
+# Mapper-configuration safety net
+# ---------------------------------------------------------------------------
+# User's relationships reference mapped classes in other modules by dotted
+# path. SQLAlchemy can only resolve those if the module was imported before
+# the first mapper configuration — which depends on WHO imported User first
+# (the full app imports everything; a test or script importing just
+# lyo_app.auth.models does not, and every mapper then fails with
+# "expression 'lyo_app.X.models.Y' failed to load").
+# Importing the referenced modules right before configuration makes mapper
+# resolution independent of import order.
+from sqlalchemy import event as _sa_event
+from sqlalchemy.orm import Mapper as _Mapper
+
+
+@_sa_event.listens_for(_Mapper, "before_configured", once=True)
+def _import_relationship_target_modules() -> None:
+    import importlib
+    import logging
+
+    for _mod in (
+        "lyo_app.auth.rbac",
+        "lyo_app.community.models",
+        "lyo_app.learning.models",
+        "lyo_app.feeds.models",
+        "lyo_app.ai_agents.models",
+        "lyo_app.ai_study.models",
+        "lyo_app.models.enhanced",
+        "lyo_app.models.clips",
+        "lyo_app.models.social",
+    ):
+        try:
+            importlib.import_module(_mod)
+        except Exception as exc:  # noqa: BLE001 — mapper error will follow with detail
+            logging.getLogger(__name__).warning(
+                "Could not import %s for mapper configuration: %s", _mod, exc
+            )

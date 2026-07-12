@@ -5,7 +5,7 @@ Tests role-based access control, permissions, and security middleware.
 
 import asyncio
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import status
 
@@ -188,7 +188,7 @@ class TestSecurityMiddleware:
     @pytest.fixture
     async def client(self):
         """Create test client."""
-        async with AsyncClient(app=app, base_url="http://test") as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
     
     async def test_rate_limiting(self, client):
@@ -289,7 +289,7 @@ class TestAuthenticationFlow:
     @pytest.fixture
     async def client(self):
         """Create test client."""
-        async with AsyncClient(app=app, base_url="http://test") as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
     
     async def test_registration_with_role_assignment(self, client):
