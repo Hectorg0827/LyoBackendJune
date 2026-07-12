@@ -86,7 +86,7 @@ class IntelligentCacheManager:
     def _generate_cache_key(self, prefix: str, *args, **kwargs) -> str:
         """Generate consistent cache keys"""
         key_data = f"{prefix}:{args}:{sorted(kwargs.items())}"
-        return f"lyo:{hashlib.md5(key_data.encode()).hexdigest()}"
+        return f"lyo:{hashlib.md5(key_data.encode(), usedforsecurity=False).hexdigest()}"
     
     async def get(
         self, 

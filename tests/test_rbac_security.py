@@ -18,6 +18,7 @@ from lyo_app.auth.schemas import UserCreate
 from lyo_app.core.database import get_db, init_db, AsyncSessionLocal
 
 import pytest_asyncio
+from sqlalchemy import text as sa_text
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -30,6 +31,15 @@ async def _ensure_app_schema():
     # New pool for this test's event loop — pooled asyncpg connections from
     # an earlier test's (closed) loop otherwise raise "Event loop is closed".
     await engine.dispose()
+
+    # Own transaction, tolerated failure: metadata includes pgvector columns
+    # (memory_insights.embedding) and create_all dies on Postgres without the
+    # extension; on SQLite the statement itself errors.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
+    except Exception:
+        pass
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

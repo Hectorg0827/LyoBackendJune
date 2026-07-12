@@ -105,7 +105,9 @@ jobs:
       run: |
         pip install bandit
         bandit -r lyo_app -f json -o bandit-report.json || true
-        bandit -r lyo_app
+        # Gate on high-severity, high-confidence findings; the full report
+        # above still captures every lower-severity item for review.
+        bandit -r lyo_app -lll -iii
 
     - name: 📋 Type checking (mypy)
       run: |

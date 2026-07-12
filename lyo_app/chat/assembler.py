@@ -103,7 +103,7 @@ class CTADeduplicator:
     def generate_cta_id(self, cta_type: str, context: Optional[str] = None) -> str:
         """Generate unique CTA ID"""
         data = f"{cta_type}:{context or ''}:{uuid4().hex[:8]}"
-        return hashlib.md5(data.encode()).hexdigest()[:12]
+        return hashlib.md5(data.encode(), usedforsecurity=False).hexdigest()[:12]
     
     def prioritize_ctas(
         self,

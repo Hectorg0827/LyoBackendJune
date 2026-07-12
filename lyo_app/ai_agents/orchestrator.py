@@ -612,7 +612,7 @@ Is there a particular aspect you'd like to dive deeper into?"""
     def _get_cache_key(self, prompt: str, max_tokens: int, temperature: float) -> str:
         """Generate cache key for response caching."""
         content = f"{prompt}:{max_tokens}:{temperature}"
-        return hashlib.md5(content.encode()).hexdigest()
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
     
     async def _get_cached_response(self, cache_key: str) -> Optional[ModelResponse]:
         """Get cached response if available."""
