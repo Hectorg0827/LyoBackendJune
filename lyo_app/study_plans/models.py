@@ -61,7 +61,10 @@ class StudyPlan(Base):
 
 class StudySession(Base):
     """Individual study session blocks scheduled for specific topics/types."""
-    __tablename__ = "study_sessions"
+    # Not "study_sessions": lyo_app/ai_study/models.py already owns that
+    # table on the shared Base, and the duplicate definition made importing
+    # both modules in one process raise InvalidRequestError.
+    __tablename__ = "study_plan_sessions"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     study_plan_id = Column(String(36), ForeignKey("study_plans.id", ondelete="CASCADE"), nullable=False)
@@ -87,7 +90,7 @@ class SessionReminder(Base):
     __tablename__ = "session_reminders"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    session_id = Column(String(36), ForeignKey("study_sessions.id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(String(36), ForeignKey("study_plan_sessions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     fire_at = Column(DateTime, nullable=False, index=True)

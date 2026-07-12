@@ -145,7 +145,7 @@ class StudyMessage(Base):
     user_typing_time_ms = Column(Integer, nullable=True)
 
     # Relationships
-    session = relationship("StudySession", back_populates="messages")
+    session = relationship("lyo_app.ai_study.models.StudySession", back_populates="messages")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -204,7 +204,7 @@ class GeneratedQuiz(Base):
     is_validated = Column(Boolean, default=False)  # Whether questions have been reviewed
 
     # Relationships
-    session = relationship("StudySession", back_populates="quizzes")
+    session = relationship("lyo_app.ai_study.models.StudySession", back_populates="quizzes")
     user = relationship("lyo_app.auth.models.User", back_populates="generated_quizzes")
     quiz_attempts = relationship("QuizAttempt", back_populates="quiz", cascade="all, delete-orphan")
 

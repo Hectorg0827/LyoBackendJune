@@ -503,6 +503,7 @@ class GamificationService:
           # Each achievement is evaluated independently: a nested award_xp for
           # an XP reward commits mid-loop, so a later iteration raising must
           # not lose already-committed unlocks or their queued notifications.
+          user_achievement = None
           try:
             # Check if user already has this achievement
             existing = await db.execute(
@@ -516,6 +517,7 @@ class GamificationService:
             user_achievement = existing.scalar_one_or_none()
             
             if user_achievement and user_achievement.is_completed:
+                user_achievement = None  # nothing staged; guard the except path
                 continue  # Already completed
             
             # Evaluate achievement criteria
@@ -524,21 +526,11 @@ class GamificationService:
             )
             
             if is_completed:
-                # Award the XP first: it commits internally, so if it fails
-                # nothing is pending and the achievement stays un-granted
-                # (re-evaluated on the next action) — previously a failure
-                # here could persist a completed achievement with no XP.
-                # check_achievements=False: this achievement's row isn't
-                # persisted yet, so a nested check would see it as still
-                # incomplete and re-award it recursively.
-                if achievement.xp_reward > 0:
-                    await self.award_xp(
-                        db, user_id, XPActionType.FIRST_ACHIEVEMENT,
-                        custom_xp=achievement.xp_reward,
-                        context_data={"achievement_id": achievement.id},
-                        check_achievements=False
-                    )
-
+                # Stage the completion and flush it BEFORE awarding XP:
+                # the nested award_xp commits internally, persisting the
+                # flushed row and the XP in the same transaction — neither
+                # can land without the other. check_achievements=False stops
+                # award_xp from re-entering this check and double-awarding.
                 if not user_achievement:
                     user_achievement = UserAchievement(
                         user_id=user_id,
@@ -550,6 +542,15 @@ class GamificationService:
                 else:
                     user_achievement.is_completed = True
                     user_achievement.completed_at = datetime.utcnow()
+                await db.flush()
+
+                if achievement.xp_reward > 0:
+                    await self.award_xp(
+                        db, user_id, XPActionType.FIRST_ACHIEVEMENT,
+                        custom_xp=achievement.xp_reward,
+                        context_data={"achievement_id": achievement.id},
+                        check_achievements=False
+                    )
 
                 awarded_achievements.append(user_achievement)
                 newly_awarded_info.append((
@@ -561,6 +562,15 @@ class GamificationService:
                 f"Achievement check failed for achievement "
                 f"{getattr(achievement, 'id', '?')}: {e}"
             )
+            # Un-mark a staged-but-uncommitted grant so the caller's later
+            # commit can't persist a completion whose XP never landed; the
+            # next action re-evaluates and re-grants it whole.
+            try:
+                if user_achievement is not None and user_achievement not in awarded_achievements:
+                    user_achievement.is_completed = False
+                    user_achievement.completed_at = None
+            except Exception:  # noqa: BLE001
+                pass
 
         # No commit here: award_xp calls this mid-flow and owns the
         # transaction — committing here persisted XP/achievement rows even

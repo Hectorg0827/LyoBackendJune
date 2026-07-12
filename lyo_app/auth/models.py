@@ -79,6 +79,25 @@ class User(Base):
     
     # RBAC relationships
     roles = relationship("lyo_app.auth.rbac.Role", secondary="user_roles", back_populates="users", lazy="noload", viewonly=True)
+
+    def has_role(self, role_name: str) -> bool:
+        """True if an eagerly-loaded role matches ``role_name``.
+
+        roles is lazy="noload": callers must selectinload it first (see
+        admin require_admin_permission); unloaded roles read as empty, so
+        this can only deny, never crash.
+        """
+        roles = self.__dict__.get("roles") or []
+        return any(role.name == role_name for role in roles)
+
+    def has_permission(self, permission_name: str) -> bool:
+        """True if any eagerly-loaded role carries ``permission_name``."""
+        roles = self.__dict__.get("roles") or []
+        return any(
+            perm.name == permission_name
+            for role in roles
+            for perm in (role.__dict__.get("permissions") or [])
+        )
     
     # Relationships - defined with string names to avoid circular imports
     created_study_groups = relationship("lyo_app.community.models.StudyGroup", back_populates="creator", lazy="noload", viewonly=True)
