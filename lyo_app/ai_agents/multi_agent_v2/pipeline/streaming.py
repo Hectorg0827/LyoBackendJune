@@ -5,7 +5,6 @@ Streaming support for real-time progress updates during course generation.
 from datetime import datetime
 from typing import AsyncIterator
 
-from .orchestrator import PipelineState, PipelineStep
 from dataclasses import dataclass
 import json
 
@@ -45,6 +44,11 @@ class StreamingPipeline:
         
         Yields ProgressEvent objects that can be sent as SSE to clients.
         """
+        # Imported here, not at module level: orchestrator.py has to import
+        # this module before it defines PipelineState/PipelineStep (it
+        # subclasses StreamingPipeline), so a top-level import is circular.
+        from .orchestrator import PipelineState, PipelineStep
+
         # Emit start event
         yield ProgressEvent(
             type="started",

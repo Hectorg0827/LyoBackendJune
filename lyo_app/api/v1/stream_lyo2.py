@@ -4,7 +4,7 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
+from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
@@ -135,6 +136,57 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
         return f"data: {json.dumps(error_data)}\n\n"
 
 import re as _re
+
+def _to_smart_blocks(
+    answer_text: Optional[str], artifact: Optional[UIBlock]
+) -> List[Dict[str, Any]]:
+    """Convert a plain answer plus optional legacy UIBlock artifact into
+    SmartBlock dicts — the unified block vocabulary all three clients render.
+    Unknown artifact types are skipped rather than guessed at."""
+    blocks: List[Dict[str, Any]] = []
+    if answer_text:
+        blocks.append(SmartBlock.text(answer_text).model_dump())
+
+    if artifact is None:
+        return blocks
+    content = artifact.content or {}
+
+    if artifact.type == UIBlockType.QUIZ:
+        options: List[QuizOption] = []
+        for i, opt in enumerate(content.get("options", [])):
+            # Planner output is loose: options arrive as plain strings or as
+            # dicts that may lack the "id" QuizOption requires.
+            if isinstance(opt, str):
+                options.append(QuizOption(id=str(i), text=opt))
+            elif isinstance(opt, dict):
+                options.append(
+                    QuizOption(id=str(opt.get("id", i)), text=str(opt.get("text", "")))
+                )
+        blocks.append(
+            SmartBlock.quiz(
+                question=str(content.get("question", "")),
+                options=options,
+                correct_index=int(content.get("correct_index", 0)),
+                explanation=content.get("explanation"),
+                hint=content.get("hint"),
+            ).model_dump()
+        )
+    elif artifact.type == UIBlockType.FLASHCARDS:
+        for card in content.get("cards", []):
+            if isinstance(card, dict):
+                blocks.append(
+                    SmartBlock.flashcard(
+                        front=str(card.get("front", "")),
+                        back=str(card.get("back", "")),
+                    ).model_dump()
+                )
+    elif artifact.type == UIBlockType.STUDY_PLAN:
+        plan = content.get("plan") or content.get("text") or ""
+        if plan:
+            blocks.append(SmartBlock.text(str(plan), subtype="summary").model_dump())
+
+    return blocks
+
 
 def _extract_course_topic(user_text: str) -> str:
     topic = _re.sub(
@@ -418,7 +470,18 @@ async def stream_lyo2_chat(
                 # Safe JSON serialization using the new helper
                 artifact_event_data = {'type': 'artifact', 'block': tagged_artifact.model_dump()}
                 yield yield_safe_sse_event("artifact", artifact_event_data)
-            
+
+            # Unified SmartBlock emission: same content as the legacy
+            # answer/artifact events above, in the versioned block vocabulary
+            # shared by all three clients. Additive — v1 consumers ignore it.
+            smart_blocks = _to_smart_blocks(
+                raw_llm_text, execution_response.artifact_block
+            )
+            if smart_blocks:
+                yield yield_safe_sse_event(
+                    "smart_blocks", {"type": "smart_blocks", "blocks": smart_blocks}
+                )
+
             # Send open_classroom payload (course creation trigger)
             if (
                 execution_response.open_classroom_payload is None

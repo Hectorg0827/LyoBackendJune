@@ -58,7 +58,8 @@ class GamificationService:
         context_type: Optional[str] = None,
         context_id: Optional[int] = None,
         context_data: Optional[Dict[str, Any]] = None,
-        custom_xp: Optional[int] = None
+        custom_xp: Optional[int] = None,
+        check_achievements: bool = True
     ) -> UserXP:
         """
         Award XP to a user for an action.
@@ -71,7 +72,10 @@ class GamificationService:
             context_id: Optional context entity ID
             context_data: Optional additional context data
             custom_xp: Custom XP amount (overrides default)
-            
+            check_achievements: False when called from _check_achievements
+                itself (achievement XP rewards), to stop the mutual recursion
+                of award_xp <-> _check_achievements
+
         Returns:
             Created XP record
         """
@@ -102,7 +106,9 @@ class GamificationService:
         await self._update_user_level(db, user_id, xp_amount)
         
         # Check for achievements
-        _, achievement_notes = await self._check_achievements(db, user_id, action_type, context_data)
+        achievement_notes = []
+        if check_achievements:
+            _, achievement_notes = await self._check_achievements(db, user_id, action_type, context_data)
 
         # Update streaks if applicable
         if action_type in [XPActionType.LESSON_COMPLETED, XPActionType.DAILY_LOGIN]:
@@ -522,11 +528,15 @@ class GamificationService:
                 # nothing is pending and the achievement stays un-granted
                 # (re-evaluated on the next action) — previously a failure
                 # here could persist a completed achievement with no XP.
+                # check_achievements=False: this achievement's row isn't
+                # persisted yet, so a nested check would see it as still
+                # incomplete and re-award it recursively.
                 if achievement.xp_reward > 0:
                     await self.award_xp(
                         db, user_id, XPActionType.FIRST_ACHIEVEMENT,
                         custom_xp=achievement.xp_reward,
-                        context_data={"achievement_id": achievement.id}
+                        context_data={"achievement_id": achievement.id},
+                        check_achievements=False
                     )
 
                 if not user_achievement:
