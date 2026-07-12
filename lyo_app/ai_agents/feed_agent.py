@@ -250,49 +250,7 @@ class FeedRankingAgent:
             "topic_preferences": {},
             "total_interactions": 0,
         }
-        try:
-            interactions = []
-            
-            # Organize by content_id
-            by_content = {}
-            for interaction in interactions:
-                if interaction.content_id not in by_content:
-                    by_content[interaction.content_id] = []
-                by_content[interaction.content_id].append({
-                    "interaction_type": interaction.interaction_type,
-                    "timestamp": interaction.timestamp,
-                    "duration": interaction.duration if hasattr(interaction, "duration") else None,
-                    "reaction": interaction.reaction if hasattr(interaction, "reaction") else None,
-                    "metadata": interaction.metadata if hasattr(interaction, "metadata") else {}
-                })
-            
-            # Get viewed content IDs for filtering duplication
-            viewed_content_ids = list(by_content.keys())
-            
-            # Calculate content type preferences
-            content_type_counts = defaultdict(int)
-            for interaction in interactions:
-                if hasattr(interaction, "content_type") and interaction.content_type:
-                    content_type_counts[interaction.content_type] += 1
-            
-            # Calculate topic preferences
-            topic_counts = defaultdict(int)
-            for interaction in interactions:
-                if hasattr(interaction, "metadata") and interaction.metadata:
-                    topics = interaction.metadata.get("topics", [])
-                    for topic in topics:
-                        topic_counts[topic] += 1
-            
-            return {
-                "interactions": by_content,
-                "viewed_content_ids": viewed_content_ids,
-                "content_type_preferences": dict(content_type_counts),
-                "topic_preferences": dict(topic_counts),
-                "total_interactions": len(interactions)
-            }
-        except Exception as e:
-            logger.error(f"Error fetching interaction history for {user_id}: {str(e)}")
-            return {"interactions": {}, "viewed_content_ids": [], "error": str(e)}
+
     
     async def _calculate_base_relevance(
         self, 

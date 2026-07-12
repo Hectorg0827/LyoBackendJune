@@ -518,6 +518,17 @@ class GamificationService:
             )
             
             if is_completed:
+                # Award the XP first: it commits internally, so if it fails
+                # nothing is pending and the achievement stays un-granted
+                # (re-evaluated on the next action) — previously a failure
+                # here could persist a completed achievement with no XP.
+                if achievement.xp_reward > 0:
+                    await self.award_xp(
+                        db, user_id, XPActionType.FIRST_ACHIEVEMENT,
+                        custom_xp=achievement.xp_reward,
+                        context_data={"achievement_id": achievement.id}
+                    )
+
                 if not user_achievement:
                     user_achievement = UserAchievement(
                         user_id=user_id,
@@ -529,15 +540,7 @@ class GamificationService:
                 else:
                     user_achievement.is_completed = True
                     user_achievement.completed_at = datetime.utcnow()
-                
-                # Award XP for achievement
-                if achievement.xp_reward > 0:
-                    await self.award_xp(
-                        db, user_id, XPActionType.FIRST_ACHIEVEMENT,
-                        custom_xp=achievement.xp_reward,
-                        context_data={"achievement_id": achievement.id}
-                    )
-                
+
                 awarded_achievements.append(user_achievement)
                 newly_awarded_info.append((
                     getattr(achievement, "name", None) or "an achievement",
