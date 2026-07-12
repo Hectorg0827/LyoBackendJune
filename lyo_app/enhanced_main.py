@@ -410,6 +410,10 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.routers.ai_routes import router as ai_router
         app.include_router(ai_router)
+        # Mentor/engagement/curriculum agent endpoints (mentor conversation,
+        # sentiment analysis, websocket) were defined but never mounted.
+        from lyo_app.ai_agents.routes import router as ai_agents_router
+        app.include_router(ai_agents_router, prefix="/api/v1")
     except ImportError:
         pass
     

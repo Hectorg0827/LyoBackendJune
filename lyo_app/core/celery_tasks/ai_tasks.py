@@ -4,13 +4,13 @@ from lyo_app.ai_agents.sentiment_agent import sentiment_engagement_agent
 from lyo_app.ai_agents.mentor_agent import AIMentor
 from lyo_app.ai_agents.curriculum_agent import curriculum_design_agent
 from lyo_app.ai_agents.curation_agent import content_curation_agent
-from lyo_app.core.database import get_db_session
+import lyo_app.core.database as database
 
 @celery_app.task(name="ai.analyze_activity")
 def analyze_user_activity_task(user_id: int, action: str, metadata: dict, user_message: str = None):
     """Celery task to analyze user activity asynchronously with AI agents."""
     async def run():
-        async with get_db_session() as db:
+        async with await database.get_db_session() as db:
             # 1. Sentiment & engagement analysis
             await sentiment_engagement_agent.analyze_user_action(
                 user_id=user_id,
@@ -47,7 +47,7 @@ def generate_course_outline_task(
 ):
     """Celery task to generate a course outline using the curriculum agent."""
     async def run():
-        async with get_db_session() as db:
+        async with await database.get_db_session() as db:
             result = await curriculum_design_agent.generate_course_outline(
                 title=title,
                 description=description,
@@ -74,7 +74,7 @@ def generate_lesson_content_task(
 ):
     """Celery task to generate lesson content using the curriculum agent."""
     async def run():
-        async with get_db_session() as db:
+        async with await database.get_db_session() as db:
             result = await curriculum_design_agent.generate_lesson_content(
                 course_id=course_id,
                 lesson_title=lesson_title,
@@ -99,7 +99,7 @@ def evaluate_content_quality_task(
 ):
     """Celery task to evaluate content quality using the curation agent."""
     async def run():
-        async with get_db_session() as db:
+        async with await database.get_db_session() as db:
             result = await content_curation_agent.evaluate_content_quality(
                 content_text=content_text,
                 content_type=content_type,
@@ -120,7 +120,7 @@ def tag_content_task(
 ):
     """Celery task to tag and categorize content using the curation agent."""
     async def run():
-        async with get_db_session() as db:
+        async with await database.get_db_session() as db:
             result = await content_curation_agent.tag_and_categorize_content(
                 content_text=content_text,
                 content_type=content_type,
@@ -135,7 +135,7 @@ def tag_content_task(
 def identify_content_gaps_task(course_id: int):
     """Celery task to identify content gaps in a course using the curation agent."""
     async def run():
-        async with get_db_session() as db:
+        async with await database.get_db_session() as db:
             result = await content_curation_agent.identify_content_gaps(
                 course_id=course_id,
                 db=db

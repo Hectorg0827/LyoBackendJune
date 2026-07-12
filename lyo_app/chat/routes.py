@@ -97,8 +97,7 @@ async def get_proactive_greeting(
             user_context_tag = await context_engine.get_user_context(db, current_user.id)
             
             # Get Detailed Learning Context
-            # TEMPORARILY DISABLED due to greenlet issues
-            learner_context = ""  # await personalization_engine.build_prompt_context(db, str(current_user.id))
+            learner_context = await personalization_engine.build_prompt_context(db, str(current_user.id))
         except Exception as e:
             await db.rollback()
             logger.warning(f"Failed to build context for greeting: {e}")

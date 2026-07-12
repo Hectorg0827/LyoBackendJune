@@ -107,6 +107,19 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rate_limit_window():
+    """The shared in-memory limiter is keyed by client IP and every ASGI
+    test request shares one; without a per-test reset a module's worth of
+    register/login calls trips the 10/min auth limit."""
+    try:
+        from lyo_app.core.rate_limiter import in_memory_rate_limiter
+
+        in_memory_rate_limiter.clients.clear()
+    except ImportError:
+        pass
+
+
 @pytest_asyncio.fixture(scope="function")
 async def async_client(db_session):
     """HTTP client over the real app with the DB swapped for the test session.

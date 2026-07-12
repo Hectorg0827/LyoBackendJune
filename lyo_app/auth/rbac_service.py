@@ -4,7 +4,7 @@ Handles role assignment, permission checking, and RBAC operations.
 """
 
 from typing import List, Optional, Set
-from sqlalchemy import select
+from sqlalchemy import select, insert, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -61,7 +61,10 @@ class RBACService:
     
     async def _get_or_create_role(self, name: str, description: str) -> Role:
         """Get existing role or create new one."""
-        stmt = select(Role).where(Role.name == name)
+        # Eager-load permissions: _assign_permissions_to_role mutates the
+        # collection, and a lazy load on an existing role in async context
+        # raises MissingGreenlet (re-running init on a seeded DB crashed).
+        stmt = select(Role).options(selectinload(Role.permissions)).where(Role.name == name)
         result = await self.db.execute(stmt)
         role = result.scalar_one_or_none()
         
@@ -74,6 +77,10 @@ class RBACService:
     
     async def _assign_permissions_to_role(self, role: Role, permissions: List[Permission]) -> None:
         """Assign permissions to a role."""
+        # Load the collection async first — touching an unloaded lazy
+        # relationship here raises MissingGreenlet (fresh-flushed roles
+        # included), which broke RBAC initialization entirely.
+        await self.db.refresh(role, attribute_names=["permissions"])
         # Clear existing permissions
         role.permissions.clear()
         
@@ -84,8 +91,7 @@ class RBACService:
     
     async def assign_role_to_user(self, user_id: int, role_name: str) -> bool:
         """Assign a role to a user."""
-        # Get user with roles loaded
-        stmt = select(User).options(selectinload(User.roles)).where(User.id == user_id)
+        stmt = select(User).where(User.id == user_id)
         result = await self.db.execute(stmt)
         user = result.scalar_one_or_none()
         
@@ -100,27 +106,37 @@ class RBACService:
         if not role:
             return False
         
-        # Check if user already has the role
-        if role not in user.roles:
-            user.roles.append(role)
+        # User.roles is viewonly (mutations are silently discarded, so the
+        # old append-based version never persisted anything) — write the
+        # association row directly.
+        existing = await self.db.execute(
+            select(user_roles).where(
+                user_roles.c.user_id == user_id,
+                user_roles.c.role_id == role.id,
+            )
+        )
+        if existing.first() is None:
+            await self.db.execute(
+                insert(user_roles).values(user_id=user_id, role_id=role.id)
+            )
             await self.db.commit()
         
         return True
     
     async def remove_role_from_user(self, user_id: int, role_name: str) -> bool:
         """Remove a role from a user."""
-        # Get user with roles loaded
-        stmt = select(User).options(selectinload(User.roles)).where(User.id == user_id)
-        result = await self.db.execute(stmt)
-        user = result.scalar_one_or_none()
-        
-        if not user:
-            return False
-        
-        # Find and remove role
-        for role in user.roles:
-            if role.name == role_name:
-                user.roles.remove(role)
+        role_result = await self.db.execute(select(Role).where(Role.name == role_name))
+        role = role_result.scalar_one_or_none()
+        if role is not None:
+            # See assign_role_to_user: the viewonly relationship can't be
+            # mutated, so delete the association row directly.
+            deleted = await self.db.execute(
+                delete(user_roles).where(
+                    user_roles.c.user_id == user_id,
+                    user_roles.c.role_id == role.id,
+                )
+            )
+            if deleted.rowcount:
                 await self.db.commit()
                 return True
         
@@ -181,7 +197,9 @@ class RBACService:
         result = await self.db.execute(stmt)
         permissions = result.scalars().all()
         
-        # Assign permissions to role
+        # Assign permissions to role (load the collection async first —
+        # touching it unloaded raises MissingGreenlet)
+        await self.db.refresh(role, attribute_names=["permissions"])
         role.permissions.extend(permissions)
         await self.db.commit()
         

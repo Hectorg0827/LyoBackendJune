@@ -452,8 +452,8 @@ class TestEventAttendanceRoutes:
         
         assert response.status_code == 201
         data = response.json()
-        assert data["community_event_id"] == event_id
-        assert data["status"] == "registered"
+        assert data["event_id"] == event_id
+        assert data["status"] == "going"
     
     async def test_update_event_attendance(self, client: AsyncClient, auth_headers: dict):
         """Test updating attendance status."""

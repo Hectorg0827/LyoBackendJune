@@ -12,11 +12,21 @@ client = TestClient(app)
 
 # Fixture to override dependency get_current_user
 @pytest.fixture(autouse=True)
-def mock_current_user(monkeypatch):
+def mock_current_user():
+    # FastAPI resolves the exact function object the routes imported
+    # (lyo_app.auth.routes.get_current_user) — monkeypatching the module
+    # attribute does nothing; dependency_overrides is the supported hook.
+    from lyo_app.auth.routes import get_current_user
+
     class DummyUser:
         id = 1
-        def has_role(self, role): return True
-    monkeypatch.setattr('lyo_app.auth.dependencies.get_current_user', lambda: DummyUser())
+
+        def has_role(self, role):
+            return True
+
+    app.dependency_overrides[get_current_user] = lambda: DummyUser()
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 # Test mentor conversation endpoint
 def test_mentor_conversation(monkeypatch):
@@ -34,7 +44,7 @@ def test_mentor_conversation(monkeypatch):
     monkeypatch.setattr(routes_module.ai_mentor, 'get_response', AsyncMock(return_value=fake_response))
 
     payload = {'message': 'Hi AI', 'context': {'foo': 'bar'}}
-    response = client.post(f"{settings.api_v1_prefix}/ai/mentor/conversation", json=payload)
+    response = client.post(f"/api/v1/ai/mentor/conversation", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data['response'] == fake_response['response']
@@ -51,6 +61,7 @@ def test_engagement_analyze(monkeypatch):
         'sentiment_analysis': None,
         'engagement_analysis': {
             'engagement_level': 'engaged',
+            'confidence': 0.9,
             'recommended_actions': []
         },
         'intervention_triggered': False,
@@ -60,7 +71,7 @@ def test_engagement_analyze(monkeypatch):
     monkeypatch.setattr(routes_module.sentiment_engagement_agent, 'analyze_user_action', AsyncMock(return_value=fake_analysis))
 
     payload = {'user_id': 1, 'action': 'test', 'metadata': {}, 'user_message': 'hello'}
-    response = client.post(f"{settings.api_v1_prefix}/ai/engagement/analyze", json=payload)
+    response = client.post(f"/api/v1/ai/engagement/analyze", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data['user_id'] == fake_analysis['user_id']
@@ -70,7 +81,7 @@ def test_engagement_analyze(monkeypatch):
 @pytest.mark.asyncio
 async def test_websocket_connection(monkeypatch, anyio_backend):
     from starlette.websockets import WebSocketDisconnect
-    url = f"ws://testserver{settings.api_v1_prefix}/ai/ws/1"
+    url = f"ws://testserver/api/v1/ai/ws/1"
     with client.websocket_connect(url) as ws:
         # The manager sends initial connection_established message
         msg = ws.receive_json()

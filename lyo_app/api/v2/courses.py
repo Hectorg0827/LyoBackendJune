@@ -182,6 +182,18 @@ async def generate_course(
     cost_map = {"basic": 0.025, "fast": 0.043, "standard": 0.085, "premium": 0.170}
     estimated_cost = cost_map.get(request.quality_tier, 0.043)
 
+    # Reject over-budget requests up front — the schema accepted
+    # max_budget_usd but nothing enforced it on this (first-mounted) handler.
+    if request.max_budget_usd is not None and estimated_cost > request.max_budget_usd:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Estimated cost (${estimated_cost:.4f}) exceeds budget "
+                f"(${request.max_budget_usd:.2f}). Consider a lower quality "
+                "tier or raising the budget."
+            ),
+        )
+
     # ⚡️ Semantic Cache Check
     user_context = request.user_context or {}
     level = user_context.get("level", "beginner")

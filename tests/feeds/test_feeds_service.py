@@ -352,7 +352,8 @@ class TestFeedsService:
         
         # User1's feed should contain User2's post
         feed = await feeds_service.get_user_feed(db_session, test_user1.id)
-        
-        assert len(feed) >= 1
-        post_ids = [post.id for post in feed]
+
+        # Paginated response: {"posts": [...], "total", "page", ...}
+        assert feed["total"] >= 1
+        post_ids = [p["id"] for p in feed["posts"]]
         assert post.id in post_ids

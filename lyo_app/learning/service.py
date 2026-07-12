@@ -6,6 +6,10 @@ Handles course, lesson, and enrollment management operations.
 from datetime import datetime
 from typing import List, Optional
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -61,7 +65,11 @@ class LearningService:
         
         # Generate embedding
         embed_text = f"{course_data.title} {course_data.description or ''} {course_data.short_description or ''}"
-        db_course.embedding = await embedding_service.embed_text(embed_text.strip())
+        try:
+            db_course.embedding = await embedding_service.embed_text(embed_text.strip())
+        except Exception as exc:  # noqa: BLE001 — embeddings must not block course creation
+            logger.warning(f"Course embedding skipped: {exc}")
+            db_course.embedding = None
         
         await db.commit()
         await db.refresh(db_course)
@@ -191,7 +199,11 @@ class LearningService:
 
         # Generate embedding
         embed_text = f"{lesson_data.title} {lesson_data.description or ''} {lesson_data.content or ''}"
-        db_lesson.embedding = await embedding_service.embed_text(embed_text.strip())
+        try:
+            db_lesson.embedding = await embedding_service.embed_text(embed_text.strip())
+        except Exception as exc:  # noqa: BLE001 — embeddings must not block lesson creation
+            logger.warning(f"Lesson embedding skipped: {exc}")
+            db_lesson.embedding = None
 
         await db.commit()
         await db.refresh(db_lesson)
