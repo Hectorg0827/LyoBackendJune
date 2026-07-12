@@ -1,3 +1,4 @@
+from sqlalchemy import text
 """
 Living Classroom - Production Monitoring Dashboard
 ================================================

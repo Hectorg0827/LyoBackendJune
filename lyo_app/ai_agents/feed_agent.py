@@ -237,15 +237,21 @@ class FeedRankingAgent:
             return {"modules": {}, "active_modules": [], "error": str(e)}
 
     async def _get_content_interaction_history(self, user_id: int, db: AsyncSession) -> Dict[str, Any]:
-        """Fetch user's content interaction history."""
+        """Fetch user's content interaction history.
+
+        The UserContentInteraction model was never implemented, so this
+        previously raised (and swallowed) a NameError on every call. Return
+        the empty history explicitly until interaction tracking lands.
+        """
+        return {
+            "interactions": {},
+            "viewed_content_ids": [],
+            "content_type_preferences": {},
+            "topic_preferences": {},
+            "total_interactions": 0,
+        }
         try:
-            # Get recent interactions
-            interactions = (await db.execute(
-                select(UserContentInteraction)
-                .where(UserContentInteraction.user_id == user_id)
-                .order_by(desc(UserContentInteraction.timestamp))
-                .limit(50)  # Limit to recent interactions
-            )).scalars().all()
+            interactions = []
             
             # Organize by content_id
             by_content = {}

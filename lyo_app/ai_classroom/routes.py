@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Request, Backgroun
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .intent_detector import get_intent_detector, ChatIntent, IntentType

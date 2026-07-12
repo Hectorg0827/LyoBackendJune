@@ -2,7 +2,10 @@
 Streaming support for real-time progress updates during course generation.
 """
 
+from datetime import datetime
 from typing import AsyncIterator
+
+from .orchestrator import PipelineState, PipelineStep
 from dataclasses import dataclass
 import json
 

@@ -4,7 +4,7 @@ Builds on existing curriculum_agent.py
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from datetime import datetime
 import hashlib
 import json
@@ -12,6 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.personalization.service import personalization_engine
 from lyo_app.core.redis_cache import redis_cache
+
+if TYPE_CHECKING:
+    from lyo_app.gen_curriculum.schemas import (
+        ContentGenerationRequest,
+        GeneratedContentResponse,
+        LearningPathRequest,
+        LearningPathResponse,
+        PathAdaptationRequest,
+        PathAdaptationResponse,
+    )
+
 
 logger = logging.getLogger(__name__)
 

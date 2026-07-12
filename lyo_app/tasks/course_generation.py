@@ -325,7 +325,6 @@ Generate the course outline:"""
             ]
         }
         
-        return outline
     
     async def create_course_content(
         self, 

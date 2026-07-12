@@ -3,7 +3,10 @@ Authentication routes for user registration, login, and profile management.
 Provides FastAPI endpoints for the authentication module.
 """
 
+import logging
 from typing import Annotated
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader

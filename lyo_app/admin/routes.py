@@ -16,6 +16,20 @@ from lyo_app.auth.security_middleware import PermissionChecker
 from lyo_app.core.database import get_db
 from pydantic import BaseModel
 
+def require_admin_permission(permission: PermissionType):
+    """Dependency factory: current user must hold ``permission``."""
+    async def _check(
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if not await PermissionChecker.check_permission(current_user, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+        return current_user
+    return _check
+
+
 
 # Pydantic schemas for admin operations
 class RoleCreate(BaseModel):
@@ -137,7 +151,7 @@ async def get_all_roles(
 async def create_role(
     role_data: RoleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Create a new custom role."""
     rbac_service = RBACService(db)
@@ -169,7 +183,7 @@ async def update_role(
     role_name: str,
     role_data: RoleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Update a role's permissions."""
     rbac_service = RBACService(db)
@@ -189,7 +203,7 @@ async def update_role(
 async def delete_role(
     role_name: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Delete a custom role (cannot delete default roles)."""
     rbac_service = RBACService(db)
@@ -208,7 +222,7 @@ async def delete_role(
 @router.get("/permissions", response_model=List[PermissionResponse])
 async def get_all_permissions(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Get all available permissions."""
     rbac_service = RBACService(db)
@@ -231,7 +245,7 @@ async def get_all_users(
     limit: int = Query(100, ge=1, le=1000),
     role_filter: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.VIEW_USER))
+    current_user: User = Depends(require_admin_permission(PermissionType.VIEW_USER))
 ):
     """Get all users with pagination and optional role filtering."""
     # This would need to be implemented in AuthService
@@ -244,7 +258,7 @@ async def assign_roles_to_user(
     user_id: int,
     assignment: UserRoleAssignment,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Assign roles to a user."""
     rbac_service = RBACService(db)
@@ -266,7 +280,7 @@ async def remove_role_from_user(
     user_id: int,
     role_name: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Remove a role from a user."""
     rbac_service = RBACService(db)
@@ -285,7 +299,7 @@ async def remove_role_from_user(
 async def bulk_assign_roles(
     assignment: BulkRoleAssignment,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Bulk assign roles to multiple users."""
     rbac_service = RBACService(db)
@@ -306,7 +320,7 @@ async def bulk_assign_roles(
 async def promote_user(
     promotion: UserPromotion,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.MANAGE_ROLES))
+    current_user: User = Depends(require_admin_permission(PermissionType.MANAGE_ROLES))
 ):
     """Promote a user from one role to another."""
     rbac_service = RBACService(db)
@@ -332,7 +346,7 @@ async def promote_user(
 async def get_user_roles(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.VIEW_USER))
+    current_user: User = Depends(require_admin_permission(PermissionType.VIEW_USER))
 ):
     """Get all roles for a specific user."""
     rbac_service = RBACService(db)
@@ -358,7 +372,7 @@ async def get_user_roles(
 async def get_role_users(
     role_name: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.VIEW_USER))
+    current_user: User = Depends(require_admin_permission(PermissionType.VIEW_USER))
 ):
     """Get all users with a specific role."""
     rbac_service = RBACService(db)
@@ -383,7 +397,7 @@ async def get_role_users(
 @router.get("/analytics/roles")
 async def get_role_analytics(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.VIEW_ANALYTICS))
+    current_user: User = Depends(require_admin_permission(PermissionType.VIEW_ANALYTICS))
 ):
     """Get analytics about role distribution."""
     rbac_service = RBACService(db)
@@ -417,7 +431,7 @@ async def get_role_analytics(
 @router.get("/analytics/permissions")
 async def get_permission_analytics(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(lambda: require_admin_permission(PermissionType.VIEW_ANALYTICS))
+    current_user: User = Depends(require_admin_permission(PermissionType.VIEW_ANALYTICS))
 ):
     """Get analytics about permission usage."""
     rbac_service = RBACService(db)

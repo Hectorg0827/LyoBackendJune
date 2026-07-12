@@ -1,6 +1,9 @@
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship, declared_attr
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lyo_app.tenants.models import Organization
 
 class TenantMixin:
     """

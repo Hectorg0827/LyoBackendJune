@@ -3,6 +3,8 @@ Gamification service implementation.
 Handles XP tracking, achievements, streaks, levels, and leaderboards.
 """
 
+import logging
+
 from datetime import datetime, timedelta, date
 from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
@@ -16,6 +18,8 @@ from lyo_app.gamification.models import (
     LeaderboardEntry, Badge, UserBadge,
     XPActionType, AchievementType, StreakType
 )
+logger = logging.getLogger(__name__)
+
 from lyo_app.gamification.schemas import (
     XPRecordCreate, AchievementCreate, AchievementUpdate,
     UserAchievementCreate, UserAchievementUpdate,
@@ -490,6 +494,10 @@ class GamificationService:
         achievements = result.scalars().all()
         
         for achievement in achievements:
+          # Each achievement is evaluated independently: a nested award_xp for
+          # an XP reward commits mid-loop, so a later iteration raising must
+          # not lose already-committed unlocks or their queued notifications.
+          try:
             # Check if user already has this achievement
             existing = await db.execute(
                 select(UserAchievement).where(
@@ -535,6 +543,11 @@ class GamificationService:
                     getattr(achievement, "name", None) or "an achievement",
                     getattr(achievement, "xp_reward", 0) or 0,
                 ))
+          except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"Achievement check failed for achievement "
+                f"{getattr(achievement, 'id', '?')}: {e}"
+            )
 
         # No commit here: award_xp calls this mid-flow and owns the
         # transaction — committing here persisted XP/achievement rows even

@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """
 Researcher Agent - Expert in deep-dive discovery and fact-gathering.
 

@@ -14,7 +14,7 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
-from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision
+from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
@@ -297,7 +297,7 @@ async def stream_lyo2_chat(
                 # OPTIMIZATION: Fast Path for simple intents
                 if decision.intent in [Intent.GREETING, Intent.CHAT] and decision.confidence > 0.7:
                     logger.info(f"⚡ [STREAM][{trace_id}] Fast Path: Skipping Planner for {decision.intent}")
-                    plan = Plan(steps=[
+                    plan = LyoPlan(steps=[
                         PlannedAction(
                             action_type=ActionType.GENERATE_TEXT,
                             description=f"Handle {decision.intent.value} request directly",
@@ -309,7 +309,7 @@ async def stream_lyo2_chat(
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 25s")
                 # Fallback plan
-                plan = Plan(steps=[
+                plan = LyoPlan(steps=[
                     PlannedAction(
                         action_type=ActionType.GENERATE_TEXT,
                         description="Fallback generation after planner timeout",

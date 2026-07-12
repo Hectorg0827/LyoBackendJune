@@ -1,3 +1,4 @@
+import asyncio
 """
 AI Optimization Management API
 Advanced endpoints for managing AI performance optimization, A/B testing, and analytics.
@@ -5,7 +6,7 @@ Advanced endpoints for managing AI performance optimization, A/B testing, and an
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import structlog
 
 from lyo_app.auth.security import verify_access_token

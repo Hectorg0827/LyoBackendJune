@@ -1,3 +1,4 @@
+from lyo_app.ai_study.service import study_mode_service
 """
 AI Study Mode API Routes - Enhanced Intelligence 
 Intelligent study session endpoints with Socratic tutoring and quiz generation

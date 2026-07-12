@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from lyo_app.community.models import (
+    PostVisibility,
     StudyGroup, GroupMembership, CommunityEvent, EventAttendance,
     StudyGroupStatus, StudyGroupPrivacy, MembershipRole,
     EventStatus, AttendanceStatus, CommunityQuestion, CommunityAnswer,

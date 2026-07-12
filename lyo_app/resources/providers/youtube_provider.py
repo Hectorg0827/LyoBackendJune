@@ -1,3 +1,5 @@
+import asyncio
+import aiohttp
 """
 Enhanced YouTube educational content provider with quota management and caching.
 """

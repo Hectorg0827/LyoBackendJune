@@ -1297,16 +1297,18 @@ class AIOrchestrator:
         }
         return responses.get(language, responses[LanguageCode.ENGLISH])
     
-    # Production optimization imports
-    try:
-        from .optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
-        from .optimization.personalization_engine import personalization_engine
-        from .optimization.ab_testing import experiment_manager, ExperimentType
-        OPTIMIZATION_AVAILABLE = True
-    except ImportError:
-        logger.warning("Optimization modules not available - running in basic mode")
-        OPTIMIZATION_AVAILABLE = False
 
+
+
+# Production optimization imports
+try:
+    from .optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
+    from .optimization.personalization_engine import personalization_engine
+    from .optimization.ab_testing import experiment_manager, ExperimentType
+    OPTIMIZATION_AVAILABLE = True
+except ImportError:
+    logger.warning("Optimization modules not available - running in basic mode")
+    OPTIMIZATION_AVAILABLE = False
 
 # Global orchestrator instance for dependency injection
 ai_orchestrator = AIOrchestrator()
