@@ -23,15 +23,26 @@ import pytest_asyncio
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def _ensure_app_schema():
     """These are integration tests against the app's real engine; make sure
-    the schema exists (create_all is a no-op where migrations already ran)."""
+    the schema exists and holds no rows from a previous test."""
     from lyo_app.core.database import engine, Base
     import lyo_app.models.enhanced  # noqa: F401 — registers all models
 
+    # New pool for this test's event loop — pooled asyncpg connections from
+    # an earlier test's (closed) loop otherwise raise "Event loop is closed".
+    await engine.dispose()
+
     async with engine.begin() as conn:
-        # Fresh schema per test: this module talks to the app's real engine,
-        # and leftover users/roles from a previous test poison the next one.
-        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        # Empty tables in reverse dependency order instead of dropping:
+        # migration-created tables outside this metadata (mentor_*) keep FK
+        # constraints on users, so DROP TABLE fails on Postgres.
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
+
+    yield
+
+    # Release this loop's connections before the loop closes.
+    await engine.dispose()
 
 
 class TestRBACSystem:
