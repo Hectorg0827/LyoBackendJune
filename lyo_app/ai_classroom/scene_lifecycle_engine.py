@@ -901,6 +901,11 @@ class SceneCompiler:
             topic = context.topic or "the next concept"
             instruction_text = f'[ {{"type": "speech", "speaker": "Teacher", "text": "Let\'s continue learning about {topic}. Are you ready?"}} ]'
 
+        # Degenerate output (empty / bare brackets) teaches nothing and fails
+        # TeacherMessage validation — swap in the topic-aware local fallback.
+        if len(instruction_text.strip()) < 10 or instruction_text.strip() in ("[]", "[ ]", "{}"):
+            instruction_text = self._local_instruction_fallback(context)
+
         # If the text is JSON (starts with '[' and ends with ']'), do not split it by paragraphs
         text_to_check = instruction_text.strip()
         if text_to_check.startswith('[') and text_to_check.endswith(']'):
@@ -1050,6 +1055,10 @@ lesson_content: {json.dumps(context.lesson_content or "")}
                     {"role": "user", "content": prompt}
                 ],
                 provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                # The director script is 20-25 JSON turns (~2500+ tokens); the
+                # 1000-token default truncated mid-array, normalizing to "[]"
+                # and killing every scene with a TeacherMessage validation error.
+                max_tokens=3500,
             )
 
             # CRITICAL: when every provider has failed, ai_resilience_manager
@@ -1115,6 +1124,8 @@ lesson_content: {json.dumps(context.lesson_content or "")}
                         # Fallback: if no list is found inside the dict, wrap the dict in a list
                         text = json.dumps([parsed])
                 elif isinstance(parsed, list):
+                    if not parsed:
+                        raise RuntimeError("Director returned an empty turn list")
                     text = json.dumps(parsed)
                 else:
                     raise RuntimeError("Parsed JSON is neither a list nor a dictionary")
