@@ -51,9 +51,16 @@ class DeepKnowledgeTracer:
         mastery = result.scalar_one_or_none()
         
         if not mastery:
+            # Column defaults apply at INSERT flush, not at construction —
+            # initialize explicitly so the in-memory math below never sees None.
             mastery = LearnerMastery(
                 user_id=user_id,
-                skill_id=skill_id
+                skill_id=skill_id,
+                mastery_level=0.0,
+                uncertainty=0.5,
+                attempts=0,
+                successes=0,
+                hints_used=0,
             )
             db.add(mastery)
         
@@ -449,6 +456,18 @@ class PersonalizationEngine:
         state = result.scalar_one_or_none()
         
         if not state:
+            # Even without a learner state (created by affect updates), a user
+            # who has answered quizzes may have reviews due — check before
+            # falling back to the new-learner default.
+            due_items = await self._get_due_repetitions(db, request.learner_id)
+            if due_items:
+                return NextActionResponse(
+                    action=ActionType.REVIEW,
+                    difficulty="mixed",
+                    reason=["spaced_repetition_due"],
+                    spaced_repetition_due=True,
+                    content={"items": due_items[:3]}
+                )
             # Default for new learner
             return NextActionResponse(
                 action=ActionType.EXPLANATION,
@@ -618,10 +637,15 @@ class PersonalizationEngine:
         schedule = result.scalar_one_or_none()
         
         if not schedule:
+            # Explicit initial values: column defaults only apply at INSERT
+            # flush, and the SM-2 math below reads these immediately.
             schedule = SpacedRepetitionSchedule(
                 user_id=user_id,
                 skill_id=skill_id,
-                item_id=item_id
+                item_id=item_id,
+                interval=1,
+                easiness_factor=2.5,
+                repetitions=0,
             )
             db.add(schedule)
         
