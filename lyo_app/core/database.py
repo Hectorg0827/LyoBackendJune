@@ -191,6 +191,9 @@ async def init_db() -> None:
         from lyo_app.study_plans.models import (  # noqa: F401
             TestProfile, StudyPlan, StudySession, SessionReminder, PlanEvent
         )
+
+        # Friend challenges — shareable quiz duels
+        from lyo_app.challenges.models import Challenge, ChallengeAttempt  # noqa: F401
         
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")

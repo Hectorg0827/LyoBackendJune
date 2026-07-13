@@ -432,6 +432,14 @@ def create_app() -> FastAPI:
         logger.info("✅ Personalization routes integrated - Deep Knowledge Tracing active!")
     except ImportError as e:
         logger.warning(f"Personalization routes not available: {e}")
+
+    # Friend challenges — shareable quiz duels with scoreboards
+    try:
+        from lyo_app.challenges.routes import router as challenges_router
+        app.include_router(challenges_router)
+        logger.info("✅ Challenge routes integrated - quiz duels active!")
+    except ImportError as e:
+        logger.warning(f"Challenge routes not available: {e}")
     
     # Phase 2: Advanced AI Tutoring Features
     try:
