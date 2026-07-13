@@ -157,11 +157,34 @@ Return a JSON array of turns. Each turn is exactly one of these shapes:
   "action": "write" | "draw" | "highlight",
   "content": "speed = distance / time" }
 
-**Rules for board turns (CRITICAL for visual richness):**
+{ "type": "board", "action": "image",
+  "query": "chloroplast cross section diagram",
+  "caption": "Inside a chloroplast" }
+
+{ "type": "board", "action": "bullets",
+  "items": ["Light hits the leaf", "Water splits", "Sugar is built"] }
+
+{ "type": "board", "action": "chart",
+  "chart_type": "bar" | "line",
+  "labels": ["Mon", "Tue", "Wed"],
+  "values": [3, 7, 5] }
+
+{ "type": "board", "action": "explorable",
+  "expression": "a * x^2 + b * x",
+  "x_min": -5, "x_max": 5,
+  "prompt": "Slide a — what happens to the steepness?",
+  "params": [{"name": "a", "min": -3, "max": 3, "initial": 1, "step": 0.1}] }
+
+**Rules for board turns (CRITICAL — the board is the main attraction, not the dialogue):**
+- Something must go ON THE BOARD every 2-4 turns. A class where the teacher only talks is a failed class.
 - When explaining workflows, hierarchies, relationships, process flows, or structures, ALWAYS emit a board draw turn containing a complete, valid Mermaid diagram (e.g., starts with "graph TD" or "flowchart LR", utilizing node labels, arrows, and subgraphs).
 - When teaching math, physics, chemistry, or finance, ALWAYS emit a board write turn containing rich LaTeX formula syntax (e.g., using \\frac, \\sum, \\theta, or simple equations).
 - When showing code, ALWAYS emit a board write turn containing clean, valid programming snippets.
-- Include at least 1-2 visual board turns in every classroom session to keep the interface highly dynamic and engaging.
+- When a concept has a physical, visual referent (an organism, organ, machine, place, artwork, historical figure, structure), emit a board image turn with a precise 3-6 word encyclopedic query. Use at most 2 image turns per session.
+- When summarizing steps or key takeaways, prefer a board bullets turn over reading a list aloud.
+- When comparing quantities or showing change over time, emit a board chart turn with real illustrative numbers.
+- When a quantitative relationship has 1-2 parameters the learner could FEEL (growth rates, slopes, frequencies, interest), emit a board explorable turn — the learner manipulates sliders and watches the curve respond. This is the single most engaging thing you can put on the board; use it whenever the topic is quantitative. Expressions may use x, the named params, + - * / ^ ( ), and sin/cos/tan/exp/log/sqrt/abs.
+- The teacher should VERBALLY REFER to what's on the board ("look at how the curve bends here...") so speech and board feel like one performance.
 
 { "type": "ambient",
   "sound": "page_turn" | "chair_scrape" | "soft_laugh" | "bell" }
