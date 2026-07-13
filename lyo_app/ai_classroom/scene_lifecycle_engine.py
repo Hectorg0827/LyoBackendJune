@@ -16,6 +16,7 @@ Architecture: Event → Context → Decision → Scene → WebSocket Stream → 
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from enum import Enum
@@ -36,6 +37,10 @@ from lyo_app.ai_classroom.sdui_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Per-session teaching progression: scene counter + rolling summaries of what
+# was already taught, so the director never replays the opening scene.
+_SESSION_PROGRESS: Dict[str, Dict[str, Any]] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -340,6 +345,16 @@ class ContextAssembler:
                     logger.warning(f"⚠️ Could not query UUID course models: {e}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not query Course: {e}")
+
+        # 5) Final fallback: web + GENERATE flows use a human-readable topic
+        #    string AS the session id ("The French Revolution"). Without this,
+        #    continue-triggered scenes lost the topic and taught "general
+        #    learning" — the director then had nothing coherent to say.
+        if not topic and trigger.session_id:
+            sid = str(trigger.session_id).strip()
+            looks_like_uuid = bool(re.fullmatch(r"[0-9a-fA-F\-]{32,36}", sid))
+            if not looks_like_uuid and not sid.startswith(("gen_", "session_")) and 0 < len(sid) <= 80:
+                topic = sid.replace("GENERATE:", "").strip()
 
         return topic, course_id, course_title, lesson_index
 
@@ -1026,16 +1041,37 @@ class SceneCompiler:
                 f"topic={topic!r}, course={course_title!r}"
             )
 
+            # Progression: without this, every scene regenerated the same
+            # opening class (and the response cache then replayed it verbatim).
+            prog = _SESSION_PROGRESS.setdefault(
+                context.session_id, {"scene": 0, "covered": []})
+            prog["scene"] += 1
+            scene_number = prog["scene"]
+            covered = prog["covered"][-8:]
+
             input_block = f"""
 INPUT FORMAT:
 subject: "{course_title}"
 session_number: {session_number}
+scene_number: {scene_number}
 user_name: "{user_name}"
 user_memory: "Likes clear and concise explanations."
-last_session_recap: ""
+last_session_recap: {json.dumps(covered[-1] if covered else "")}
+already_covered: {json.dumps(covered)}
 user_level: "beginner"
 lesson_title: "{context.lesson_title or topic}"
 lesson_content: {json.dumps(context.lesson_content or "")}
+
+PROGRESSION RULES (CRITICAL):
+- scene_number 1 is the ONLY scene that may use the opening protocol.
+- If scene_number > 1: NO welcome, NO re-introduction, NO repeating the hook.
+  Continue the SAME class exactly where it left off and teach the NEXT idea,
+  strictly deeper or adjacent to what came before.
+- NEVER re-teach anything listed in already_covered.
+- Only emit session_end when the topic is genuinely concluded (never before
+  scene 4) — most scenes should end mid-lesson, awaiting the learner.
+- NEVER return an empty array. There is ALWAYS a deeper or adjacent idea to
+  teach next; every scene must contain at least 6 turns.
 """
             # Injecting explicit instruction to use the generated lesson content
             prompt = (
@@ -1059,6 +1095,9 @@ lesson_content: {json.dumps(context.lesson_content or "")}
                 # 1000-token default truncated mid-array, normalizing to "[]"
                 # and killing every scene with a TeacherMessage validation error.
                 max_tokens=3500,
+                # Never serve a lesson from cache: identical inputs used to
+                # replay the exact same lecture on every scene.
+                use_cache=False,
             )
 
             # CRITICAL: when every provider has failed, ai_resilience_manager
@@ -1125,7 +1164,26 @@ lesson_content: {json.dumps(context.lesson_content or "")}
                         text = json.dumps([parsed])
                 elif isinstance(parsed, list):
                     if not parsed:
-                        raise RuntimeError("Director returned an empty turn list")
+                        # Flaky model behavior — one retry with a direct nudge
+                        # usually recovers before we resort to the template.
+                        logger.warning("⚠️ Director returned []; retrying once")
+                        retry = await ai_resilience_manager.chat_completion(
+                            messages=[
+                                {"role": "system", "content": "You are the classroom director. Return ONLY a non-empty JSON array of director turns (at least 6 turns). Never return an empty array."},
+                                {"role": "user", "content": prompt},
+                            ],
+                            provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
+                            max_tokens=3500,
+                            use_cache=False,
+                        )
+                        retry_text = (retry.get("content") or "").strip()
+                        fb = retry_text.find('[')
+                        lb = retry_text.rfind(']')
+                        if fb != -1 and lb > fb:
+                            retry_text = retry_text[fb:lb + 1]
+                        parsed = json.loads(retry_text)
+                        if not isinstance(parsed, list) or not parsed:
+                            raise RuntimeError("Director returned an empty turn list twice")
                     text = json.dumps(parsed)
                 else:
                     raise RuntimeError("Parsed JSON is neither a list nor a dictionary")
@@ -1138,6 +1196,18 @@ lesson_content: {json.dumps(context.lesson_content or "")}
                 except Exception as cache_err:
                     logger.warning(f"Failed to clear cache: {cache_err}")
                 raise
+
+            # Remember what this scene taught so the next one moves forward.
+            try:
+                speech_texts = [
+                    t.get("text", "") for t in (parsed if isinstance(parsed, list) else [])
+                    if isinstance(t, dict) and t.get("type") == "speech" and t.get("speaker") == "Teacher"
+                ]
+                summary = " / ".join(s[:110] for s in speech_texts[:2] if s)
+                if summary:
+                    prog["covered"].append(summary)
+            except Exception:
+                pass
 
             return text
 
