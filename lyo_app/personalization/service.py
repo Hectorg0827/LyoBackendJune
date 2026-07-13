@@ -413,6 +413,11 @@ class PersonalizationEngine:
         """
         Update knowledge tracking from assessment
         """
+        # Capture prior mastery so clients can award honest, delta-based XP.
+        old_mastery, _ = await self.dkt.get_skill_readiness(
+            db, request.learner_id, request.skill_id
+        )
+
         # Update mastery
         new_mastery = await self.dkt.update_mastery(
             db,
@@ -435,6 +440,7 @@ class PersonalizationEngine:
         return {
             "skill_id": request.skill_id,
             "new_mastery": new_mastery,
+            "old_mastery": old_mastery,
             "correct": request.correct,
             "updated": True
         }
