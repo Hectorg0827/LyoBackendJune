@@ -364,7 +364,7 @@ class VoiceAgent(A2ABaseAgent[VoiceAgentOutput]):
                 ),
             ],
             temperature=0.5,  # Balanced for natural speech
-            max_tokens=32768,  # Large for full scripts
+            max_tokens=16384,  # gpt-4o-mini completion cap (32768 caused 400s)
             timeout_seconds=180.0,
             force_model_tier=ModelTier.PREMIUM
         )

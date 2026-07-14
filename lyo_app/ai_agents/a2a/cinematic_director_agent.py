@@ -246,7 +246,7 @@ class CinematicDirectorAgent(A2ABaseAgent[CinematicOutput]):
                 ),
             ],
             temperature=0.7,  # Higher creativity for storytelling
-            max_tokens=32768,  # Large output for full course structure
+            max_tokens=16384,  # gpt-4o-mini completion cap (32768 caused 400s)
             timeout_seconds=180.0,
             force_model_tier=ModelTier.PREMIUM
         )

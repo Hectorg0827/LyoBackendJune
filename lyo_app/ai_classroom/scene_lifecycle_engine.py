@@ -1090,7 +1090,10 @@ PROGRESSION RULES (CRITICAL):
                     {"role": "system", "content": "You are a world-class course designer. You script a live class utilizing the provided INPUT FORMAT. CRITICAL REQUIREMENT: You must read `lesson_title` and `lesson_content` from the input, and base the entire lesson and lecture script on that exact `lesson_content`! Teach this exact material step-by-step through a rich conversational flow with the cast. Ensure that Rio, Maya, Sam, Zack, and the Teacher discuss the actual concepts, facts, examples, and code snippets provided in the `lesson_content`. Do NOT invent generic lessons; teach the exact content. Return ONLY valid JSON containing a list of director turns. No prose, no markdown — pure JSON."},
                     {"role": "user", "content": prompt}
                 ],
-                provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                # gpt-4o-mini first: the Gemini key is currently revoked
+                # ("reported as leaked"), so leading with it just burns a
+                # circuit-breaker failure per scene.
+                provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
                 # The director script is 20-25 JSON turns (~2500+ tokens); the
                 # 1000-token default truncated mid-array, normalizing to "[]"
                 # and killing every scene with a TeacherMessage validation error.
@@ -1295,10 +1298,13 @@ PROGRESSION RULES (CRITICAL):
         lesson_content = context.lesson_content or ""
 
         try:
+            covered = _SESSION_PROGRESS.get(context.session_id, {}).get("covered", [])
+            taught_context = "\n".join(covered[-4:]) if covered else ""
             prompt = (
                 f"Generate a single multiple-choice quiz question about the following lesson: '{context.lesson_title or topic}'.\n"
                 f"Lesson Content:\n{lesson_content}\n\n"
-                f"The question must test understanding of the specific concepts described in the Lesson Content.\n"
+                f"What the teacher just taught in class (test THIS material):\n{taught_context}\n\n"
+                f"The question must test understanding of the specific concepts described above — never a generic question.\n"
                 f"Return ONLY valid JSON (no markdown) with this exact structure:\n"
                 f'{{"question": "...", "options": ['
                 f'{{"id": "a", "label": "...", "is_correct": false}}, '
@@ -1316,7 +1322,9 @@ PROGRESSION RULES (CRITICAL):
                     {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON quiz questions. No prose, no markdown — pure JSON."},
                     {"role": "user", "content": prompt}
                 ],
-                provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
+                # Cached quizzes repeat the identical question forever.
+                use_cache=False,
             )
 
             # When every provider has failed, ai_resilience returns the canned
