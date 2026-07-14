@@ -7,8 +7,10 @@ sys.path.insert(0, '/Users/hectorgarcia/Desktop/LyoBackendJune')
 
 # Set environment variable to force using local .env
 os.environ["ENVIRONMENT"] = "development"
-os.environ["GOOGLE_API_KEY"] = "AIzaSyAXqRkBk_PUuiy8WKCQ66v447NmTE_tCK0"
-os.environ["GEMINI_API_KEY"] = "AIzaSyAXqRkBk_PUuiy8WKCQ66v447NmTE_tCK0"
+# Keys must come from the environment — hardcoding one here is how the
+# previous Gemini key got scraped and revoked ("reported as leaked").
+assert os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"), \
+    "Set GEMINI_API_KEY (or GOOGLE_API_KEY) in your environment first"
 
 # Import after setting env vars
 from lyo_app.ai_agents.multi_agent_v2 import CourseGenerationPipeline, PipelineConfig, QualityTier

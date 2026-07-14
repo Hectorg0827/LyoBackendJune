@@ -27,7 +27,7 @@ steps:
       '--memory', '2Gi',
       '--cpu', '2',
       '--max-instances', '10',
-      '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,GOOGLE_API_KEY=AIzaSyAXqRkBk_PUuiy8WKCQ66v447NmTE_tCK0,CORS_ORIGINS=["https://lyo.app"]',
+      '--set-env-vars', 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,GOOGLE_API_KEY=${_GOOGLE_API_KEY},CORS_ORIGINS=["https://lyo.app"]',
       '--set-secrets', 'SECRET_KEY=jwt-secret:latest,DATABASE_URL=database-url:latest',
       '--add-cloudsql-instances', 'lyobackend:us-central1:my-instance',
       '--timeout', '300s'
