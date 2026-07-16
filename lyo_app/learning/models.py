@@ -14,6 +14,12 @@ from lyo_app.core.database import Base
 from lyo_app.tenants.mixins import TenantMixin
 from pgvector.sqlalchemy import Vector
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import lyo_app.models.enhanced  # noqa: F401 — resolves dotted Mapped[] forward refs
+    from lyo_app.auth.models import User  # noqa: F401
+
 
 class DifficultyLevel(str, Enum):
     """Difficulty levels for courses and lessons."""

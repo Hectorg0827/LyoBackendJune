@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import OperationalError
 from typing import List, Optional
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from lyo_app.core.database import get_db
 from lyo_app.core.database import engine
@@ -31,7 +31,9 @@ async def _ensure_user_table_if_missing(exc: Exception) -> None:
 
 class RegisterPayload(BaseModel):
     email: EmailStr
-    password: str
+    # Weak credentials were accepted before — this is the endpoint every
+    # mobile client registers through.
+    password: str = Field(..., min_length=8, max_length=128)
     full_name: Optional[str] = None
 
 
@@ -73,7 +75,17 @@ async def register_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    
+
+    # Default role, best-effort: RBAC may not be seeded in every deploy,
+    # and registration must not fail because of it.
+    try:
+        from lyo_app.auth.rbac_service import RBACService
+        from lyo_app.auth.rbac import RoleType
+
+        await RBACService(db).assign_role_to_user(user.id, RoleType.STUDENT.value)
+    except Exception:  # noqa: BLE001
+        pass
+
     return {"message": "User created successfully", "user_id": user.id}
 
 

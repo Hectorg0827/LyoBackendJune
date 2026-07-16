@@ -205,7 +205,7 @@ class MediaService:
         In production, replace with Imagen API.
         """
         # Create a simple SVG placeholder
-        color_hash = hashlib.md5(concept.encode()).hexdigest()[:6]
+        color_hash = hashlib.md5(concept.encode(), usedforsecurity=False).hexdigest()[:6]
         bg_color = f"#{color_hash}"
         
         # Generate contrasting text color

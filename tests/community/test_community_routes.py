@@ -192,9 +192,9 @@ class TestStudyGroupRoutes:
 class TestGroupMembershipRoutes:
     """Test group membership API endpoints."""
     
-    async def test_join_study_group(self, client: AsyncClient, auth_headers: dict):
+    async def test_join_study_group(self, client: AsyncClient, auth_headers: dict, second_auth_headers: dict):
         """Test joining a study group."""
-        # Create a study group first
+        # Create a study group first (creator is auto-joined)
         group_data = {
             "name": "Join Test Group",
             "privacy": "public"
@@ -205,11 +205,11 @@ class TestGroupMembershipRoutes:
             headers=auth_headers
         )
         group_id = create_response.json()["id"]
-        
-        # Join the group
+
+        # A second user joins the group
         response = await client.post(
             f"/api/v1/community/study-groups/{group_id}/join",
-            headers=auth_headers
+            headers=second_auth_headers
         )
         
         assert response.status_code == 201
@@ -218,7 +218,7 @@ class TestGroupMembershipRoutes:
         assert data["role"] == "member"
         assert data["is_approved"] is True
     
-    async def test_leave_study_group(self, client: AsyncClient, auth_headers: dict):
+    async def test_leave_study_group(self, client: AsyncClient, auth_headers: dict, second_auth_headers: dict):
         """Test leaving a study group."""
         # Create and join a study group first
         group_data = {
@@ -231,16 +231,17 @@ class TestGroupMembershipRoutes:
             headers=auth_headers
         )
         group_id = create_response.json()["id"]
-        
-        await client.post(
+
+        join_response = await client.post(
             f"/api/v1/community/study-groups/{group_id}/join",
-            headers=auth_headers
+            headers=second_auth_headers
         )
-        
+        assert join_response.status_code == 201
+
         # Leave the group
         response = await client.delete(
             f"/api/v1/community/study-groups/{group_id}/leave",
-            headers=auth_headers
+            headers=second_auth_headers
         )
         
         assert response.status_code == 204
@@ -258,12 +259,8 @@ class TestGroupMembershipRoutes:
             headers=auth_headers
         )
         group_id = create_response.json()["id"]
-        
-        await client.post(
-            f"/api/v1/community/study-groups/{group_id}/join",
-            headers=auth_headers
-        )
-        
+
+        # Creator is auto-joined; no separate join needed
         # Get group members
         response = await client.get(
             f"/api/v1/community/study-groups/{group_id}/members",
@@ -432,7 +429,7 @@ class TestCommunityEventRoutes:
 class TestEventAttendanceRoutes:
     """Test event attendance API endpoints."""
     
-    async def test_register_event_attendance(self, client: AsyncClient, auth_headers: dict):
+    async def test_register_event_attendance(self, client: AsyncClient, auth_headers: dict, second_auth_headers: dict):
         """Test registering for an event."""
         # Create an event first
         event_data = {
@@ -446,17 +443,17 @@ class TestEventAttendanceRoutes:
             headers=auth_headers
         )
         event_id = create_response.json()["id"]
-        
-        # Register attendance
+
+        # Organizer is auto-registered; a second user registers attendance
         response = await client.post(
             f"/api/v1/community/events/{event_id}/attend",
-            headers=auth_headers
+            headers=second_auth_headers
         )
         
         assert response.status_code == 201
         data = response.json()
-        assert data["community_event_id"] == event_id
-        assert data["status"] == "registered"
+        assert data["event_id"] == event_id
+        assert data["status"] == "going"
     
     async def test_update_event_attendance(self, client: AsyncClient, auth_headers: dict):
         """Test updating attendance status."""

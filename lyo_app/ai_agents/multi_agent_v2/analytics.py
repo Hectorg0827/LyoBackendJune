@@ -3,7 +3,10 @@ Usage tracking and analytics for course generation.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .pipeline.orchestrator import PipelineConfig
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from uuid import uuid4

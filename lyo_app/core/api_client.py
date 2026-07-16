@@ -193,7 +193,7 @@ class BaseAPIClient:
             "params": params
         }
         key_string = json.dumps(cache_data, sort_keys=True)
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.md5(key_string.encode(), usedforsecurity=False).hexdigest()
     
     @retry(
         stop=stop_after_attempt(3),

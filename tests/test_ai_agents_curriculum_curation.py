@@ -77,7 +77,7 @@ class TestCurriculumAgent:
         mock_response.cost_estimate = 0.02
         mock_response.response_time_ms = 1200
         mock_response.error = None
-        mock_orchestrator.generate_response.return_value = mock_response
+        mock_orchestrator.generate_response = AsyncMock(return_value=mock_response)
         
         # Test function
         result = await curriculum_design_agent.generate_course_outline(
@@ -137,7 +137,7 @@ class TestCurriculumAgent:
         mock_response.cost_estimate = 0.03
         mock_response.response_time_ms = 1500
         mock_response.error = None
-        mock_orchestrator.generate_response.return_value = mock_response
+        mock_orchestrator.generate_response = AsyncMock(return_value=mock_response)
         
         # Test function
         result = await curriculum_design_agent.generate_lesson_content(
@@ -187,7 +187,7 @@ class TestCurationAgent:
         mock_response.cost_estimate = 0.025
         mock_response.response_time_ms = 800
         mock_response.error = None
-        mock_orchestrator.generate_response.return_value = mock_response
+        mock_orchestrator.generate_response = AsyncMock(return_value=mock_response)
         
         # Test function
         result = await content_curation_agent.evaluate_content_quality(
@@ -227,7 +227,7 @@ class TestCurationAgent:
         mock_response.cost_estimate = 0.015
         mock_response.response_time_ms = 600
         mock_response.error = None
-        mock_orchestrator.generate_response.return_value = mock_response
+        mock_orchestrator.generate_response = AsyncMock(return_value=mock_response)
         
         # Test function
         result = await content_curation_agent.tag_and_categorize_content(

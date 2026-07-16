@@ -304,7 +304,10 @@ async def verify_apple_purchase(
     to verify the receipt and activate the subscription.
     """
     result = await iap_service.verify_apple_receipt(request.receipt_data)
-    
+
+    # Same success guard as the Google endpoint below; this line had been
+    # lost, leaving an orphaned indented block (SyntaxError).
+    if result.get("valid"):
         response = {
             "valid": True,
             "product_id": result.get("product_id"),

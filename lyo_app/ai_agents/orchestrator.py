@@ -612,7 +612,7 @@ Is there a particular aspect you'd like to dive deeper into?"""
     def _get_cache_key(self, prompt: str, max_tokens: int, temperature: float) -> str:
         """Generate cache key for response caching."""
         content = f"{prompt}:{max_tokens}:{temperature}"
-        return hashlib.md5(content.encode()).hexdigest()
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
     
     async def _get_cached_response(self, cache_key: str) -> Optional[ModelResponse]:
         """Get cached response if available."""
@@ -1297,16 +1297,18 @@ class AIOrchestrator:
         }
         return responses.get(language, responses[LanguageCode.ENGLISH])
     
-    # Production optimization imports
-    try:
-        from .optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
-        from .optimization.personalization_engine import personalization_engine
-        from .optimization.ab_testing import experiment_manager, ExperimentType
-        OPTIMIZATION_AVAILABLE = True
-    except ImportError:
-        logger.warning("Optimization modules not available - running in basic mode")
-        OPTIMIZATION_AVAILABLE = False
 
+
+
+# Production optimization imports
+try:
+    from .optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
+    from .optimization.personalization_engine import personalization_engine
+    from .optimization.ab_testing import experiment_manager, ExperimentType
+    OPTIMIZATION_AVAILABLE = True
+except ImportError:
+    logger.warning("Optimization modules not available - running in basic mode")
+    OPTIMIZATION_AVAILABLE = False
 
 # Global orchestrator instance for dependency injection
 ai_orchestrator = AIOrchestrator()

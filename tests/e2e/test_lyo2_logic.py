@@ -4,6 +4,20 @@ import asyncio
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
 
+import pytest
+
+# This file was written as a standalone diagnostic script: it permanently
+# replaces fastapi, lyo_app.ai.router, lyo_app.chat.* and a dozen other
+# entries in sys.modules WITHOUT restoring them, corrupting every test that
+# runs after it in the same process (e.g. test_lyo2_intents sees FakeRouter).
+# Run it alone: pytest tests/e2e/test_lyo2_logic.py
+if os.environ.get("LYO_RUN_STANDALONE_DIAGNOSTICS") != "1":
+    pytest.skip(
+        "standalone diagnostic; mutates sys.modules process-wide — "
+        "set LYO_RUN_STANDALONE_DIAGNOSTICS=1 to run in isolation",
+        allow_module_level=True,
+    )
+
 # --- SUPER MOCKING ---
 from sqlalchemy.orm import DeclarativeBase
 class Base(DeclarativeBase):

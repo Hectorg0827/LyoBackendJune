@@ -63,7 +63,7 @@ class PerformanceCache:
         if kwargs:
             params = ":".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
             key_data += f":{params}"
-        return hashlib.md5(key_data.encode()).hexdigest()[:16]
+        return hashlib.md5(key_data.encode(), usedforsecurity=False).hexdigest()[:16]
 
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache with fallback to memory"""

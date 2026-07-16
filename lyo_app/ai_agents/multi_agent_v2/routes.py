@@ -220,7 +220,7 @@ class RegenerateRequest(BaseModel):
 
 def get_pipeline() -> CourseGenerationPipeline:
     """Get or create the pipeline instance"""
-    global _pipeline, _job_manager
+    global _pipeline
     if _pipeline is None:
         # Check if we can get a DB session
         job_man = None

@@ -22,6 +22,8 @@ from lyo_app.gamification.models import Streak, UserLevel
 from lyo_app.learning.models import CourseEnrollment, LessonCompletion
 from lyo_app.personalization.models import LearnerMastery, LearnerState
 
+logger = logging.getLogger(__name__)
+
 # Phase 2: Predictive Intelligence integration
 try:
     from lyo_app.predictive.dropout_prevention import dropout_predictor
@@ -31,9 +33,6 @@ try:
 except ImportError:
     logger.warning("Phase 2 predictive intelligence not available")
     PREDICTIVE_ENABLED = False
-
-logger = logging.getLogger(__name__)
-
 
 class InterventionEngine:
     """

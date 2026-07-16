@@ -30,7 +30,11 @@ class EmbeddingService:
         """
         if not text:
             return None
-            
+        if not settings.gemini_api_key:
+            # No key configured (tests, minimal deploys): embeddings are
+            # best-effort, don't attempt network calls that must fail.
+            return None
+
         try:
             # Run in executor since the library is synchronous
             result = await asyncio.to_thread(
@@ -59,7 +63,9 @@ class EmbeddingService:
         """
         if not query:
             return None
-            
+        if not settings.gemini_api_key:
+            return None
+
         try:
             result = await asyncio.to_thread(
                 genai.embed_content,

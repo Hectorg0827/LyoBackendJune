@@ -6,6 +6,7 @@ Create Date: 2025-02-09 20:44:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "booking_review_001"
@@ -35,8 +36,16 @@ def upgrade() -> None:
     )
 
     # -- bookings --
-    booking_status = sa.Enum("pending", "confirmed", "cancelled", "completed", name="bookingstatus")
-    booking_status.create(op.get_bind(), checkfirst=True)
+    # Create the type explicitly (checkfirst), then reference it from the
+    # column with create_type=False so create_table doesn't emit a second
+    # CREATE TYPE — that duplicate broke `alembic upgrade heads`.
+    sa.Enum(
+        "pending", "confirmed", "cancelled", "completed", name="bookingstatus"
+    ).create(op.get_bind(), checkfirst=True)
+    booking_status = postgresql.ENUM(
+        "pending", "confirmed", "cancelled", "completed",
+        name="bookingstatus", create_type=False,
+    )
 
     op.create_table(
         "bookings",

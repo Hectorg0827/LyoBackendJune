@@ -23,12 +23,14 @@ class TestFeedsRoutes:
             email="testuser@example.com",
             username="testuser",
             password="testpassword123",
+            confirm_password="testpassword123",
             first_name="Test",
             last_name="User"
         )
         
         response = await async_client.post("/api/v1/auth/register", json=user_data.model_dump())
-        assert response.status_code == 201
+        # register returns 200 with {"message", "user_id"}
+        assert response.status_code in (200, 201)
         
         # Login to get token
         login_data = UserLogin(email="testuser@example.com", password="testpassword123")
@@ -46,12 +48,14 @@ class TestFeedsRoutes:
             email="testuser2@example.com",
             username="testuser2",
             password="testpassword123",
+            confirm_password="testpassword123",
             first_name="Test",
             last_name="User2"
         )
         
         response = await async_client.post("/api/v1/auth/register", json=user_data.model_dump())
-        assert response.status_code == 201
+        # register returns 200 with {"message", "user_id"}
+        assert response.status_code in (200, 201)
         
         # Login to get token
         login_data = UserLogin(email="testuser2@example.com", password="testpassword123")

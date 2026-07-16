@@ -65,6 +65,13 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     except ImportError:
         pass
     try:
+        # In-app notification rows live in the router module; without this
+        # import create_all skips the notifications table and every service
+        # action that notifies (follow, comment, ...) rolls back mid-test.
+        from lyo_app.routers.notifications import Notification  # noqa: F401
+    except ImportError:
+        pass
+    try:
         from lyo_app.stack.models import StackItem  # noqa: F401
     except ImportError:
         pass
@@ -95,6 +102,103 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:
         yield session
         await session.rollback()
-    
+
     # Clean up
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limit_window():
+    """The shared in-memory limiter is keyed by client IP and every ASGI
+    test request shares one; without a per-test reset a module's worth of
+    register/login calls trips the 10/min auth limit."""
+    try:
+        from lyo_app.core.rate_limiter import in_memory_rate_limiter
+
+        in_memory_rate_limiter.clients.clear()
+    except ImportError:
+        pass
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_client(db_session):
+    """HTTP client over the real app with the DB swapped for the test session.
+
+    Route tests (feeds/community/...) drive the full request/response cycle;
+    the app's get_db dependency is overridden so everything lands in the
+    per-test in-memory database.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from lyo_app.core.database import get_db
+    from lyo_app.enhanced_main import app
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    # The security middleware rate-limits by client IP, and every ASGI test
+    # request shares one — a module's worth of register/login calls trips the
+    # 10/min auth limit. Each test starts with a clean window, like its DB.
+    from lyo_app.core.rate_limiter import in_memory_rate_limiter
+
+    in_memory_rate_limiter.clients.clear()
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def client(async_client):
+    """Alias — community/gamification route tests use the name `client`."""
+    return async_client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def auth_headers(async_client) -> dict:
+    """Register + log in a fresh user through the API; return its bearer header."""
+    user_data = {
+        "email": "conftest_user@example.com",
+        "username": "conftest_user",
+        "password": "testpassword123",
+        "confirm_password": "testpassword123",
+        "first_name": "Test",
+        "last_name": "User",
+    }
+    # /api/v1/auth/register returns 200 {"message", "user_id"}; the token
+    # comes from the follow-up login call.
+    response = await async_client.post("/api/v1/auth/register", json=user_data)
+    assert response.status_code in (200, 201), f"register failed: {response.text}"
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={"email": user_data["email"], "password": user_data["password"]},
+    )
+    assert response.status_code == 200, f"login failed: {response.text}"
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+@pytest_asyncio.fixture(scope="function")
+async def second_auth_headers(async_client) -> dict:
+    """A second authenticated user, for tests exercising member/other roles."""
+    user_data = {
+        "email": "conftest_user2@example.com",
+        "username": "conftest_user2",
+        "password": "testpassword123",
+        "confirm_password": "testpassword123",
+        "first_name": "Second",
+        "last_name": "User",
+    }
+    response = await async_client.post("/api/v1/auth/register", json=user_data)
+    assert response.status_code in (200, 201), f"register failed: {response.text}"
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={"email": user_data["email"], "password": user_data["password"]},
+    )
+    assert response.status_code == 200, f"login failed: {response.text}"
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}

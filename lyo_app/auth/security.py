@@ -13,7 +13,10 @@ from lyo_app.core.config import settings
 
 
 # Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Must accept every scheme jwt_auth.pwd_context produces: registration hashes
+# with pbkdf2_sha256 there, and a bcrypt-only context raises UnknownHashError
+# on login for those users.
+pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:

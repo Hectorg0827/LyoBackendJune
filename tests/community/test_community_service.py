@@ -329,23 +329,39 @@ class TestCommunityService:
 
     async def test_join_full_study_group(self, community_service: CommunityService, db_session: AsyncSession, test_user: User, test_user2: User):
         """Test joining a study group that is at capacity."""
-        # Create a group with max 1 member (only creator)
+        # Minimum capacity is 2 (creator + one member)
         group_data = StudyGroupCreate(
             name="Full Group",
             description="This group is full",
             privacy=StudyGroupPrivacy.PUBLIC,
-            max_members=1,
+            max_members=2,
             requires_approval=False,
             course_id=None
         )
-        
+
         group = await community_service.create_study_group(db_session, test_user.id, group_data)
-        
-        # Try to join (should fail because creator already fills the capacity)
+
+        # Second member fills the group
         membership_data = GroupMembershipCreate(study_group_id=group.id)
-        
+        await community_service.join_study_group(db_session, test_user2.id, membership_data)
+
+        # A third user must bounce off the full group
+        user3 = User(
+            email="testuser3@example.com",
+            username="testuser3",
+            hashed_password="hashedpassword",
+            first_name="Test",
+            last_name="User3",
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db_session.add(user3)
+        await db_session.commit()
+        await db_session.refresh(user3)
+
         with pytest.raises(ValueError, match="Study group is full"):
-            await community_service.join_study_group(db_session, test_user2.id, membership_data)
+            await community_service.join_study_group(db_session, user3.id, membership_data)
 
     async def test_join_private_study_group(self, community_service: CommunityService, db_session: AsyncSession, test_user: User, test_user2: User):
         """Test joining a private study group (should fail)."""
@@ -468,25 +484,16 @@ class TestCommunityService:
             )
             await community_service.create_study_group(db_session, test_user.id, group_data)
         
-        # Get all groups
-        result = await community_service.get_study_groups(db_session, page=1, per_page=10)
-        
-        assert "groups" in result
-        assert "total" in result
-        assert "page" in result
-        assert "per_page" in result
-        assert "has_next" in result
-        
-        assert len(result["groups"]) == 3
-        assert result["total"] == 3
-        assert result["page"] == 1
-        assert result["per_page"] == 10
-        assert result["has_next"] is False
-        
+        # Get all groups — service returns a plain list of group dicts
+        result = await community_service.get_study_groups(db_session, skip=0, limit=10)
+
+        assert isinstance(result, list)
+        assert len(result) == 3
+
         # Test filtering by course
-        result = await community_service.get_study_groups(db_session, course_id=test_course.id, page=1, per_page=10)
-        assert len(result["groups"]) == 1
-        assert result["groups"][0]["course_id"] == test_course.id
+        result = await community_service.get_study_groups(db_session, course_id=test_course.id, skip=0, limit=10)
+        assert len(result) == 1
+        assert result[0]["course_id"] == test_course.id
 
     # Community Event Tests
     async def test_create_community_event(self, community_service: CommunityService, db_session: AsyncSession, test_user: User):

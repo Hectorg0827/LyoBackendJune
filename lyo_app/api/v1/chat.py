@@ -20,6 +20,8 @@ from lyo_app.personalization.service import PersonalizationEngine
 from lyo_app.ai_agents.a2a.schemas import Artifact, ArtifactType, A2ACourseRequest
 from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
 
+orchestrator = A2AOrchestrator()
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()

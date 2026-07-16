@@ -86,7 +86,7 @@ class IntelligentCacheManager:
     def _generate_cache_key(self, prefix: str, *args, **kwargs) -> str:
         """Generate consistent cache keys"""
         key_data = f"{prefix}:{args}:{sorted(kwargs.items())}"
-        return f"lyo:{hashlib.md5(key_data.encode()).hexdigest()}"
+        return f"lyo:{hashlib.md5(key_data.encode(), usedforsecurity=False).hexdigest()}"
     
     async def get(
         self, 
@@ -426,7 +426,6 @@ async def init_cache_manager():
 
 def get_cache_manager() -> IntelligentCacheManager:
     """Get global cache manager instance"""
-    global _cache_manager
     if _cache_manager is None:
         raise RuntimeError("Cache manager not initialized. Call init_cache_manager() first.")
     return _cache_manager

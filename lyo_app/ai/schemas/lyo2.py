@@ -26,6 +26,11 @@ class Intent(str, Enum):
     CHAT = "CHAT"
     HELP = "HELP"
     GENERAL = "GENERAL"
+    # Router keyword fallback and planner both emit these (see router.py
+    # _fallback intents and planner rule 7/8); dropping them made routing
+    # crash with a ValidationError on any "how am I doing" / feelings text.
+    REFLECT = "REFLECT"
+    WEEKLY_REVIEW = "WEEKLY_REVIEW"
     UNKNOWN = "UNKNOWN"
 
 

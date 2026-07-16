@@ -194,7 +194,7 @@ class ABTestManager:
 
         # Create deterministic hash
         hash_input = f"{test_name}_{user_id}_{config.start_date}"
-        user_hash = int(hashlib.md5(hash_input.encode()).hexdigest(), 16) % 10000
+        user_hash = int(hashlib.md5(hash_input.encode(), usedforsecurity=False).hexdigest(), 16) % 10000
 
         # Calculate cumulative percentages (scaled to 10000 for precision)
         control_threshold = int(config.control_percentage * 100)

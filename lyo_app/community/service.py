@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from lyo_app.community.models import (
+    PostVisibility,
     StudyGroup, GroupMembership, CommunityEvent, EventAttendance,
     StudyGroupStatus, StudyGroupPrivacy, MembershipRole,
     EventStatus, AttendanceStatus, CommunityQuestion, CommunityAnswer,
@@ -756,6 +757,120 @@ class CommunityService:
         
         return attendance
 
+    async def update_attendance_for_event(
+        self,
+        db: AsyncSession,
+        event_id: int,
+        user_id: int,
+        attendance_data: EventAttendanceUpdate,
+    ) -> Optional[EventAttendance]:
+        """Update the caller's attendance on an event, looked up by event id.
+
+        The PUT /events/{id}/attendance route knows the event, not the
+        attendance row; resolve it and delegate to update_event_attendance.
+        """
+        result = await db.execute(
+            select(EventAttendance).where(
+                and_(
+                    EventAttendance.event_id == event_id,
+                    EventAttendance.user_id == user_id,
+                )
+            )
+        )
+        attendance = result.scalar_one_or_none()
+        if not attendance:
+            return None
+        return await self.update_event_attendance(
+            db, attendance.id, user_id, attendance_data
+        )
+
+    async def get_group_members(
+        self,
+        db: AsyncSession,
+        group_id: int,
+        user_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> List[GroupMembership]:
+        """Approved memberships of a group, oldest first."""
+        result = await db.execute(
+            select(GroupMembership)
+            .where(
+                and_(
+                    GroupMembership.study_group_id == group_id,
+                    GroupMembership.is_approved == True,  # noqa: E712
+                )
+            )
+            .order_by(GroupMembership.joined_at)
+            .offset(skip)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_user_study_groups(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> List[StudyGroup]:
+        """Groups the user is an approved member of, newest first."""
+        result = await db.execute(
+            select(StudyGroup)
+            .join(GroupMembership, GroupMembership.study_group_id == StudyGroup.id)
+            .where(
+                and_(
+                    GroupMembership.user_id == user_id,
+                    GroupMembership.is_approved == True,  # noqa: E712
+                )
+            )
+            .order_by(desc(StudyGroup.created_at))
+            .offset(skip)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_user_community_events(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        upcoming_only: bool = True,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> List[CommunityEvent]:
+        """Events the user organizes or attends, soonest first."""
+        attending = (
+            select(EventAttendance.event_id)
+            .where(
+                and_(
+                    EventAttendance.user_id == user_id,
+                    EventAttendance.status.in_(
+                        [
+                            AttendanceStatus.GOING,
+                            AttendanceStatus.MAYBE,
+                            AttendanceStatus.ATTENDED,
+                        ]
+                    ),
+                )
+            )
+        )
+        conditions = [
+            or_(
+                CommunityEvent.organizer_id == user_id,
+                CommunityEvent.id.in_(attending),
+            )
+        ]
+        if upcoming_only:
+            conditions.append(CommunityEvent.end_time >= datetime.utcnow())
+        result = await db.execute(
+            select(CommunityEvent)
+            .where(and_(*conditions))
+            .order_by(CommunityEvent.start_time)
+            .offset(skip)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def cancel_event_registration(
         self, 
         db: AsyncSession, 
@@ -1008,6 +1123,12 @@ class CommunityService:
         )
         user_events_count = user_events_result.scalar() or 0
         
+        # Groups this user created
+        groups_created_result = await db.execute(
+            select(func.count(StudyGroup.id)).where(StudyGroup.creator_id == user_id)
+        )
+        groups_created = groups_created_result.scalar() or 0
+
         return {
             "total_groups": total_groups,
             "active_groups": active_groups,
@@ -1016,6 +1137,9 @@ class CommunityService:
             "total_memberships": total_memberships,
             "user_groups_count": user_groups_count,
             "user_events_count": user_events_count,
+            "groups_created": groups_created,
+            "groups_joined": user_groups_count,
+            "events_attending": user_events_count,
         }
 
     async def _get_group_member_count(self, db: AsyncSession, group_id: int) -> int:
