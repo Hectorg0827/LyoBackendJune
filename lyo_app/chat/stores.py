@@ -7,6 +7,7 @@ Provides async CRUD operations and intelligent caching.
 
 import json
 import hashlib
+import inspect
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
@@ -579,7 +580,17 @@ class ConversationStore:
         query = query.order_by(desc(ChatMessage.created_at)).limit(limit)
         
         result = await db.execute(query)
-        messages = list(result.scalars().all())
+        # SQLAlchemy's AsyncSession returns a synchronous ScalarResult after
+        # ``execute``. Some compatible adapters and our async route fixtures
+        # expose the intermediate calls as awaitables, so normalize both
+        # shapes at this boundary.
+        scalars = result.scalars()
+        if inspect.isawaitable(scalars):
+            scalars = await scalars
+        rows = scalars.all()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        messages = list(rows)
         # Return in chronological order
         return list(reversed(messages))
     
