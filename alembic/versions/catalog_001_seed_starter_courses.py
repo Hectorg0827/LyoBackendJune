@@ -17,6 +17,36 @@ branch_labels = None
 depends_on = None
 
 
+def _extend_legacy_enum_column(
+    bind,
+    table_name: str,
+    column_name: str,
+    values: tuple[str, ...],
+) -> None:
+    """Add current lowercase values while preserving old enum constraints."""
+    if bind.dialect.name != "postgresql":
+        return
+    columns = {
+        column["name"]: column
+        for column in sa.inspect(bind).get_columns(table_name)
+    }
+    column = columns.get(column_name)
+    enum_type = None if column is None else column["type"]
+    if not getattr(enum_type, "enums", None) or not getattr(enum_type, "name", None):
+        return
+
+    quoted_type = bind.dialect.identifier_preparer.quote(enum_type.name)
+    with op.get_context().autocommit_block():
+        for value in values:
+            escaped_value = value.replace("'", "''")
+            op.execute(
+                sa.text(
+                    f"ALTER TYPE {quoted_type} ADD VALUE IF NOT EXISTS "
+                    f"'{escaped_value}'"
+                )
+            )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if "organizations" not in sa.inspect(bind).get_table_names():
@@ -39,6 +69,18 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.Column("updated_at", sa.DateTime(), nullable=False),
         )
+    _extend_legacy_enum_column(
+        bind,
+        "courses",
+        "difficulty_level",
+        ("beginner", "intermediate", "advanced"),
+    )
+    _extend_legacy_enum_column(
+        bind,
+        "lessons",
+        "content_type",
+        ("video", "text", "interactive", "quiz", "assignment"),
+    )
     seed_starter_catalog(bind)
 
 
