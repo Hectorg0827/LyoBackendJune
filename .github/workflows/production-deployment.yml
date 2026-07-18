@@ -1,28 +1,37 @@
-# 🚀 CI/CD Pipeline for LyoBackendJune
-# Automated testing, building, and deployment to production
+name: Backend CI and release image
 
-name: LyoBackendJune CI/CD
+# Railway owns production deployment through its GitHub integration. This
+# workflow proves the revision and publishes an immutable image, but never
+# changes production infrastructure directly.
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+concurrency:
+  group: backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   release:
-    types: [ published ]
+    types: [published]
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '18'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # 🧪 Testing and Quality Assurance
   test:
-    name: Test & Quality Checks
+    name: Test, migrate, and audit
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 35
+
     services:
       postgres:
         image: pgvector/pgvector:pg15
@@ -37,7 +46,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-      
       redis:
         image: redis:7-alpine
         options: >-
@@ -48,324 +56,131 @@ jobs:
         ports:
           - 6379:6379
 
+    env:
+      PYTHONPATH: .
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql://testuser:testpass@localhost:5432/testdb
+      REDIS_URL: redis://localhost:6379
+      SECRET_KEY: test-secret-key-for-ci-cd-at-least-32-characters-long
+
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-asyncio httpx
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx flake8 bandit mypy
 
-    - name: 🔧 Set up test environment
-      run: |
-        printf "DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb\nREDIS_URL=redis://localhost:6379\nENVIRONMENT=development\nSECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long\n" > .env.test
+      - name: Prove database migrations on PostgreSQL
+        run: alembic upgrade head
 
-    - name: 🗄️ Run database migrations
-      run: |
-        export PYTHONPATH=.
-        export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
-        export SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
-        python setup_database.py
+      - name: Run tests with coverage
+        run: python -m pytest --cov=lyo_app --cov-report=xml tests/
 
-    - name: 🧪 Run tests with coverage
-      run: |
-        export PYTHONPATH=.
-        # Settings only accepts development/staging/production — 'test' is
-        # rejected at import time and kills pytest collection.
-        export ENVIRONMENT=development
-        export DATABASE_URL=postgresql://testuser:testpass@localhost:5432/testdb
-        export REDIS_URL=redis://localhost:6379
-        export SECRET_KEY=test-secret-key-for-ci-cd-at-least-32-characters-long
-        python -m pytest --cov=lyo_app --cov-report=xml --cov-report=html tests/
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: unittests
+        continue-on-error: true
 
-    - name: 📊 Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-      continue-on-error: true
+      - name: Reject fatal Python errors
+        run: flake8 lyo_app --count --select=E9,F63,F7,F82 --show-source --statistics
 
-    - name: 🔍 Run linting (flake8)
-      run: |
-        pip install flake8
-        flake8 lyo_app --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 lyo_app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - name: Record full lint report
+        run: flake8 lyo_app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-    - name: 🔒 Run security checks (bandit)
-      run: |
-        pip install bandit
-        bandit -r lyo_app -f json -o bandit-report.json || true
-        # Gate on high-severity, high-confidence findings; the full report
-        # above still captures every lower-severity item for review.
-        bandit -r lyo_app -lll -iii
+      - name: Reject high-confidence security findings
+        run: bandit -r lyo_app -lll -iii
 
-    - name: 📋 Type checking (mypy)
-      run: |
-        pip install mypy
-        mypy lyo_app --ignore-missing-imports || true
+      - name: Record type-checking debt
+        run: mypy lyo_app --ignore-missing-imports
+        continue-on-error: true
 
-  # 🏗️ Build Docker Image
   build:
-    name: Build Docker Image
+    name: Build immutable release image
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: test
     if: github.event_name != 'pull_request'
-    
+
     outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
-      image-url: ${{ steps.build.outputs.image-url }}
+      image-ref: ${{ steps.image-ref.outputs.value }}
 
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: 🐳 Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: 🔐 Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: 📝 Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: 🏗️ Build and push Docker image
-      id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.production
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deployment/Dockerfile.production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
 
-  # 🚀 Deploy to Staging
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: [test, build]
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      - name: Expose immutable image reference
+        id: image-ref
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          REPOSITORY=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "value=ghcr.io/$REPOSITORY@$DIGEST" >> "$GITHUB_OUTPUT"
 
-    - name: ⚙️ Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
-
-    - name: 🚀 Deploy to ECS Staging
-      run: |
-        aws ecs update-service \
-          --cluster ${{ secrets.ECS_CLUSTER_NAME_STAGING }} \
-          --service ${{ secrets.ECS_SERVICE_NAME_STAGING }} \
-          --force-new-deployment
-
-    - name: ⏳ Wait for deployment
-      run: |
-        aws ecs wait services-stable \
-          --cluster ${{ secrets.ECS_CLUSTER_NAME_STAGING }} \
-          --services ${{ secrets.ECS_SERVICE_NAME_STAGING }}
-
-    - name: 🏥 Health check
-      run: |
-        sleep 30
-        curl -f ${{ secrets.STAGING_URL }}/health
-
-    - name: 📢 Notify deployment success
-      uses: 8398a7/action-slack@v3
-      with:
-        status: success
-        channel: '#deployments'
-        text: '✅ LyoBackendJune deployed to staging successfully!'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  # 🚀 Deploy to Production
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: [test, build]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'release'
-    environment: production
-    
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-
-    - name: ⚙️ Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
-
-    - name: 🚀 Deploy to ECS Production
-      run: |
-        aws ecs update-service \
-          --cluster ${{ secrets.ECS_CLUSTER_NAME_PRODUCTION }} \
-          --service ${{ secrets.ECS_SERVICE_NAME_PRODUCTION }} \
-          --force-new-deployment
-
-    - name: ⏳ Wait for deployment
-      run: |
-        aws ecs wait services-stable \
-          --cluster ${{ secrets.ECS_CLUSTER_NAME_PRODUCTION }} \
-          --services ${{ secrets.ECS_SERVICE_NAME_PRODUCTION }}
-
-    - name: 🏥 Health check
-      run: |
-        sleep 30
-        curl -f ${{ secrets.PRODUCTION_URL }}/health
-
-    - name: 🔄 Run production validation
-      run: |
-        python production_validation_final.py --url ${{ secrets.PRODUCTION_URL }}
-
-    - name: 📢 Notify deployment success
-      uses: 8398a7/action-slack@v3
-      with:
-        status: success
-        channel: '#deployments'
-        text: '🚀 LyoBackendJune deployed to production successfully!'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-    - name: 🏷️ Create release tag
-      if: github.event_name != 'release'
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git tag -a v$(date +%Y%m%d%H%M%S) -m "Production deployment $(date)"
-        git push origin --tags
-
-  # 🛡️ Security Scanning
   security:
-    name: Security Scanning
+    name: Scan immutable release image
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-
-    - name: 🔍 Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-      continue-on-error: true
-
-    - name: 📊 Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
-      continue-on-error: true
-
-  # 📊 Performance Testing
-  performance:
-    name: Performance Testing
-    runs-on: ubuntu-latest
-    needs: deploy-staging
-    if: github.ref == 'refs/heads/develop'
-    
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-
-    - name: 🚀 Install k6
-      run: |
-        sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-        echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
-        sudo apt-get update
-        sudo apt-get install k6
-
-    - name: 🧪 Run performance tests
-      run: |
-        k6 run --out json=results.json load_test/load_test.js
-      env:
-        TARGET_URL: ${{ secrets.STAGING_URL }}
-
-    - name: 📊 Upload performance results
-      uses: actions/upload-artifact@v4
-      with:
-        name: performance-results
-        path: results.json
-        if-no-files-found: ignore
-
-  # 📝 Documentation
-  documentation:
-    name: Update Documentation
-    runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    
+
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      - name: Scan container
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.build.outputs.image-ref }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
 
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-
-    - name: 📦 Install dependencies
-      run: |
-        pip install -r requirements.txt
-        pip install sphinx sphinx-rtd-theme
-
-    - name: 🔧 Generate API documentation
-      run: |
-        python -c "
-        import json
-        from lyo_app.app_factory import create_app
-
-        # Generate OpenAPI spec
-        app = create_app()
-        openapi_spec = app.openapi()
-        with open('openapi.json', 'w') as f:
-            json.dump(openapi_spec, f, indent=2)
-        "
-      continue-on-error: true
-
-    - name: 📚 Build documentation
-      run: |
-        mkdir -p docs
-        echo '# LyoBackendJune API Documentation' > docs/README.md
-        echo 'API documentation available at /docs endpoint' >> docs/README.md
-
-    - name: 📤 Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./docs
+      - name: Upload results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif

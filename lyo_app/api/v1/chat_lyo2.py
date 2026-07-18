@@ -10,8 +10,13 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
-from lyo_app.ai.schemas.lyo2 import RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext, MediaRef
+from lyo_app.ai.schemas.lyo2 import (
+    RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
+    ConversationTurn, MediaRef, UIBlock, UIBlockType,
+)
 from lyo_app.api.v1.chat import ChatRequest, ConversationMessage
+from lyo_app.chat.models import ChatMode
+from lyo_app.chat.stores import conversation_store
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,75 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
     trace_id = str(uuid.uuid4())
     start_time = time.time()
     try:
+        persistent_conversation = None
+        assistant_client_message_id = None
+        authenticated_user_id = (
+            str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+        )
+        if authenticated_user_id:
+            if request.conversation_id:
+                persistent_conversation = await conversation_store.get_owned_conversation(
+                    db, request.conversation_id, authenticated_user_id
+                )
+                if persistent_conversation is None:
+                    persistent_conversation = await conversation_store.create_conversation(
+                        db,
+                        session_id=request.session_id or request.device_id or trace_id,
+                        user_id=authenticated_user_id,
+                        topic=(request.text or "New Chat")[:200],
+                    )
+                    request.conversation_id = persistent_conversation.id
+            else:
+                persistent_conversation = await conversation_store.create_conversation(
+                    db,
+                    session_id=request.session_id or request.device_id or trace_id,
+                    user_id=authenticated_user_id,
+                    topic=(request.text or "New Chat")[:200],
+                )
+                request.conversation_id = persistent_conversation.id
+            persisted = await conversation_store.get_messages(
+                db, persistent_conversation.id, limit=30
+            )
+            request.conversation_history = [
+                ConversationTurn(role=message.role, content=message.content)
+                for message in persisted
+                if message.role in ("user", "assistant", "system")
+                and not (
+                    request.client_message_id
+                    and message.client_message_id == request.client_message_id
+                )
+            ]
+            if request.client_message_id:
+                assistant_client_message_id = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"{persistent_conversation.id}:{request.client_message_id}:assistant",
+                    )
+                )
+                replayed = await conversation_store.get_message_by_client_id(
+                    db, persistent_conversation.id, assistant_client_message_id
+                )
+                if replayed:
+                    return UnifiedChatResponse(
+                        answer_block=UIBlock(
+                            type=UIBlockType.TUTOR_MESSAGE,
+                            content={"text": replayed.content},
+                        ),
+                        metadata={
+                            "trace_id": trace_id,
+                            "conversation_id": persistent_conversation.id,
+                            "replayed": True,
+                        },
+                    )
+            if request.text:
+                await conversation_store.add_message(
+                    db,
+                    persistent_conversation.id,
+                    "user",
+                    request.text,
+                    client_message_id=request.client_message_id,
+                )
+
         # 1. Layer A: Multimodal Routing
         logger.info(f"[{trace_id}] Layer A: Routing request for user {current_user.id}")
         routing_response = await router_agent.route(request)
@@ -68,13 +142,25 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         # Check for clarification gate
         if decision.needs_clarification:
             logger.info(f"[{trace_id}] Clarification needed: {decision.clarification_question}")
-            from lyo_app.ai.schemas.lyo2 import UIBlock, UIBlockType
+            clarification = decision.clarification_question or "Could you clarify what you would like to learn?"
+            if persistent_conversation:
+                await conversation_store.add_message(
+                    db,
+                    persistent_conversation.id,
+                    "assistant",
+                    clarification,
+                    client_message_id=assistant_client_message_id,
+                )
             return UnifiedChatResponse(
                 answer_block=UIBlock(
                     type=UIBlockType.TUTOR_MESSAGE,
-                    content={"text": decision.clarification_question}
+                    content={"text": clarification}
                 ),
-                metadata={"clarification_needed": True, "trace_id": trace_id}
+                metadata={
+                    "clarification_needed": True,
+                    "trace_id": trace_id,
+                    "conversation_id": request.conversation_id,
+                }
             )
             
         # 2. Layer B: Planning
@@ -88,7 +174,10 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             user_id=str(current_user.id),
             plan=plan,
             original_request=request.text or "",
-            conversation_history=request.history
+            conversation_history=[
+                {"role": turn.role, "content": turn.content}
+                for turn in request.conversation_history
+            ]
         )
         
         # Add trace metadata
@@ -97,8 +186,20 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "trace_id": trace_id,
             "latency_ms": latency_ms,
             "intent": decision.intent,
-            "tier": decision.suggested_tier
+            "tier": decision.suggested_tier,
+            "conversation_id": request.conversation_id,
         })
+
+        answer_text = execution_response.answer_block.content.get("text", "")
+        if persistent_conversation and answer_text:
+            await conversation_store.add_message(
+                db,
+                persistent_conversation.id,
+                "assistant",
+                answer_text,
+                mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
+                client_message_id=assistant_client_message_id,
+            )
         
         return execution_response
 

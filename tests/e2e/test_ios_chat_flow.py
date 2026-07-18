@@ -25,10 +25,22 @@ def mock_auth():
     # Create a dummy user
     mock_user = MagicMock()
     mock_user.id = "test_user_123"
+
+    # Match SQLAlchemy's real AsyncSession contract. Session I/O is async,
+    # while add() and the Result scalar accessors are synchronous.
+    mock_db = AsyncMock()
+    query_result = MagicMock()
+    query_result.scalar_one_or_none.return_value = None
+    query_result.scalars.return_value.all.return_value = []
+    mock_db.execute.return_value = query_result
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+    mock_db.refresh = AsyncMock()
     
     # Override dependency
     app.dependency_overrides[get_current_user_or_guest] = lambda: mock_user
-    app.dependency_overrides[get_db] = lambda: AsyncMock() # Mock DB Session
+    app.dependency_overrides[get_db] = lambda: mock_db
     
     yield
     

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 
 
 class InputModality(str, Enum):
@@ -117,16 +117,23 @@ class ConversationTurn(BaseModel):
 
 
 class RouterRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    user_id: str
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    # The authenticated identity is always derived from the bearer token.  This
+    # optional field remains for old clients but is never trusted by routes.
+    user_id: Optional[str] = None
     text: Optional[str] = None
     media: List[MediaRef] = Field(default_factory=list)
     attachment_ids: List[str] = Field(default_factory=list)  # Explicit IDs from MediaPickerService
     active_artifact: Optional[ActiveArtifactContext] = None
     forced_intent: Optional[Intent] = None
     state_summary: Dict[str, Any] = Field(default_factory=dict)  # curated learning state head
+    conversation_id: Optional[str] = None
+    session_id: Optional[str] = None
+    device_id: Optional[str] = None
+    client_message_id: Optional[str] = None
     conversation_history: List[ConversationTurn] = Field(
         default_factory=list,
+        validation_alias=AliasChoices("conversation_history", "history"),
         description="Recent conversation turns for multi-turn context continuity"
     )
 
