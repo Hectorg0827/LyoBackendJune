@@ -14,7 +14,7 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
-from lyo_app.ai.schemas.lyo2 import RouterRequest, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
+from lyo_app.ai.schemas.lyo2 import RouterRequest, ConversationTurn, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
 from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
@@ -41,6 +41,8 @@ except ModuleNotFoundError as exc:
 from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
+from lyo_app.chat.models import ChatMode
+from lyo_app.chat.stores import conversation_store
 
 # Simple response builder to fix missing import
 class LyoResponseBuilder:
@@ -222,6 +224,96 @@ async def stream_lyo2_chat(
         start_time = time.time()
         
         try:
+            # Resolve one server-owned conversation before any AI work.  The
+            # bearer identity, never a client-supplied user_id, owns the row.
+            persistent_conversation = None
+            assistant_client_message_id = None
+            replayed_assistant = None
+            authenticated_user_id = (
+                str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+            )
+            if authenticated_user_id:
+                if request.conversation_id:
+                    persistent_conversation = await conversation_store.get_owned_conversation(
+                        db, request.conversation_id, authenticated_user_id
+                    )
+                    if persistent_conversation is None:
+                        # A new client can begin with a provisional local UUID.
+                        # Adopt a server UUID and announce it below.
+                        persistent_conversation = await conversation_store.create_conversation(
+                            db,
+                            session_id=request.session_id or request.device_id or trace_id,
+                            user_id=authenticated_user_id,
+                            topic=(request.text or "New Chat")[:200],
+                        )
+                        request.conversation_id = persistent_conversation.id
+                else:
+                    persistent_conversation = await conversation_store.create_conversation(
+                        db,
+                        session_id=request.session_id or request.device_id or trace_id,
+                        user_id=authenticated_user_id,
+                        topic=(request.text or "New Chat")[:200],
+                    )
+                    request.conversation_id = persistent_conversation.id
+
+                # Server history is canonical.  Clients can omit local history
+                # and resume seamlessly after reinstall, refresh, or device swap.
+                persisted_history = await conversation_store.get_messages(
+                    db, persistent_conversation.id, limit=30
+                )
+                request.conversation_history = [
+                    ConversationTurn(role=message.role, content=message.content)
+                    for message in persisted_history
+                    if message.role in ("user", "assistant", "system")
+                    and not (
+                        request.client_message_id
+                        and message.client_message_id == request.client_message_id
+                    )
+                ]
+                if request.client_message_id:
+                    assistant_client_message_id = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"{persistent_conversation.id}:{request.client_message_id}:assistant",
+                        )
+                    )
+                    replayed_assistant = await conversation_store.get_message_by_client_id(
+                        db,
+                        persistent_conversation.id,
+                        assistant_client_message_id,
+                    )
+                if request.text:
+                    await conversation_store.add_message(
+                        db,
+                        persistent_conversation.id,
+                        role="user",
+                        content=request.text,
+                        mode_used=ChatMode.GENERAL.value,
+                        client_message_id=request.client_message_id,
+                    )
+                yield yield_safe_sse_event(
+                    "conversation",
+                    {
+                        "type": "conversation",
+                        "conversation_id": persistent_conversation.id,
+                    },
+                )
+                if replayed_assistant:
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": replayed_assistant.content},
+                                "priority": 0,
+                            },
+                            "replayed": True,
+                        },
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+
             collected_bricks = []
             
             skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
@@ -241,7 +333,13 @@ async def stream_lyo2_chat(
             
             # Check for cached full response (Skip remaining layers if hit)
             cache_key = opt_data.get("cache_key")
-            cached_full_resp = await ai_performance_optimizer.cache_manager.get("full_response", key=cache_key)
+            # Personalized/multi-turn answers must never be served from the
+            # global prompt cache: the cache key does not encode user history.
+            cached_full_resp = None
+            if not authenticated_user_id:
+                cached_full_resp = await ai_performance_optimizer.cache_manager.get(
+                    "full_response", key=cache_key
+                )
             if cached_full_resp:
                 logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
                 for brick in cached_full_resp:
@@ -325,6 +423,15 @@ async def stream_lyo2_chat(
                 # that it truly cannot understand. Low-confidence clarifications
                 # from fallback routing should not block the pipeline.
                 logger.info(f"🤔 [STREAM][{trace_id}] Needs clarification: {decision.clarification_question}")
+                if persistent_conversation and decision.clarification_question:
+                    await conversation_store.add_message(
+                        db,
+                        persistent_conversation.id,
+                        role="assistant",
+                        content=decision.clarification_question,
+                        mode_used=ChatMode.GENERAL.value,
+                        client_message_id=assistant_client_message_id,
+                    )
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
                 return
                 
@@ -337,6 +444,15 @@ async def stream_lyo2_chat(
                     if data.missing_critical_info and data.follow_up_question:
                         # Yield a clarification if critical info is missing
                         logger.info(f"🤔 [STREAM][{trace_id}] Test Prep needs clarification: missing {data.missing_critical_info}")
+                        if persistent_conversation:
+                            await conversation_store.add_message(
+                                db,
+                                persistent_conversation.id,
+                                role="assistant",
+                                content=data.follow_up_question,
+                                mode_used=ChatMode.TEST_PREP.value,
+                                client_message_id=assistant_client_message_id,
+                            )
                         yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
                         return
                     # Optionally attach extracted data back to the request for the planner
@@ -563,7 +679,12 @@ async def stream_lyo2_chat(
                 yield f"data: {json.dumps(actions_brick)}\n\n"
             
             # --- Cache the full response (Phase 17) ---
-            if 'cache_key' in locals() and cache_key and collected_bricks:
+            if (
+                not authenticated_user_id
+                and 'cache_key' in locals()
+                and cache_key
+                and collected_bricks
+            ):
                 try:
                     await ai_performance_optimizer.cache_manager.set(
                         "full_response", 
@@ -574,6 +695,16 @@ async def stream_lyo2_chat(
                     logger.info(f"💾 [STREAM][{trace_id}] Persisted full response to cache.")
                 except Exception as e:
                     logger.warning(f"⚠️ Cache save failed: {e}")
+
+            if persistent_conversation and raw_llm_text:
+                await conversation_store.add_message(
+                    db,
+                    persistent_conversation.id,
+                    role="assistant",
+                    content=raw_llm_text,
+                    mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
+                    client_message_id=assistant_client_message_id,
+                )
 
             # Completion signal
             yield "data: [DONE]\n\n"

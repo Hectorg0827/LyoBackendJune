@@ -24,6 +24,54 @@ class ConversationHistoryItem(BaseModel):
     content: str = Field(..., description="Message content")
 
 
+class ConversationMessageRead(BaseModel):
+    """Canonical persisted AI-chat message shared by every client."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    mode_used: str
+    ctas: Optional[List[Dict[str, Any]]] = None
+    chip_actions: Optional[List[Dict[str, Any]]] = None
+    created_at: datetime
+
+
+class ConversationSummaryRead(BaseModel):
+    """A conversation row for cross-device history lists."""
+
+    id: str
+    title: str
+    message_count: int
+    last_message_preview: Optional[str] = None
+    current_mode: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationDetailRead(ConversationSummaryRead):
+    messages: List[ConversationMessageRead] = Field(default_factory=list)
+
+
+class ConversationListResponse(BaseModel):
+    conversations: List[ConversationSummaryRead]
+    has_more: bool = False
+
+
+class ConversationCreateRequest(BaseModel):
+    title: Optional[str] = Field(None, max_length=200)
+    session_id: Optional[str] = Field(None, max_length=100)
+    device_id: Optional[str] = Field(None, max_length=100)
+
+
+class ConversationUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    is_active: Optional[bool] = None
+
+
 class ChatRequest(BaseModel):
     """
     Main chat request schema with mode_hint and action support.
@@ -46,6 +94,11 @@ class ChatRequest(BaseModel):
     # Context
     conversation_id: Optional[str] = Field(None, description="Existing conversation ID to continue")
     session_id: Optional[str] = Field(None, description="Client session ID for tracking")
+    client_message_id: Optional[str] = Field(
+        None,
+        max_length=128,
+        description="Stable client turn ID used to make retries idempotent",
+    )
     conversation_history: Optional[List[ConversationHistoryItem]] = Field(
         None, description="Previous messages for context"
     )
