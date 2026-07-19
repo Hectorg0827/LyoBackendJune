@@ -1,6 +1,7 @@
 """Contract tests for the evidence-based AI Classroom teaching loop."""
 
 import unittest
+from unittest.mock import AsyncMock
 
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent,
@@ -18,6 +19,8 @@ from lyo_app.ai_classroom.scene_lifecycle_engine import (
     score_transfer_response,
 )
 from lyo_app.ai_classroom.websocket_routes import canonical_action_intent
+from lyo_app.personalization.schemas import KnowledgeTraceRequest
+from lyo_app.personalization.service import PersonalizationEngine
 
 
 class ClassroomActionContractTests(unittest.TestCase):
@@ -87,6 +90,28 @@ class TransferEvidenceTests(unittest.TestCase):
         )
         self.assertIn("fractions", keywords)
         self.assertIn("denominators", keywords)
+
+
+class SpacedRetrievalContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_trace_normalizes_json_user_id_for_mastery_and_schedule(self):
+        engine = PersonalizationEngine()
+        engine.dkt.get_skill_readiness = AsyncMock(return_value=(0.2, 0.8))
+        engine.dkt.update_mastery = AsyncMock(return_value=0.4)
+        engine._update_repetition_schedule = AsyncMock()
+        db = object()
+        await engine.trace_knowledge(
+            db,
+            KnowledgeTraceRequest(
+                learner_id="42",
+                skill_id="fractions",
+                item_id="compare fractions",
+                correct=True,
+                time_taken_seconds=8,
+            ),
+        )
+        engine.dkt.update_mastery.assert_awaited_once()
+        self.assertEqual(engine.dkt.update_mastery.await_args.args[1], 42)
+        self.assertEqual(engine._update_repetition_schedule.await_args.args[1], 42)
 
 
 class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
