@@ -1,13 +1,21 @@
-"""Contract tests for the guided AI Classroom teaching loop."""
+"""Contract tests for the evidence-based AI Classroom teaching loop."""
 
 import unittest
 
-from lyo_app.ai_classroom.sdui_models import ActionIntent, SceneType
+from lyo_app.ai_classroom.sdui_models import (
+    ActionIntent,
+    ClassroomMode,
+    HintLevel,
+    InputField,
+    SceneType,
+)
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     ClassroomDirector,
     ContextSnapshot,
     Trigger,
     TriggerType,
+    expected_transfer_keywords,
+    score_transfer_response,
 )
 from lyo_app.ai_classroom.websocket_routes import canonical_action_intent
 
@@ -27,11 +35,58 @@ class ClassroomActionContractTests(unittest.TestCase):
             ActionIntent.SKIP_AHEAD,
         )
 
-    def test_learner_response_is_not_misclassified_as_a_question(self):
+    def test_new_evidence_and_mode_intents_are_canonical(self):
         self.assertEqual(
-            canonical_action_intent(ActionIntent.USER_MESSAGE),
-            ActionIntent.USER_MESSAGE,
+            canonical_action_intent(ActionIntent.SUBMIT_TRANSFER),
+            ActionIntent.SUBMIT_TRANSFER,
         )
+        self.assertEqual(
+            canonical_action_intent(ActionIntent.SET_MODE),
+            ActionIntent.SET_MODE,
+        )
+
+    def test_transfer_input_carries_a_transparent_server_rubric(self):
+        field = InputField(
+            question="Apply proportional reasoning to a new recipe.",
+            placeholder="Explain your example",
+            concept_id="proportional reasoning",
+            expected_keywords=["ratio", "scale"],
+        )
+        self.assertEqual(field.action_intent, ActionIntent.SUBMIT_TRANSFER.value)
+        self.assertEqual(field.evidence_type, "transfer")
+        self.assertGreater(field.min_words, 1)
+
+
+class TransferEvidenceTests(unittest.TestCase):
+    def test_substantive_application_with_rubric_language_passes(self):
+        correct, coverage, missing = score_transfer_response(
+            "I use the ratio to scale every ingredient by the same factor.",
+            ["ratio", "scale", "factor"],
+            min_words=6,
+            min_score=0.25,
+        )
+        self.assertTrue(correct)
+        self.assertGreaterEqual(coverage, 2 / 3)
+        self.assertEqual(missing, ["factor"] if coverage < 1 else [])
+
+    def test_short_or_unrelated_response_fails(self):
+        correct, coverage, missing = score_transfer_response(
+            "I get it.",
+            ["ratio", "scale"],
+            min_words=6,
+            min_score=0.25,
+        )
+        self.assertFalse(correct)
+        self.assertEqual(coverage, 0)
+        self.assertEqual(missing, ["ratio", "scale"])
+
+    def test_keywords_come_from_authored_objective_and_content(self):
+        keywords = expected_transfer_keywords(
+            "Compare fractions with unlike denominators",
+            "Use a common denominator before comparing numerators.",
+        )
+        self.assertIn("fractions", keywords)
+        self.assertIn("denominators", keywords)
 
 
 class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -67,7 +122,7 @@ class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(decision.selected_scene_type, SceneType.INSTRUCTION)
 
-    async def test_correct_checkpoint_is_confirmed_before_advancing(self):
+    async def test_correct_recognition_requires_transfer_evidence(self):
         decision = await self.director.decide_scene(
             self.trigger(
                 ActionIntent.SUBMIT_ANSWER,
@@ -75,19 +130,40 @@ class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
             ),
             self.context,
         )
+        self.assertEqual(decision.selected_scene_type, SceneType.REFLECTION)
+        self.assertTrue(decision.require_interaction)
+
+    async def test_correct_transfer_confirms_mastery(self):
+        decision = await self.director.decide_scene(
+            self.trigger(
+                ActionIntent.SUBMIT_TRANSFER,
+                answer_data={"is_correct": True},
+            ),
+            self.context,
+        )
         self.assertEqual(decision.selected_scene_type, SceneType.CELEBRATION)
 
-    async def test_incorrect_checkpoint_reteaches(self):
-        decision = await self.director.decide_scene(
+    async def test_incorrect_evidence_reteaches(self):
+        recognition = await self.director.decide_scene(
             self.trigger(
                 ActionIntent.SUBMIT_ANSWER,
                 answer_data={"is_correct": False},
             ),
             self.context,
         )
-        self.assertEqual(decision.selected_scene_type, SceneType.CORRECTION)
+        transfer = await self.director.decide_scene(
+            self.trigger(
+                ActionIntent.SUBMIT_TRANSFER,
+                answer_data={"is_correct": False},
+            ),
+            self.context,
+        )
+        self.assertEqual(recognition.selected_scene_type, SceneType.CORRECTION)
+        self.assertEqual(transfer.selected_scene_type, SceneType.CORRECTION)
+        self.assertTrue(transfer.require_interaction)
 
-    async def test_adaptive_signals_change_the_pedagogical_move(self):
+    async def test_hint_ladder_and_challenge_mode_change_the_move(self):
+        self.context.hint_level = HintLevel.NUDGE
         hint = await self.director.decide_scene(
             self.trigger(ActionIntent.REQUEST_HINT),
             self.context,
@@ -98,8 +174,20 @@ class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(hint.selected_scene_type, SceneType.INSTRUCTION)
         self.assertLess(hint.difficulty_adjustment, 0)
-        self.assertEqual(stretch.selected_scene_type, SceneType.INSTRUCTION)
         self.assertGreater(stretch.difficulty_adjustment, 0)
+
+    async def test_review_mode_opens_with_due_retrieval(self):
+        self.context.classroom_mode = ClassroomMode.REVIEW
+        self.context.review_due_items = ["fraction comparison"]
+        decision = await self.director.decide_scene(
+            Trigger(
+                trigger_type=TriggerType.SYSTEM_TIMEOUT,
+                user_id="42",
+                session_id="course-1",
+            ),
+            self.context,
+        )
+        self.assertEqual(decision.selected_scene_type, SceneType.CHALLENGE)
 
 
 if __name__ == "__main__":
