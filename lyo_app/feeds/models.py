@@ -14,6 +14,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from lyo_app.core.database import Base
 from lyo_app.tenants.mixins import TenantMixin
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lyo_app.auth.models import User  # noqa: F401
+    from lyo_app.learning.models import Course, Lesson  # noqa: F401
+
 
 class PostType(str, Enum):
     """Types of social posts."""

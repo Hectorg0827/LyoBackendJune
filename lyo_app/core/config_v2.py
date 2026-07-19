@@ -94,9 +94,11 @@ class Settings(BaseSettings):
     REDIS_URL: Optional[RedisDsn] = Field(None, env="REDIS_URL")
     REDIS_POOL_SIZE: int = Field(default=20, env="REDIS_POOL_SIZE")  # Increased for better concurrent performance
     
-    # Google Cloud Storage
-    GCS_BUCKET_NAME: str = Field(..., env="GCS_BUCKET_NAME")
-    GCS_PROJECT_ID: str = Field(..., env="GCS_PROJECT_ID")
+    # Google Cloud Storage — optional so importing this module doesn't require
+    # GCS env in non-storage contexts (tests, workers); consumers fall back
+    # via getattr and storage code errors at use, not at import.
+    GCS_BUCKET_NAME: Optional[str] = Field(None, env="GCS_BUCKET_NAME")
+    GCS_PROJECT_ID: Optional[str] = Field(None, env="GCS_PROJECT_ID")
     GCS_CREDENTIALS_PATH: Optional[str] = Field(None, env="GCS_CREDENTIALS_PATH")
     GCS_CREDENTIALS_JSON: Optional[str] = Field(None, env="GCS_CREDENTIALS_JSON")
     

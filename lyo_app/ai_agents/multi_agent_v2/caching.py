@@ -77,7 +77,7 @@ class CurriculumCache:
         key_data = f"{topic_normalized}:{level_normalized}:{lesson_count}"
         
         # Hash for consistent length
-        key_hash = hashlib.md5(key_data.encode()).hexdigest()[:16]
+        key_hash = hashlib.md5(key_data.encode(), usedforsecurity=False).hexdigest()[:16]
         
         return f"curriculum:v1:{key_hash}"
     

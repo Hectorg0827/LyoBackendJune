@@ -38,7 +38,7 @@ async def test_analyze_user_action_without_message(monkeypatch):
     )
     assert result["user_id"] == 1
     assert result["action"] == "test_action"
-    assert result["previous_state"] == "IDLE"
-    assert result["new_state"] == "ENGAGED"
+    assert result["previous_state"] == "idle"
+    assert result["new_state"] == "engaged"
     assert result["intervention_triggered"] is False
     assert isinstance(datetime.fromisoformat(result["timestamp"]), datetime)

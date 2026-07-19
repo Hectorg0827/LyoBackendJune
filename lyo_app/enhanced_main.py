@@ -387,6 +387,22 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
+
+    # Basic social feed routes: /posts, /comments, /posts/{id}/reactions,
+    # /follow, /feed, /feed/public, /users/{id}/posts, /users/{id}/stats.
+    # The enhanced feeds router above only serves /api/v1/feeds/*; without
+    # this, the paths the web/Android clients call do not exist and the
+    # notification triggers in feeds/service.py are unreachable.
+    try:
+        from lyo_app.feeds.routes import router as basic_feeds_router
+        app.include_router(basic_feeds_router, tags=["feeds"])
+        # Versioned mount: /api/v1/feeds/posts, /comments, /feed/public, ...
+        # matches the mobile clients' /api/v1 surface and the route tests.
+        app.include_router(basic_feeds_router, prefix="/api/v1/feeds", tags=["feeds"])
+        logger.info("✅ Basic feeds routes integrated - posts/comments/reactions/follow active!")
+    except ImportError as e:
+        logger.warning(f"Basic feeds routes not available: {e}")
+
     if storage_router:
         app.include_router(storage_router)
     # app.include_router(ads_router)  # TODO: Monetization module incomplete
@@ -394,6 +410,10 @@ def create_app() -> FastAPI:
     try:
         from lyo_app.routers.ai_routes import router as ai_router
         app.include_router(ai_router)
+        # Mentor/engagement/curriculum agent endpoints (mentor conversation,
+        # sentiment analysis, websocket) were defined but never mounted.
+        from lyo_app.ai_agents.routes import router as ai_agents_router
+        app.include_router(ai_agents_router, prefix="/api/v1")
     except ImportError:
         pass
     
@@ -496,6 +516,26 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Clips routes not available: {e}")
     
+    # Messaging Router - Direct messages between users
+    try:
+        from lyo_app.routers.messaging import router as messaging_router
+        app.include_router(messaging_router)
+        app.include_router(messaging_router, prefix="/api/v1")
+        logger.info("✅ Messaging routes integrated - Direct messages active!")
+    except ImportError as e:
+        logger.warning(f"Messaging routes not available: {e}")
+
+    # Multi-Device Sync Router - cross-device conversation continuity
+    # (REST under both legacy and /api/v1 prefixes, matching community/gamification;
+    #  websocket lives at /api/v1/sync/ws)
+    try:
+        from lyo_app.routers.sync import router as sync_router
+        app.include_router(sync_router, tags=["Multi-Device Sync"])
+        app.include_router(sync_router, prefix="/api/v1", tags=["Multi-Device Sync"])
+        logger.info("✅ Multi-device sync routes integrated - cross-device continuity active!")
+    except ImportError as e:
+        logger.warning(f"Sync routes not available: {e}")
+
     # Optional legacy/feature routers (only include if present)
     try:
         from lyo_app.community.routes import router as community_router
@@ -674,7 +714,23 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Relationship routes not available: {e}")
 
+    # Notifications Router - User notification management
+    try:
+        from lyo_app.routers.notifications import router as notifications_router
+        app.include_router(notifications_router)
+        app.include_router(notifications_router, prefix="/api/v1")
+        logger.info("✅ Notification routes integrated - User notifications active!")
+    except ImportError as e:
+        logger.warning(f"Notification routes not available: {e}")
 
+    # Discover Router - Educational places and trending content
+    try:
+        from lyo_app.routers.discover import router as discover_router
+        app.include_router(discover_router)
+        app.include_router(discover_router, prefix="/api/v1")
+        logger.info("✅ Discover routes integrated - Places & trending content active!")
+    except ImportError as e:
+        logger.warning(f"Discover routes not available: {e}")
 
     @app.get("/health")
     async def enhanced_health_check():  # noqa: D401

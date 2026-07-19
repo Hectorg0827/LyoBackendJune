@@ -149,7 +149,7 @@ class Experiment:
         
         # Create deterministic hash based on experiment ID and user ID
         hash_input = f"{self.id}:{user_id}"
-        hash_value = int(hashlib.md5(hash_input.encode()).hexdigest(), 16)
+        hash_value = int(hashlib.md5(hash_input.encode(), usedforsecurity=False).hexdigest(), 16)
         normalized_hash = (hash_value % 10000) / 10000.0
         
         # Check if user is in experiment traffic
@@ -297,7 +297,7 @@ class ExperimentManager:
     ) -> str:
         """Create a new A/B test experiment."""
         
-        experiment_id = hashlib.md5(f"{name}:{datetime.now().isoformat()}".encode()).hexdigest()[:12]
+        experiment_id = hashlib.md5(f"{name}:{datetime.now().isoformat()}".encode(), usedforsecurity=False).hexdigest()[:12]
         
         # Create experiment variants
         experiment_variants = []

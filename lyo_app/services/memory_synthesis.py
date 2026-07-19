@@ -22,6 +22,8 @@ from lyo_app.personalization.models import (
     LearnerState, LearnerMastery, SpacedRepetitionSchedule, MemoryInsight as MemoryInsightDB
 )
 from lyo_app.services.embedding_service import embedding_service
+from lyo_app.ai_agents.models import MentorInteraction
+from lyo_app.auth.models import User
 import json
 
 logger = logging.getLogger(__name__)

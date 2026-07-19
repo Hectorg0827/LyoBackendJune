@@ -19,14 +19,14 @@ import time
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, AsyncGenerator
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
-from lyo_app.auth.jwt_auth import get_optional_current_user
+from lyo_app.auth.jwt_auth import get_current_user, get_optional_current_user
 from lyo_app.models.enhanced import User
 from lyo_app.chat.models import ChatMode, ChatMessage, ChatConversation
 from lyo_app.chat.schemas import (
@@ -46,6 +46,9 @@ from lyo_app.chat.schemas import (
     SelectionNoteRequest, SelectionNoteResponse,
     HighlightCreate, HighlightRead, HighlightListResponse,
     AnnotationUpdate,
+    ConversationCreateRequest, ConversationUpdateRequest,
+    ConversationListResponse, ConversationSummaryRead,
+    ConversationDetailRead, ConversationMessageRead,
 )
 from lyo_app.core.lyo_protocol import (
     LyoBlock, BlockType, SemanticRole, PresentationHint, ConceptPayload
@@ -74,6 +77,127 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
+def _conversation_title(conversation: ChatConversation) -> str:
+    return (conversation.topic or "New Chat").strip() or "New Chat"
+
+
+def _message_read(message: ChatMessage) -> ConversationMessageRead:
+    return ConversationMessageRead.model_validate(message)
+
+
+async def _conversation_summary(
+    db: AsyncSession, conversation: ChatConversation
+) -> ConversationSummaryRead:
+    messages = await conversation_store.get_messages(db, conversation.id, limit=1)
+    last_message = messages[-1] if messages else None
+    return ConversationSummaryRead(
+        id=conversation.id,
+        title=_conversation_title(conversation),
+        message_count=conversation.message_count,
+        last_message_preview=(last_message.content[:160] if last_message else None),
+        current_mode=conversation.current_mode,
+        is_active=conversation.is_active,
+        created_at=conversation.created_at,
+        updated_at=conversation.last_message_at or conversation.updated_at,
+    )
+
+
+# =============================================================================
+# CANONICAL CROSS-DEVICE CONVERSATION HISTORY
+# =============================================================================
+
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_chat_conversations(
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List the authenticated user's AI chats, newest activity first."""
+    user_id = str(current_user.id)
+    rows = await conversation_store.list_for_user(
+        db, user_id, limit=limit + 1, offset=offset
+    )
+    has_more = len(rows) > limit
+    summaries = [await _conversation_summary(db, row) for row in rows[:limit]]
+    return ConversationListResponse(conversations=summaries, has_more=has_more)
+
+
+@router.post(
+    "/conversations", response_model=ConversationDetailRead, status_code=status.HTTP_201_CREATED
+)
+async def create_chat_conversation(
+    request: ConversationCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    session_id = request.session_id or request.device_id or str(uuid4())
+    conversation = await conversation_store.create_conversation(
+        db,
+        session_id=session_id,
+        user_id=str(current_user.id),
+        topic=request.title,
+    )
+    summary = await _conversation_summary(db, conversation)
+    return ConversationDetailRead(**summary.model_dump(), messages=[])
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetailRead)
+async def get_chat_conversation(
+    conversation_id: str,
+    limit: int = Query(100, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversation = await conversation_store.get_owned_conversation(
+        db, conversation_id, str(current_user.id)
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = await conversation_store.get_messages(db, conversation.id, limit=limit)
+    summary = await _conversation_summary(db, conversation)
+    return ConversationDetailRead(
+        **summary.model_dump(), messages=[_message_read(message) for message in messages]
+    )
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationSummaryRead)
+async def update_chat_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversation = await conversation_store.get_owned_conversation(
+        db, conversation_id, str(current_user.id)
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if request.title is not None:
+        conversation.topic = request.title.strip()[:200]
+    if request.is_active is not None:
+        conversation.is_active = request.is_active
+    await db.commit()
+    await db.refresh(conversation)
+    return await _conversation_summary(db, conversation)
+
+
+@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_chat_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversation = await conversation_store.get_owned_conversation(
+        db, conversation_id, str(current_user.id)
+    )
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conversation.is_active = False
+    await db.commit()
+    return None
+
+
 # =============================================================================
 # PROACTIVE GREETING ENDPOINT
 # =============================================================================
@@ -97,8 +221,7 @@ async def get_proactive_greeting(
             user_context_tag = await context_engine.get_user_context(db, current_user.id)
             
             # Get Detailed Learning Context
-            # TEMPORARILY DISABLED due to greenlet issues
-            learner_context = ""  # await personalization_engine.build_prompt_context(db, str(current_user.id))
+            learner_context = await personalization_engine.build_prompt_context(db, str(current_user.id))
         except Exception as e:
             await db.rollback()
             logger.warning(f"Failed to build context for greeting: {e}")
@@ -178,7 +301,12 @@ async def chat_endpoint(
         conversation_id = request.conversation_id
         
         if conversation_id:
-            conversation = await conversation_store.get_conversation(db, conversation_id)
+            if current_user:
+                conversation = await conversation_store.get_owned_conversation(
+                    db, conversation_id, str(current_user.id)
+                )
+            else:
+                conversation = await conversation_store.get_conversation(db, conversation_id)
         else:
             conversation = await conversation_store.get_active_conversation(
                 db, session_id, user_id=str(current_user.id) if current_user else None
@@ -194,6 +322,16 @@ async def chat_endpoint(
         # Capture essential data EARLY before any commit/rollback expires the object
         active_conversation_id = conversation.id
         active_conversation_topic = conversation.topic
+        assistant_client_message_id = (
+            str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{active_conversation_id}:{request.client_message_id}:assistant",
+                )
+            )
+            if request.client_message_id
+            else None
+        )
 
         # Best-effort backfill user binding for continuity
         if current_user and not conversation.user_id:
@@ -214,9 +352,53 @@ async def chat_endpoint(
         
         # 2. Build Context & History EARLY (for Router)
         history = []
-        if request.conversation_history:
+        if current_user:
+            persisted_messages = await conversation_store.get_messages(
+                db, active_conversation_id, limit=30
+            )
+            history = [
+                {"role": message.role, "content": message.content}
+                for message in persisted_messages
+                if not (
+                    request.client_message_id
+                    and message.client_message_id == request.client_message_id
+                )
+            ]
+        elif request.conversation_history:
             for msg in request.conversation_history:
                 history.append({"role": msg.role, "content": msg.content})
+
+        if assistant_client_message_id:
+            replayed_assistant = await conversation_store.get_message_by_client_id(
+                db, active_conversation_id, assistant_client_message_id
+            )
+            if replayed_assistant:
+                persisted_messages = await conversation_store.get_messages(
+                    db, active_conversation_id, limit=30
+                )
+                return ChatResponse(
+                    response=replayed_assistant.content,
+                    message_id=replayed_assistant.id,
+                    conversation_id=active_conversation_id,
+                    mode_used=replayed_assistant.mode_used,
+                    conversation_history=[
+                        ConversationHistoryItem(role=message.role, content=message.content)
+                        for message in persisted_messages
+                    ],
+                    ctas=[],
+                    chip_actions=[],
+                    latency_ms=int((time.time() - start_time) * 1000),
+                )
+
+        if request.client_message_id:
+            await conversation_store.add_message(
+                db,
+                active_conversation_id,
+                role="user",
+                content=request.message,
+                mode_used=request.mode_hint or ChatMode.GENERAL.value,
+                client_message_id=request.client_message_id,
+            )
 
         context = {
             "context": request.context,
@@ -262,7 +444,7 @@ async def chat_endpoint(
         cache_hit = False
         cached_response = None
         
-        if response_cache:
+        if response_cache and not current_user:
             cached_response = await response_cache.get(
                 request.message, mode.value
             )
@@ -282,7 +464,7 @@ async def chat_endpoint(
             )
             
             # Cache the response
-            if response_cache and agent_result.get("response"):
+            if response_cache and not current_user and agent_result.get("response"):
                 await response_cache.set(
                     request.message, mode.value, agent_result
                 )
@@ -351,6 +533,10 @@ async def chat_endpoint(
         message_id = str(uuid4())
         
         async def save_user_message():
+            if request.client_message_id:
+                return await conversation_store.get_message_by_client_id(
+                    db, active_conversation_id, request.client_message_id
+                )
             return await conversation_store.add_message(
                 db, active_conversation_id,
                 role="user",
@@ -370,7 +556,8 @@ async def chat_endpoint(
                 latency_ms=latency_ms,
                 ctas=[cta.model_dump() for cta in assembled["ctas"]],
                 chip_actions=[chip.model_dump() for chip in assembled["chip_actions"]],
-                cache_hit=cache_hit
+                cache_hit=cache_hit,
+                client_message_id=assistant_client_message_id,
             )
         
         # Captured ID is used for saves to avoid greenlet errors on expired objects
@@ -593,7 +780,12 @@ async def chat_stream_endpoint(
             # 1. Get or create conversation
             conversation_id = request.conversation_id
             if conversation_id:
-                conversation = await conversation_store.get_conversation(db, conversation_id)
+                if current_user:
+                    conversation = await conversation_store.get_owned_conversation(
+                        db, conversation_id, str(current_user.id)
+                    )
+                else:
+                    conversation = await conversation_store.get_conversation(db, conversation_id)
             else:
                 conversation = await conversation_store.get_active_conversation(
                     db, session_id, user_id=str(current_user.id) if current_user else None
@@ -745,11 +937,12 @@ async def chat_stream_endpoint(
             
             latency_ms = int((time.time() - start_time) * 1000)
             
-            # 8. Save messages in background (don't block stream completion)
-            asyncio.create_task(_save_stream_messages(
+            # 8. Commit before closing the stream. A FastAPI dependency session
+            # cannot safely be handed to a detached task after the response.
+            await _save_stream_messages(
                 db, active_conversation_id, session_id, mode.value, request, assembled,
                 agent_result, cache_hit, latency_ms, confidence, reasoning
-            ))
+            )
             
             # 9. Send completion event
             yield StreamEvent(

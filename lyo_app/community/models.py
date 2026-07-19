@@ -160,7 +160,12 @@ class CommunityEvent(Base):
     start_time = Column(DateTime, nullable=False, index=True)
     end_time = Column(DateTime, nullable=False)
     timezone = Column(String(50), nullable=False, default="UTC")
-    
+
+    # Capacity — column exists in the initial production schema and the
+    # service/schemas read and write it; it was dropped from the model
+    # during branch consolidation, making every event creation crash.
+    max_attendees = Column(Integer, nullable=True)
+
     # Associations
     organizer_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     study_group_id = Column(Integer, ForeignKey("study_groups.id"), nullable=True, index=True)

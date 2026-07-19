@@ -380,7 +380,7 @@ def _generate_cache_key(func_name: str, args: tuple, kwargs: dict) -> str:
         'kwargs': sorted(kwargs.items())
     }
     key_string = json.dumps(key_data, sort_keys=True)
-    return hashlib.md5(key_string.encode()).hexdigest()
+    return hashlib.md5(key_string.encode(), usedforsecurity=False).hexdigest()
 
 # Global cache manager instance (would be initialized in app factory)
 _cache_manager_instance = None

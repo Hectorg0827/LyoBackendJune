@@ -15,8 +15,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Create all production tables."""
-    
+    """Create all production tables (bootstrap for an EMPTY database only)."""
+
+    # This legacy bootstrap predates the consolidated migration graph. The
+    # graph now descends from the real initial schema (156c634b5cea), so on
+    # any database built through that lineage these tables already exist —
+    # and with different column types (integer ids vs this file's UUIDs).
+    # Running it there aborted `alembic upgrade heads` with DuplicateTable.
+    bind = op.get_bind()
+    if sa.inspect(bind).has_table("users"):
+        return
+
     # Users table
     op.create_table(
         'users',

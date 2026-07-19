@@ -262,6 +262,7 @@ class FeedsService:
             raise ValueError("Post not found")
         
         # Verify parent comment exists if specified
+        parent_comment = None
         if comment_data.parent_comment_id:
             parent_result = await db.execute(
                 select(Comment).where(Comment.id == comment_data.parent_comment_id)
@@ -284,26 +285,78 @@ class FeedsService:
         db.add(db_comment)
         await db.commit()
         await db.refresh(db_comment)
-        
-        return db_comment
+
+        # Notify the post author — and on a threaded reply, the parent
+        # comment's author, who is the person most likely to care (non-fatal;
+        # create_notification skips self-notifications itself)
+        try:
+            from lyo_app.routers.notifications import create_notification, get_actor_display_name
+            actor_name = await get_actor_display_name(db, author_id)
+            snippet = (comment_data.content or "").strip()
+            if len(snippet) > 80:
+                snippet = snippet[:77] + "..."
+            await create_notification(
+                db,
+                user_id=post.author_id,
+                type="comment",
+                title="New comment",
+                body=f'{actor_name} commented: "{snippet}"',
+                actor_id=author_id,
+                target_id=str(comment_data.post_id),
+                target_type="post",
+            )
+            if parent_comment is not None and parent_comment.author_id != post.author_id:
+                await create_notification(
+                    db,
+                    user_id=parent_comment.author_id,
+                    type="reply",
+                    title="New reply",
+                    body=f'{actor_name} replied: "{snippet}"',
+                    actor_id=author_id,
+                    target_id=str(comment_data.post_id),
+                    target_type="post",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Re-select with replies eagerly loaded: CommentRead serializes the
+        # `replies` relationship, and a lazy load during response rendering
+        # raises MissingGreenlet under the async session.
+        result = await db.execute(
+            select(Comment)
+            .options(
+                # Two levels: CommentRead serializes replies recursively,
+                # so each loaded reply's own `replies` must be loaded too
+                # or pydantic triggers a lazy load (MissingGreenlet).
+                selectinload(Comment.replies).selectinload(Comment.replies)
+            )
+            .where(Comment.id == db_comment.id)
+        )
+        return result.scalar_one()
 
     async def get_comments_by_post(
-        self, 
-        db: AsyncSession, 
+        self,
+        db: AsyncSession,
         post_id: int
     ) -> List[Comment]:
         """
         Get all comments for a post, ordered by creation time.
-        
+
         Args:
             db: Database session
             post_id: Post ID
-            
+
         Returns:
             List of comments
         """
         result = await db.execute(
             select(Comment)
+            .options(
+                # Two levels: CommentRead serializes replies recursively,
+                # so each loaded reply's own `replies` must be loaded too
+                # or pydantic triggers a lazy load (MissingGreenlet).
+                selectinload(Comment.replies).selectinload(Comment.replies)
+            )
             .where(Comment.post_id == post_id)
             .order_by(Comment.created_at)
         )
@@ -364,7 +417,24 @@ class FeedsService:
             db.add(db_reaction)
             await db.commit()
             await db.refresh(db_reaction)
-            
+
+            # Notify the post author about the new reaction (non-fatal)
+            try:
+                from lyo_app.routers.notifications import create_notification, get_actor_display_name
+                actor_name = await get_actor_display_name(db, user_id)
+                await create_notification(
+                    db,
+                    user_id=post.author_id,
+                    type="like",
+                    title="New reaction",
+                    body=f"{actor_name} reacted to your post",
+                    actor_id=user_id,
+                    target_id=str(reaction_data.post_id),
+                    target_type="post",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
             return db_reaction
 
     async def react_to_comment(
@@ -474,7 +544,24 @@ class FeedsService:
         db.add(db_follow)
         await db.commit()
         await db.refresh(db_follow)
-        
+
+        # Notify the followed user (non-fatal)
+        try:
+            from lyo_app.routers.notifications import create_notification, get_actor_display_name
+            actor_name = await get_actor_display_name(db, follower_id)
+            await create_notification(
+                db,
+                user_id=follow_data.following_id,
+                type="follow",
+                title="New follower",
+                body=f"{actor_name} started following you",
+                actor_id=follower_id,
+                target_id=str(follower_id),
+                target_type="user",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         return db_follow
 
     async def unfollow_user(
@@ -907,11 +994,21 @@ class FeedsService:
         # Update content
         comment.content = comment_data.content
         comment.updated_at = datetime.utcnow()
-        
+
         await db.commit()
-        await db.refresh(comment)
-        
-        return comment
+
+        # Reload with replies eagerly loaded for CommentRead serialization
+        result = await db.execute(
+            select(Comment)
+            .options(
+                # Two levels: CommentRead serializes replies recursively,
+                # so each loaded reply's own `replies` must be loaded too
+                # or pydantic triggers a lazy load (MissingGreenlet).
+                selectinload(Comment.replies).selectinload(Comment.replies)
+            )
+            .where(Comment.id == comment.id)
+        )
+        return result.scalar_one()
 
     async def delete_comment(
         self, 

@@ -53,13 +53,16 @@ async def bootstrap_lyo_inc(
     3. Generates the first API key
     
     Call this ONCE after deploying the multi-tenant update.
-    
-    Query param: secret=lyo-bootstrap-2024
+
+    Query param: secret=$TENANT_BOOTSTRAP_SECRET (must be set in the env;
+    the endpoint is disabled when unset).
     """
+    import os
+
     from sqlalchemy import text
-    
-    # Simple secret check
-    if secret != "lyo-bootstrap-2024":
+
+    expected = os.environ.get("TENANT_BOOTSTRAP_SECRET")
+    if not expected or secret != expected:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid bootstrap secret"

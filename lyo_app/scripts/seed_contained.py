@@ -9,6 +9,7 @@ from lyo_app.auth.models import User, RefreshToken  # noqa: F401
 from lyo_app.auth.rbac import Role, Permission, user_roles, role_permissions  # noqa: F401
 from lyo_app.models.enhanced import Task, PushDevice, GamificationProfile  # noqa: F401
 from lyo_app.learning.models import Course, Lesson, CourseEnrollment, LessonCompletion  # noqa: F401
+from lyo_app.community.models import EventType, EventStatus, MarketplaceItem
 from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance, CommunityQuestion, CommunityAnswer  # noqa: F401
 from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
 from lyo_app.tenants.models import Organization, APIKey  # noqa: F401

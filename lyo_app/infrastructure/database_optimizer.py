@@ -156,7 +156,7 @@ class DatabaseOptimizer:
         """Generate unique ID for query"""
         # Normalize query text for better caching
         normalized = ' '.join(query_text.split()).upper()
-        return hashlib.md5(normalized.encode()).hexdigest()[:16]
+        return hashlib.md5(normalized.encode(), usedforsecurity=False).hexdigest()[:16]
 
     def _record_query_metrics(self, query_id: str, query_type: QueryType,
                             query_text: str, execution_time: float,
@@ -444,7 +444,7 @@ class DatabaseOptimizer:
             cache_data["params"] = params
 
         cache_string = json.dumps(cache_data, sort_keys=True)
-        return hashlib.md5(cache_string.encode()).hexdigest()
+        return hashlib.md5(cache_string.encode(), usedforsecurity=False).hexdigest()
 
     def should_cache_query(self, query_type: QueryType, execution_time: float) -> bool:
         """Determine if query result should be cached"""

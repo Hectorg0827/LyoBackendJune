@@ -91,7 +91,7 @@ class LyoNexusAgent:
                             asyncio.create_task(
                                 self.media_worker.dispatch_media_generation(
                                     query=media_query,
-                                    brick_id=update_id,
+                                    brick_id=placeholder_brick["id"],
                                     media_type="image" # Defaulting for now
                                 )
                             )

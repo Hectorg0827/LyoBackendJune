@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from typing import Dict, List, Set, Any
+from typing import Dict, List, Set, Any, Optional
 from fastapi import WebSocket
 from datetime import datetime
 import redis.asyncio as redis

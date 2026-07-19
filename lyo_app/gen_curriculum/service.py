@@ -4,7 +4,7 @@ Builds on existing curriculum_agent.py
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from datetime import datetime
 import hashlib
 import json
@@ -12,6 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.personalization.service import personalization_engine
 from lyo_app.core.redis_cache import redis_cache
+
+if TYPE_CHECKING:
+    from lyo_app.gen_curriculum.schemas import (
+        ContentGenerationRequest,
+        GeneratedContentResponse,
+        LearningPathRequest,
+        LearningPathResponse,
+        PathAdaptationRequest,
+        PathAdaptationResponse,
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +47,7 @@ class GenerativeCurriculumEngine:
         Generate fully adaptive curriculum using multi-agent pipeline
         """
         # Check cache first
-        cache_key = f"curriculum:{user_id}:{hashlib.md5(learning_goal.encode()).hexdigest()}"
+        cache_key = f"curriculum:{user_id}:{hashlib.md5(learning_goal.encode(), usedforsecurity=False).hexdigest()}"
         cached_curriculum = await redis_cache.get(cache_key)
         if cached_curriculum:
             logger.info(f"🎯 Cache hit for curriculum: {learning_goal}")
@@ -120,7 +131,7 @@ class GenerativeCurriculumEngine:
 
         # Check cache
         # Create a unique key based on request parameters
-        req_hash = hashlib.md5(request.json().encode()).hexdigest()
+        req_hash = hashlib.md5(request.json().encode(), usedforsecurity=False).hexdigest()
         cache_key = f"content:{req_hash}"
         
         cached_data = await redis_cache.get(cache_key)

@@ -4,7 +4,7 @@ Tests the complete request/response cycle for auth endpoints.
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,7 +49,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test successful user registration through API."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Mock the database dependency
             app.dependency_overrides[get_db] = lambda: db_session
             
@@ -57,14 +57,16 @@ class TestAuthRoutes:
             
             assert response.status_code == 201
             data = response.json()
-            assert data["email"] == valid_user_data["email"]
-            assert data["username"] == valid_user_data["username"]
-            assert data["first_name"] == valid_user_data["first_name"]
-            assert data["last_name"] == valid_user_data["last_name"]
-            assert "hashed_password" not in data  # Should not be in response
-            assert "password" not in data  # Should not be in response
-            assert data["is_active"] is True
-            assert data["is_verified"] is False
+            # /register returns a LoginResponse (token + nested user)
+            assert data["access_token"]
+            user = data["user"]
+            assert user["email"] == valid_user_data["email"]
+            assert user["username"] == valid_user_data["username"]
+            assert user["first_name"] == valid_user_data["first_name"]
+            assert user["last_name"] == valid_user_data["last_name"]
+            assert "hashed_password" not in user  # Should not be in response
+            assert "password" not in user  # Should not be in response
+            assert user["is_active"] is True
 
     async def test_register_user_duplicate_email(
         self,
@@ -73,7 +75,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test registration with duplicate email returns 400."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             # Register first user
@@ -94,7 +96,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test registration with invalid data returns 422."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             invalid_data = {
@@ -115,7 +117,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test successful user login."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             # First register a user
@@ -142,7 +144,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test login with invalid credentials returns 401."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             # Register a user first
@@ -165,7 +167,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test login with non-existent user returns 401."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             login_data = {
@@ -185,12 +187,12 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test getting user by ID."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             # Register a user first
             register_response = await client.post("/auth/register", json=valid_user_data)
-            user_id = register_response.json()["id"]
+            user_id = register_response.json()["user"]["id"]
             
             # Get user by ID
             response = await client.get(f"/auth/users/{user_id}")
@@ -206,7 +208,7 @@ class TestAuthRoutes:
         db_session: AsyncSession
     ):
         """Test getting non-existent user returns 404."""
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
             response = await client.get("/auth/users/999")

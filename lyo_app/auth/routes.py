@@ -3,7 +3,10 @@ Authentication routes for user registration, login, and profile management.
 Provides FastAPI endpoints for the authentication module.
 """
 
+import logging
 from typing import Annotated
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
@@ -497,7 +500,15 @@ async def update_profile(
     
     # Update fields if provided
     if request.full_name is not None:
-        user.full_name = request.full_name
+        # User model stores first_name/last_name; assigning a non-mapped
+        # full_name attribute was a silent no-op that never persisted.
+        parts = request.full_name.strip().split(None, 1)
+        if parts:
+            user.first_name = parts[0]
+            # A single-word full_name updates only the first name — don't
+            # silently wipe an existing last name.
+            if len(parts) > 1:
+                user.last_name = parts[1]
     if request.bio is not None:
         user.bio = request.bio
     if request.avatar_url is not None:

@@ -79,8 +79,10 @@ class TestAuthService:
         user = await auth_service.register_user(db_session, valid_user_data)
         
         # Password should be hashed and verifiable
-        assert auth_service.verify_password(
-            valid_user_data.password, 
+        from lyo_app.auth.security import verify_password
+
+        assert verify_password(
+            valid_user_data.password,
             user.hashed_password
         )
 

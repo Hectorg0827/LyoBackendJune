@@ -3,6 +3,8 @@ Gamification service implementation.
 Handles XP tracking, achievements, streaks, levels, and leaderboards.
 """
 
+import logging
+
 from datetime import datetime, timedelta, date
 from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
@@ -16,6 +18,8 @@ from lyo_app.gamification.models import (
     LeaderboardEntry, Badge, UserBadge,
     XPActionType, AchievementType, StreakType
 )
+logger = logging.getLogger(__name__)
+
 from lyo_app.gamification.schemas import (
     XPRecordCreate, AchievementCreate, AchievementUpdate,
     UserAchievementCreate, UserAchievementUpdate,
@@ -54,7 +58,8 @@ class GamificationService:
         context_type: Optional[str] = None,
         context_id: Optional[int] = None,
         context_data: Optional[Dict[str, Any]] = None,
-        custom_xp: Optional[int] = None
+        custom_xp: Optional[int] = None,
+        check_achievements: bool = True
     ) -> UserXP:
         """
         Award XP to a user for an action.
@@ -67,7 +72,10 @@ class GamificationService:
             context_id: Optional context entity ID
             context_data: Optional additional context data
             custom_xp: Custom XP amount (overrides default)
-            
+            check_achievements: False when called from _check_achievements
+                itself (achievement XP rewards), to stop the mutual recursion
+                of award_xp <-> _check_achievements
+
         Returns:
             Created XP record
         """
@@ -98,13 +106,16 @@ class GamificationService:
         await self._update_user_level(db, user_id, xp_amount)
         
         # Check for achievements
-        await self._check_achievements(db, user_id, action_type, context_data)
-        
+        achievement_notes = []
+        if check_achievements:
+            _, achievement_notes = await self._check_achievements(db, user_id, action_type, context_data)
+
         # Update streaks if applicable
         if action_type in [XPActionType.LESSON_COMPLETED, XPActionType.DAILY_LOGIN]:
             await self._update_streak(db, user_id, self._action_to_streak_type(action_type))
-        
+
         await db.commit()
+        await self._notify_achievements(db, user_id, achievement_notes)
         return xp_record
 
     async def get_user_xp_summary(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
@@ -249,7 +260,10 @@ class GamificationService:
         self, db: AsyncSession, user_id: int, action_type: XPActionType, context_data: Optional[Dict] = None
     ) -> List[UserAchievement]:
         """Check and award achievements based on user actions."""
-        return await self._check_achievements(db, user_id, action_type, context_data)
+        awarded, achievement_notes = await self._check_achievements(db, user_id, action_type, context_data)
+        await db.commit()
+        await self._notify_achievements(db, user_id, achievement_notes)
+        return awarded
 
     # Streak Operations
     async def update_streak(
@@ -476,7 +490,8 @@ class GamificationService:
         # In a real implementation, you'd have more sophisticated criteria evaluation
         
         awarded_achievements = []
-        
+        newly_awarded_info = []  # (name, xp_reward) for notifications, created after commit
+
         # Get all active achievements that could be triggered by this action
         result = await db.execute(
             select(Achievement)
@@ -485,6 +500,11 @@ class GamificationService:
         achievements = result.scalars().all()
         
         for achievement in achievements:
+          # Each achievement is evaluated independently: a nested award_xp for
+          # an XP reward commits mid-loop, so a later iteration raising must
+          # not lose already-committed unlocks or their queued notifications.
+          user_achievement = None
+          try:
             # Check if user already has this achievement
             existing = await db.execute(
                 select(UserAchievement).where(
@@ -497,6 +517,7 @@ class GamificationService:
             user_achievement = existing.scalar_one_or_none()
             
             if user_achievement and user_achievement.is_completed:
+                user_achievement = None  # nothing staged; guard the except path
                 continue  # Already completed
             
             # Evaluate achievement criteria
@@ -505,6 +526,11 @@ class GamificationService:
             )
             
             if is_completed:
+                # Stage the completion and flush it BEFORE awarding XP:
+                # the nested award_xp commits internally, persisting the
+                # flushed row and the XP in the same transaction — neither
+                # can land without the other. check_achievements=False stops
+                # award_xp from re-entering this check and double-awarding.
                 if not user_achievement:
                     user_achievement = UserAchievement(
                         user_id=user_id,
@@ -516,19 +542,67 @@ class GamificationService:
                 else:
                     user_achievement.is_completed = True
                     user_achievement.completed_at = datetime.utcnow()
-                
-                # Award XP for achievement
+                await db.flush()
+
                 if achievement.xp_reward > 0:
                     await self.award_xp(
                         db, user_id, XPActionType.FIRST_ACHIEVEMENT,
                         custom_xp=achievement.xp_reward,
-                        context_data={"achievement_id": achievement.id}
+                        context_data={"achievement_id": achievement.id},
+                        check_achievements=False
                     )
-                
+
                 awarded_achievements.append(user_achievement)
-        
-        await db.commit()
-        return awarded_achievements
+                newly_awarded_info.append((
+                    getattr(achievement, "name", None) or "an achievement",
+                    getattr(achievement, "xp_reward", 0) or 0,
+                ))
+          except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"Achievement check failed for achievement "
+                f"{getattr(achievement, 'id', '?')}: {e}"
+            )
+            # Un-mark a staged-but-uncommitted grant so the caller's later
+            # commit can't persist a completion whose XP never landed; the
+            # next action re-evaluates and re-grants it whole.
+            try:
+                if user_achievement is not None and user_achievement not in awarded_achievements:
+                    user_achievement.is_completed = False
+                    user_achievement.completed_at = None
+            except Exception:  # noqa: BLE001
+                pass
+
+        # No commit here: award_xp calls this mid-flow and owns the
+        # transaction — committing here persisted XP/achievement rows even
+        # when a later step of the same award_xp call failed. Callers commit,
+        # then emit the returned notification info via _notify_achievements.
+        return awarded_achievements, newly_awarded_info
+
+    async def _notify_achievements(
+        self, db: AsyncSession, user_id: int, newly_awarded_info: List[tuple]
+    ) -> None:
+        """Emit an in-app notification per newly-unlocked achievement.
+
+        Non-fatal; must be called only after the caller has committed
+        (create_notification manages its own transaction).
+        """
+        if not newly_awarded_info:
+            return
+        try:
+            from lyo_app.routers.notifications import create_notification
+            for name, xp in newly_awarded_info:
+                xp_suffix = f" +{xp} XP" if xp else ""
+                await create_notification(
+                    db,
+                    user_id=user_id,
+                    type="achievement",
+                    title="Achievement unlocked!",
+                    body=f'You earned "{name}".{xp_suffix}',
+                    actor_id=None,
+                    target_type="achievement",
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _evaluate_achievement_criteria(
         self, db: AsyncSession, user_id: int, criteria: Dict[str, Any], 
