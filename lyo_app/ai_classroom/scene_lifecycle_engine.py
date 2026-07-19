@@ -1206,7 +1206,7 @@ class SceneCompiler:
                     "Review your notebook, then choose one idea to apply outside the classroom."
                 ),
                 emotion="celebrating",
-                audio_mood=AudioMood.UPBEAT,
+                audio_mood=AudioMood.ENCOURAGING,
                 priority=0,
             ))
             celebration_message = "Course complete — you earned this! 🎉"
@@ -1217,7 +1217,7 @@ class SceneCompiler:
                     f"{context.learning_objective or context.lesson_title or context.topic or 'this idea'}."
                 ),
                 emotion="encouraging",
-                audio_mood=AudioMood.UPBEAT,
+                audio_mood=AudioMood.ENCOURAGING,
                 priority=0,
             ))
             celebration_message = "Checkpoint mastered! 🎉"
