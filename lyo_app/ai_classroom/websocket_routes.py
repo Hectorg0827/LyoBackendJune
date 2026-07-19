@@ -34,6 +34,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/classroom/ws", tags=["AI Classroom WebSocket"])
 
 
+_ACTION_INTENT_ALIASES = {
+    ActionIntent.QUIZ_ANSWER: ActionIntent.SUBMIT_ANSWER,
+    ActionIntent.USER_MESSAGE: ActionIntent.ASK_QUESTION,
+    ActionIntent.CONFUSED: ActionIntent.REQUEST_HINT,
+    ActionIntent.TOO_EASY: ActionIntent.SKIP_AHEAD,
+}
+
+
+def canonical_action_intent(value: ActionIntent) -> ActionIntent:
+    """Return the single teaching-engine intent for any supported client alias."""
+    intent = value if isinstance(value, ActionIntent) else ActionIntent(value)
+    return _ACTION_INTENT_ALIASES.get(intent, intent)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 🔐 AUTHENTICATION FOR WEBSOCKETS
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -226,14 +240,40 @@ async def _register_lifecycle_handlers(
             # Get a fresh DB session dynamically to prevent connection pooling / leak issues over long-lived websockets
             async for db in get_async_session():
                 engine = SceneLifecycleEngine(db, ws_manager)
-                scene = await engine.handle_user_action(
-                    user_id=payload.user_id or connection.user_id,
-                    session_id=payload.session_id,
-                    action_intent=ActionIntent(payload.action_intent),
-                    action_data=payload.answer_data,
-                    component_id=payload.component_id
+                source_intent = ActionIntent(payload.action_intent)
+                action_intent = canonical_action_intent(source_intent)
+                action_data = dict(payload.answer_data or {})
+                action_data["source_intent"] = source_intent.value
+
+                if action_intent == ActionIntent.SUBMIT_ANSWER:
+                    selected_option_id = action_data.get("selected_option_id")
+                    if not selected_option_id:
+                        raise ValueError("Quiz submission requires selected_option_id")
+
+                    # The active server scene owns correctness.  Never trust a
+                    # client-supplied is_correct flag.
+                    scene = await engine.handle_quiz_submission(
+                        user_id=payload.user_id or connection.user_id,
+                        session_id=payload.session_id,
+                        quiz_component_id=payload.component_id or "",
+                        selected_option_id=str(selected_option_id),
+                        is_correct=False,
+                        response_time_ms=payload.response_time_ms or 0,
+                    )
+                else:
+                    scene = await engine.handle_user_action(
+                        user_id=payload.user_id or connection.user_id,
+                        session_id=payload.session_id,
+                        action_intent=action_intent,
+                        action_data=action_data,
+                        component_id=payload.component_id,
+                    )
+                logger.info(
+                    "🎯 User action processed dynamically: %s → %s → scene %s",
+                    source_intent.value,
+                    action_intent.value,
+                    scene.scene_id,
                 )
-                logger.info(f"🎯 User action processed dynamically: {payload.action_intent} → scene {scene.scene_id}")
                 break
 
         except Exception as e:
