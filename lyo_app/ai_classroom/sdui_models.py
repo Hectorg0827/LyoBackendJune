@@ -56,7 +56,12 @@ class AudioMood(str, Enum):
 
 
 class ActionIntent(str, Enum):
-    """User action intents that trigger scene transitions"""
+    """User action intents that trigger scene transitions.
+
+    Canonical intents are shared by every client.  The legacy aliases remain
+    accepted during the cross-device rollout, but are normalized by the
+    WebSocket route before they reach the teaching engine.
+    """
     REQUEST_HINT = "request_hint"
     CONTINUE = "continue"
     RETRY = "retry"
@@ -64,6 +69,12 @@ class ActionIntent(str, Enum):
     ASK_QUESTION = "ask_question"
     REQUEST_EXAMPLE = "request_example"
     SKIP_AHEAD = "skip_ahead"
+
+    # Backward-compatible client aliases.
+    QUIZ_ANSWER = "quiz_answer"
+    USER_MESSAGE = "user_message"
+    CONFUSED = "confused"
+    TOO_EASY = "too_easy"
 
 
 class ValidationLevel(str, Enum):
