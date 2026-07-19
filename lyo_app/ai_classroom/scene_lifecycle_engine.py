@@ -869,6 +869,14 @@ class ClassroomDirector:
                     require_audio=True,
                 )
 
+            if action_intent == ActionIntent.USER_MESSAGE:
+                return DirectorDecision(
+                    selected_scene_type=SceneType.INSTRUCTION,
+                    reasoning="Use the learner's response as evidence and continue the explanation",
+                    confidence=0.85,
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                )
+
             if action_intent == ActionIntent.REQUEST_EXAMPLE:
                 return DirectorDecision(
                     selected_scene_type=SceneType.INSTRUCTION,
