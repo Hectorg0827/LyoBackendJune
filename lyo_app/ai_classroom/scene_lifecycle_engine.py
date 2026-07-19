@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.ai_classroom.sdui_models import (
     Scene, SceneType, Component, ComponentType,
-    TeacherMessage, StudentPrompt, QuizCard, CTAButton, Celebration,
+    TeacherMessage, StudentPrompt, QuizCard, CTAButton, Celebration, ProgressBar,
     AudioMood, ActionIntent, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
@@ -1070,10 +1070,25 @@ class SceneCompiler:
         elif decision.selected_scene_type == SceneType.CELEBRATION:
             components.extend(await self._create_celebration_components(context))
 
-        # Always add progress indicator if not celebration
-        if decision.selected_scene_type != SceneType.CELEBRATION:
-            # Could add progress bar component here
-            pass
+        # Make advancement visible. A checkpoint counts only after the server
+        # has validated it and placed it in mastered_lessons.
+        progress = _SESSION_PROGRESS.get(context.session_id, {})
+        total = max(context.total_lessons, 1)
+        mastered_count = min(
+            total,
+            len(set(progress.get("mastered_lessons", []))),
+        )
+        if context.course_complete:
+            mastered_count = total
+        components.insert(0, ProgressBar(
+            current=mastered_count,
+            total=total,
+            show_percentage=True,
+            show_fraction=True,
+            label="Lesson mastery",
+            color_scheme="purple",
+            priority=0,
+        ))
 
         return components
 
