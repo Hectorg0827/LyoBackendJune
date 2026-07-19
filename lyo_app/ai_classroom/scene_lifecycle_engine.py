@@ -1205,7 +1205,7 @@ class SceneCompiler:
                     "and demonstrated the key ideas at every checkpoint. "
                     "Review your notebook, then choose one idea to apply outside the classroom."
                 ),
-                emotion="celebrating",
+                emotion="excited",
                 audio_mood=AudioMood.ENCOURAGING,
                 priority=0,
             ))
