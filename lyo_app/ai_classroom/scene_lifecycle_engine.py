@@ -188,6 +188,7 @@ class ContextSnapshot(BaseModel):
     # Current learner input + durable personalization context
     learner_signal: Optional[str] = None
     learner_message: Optional[str] = None
+    learner_response: Optional[str] = None
     learner_context: str = ""
 
     # Knowledge state
@@ -234,6 +235,20 @@ class ContextAssembler:
         context.topic, context.course_id, context.course_title, context.lesson_index = \
             await self._resolve_topic(trigger)
 
+        # Hydrate guided-classroom position from the existing ClassroomSession
+        # JSON context. This survives worker restarts without a schema migration.
+        progress = _SESSION_PROGRESS.setdefault(
+            trigger.session_id, {"scene": 0, "covered": [], "mastered_lessons": []}
+        )
+        if not progress.get("_hydrated"):
+            persisted = await self._load_persisted_session_progress(trigger)
+            if persisted:
+                progress.update(persisted)
+            progress["_hydrated"] = True
+        if "current_lesson_index" in progress:
+            context.lesson_index = int(progress["current_lesson_index"] or 0)
+        context.course_complete = bool(progress.get("course_complete", False))
+
         # Resolve current lesson content from the DB
         context.lesson_title, context.lesson_content, context.total_lessons = \
             await self._resolve_current_lesson(context.course_id, context.lesson_index)
@@ -245,9 +260,6 @@ class ContextAssembler:
         # entire classroom session. These values arrive on the welcome trigger
         # and must remain available on later WebSocket actions.
         action_data = trigger.action_data or {}
-        progress = _SESSION_PROGRESS.setdefault(
-            trigger.session_id, {"scene": 0, "covered": [], "mastered_lessons": []}
-        )
         explicit_objective = action_data.get("objective")
         if explicit_objective:
             progress["learning_objective"] = str(explicit_objective)
@@ -269,7 +281,11 @@ class ContextAssembler:
         context.learner_signal = (
             raw_intent.value if isinstance(raw_intent, ActionIntent) else raw_intent
         )
-        context.learner_message = action_data.get("message")
+        message = action_data.get("message")
+        if context.learner_signal == ActionIntent.ASK_QUESTION.value:
+            context.learner_message = message
+        else:
+            context.learner_response = message
         context.learner_context = await self._get_learner_context(
             trigger.user_id, context.lesson_title or context.topic
         )
@@ -297,6 +313,33 @@ class ContextAssembler:
                    f"engagement={context.engagement_level:.2f}")
 
         return context
+
+    async def _load_persisted_session_progress(
+        self, trigger: Trigger
+    ) -> Dict[str, Any]:
+        """Load the latest durable guided-classroom state for this learner."""
+        try:
+            user_id = int(trigger.user_id)
+            from lyo_app.classroom.models import ClassroomSession
+            result = await self.db.execute(
+                select(ClassroomSession)
+                .where(
+                    and_(
+                        ClassroomSession.user_id == user_id,
+                        ClassroomSession.title == trigger.session_id,
+                        ClassroomSession.session_type == "guided_ai",
+                    )
+                )
+                .order_by(desc(ClassroomSession.updated_at))
+                .limit(1)
+            )
+            session = result.scalars().first()
+            return dict(session.context or {}) if session else {}
+        except (ValueError, TypeError):
+            return {}
+        except Exception as e:
+            logger.debug(f"ℹ️ Could not hydrate classroom progress: {e}")
+            return {}
 
     async def _resolve_topic(
         self, trigger: Trigger
@@ -920,6 +963,15 @@ class ClassroomDirector:
                     require_audio=True,
                 )
 
+        if context.course_complete:
+            return DirectorDecision(
+                selected_scene_type=SceneType.CELEBRATION,
+                reasoning="Persisted session shows every checkpoint complete",
+                confidence=0.95,
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CELEBRATION],
+                estimated_duration_seconds=15,
+            )
+
         if trigger.trigger_type == TriggerType.SYSTEM_TIMEOUT:
             return DirectorDecision(
                 selected_scene_type=SceneType.INSTRUCTION,
@@ -1222,12 +1274,14 @@ user_level: "{user_level}"
 learning_objective: {json.dumps(context.learning_objective or context.lesson_title or topic)}
 learner_signal: {json.dumps(context.learner_signal or "")}
 learner_question: {json.dumps(context.learner_message or "")}
+learner_response: {json.dumps(context.learner_response or "")}
 lesson_title: "{context.lesson_title or topic}"
 lesson_content: {json.dumps(context.lesson_content or "")}
 
 TEACHING RESPONSE RULES:
 - Keep the learning_objective visible in your reasoning and make every turn serve it.
 - If learner_question is present, answer it directly before resuming the sequence.
+- If learner_response is present, acknowledge its reasoning briefly and use it as evidence; do not pretend it was a question.
 - If learner_signal is request_hint or confused, slow down, diagnose the likely gap, and use one worked example.
 - If learner_signal is skip_ahead or too_easy, increase depth and transfer difficulty; do not merely move on.
 - If learner_signal is incorrect_answer, explicitly explain the likely misconception, then show one worked example.
@@ -1259,7 +1313,7 @@ PROGRESSION RULES (CRITICAL):
             # Call the resilient AI manager with Gemini and OpenAI fallbacks.
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous, warm classroom teacher. Teach the exact lesson_content toward the stated learning_objective. Respond directly to learner_question and learner_signal. Use explanation, a worked example, and a concise check for understanding. AI classmates are optional and must never displace the teacher or the learner. Use learner_context only when relevant. Return ONLY a valid, non-empty JSON list of director turns. No prose or markdown."},
+                    {"role": "system", "content": "You are a rigorous, warm classroom teacher. Teach the exact lesson_content toward the stated learning_objective. Respond directly to learner_question, learner_response, and learner_signal. Use explanation, a worked example, and a concise check for understanding. AI classmates are optional and must never displace the teacher or the learner. Use learner_context only when relevant. Return ONLY a valid, non-empty JSON list of director turns. No prose or markdown."},
                     {"role": "user", "content": prompt}
                 ],
                 # gpt-4o-mini first: the Gemini key is currently revoked
@@ -1602,6 +1656,65 @@ class SceneLifecycleEngine:
         # Register default handlers
         self._register_handlers()
 
+    async def _persist_session_progress(
+        self,
+        trigger: Trigger,
+        context: ContextSnapshot,
+        progress: Dict[str, Any],
+    ) -> None:
+        """Persist guided classroom position in ClassroomSession.context."""
+        try:
+            user_id = int(trigger.user_id)
+            from lyo_app.classroom.models import ClassroomSession
+            result = await self.db.execute(
+                select(ClassroomSession)
+                .where(
+                    and_(
+                        ClassroomSession.user_id == user_id,
+                        ClassroomSession.title == trigger.session_id,
+                        ClassroomSession.session_type == "guided_ai",
+                    )
+                )
+                .order_by(desc(ClassroomSession.updated_at))
+                .limit(1)
+            )
+            session = result.scalars().first()
+            if not session:
+                session = ClassroomSession(
+                    user_id=user_id,
+                    title=trigger.session_id,
+                    subject=context.topic,
+                    session_type="guided_ai",
+                    context={},
+                )
+                self.db.add(session)
+
+            durable_context = dict(session.context or {})
+            durable_context.update({
+                "current_lesson_index": context.lesson_index,
+                "mastered_lessons": list(progress.get("mastered_lessons", [])),
+                "learning_objective": progress.get("learning_objective"),
+                "difficulty": progress.get("difficulty"),
+                "course_complete": context.course_complete,
+                "scene": progress.get("scene", 0),
+                "covered": list(progress.get("covered", []))[-8:],
+            })
+            session.context = durable_context
+            session.subject = context.topic or session.subject
+            session.is_active = not context.course_complete
+            session.updated_at = datetime.utcnow()
+            if context.course_complete:
+                session.ended_at = datetime.utcnow()
+            await self.db.commit()
+        except (ValueError, TypeError):
+            return
+        except Exception as e:
+            logger.warning(f"⚠️ Could not persist classroom progress: {e}")
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
     def _register_handlers(self):
         """Register default trigger handlers"""
         self.trigger_listener.register_handler(
@@ -1685,7 +1798,10 @@ class SceneLifecycleEngine:
                 1.0,
                 len(mastered_lessons) / max(context.total_lessons, 1),
             )
+            progress["current_lesson_index"] = context.lesson_index
+            progress["course_complete"] = context.course_complete
             self.session_contexts[trigger.session_id] = context
+            await self._persist_session_progress(trigger, context, progress)
 
             # PHASE 3: Director Decision (Decide)
             decision = await self.director.decide_scene(trigger, context)
