@@ -1062,7 +1062,7 @@ class SceneCompiler:
 
         # Continue button
         components.append(CTAButton(
-            label="Continue",
+            label="Check understanding",
             action_intent=ActionIntent.CONTINUE,
             button_style="primary",
             priority=100,  # Ensure it comes last
@@ -1096,12 +1096,16 @@ class SceneCompiler:
                 priority=0
             ))
 
-        # Teacher correction
-        topic_hint = f" about {context.topic}" if context.topic else ""
+        # Reteach the missed idea rather than merely saying it was wrong.
+        if self.ai_service:
+            correction_text = await self._generate_instruction_content(context)
+        else:
+            correction_text = self._local_instruction_fallback(context)
         components.append(TeacherMessage(
-            text=f"Let me help clarify this concept{topic_hint} for you.",
+            text=correction_text,
             emotion="concerned",
             audio_mood=AudioMood.GENTLE,
+            concept_tags=[context.learning_objective or context.topic or "current_topic"],
             priority=1
         ))
 
@@ -1218,6 +1222,7 @@ TEACHING RESPONSE RULES:
 - If learner_question is present, answer it directly before resuming the sequence.
 - If learner_signal is request_hint or confused, slow down, diagnose the likely gap, and use one worked example.
 - If learner_signal is skip_ahead or too_easy, increase depth and transfer difficulty; do not merely move on.
+- If learner_signal is incorrect_answer, explicitly explain the likely misconception, then show one worked example.
 - Use learner_context only when relevant. Never invent preferences or history.
 - Teach first. AI classmates are optional and may speak only when they clarify a misconception or model reasoning.
 
@@ -1529,7 +1534,7 @@ PROGRESSION RULES (CRITICAL):
                 question=data["question"],
                 options=options,
                 allow_multiple_attempts=True,
-                concept_id=context.topic or "current_concept",
+                concept_id=context.learning_objective or context.topic or "current_concept",
             )
 
         except Exception as e:
@@ -1546,7 +1551,7 @@ PROGRESSION RULES (CRITICAL):
             question=f"Which of the following represents the core objective when studying {topic}?",
             options=options,
             allow_multiple_attempts=True,
-            concept_id=context.topic or "current_concept"
+            concept_id=context.learning_objective or context.topic or "current_concept"
         )
 
 
@@ -1633,12 +1638,16 @@ class SceneLifecycleEngine:
             )
             mastered_lessons = set(progress.get("mastered_lessons", []))
 
-            if (
-                action_intent == ActionIntent.SUBMIT_ANSWER
-                and action_data.get("answer_data", {}).get("is_correct") is True
-            ):
-                mastered_lessons.add(context.lesson_index)
-                progress["mastered_lessons"] = sorted(mastered_lessons)
+            if action_intent == ActionIntent.SUBMIT_ANSWER:
+                answer_is_correct = (
+                    action_data.get("answer_data", {}).get("is_correct") is True
+                )
+                context.learner_signal = (
+                    "correct_answer" if answer_is_correct else "incorrect_answer"
+                )
+                if answer_is_correct:
+                    mastered_lessons.add(context.lesson_index)
+                    progress["mastered_lessons"] = sorted(mastered_lessons)
 
             if action_intent == ActionIntent.CONTINUE and context.lesson_index in mastered_lessons:
                 next_index = context.lesson_index + 1
@@ -1683,7 +1692,6 @@ class SceneLifecycleEngine:
             if self.websocket_manager:
                 await self._stream_scene_to_client(scene, trigger.session_id)
 
-            total_time = (time.time() - start_time) * 1000
             total_time = (time.time() - start_time) * 1000
             logger.info(f"✅ LIFECYCLE COMPLETE: {scene.scene_id} in {total_time:.0f}ms")
 
