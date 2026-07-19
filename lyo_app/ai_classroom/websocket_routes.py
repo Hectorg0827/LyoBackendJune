@@ -36,7 +36,6 @@ router = APIRouter(prefix="/api/v1/classroom/ws", tags=["AI Classroom WebSocket"
 
 _ACTION_INTENT_ALIASES = {
     ActionIntent.QUIZ_ANSWER: ActionIntent.SUBMIT_ANSWER,
-    ActionIntent.USER_MESSAGE: ActionIntent.ASK_QUESTION,
     ActionIntent.CONFUSED: ActionIntent.REQUEST_HINT,
     ActionIntent.TOO_EASY: ActionIntent.SKIP_AHEAD,
 }
