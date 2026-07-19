@@ -131,7 +131,9 @@ async def create_chat_conversation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    session_id = request.session_id or request.device_id or str(uuid4())
+    # Clamp to the column width so an oversized client id degrades gracefully
+    # instead of failing the INSERT (session_id is a grouping key, not a lookup).
+    session_id = (request.session_id or request.device_id or str(uuid4()))[:64]
     conversation = await conversation_store.create_conversation(
         db,
         session_id=session_id,

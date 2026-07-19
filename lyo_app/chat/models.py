@@ -170,8 +170,9 @@ class ChatConversation(TenantMixin, Base):
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
     user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
-    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    
+    # Web clients send "web-<uuid>" device ids (40 chars), so this must exceed 36
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
     # Conversation context
     initial_mode: Mapped[str] = mapped_column(String(50), default=ChatMode.GENERAL.value)
     current_mode: Mapped[str] = mapped_column(String(50), default=ChatMode.GENERAL.value)
@@ -328,7 +329,8 @@ class ChatTelemetry(TenantMixin, Base):
     # Event identification
     event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
-    session_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    # Matches chat_conversations.session_id, which holds 40-char web device ids
+    session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     conversation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     
