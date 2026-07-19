@@ -56,7 +56,12 @@ class AudioMood(str, Enum):
 
 
 class ActionIntent(str, Enum):
-    """User action intents that trigger scene transitions"""
+    """User action intents that trigger scene transitions.
+
+    Canonical intents are shared by every client.  The legacy aliases remain
+    accepted during the cross-device rollout, but are normalized by the
+    WebSocket route before they reach the teaching engine.
+    """
     REQUEST_HINT = "request_hint"
     CONTINUE = "continue"
     RETRY = "retry"
@@ -64,6 +69,32 @@ class ActionIntent(str, Enum):
     ASK_QUESTION = "ask_question"
     REQUEST_EXAMPLE = "request_example"
     SKIP_AHEAD = "skip_ahead"
+    SUBMIT_TRANSFER = "submit_transfer"
+    SET_MODE = "set_mode"
+    REQUEST_REVIEW = "request_review"
+
+    # Backward-compatible client aliases.
+    QUIZ_ANSWER = "quiz_answer"
+    USER_MESSAGE = "user_message"
+    CONFUSED = "confused"
+    TOO_EASY = "too_easy"
+
+
+class ClassroomMode(str, Enum):
+    """Learner-controlled classroom format."""
+    SOLO = "solo"
+    CLASSROOM = "classroom"
+    CHALLENGE = "challenge"
+    REVIEW = "review"
+
+
+class HintLevel(str, Enum):
+    """Graduated help that preserves productive struggle."""
+    NUDGE = "nudge"
+    PRINCIPLE = "principle"
+    WORKED_STEP = "worked_step"
+    FULL_EXAMPLE = "full_example"
+    PREREQUISITE = "prerequisite"
 
 
 class ValidationLevel(str, Enum):
@@ -120,6 +151,11 @@ class TeacherMessage(ComponentBase):
     # Educational context
     concept_tags: List[str] = Field(default_factory=list, max_items=5)
     difficulty_level: Literal["beginner", "intermediate", "advanced"] = "beginner"
+    source_attributions: List[str] = Field(
+        default_factory=list,
+        max_items=5,
+        description="Course-provided provenance labels; never model-invented citations",
+    )
 
     @field_validator('text')
     @classmethod
@@ -240,17 +276,23 @@ class InputField(ComponentBase):
 
     type: Literal[ComponentType.INPUT_FIELD] = ComponentType.INPUT_FIELD
     placeholder: str = Field(..., max_length=100)
+    question: Optional[str] = Field(None, min_length=5, max_length=700)
+    action_intent: ActionIntent = ActionIntent.SUBMIT_TRANSFER
+    concept_id: Optional[str] = None
+    evidence_type: Literal["explanation", "application", "transfer", "retrieval"] = "transfer"
+    source_attributions: List[str] = Field(default_factory=list, max_items=5)
 
     # Input validation
     validation_level: ValidationLevel = ValidationLevel.LENIENT
     expected_keywords: List[str] = Field(default_factory=list, max_items=10)
-    min_words: int = Field(default=1, ge=1, le=100)
-    max_words: int = Field(default=50, ge=1, le=200)
+    min_words: int = Field(default=6, ge=1, le=100)
+    max_words: int = Field(default=120, ge=1, le=200)
+    min_score: float = Field(default=0.25, ge=0.0, le=1.0)
 
     # Input behavior
     auto_capitalize: bool = True
     spell_check: bool = True
-    multiline: bool = False
+    multiline: bool = True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════

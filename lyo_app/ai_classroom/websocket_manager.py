@@ -564,19 +564,27 @@ class WebSocketManager:
                 try:
                     payload = UserActionPayload(**message_data)
                 except Exception as parse_err:
-                    # Build minimal payload from just action_intent
-                    logger.warning(f"⚠️ Falling back to minimal UserActionPayload: {parse_err}")
-                    raw_intent = message_data.get("action_intent", "continue")
-                    try:
-                        intent = ActionIntent(raw_intent)
-                    except ValueError:
-                        intent = ActionIntent.CONTINUE
-                    payload = UserActionPayload(
-                        event_type=WebSocketEventType.USER_ACTION,
+                    # Never turn an invalid learner action into "continue".
+                    # That silently advanced lessons when clients sent a typo or
+                    # a not-yet-supported interaction, making the classroom look
+                    # adaptive while discarding the learner's intent.
+                    raw_intent = message_data.get("action_intent")
+                    logger.warning(
+                        "⚠️ Rejecting invalid classroom action %r: %s",
+                        raw_intent,
+                        parse_err,
+                    )
+                    error_payload = WebSocketPayload(
+                        event_type=WebSocketEventType.ERROR,
                         session_id=connection.session_id,
                         user_id=connection.user_id,
-                        action_intent=intent,
+                        data={
+                            "error": "unsupported_action",
+                            "action_intent": raw_intent,
+                        },
                     )
+                    await self.send_to_connection(connection_id, error_payload)
+                    return
                 await self._handle_user_action(payload, connection)
             else:
                 payload = WebSocketPayload(**message_data)

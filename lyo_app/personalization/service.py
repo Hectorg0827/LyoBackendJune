@@ -413,15 +413,20 @@ class PersonalizationEngine:
         """
         Update knowledge tracking from assessment
         """
+        # Schemas accept IDs from JSON as strings; database foreign keys are
+        # integers. Normalize once so mastery and review scheduling share the
+        # same learner record on PostgreSQL.
+        learner_id = int(request.learner_id)
+
         # Capture prior mastery so clients can award honest, delta-based XP.
         old_mastery, _ = await self.dkt.get_skill_readiness(
-            db, request.learner_id, request.skill_id
+            db, learner_id, request.skill_id
         )
 
         # Update mastery
         new_mastery = await self.dkt.update_mastery(
             db,
-            request.learner_id,
+            learner_id,
             request.skill_id,
             request.correct,
             request.time_taken_seconds,
@@ -431,7 +436,7 @@ class PersonalizationEngine:
         # Update spaced repetition schedule
         await self._update_repetition_schedule(
             db,
-            request.learner_id,
+            learner_id,
             request.skill_id,
             request.item_id,
             request.correct

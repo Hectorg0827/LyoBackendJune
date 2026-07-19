@@ -11,6 +11,8 @@ Architecture: iOS Client ←→ WebSocket Routes ←→ Scene Lifecycle Engine �
 import asyncio
 import json
 import logging
+import os
+import secrets
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
@@ -32,6 +34,19 @@ logger = logging.getLogger(__name__)
 
 # Router setup
 router = APIRouter(prefix="/api/v1/classroom/ws", tags=["AI Classroom WebSocket"])
+
+
+_ACTION_INTENT_ALIASES = {
+    ActionIntent.QUIZ_ANSWER: ActionIntent.SUBMIT_ANSWER,
+    ActionIntent.CONFUSED: ActionIntent.REQUEST_HINT,
+    ActionIntent.TOO_EASY: ActionIntent.SKIP_AHEAD,
+}
+
+
+def canonical_action_intent(value: ActionIntent) -> ActionIntent:
+    """Return the single teaching-engine intent for any supported client alias."""
+    intent = value if isinstance(value, ActionIntent) else ActionIntent(value)
+    return _ACTION_INTENT_ALIASES.get(intent, intent)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -62,16 +77,17 @@ async def authenticate_websocket(
             logger.warning(f"WebSocket JWT authentication failed: {e}")
 
     if api_key:
-        # Allow guest access with API key
-        from lyo_app.models.enhanced import User
-        return User(
-            id="guest_session",
-            username="Guest Learner",
-            email="guest@lyo.app",
-            is_active=True
-        )
+        configured_key = os.getenv("CLASSROOM_GUEST_API_KEY")
+        if configured_key and secrets.compare_digest(api_key, configured_key):
+            from lyo_app.models.enhanced import User
+            return User(
+                id="guest_session",
+                username="Guest Learner",
+                email="guest@lyo.app",
+                is_active=True,
+            )
 
-    raise HTTPException(status_code=401, detail="Authentication required for WebSocket")
+    raise HTTPException(status_code=401, detail="Valid authentication required for WebSocket")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -105,20 +121,28 @@ async def websocket_endpoint(
         token = websocket.query_params.get("token")
         api_key = websocket.query_params.get("api_key")
 
-        # Basic authentication
+        # Authentication fails closed. Guest classrooms are available only
+        # when operators configure a dedicated secret.
         if not token and not api_key:
             await websocket.close(code=4001, reason="Authentication required")
             return
 
-        # For simplicity, we'll extract user_id from token or use guest
-        user_id = "guest_session"  # Default
         if token:
             try:
                 from lyo_app.auth.jwt_auth import verify_token_async
                 token_data = await verify_token_async(token, expected_type="access")
-                user_id = str(token_data.user_id) if token_data.user_id else "guest_session"
-            except:
-                user_id = "guest_session"
+                if not token_data.user_id:
+                    raise ValueError("Token has no user id")
+                user_id = str(token_data.user_id)
+            except Exception:
+                await websocket.close(code=4001, reason="Invalid authentication token")
+                return
+        else:
+            configured_key = os.getenv("CLASSROOM_GUEST_API_KEY")
+            if not configured_key or not secrets.compare_digest(api_key or "", configured_key):
+                await websocket.close(code=4001, reason="Guest classroom is not configured")
+                return
+            user_id = f"guest_{session_id}"
 
         # Connect client
         connection = await ws_manager.connect_client(
@@ -226,14 +250,49 @@ async def _register_lifecycle_handlers(
             # Get a fresh DB session dynamically to prevent connection pooling / leak issues over long-lived websockets
             async for db in get_async_session():
                 engine = SceneLifecycleEngine(db, ws_manager)
-                scene = await engine.handle_user_action(
-                    user_id=payload.user_id or connection.user_id,
-                    session_id=payload.session_id,
-                    action_intent=ActionIntent(payload.action_intent),
-                    action_data=payload.answer_data,
-                    component_id=payload.component_id
+                source_intent = ActionIntent(payload.action_intent)
+                action_intent = canonical_action_intent(source_intent)
+                action_data = dict(payload.answer_data or {})
+                action_data["source_intent"] = source_intent.value
+
+                if action_intent == ActionIntent.SUBMIT_ANSWER:
+                    selected_option_id = action_data.get("selected_option_id")
+                    if not selected_option_id:
+                        raise ValueError("Quiz submission requires selected_option_id")
+
+                    # The active server scene owns correctness.
+                    scene = await engine.handle_quiz_submission(
+                        user_id=payload.user_id or connection.user_id,
+                        session_id=payload.session_id,
+                        quiz_component_id=payload.component_id or "",
+                        selected_option_id=str(selected_option_id),
+                        response_time_ms=payload.response_time_ms or 0,
+                    )
+                elif action_intent == ActionIntent.SUBMIT_TRANSFER:
+                    response = str(action_data.get("response") or "").strip()
+                    if not response:
+                        raise ValueError("Transfer submission requires a response")
+                    scene = await engine.handle_transfer_submission(
+                        user_id=payload.user_id or connection.user_id,
+                        session_id=payload.session_id,
+                        input_component_id=payload.component_id or "",
+                        response=response,
+                        response_time_ms=payload.response_time_ms or 0,
+                    )
+                else:
+                    scene = await engine.handle_user_action(
+                        user_id=payload.user_id or connection.user_id,
+                        session_id=payload.session_id,
+                        action_intent=action_intent,
+                        action_data=action_data,
+                        component_id=payload.component_id,
+                    )
+                logger.info(
+                    "🎯 User action processed dynamically: %s → %s → scene %s",
+                    source_intent.value,
+                    action_intent.value,
+                    scene.scene_id,
                 )
-                logger.info(f"🎯 User action processed dynamically: {payload.action_intent} → scene {scene.scene_id}")
                 break
 
         except Exception as e:
@@ -281,8 +340,17 @@ async def _send_welcome_scene(
         return
 
     try:
-        # Topic passed explicitly by iOS client (courseTitle from the course proposal)
+        # Explicit course context comes from the generated course card. Keep it
+        # attached to the session so instruction is driven by a goal, not only
+        # a display title.
         topic_from_query = connection.websocket.query_params.get("topic")
+        objective_from_query = connection.websocket.query_params.get("objective")
+        difficulty_from_query = connection.websocket.query_params.get("difficulty")
+        mode_from_query = connection.websocket.query_params.get("mode") or "solo"
+        duration_from_query = connection.websocket.query_params.get("duration_minutes") or "10"
+        reduced_motion_from_query = (
+            connection.websocket.query_params.get("reduced_motion") or "false"
+        ).lower() == "true"
 
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
@@ -323,7 +391,15 @@ async def _send_welcome_scene(
             user_id=connection.user_id,
             session_id=connection.session_id,
             course_id=course_id,
-            action_data={"welcome": True, "topic": resolved_topic},
+            action_data={
+                "welcome": True,
+                "topic": resolved_topic,
+                "objective": objective_from_query,
+                "difficulty": difficulty_from_query,
+                "mode": mode_from_query,
+                "duration_minutes": duration_from_query,
+                "reduced_motion": reduced_motion_from_query,
+            },
             urgency=1
         )
 
@@ -484,22 +560,18 @@ async def submit_quiz_answer(
         # Initialize lifecycle engine
         lifecycle_engine = SceneLifecycleEngine(db, ws_manager)
 
-        # TODO: Determine if answer is correct (would query quiz data)
-        is_correct = selected_option_id == "b"  # Mock logic
-
-        # Process quiz submission
+        # The active QuizCard retained by the lifecycle engine is authoritative.
         scene = await lifecycle_engine.handle_quiz_submission(
             user_id=str(current_user.id),
             session_id=session_id,
             quiz_component_id=quiz_component_id,
             selected_option_id=selected_option_id,
-            is_correct=is_correct,
-            response_time_ms=response_time_ms
+            response_time_ms=response_time_ms,
         )
 
         return {
             "success": True,
-            "is_correct": is_correct,
+            "validated_by_server": True,
             "scene_id": scene.scene_id,
             "scene_type": scene.scene_type,
             "feedback_components": len([c for c in scene.components if c.type in ["TeacherMessage", "Celebration"]]),
