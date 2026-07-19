@@ -2280,7 +2280,6 @@ class SceneLifecycleEngine:
         session_id: str,
         quiz_component_id: str,
         selected_option_id: str,
-        is_correct: bool,
         response_time_ms: int,
     ) -> Scene:
         """Validate a quiz server-side and preserve distractor diagnosis."""
@@ -2317,12 +2316,6 @@ class SceneLifecycleEngine:
                             )
                             misconception_tag = option.misconception_tag
                             remediation_hint = option.remediation_hint
-                            if validated_correct != is_correct:
-                                logger.warning(
-                                    "Quiz validation mismatch: client=%s server=%s",
-                                    is_correct,
-                                    validated_correct,
-                                )
                             break
                     break
 
