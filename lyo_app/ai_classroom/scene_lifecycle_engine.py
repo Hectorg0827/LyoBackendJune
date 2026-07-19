@@ -32,7 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.ai_classroom.sdui_models import (
     Scene, SceneType, Component, ComponentType,
     TeacherMessage, StudentPrompt, QuizCard, CTAButton, Celebration, ProgressBar,
-    AudioMood, ActionIntent, WebSocketPayload, SceneStreamPayload,
+    InputField, LessonBlock, ExampleBlock,
+    AudioMood, ActionIntent, ClassroomMode, HintLevel, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
 
@@ -41,6 +42,45 @@ logger = logging.getLogger(__name__)
 # Per-session teaching progression: scene counter + rolling summaries of what
 # was already taught, so the director never replays the opening scene.
 _SESSION_PROGRESS: Dict[str, Dict[str, Any]] = {}
+
+_TRANSFER_STOPWORDS = {
+    "about", "after", "again", "apply", "because", "before", "being", "compare",
+    "course", "demonstrate", "explain", "from", "have", "into", "lesson", "that",
+    "their", "there", "these", "this", "through", "understand", "using", "what",
+    "when", "where", "which", "with", "would", "your",
+}
+
+
+def expected_transfer_keywords(objective: str, lesson_content: str = "") -> List[str]:
+    """Build a small transparent rubric from authored course language."""
+    source = f"{objective} {lesson_content[:400]}"
+    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{2,}", source.lower())
+    keywords: List[str] = []
+    for token in tokens:
+        if token in _TRANSFER_STOPWORDS or token in keywords:
+            continue
+        keywords.append(token)
+        if len(keywords) == 8:
+            break
+    return keywords
+
+
+def score_transfer_response(
+    response: str,
+    expected_keywords: List[str],
+    min_words: int = 6,
+    min_score: float = 0.25,
+) -> tuple[bool, float, List[str]]:
+    """Score open evidence deterministically; return correctness, coverage, gaps."""
+    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "").lower())
+    token_set = set(tokens)
+    rubric = [k.lower().strip() for k in expected_keywords if k and k.strip()]
+    hits = [k for k in rubric if k in token_set or k in (response or "").lower()]
+    coverage = len(hits) / max(len(rubric), 1)
+    substantive = len(tokens) >= min_words
+    correct = substantive and (not rubric or coverage >= min_score)
+    missing = [k for k in rubric if k not in hits]
+    return correct, round(coverage, 3), missing[:4]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -184,12 +224,20 @@ class ContextSnapshot(BaseModel):
     total_lessons: int = 0
     learning_objective: Optional[str] = None
     course_complete: bool = False
+    classroom_mode: ClassroomMode = ClassroomMode.SOLO
+    target_duration_minutes: int = Field(default=10, ge=3, le=60)
+    source_attributions: List[str] = Field(default_factory=list)
+    review_due_items: List[str] = Field(default_factory=list)
 
     # Current learner input + durable personalization context
     learner_signal: Optional[str] = None
     learner_message: Optional[str] = None
     learner_response: Optional[str] = None
     learner_context: str = ""
+    hint_level: Optional[HintLevel] = None
+    misconception_tag: Optional[str] = None
+    remediation_hint: Optional[str] = None
+    answer_feedback: Optional[str] = None
 
     # Knowledge state
     knowledge_states: List[KnowledgeState] = Field(default_factory=list)
@@ -255,6 +303,12 @@ class ContextAssembler:
         # If lesson gave us a more specific topic, use it
         if context.lesson_title and not context.topic:
             context.topic = context.lesson_title
+        if context.course_title or context.lesson_title:
+            context.source_attributions = [
+                "Course material"
+                + (f": {context.course_title}" if context.course_title else "")
+                + (f" — {context.lesson_title}" if context.lesson_title else "")
+            ]
 
         # Preserve the instructional goal and learner-selected pace for the
         # entire classroom session. These values arrive on the welcome trigger
@@ -277,6 +331,44 @@ class ContextAssembler:
             progress.get("difficulty"), context.preferred_difficulty
         )
 
+        mode = action_data.get("mode")
+        if mode:
+            try:
+                progress["classroom_mode"] = ClassroomMode(str(mode).lower()).value
+            except ValueError:
+                progress["classroom_mode"] = ClassroomMode.SOLO.value
+        try:
+            context.classroom_mode = ClassroomMode(
+                progress.get("classroom_mode", ClassroomMode.SOLO.value)
+            )
+        except ValueError:
+            context.classroom_mode = ClassroomMode.SOLO
+
+        duration = action_data.get("duration_minutes")
+        if duration is not None:
+            try:
+                progress["target_duration_minutes"] = max(3, min(60, int(duration)))
+            except (TypeError, ValueError):
+                pass
+        context.target_duration_minutes = int(
+            progress.get("target_duration_minutes", context.target_duration_minutes)
+        )
+
+        hint_level = action_data.get("hint_level")
+        if hint_level:
+            try:
+                context.hint_level = HintLevel(str(hint_level))
+                hint_counts = progress.setdefault("hint_counts", {})
+                lesson_key = str(context.lesson_index)
+                hint_counts[lesson_key] = int(hint_counts.get(lesson_key, 0)) + 1
+            except ValueError:
+                context.hint_level = HintLevel.NUDGE
+
+        answer_data = action_data.get("answer_data", {})
+        context.misconception_tag = answer_data.get("misconception_tag")
+        context.remediation_hint = answer_data.get("remediation_hint")
+        context.answer_feedback = answer_data.get("feedback")
+
         raw_intent = action_data.get("source_intent") or action_data.get("action_intent")
         context.learner_signal = (
             raw_intent.value if isinstance(raw_intent, ActionIntent) else raw_intent
@@ -289,6 +381,8 @@ class ContextAssembler:
         context.learner_context = await self._get_learner_context(
             trigger.user_id, context.lesson_title or context.topic
         )
+        if context.classroom_mode == ClassroomMode.REVIEW:
+            context.review_due_items = await self._get_due_review_items(trigger.user_id)
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)
@@ -579,6 +673,24 @@ class ContextAssembler:
 
         return lesson_title, lesson_content, total_lessons
 
+    async def _get_due_review_items(self, user_id: str) -> List[str]:
+        """Return scheduled retrieval items without blocking guest sessions."""
+        try:
+            user_id_int = int(user_id)
+            from lyo_app.personalization.service import PersonalizationEngine
+            return await PersonalizationEngine()._get_due_repetitions(
+                self.db, user_id_int
+            )
+        except (ValueError, TypeError):
+            return []
+        except Exception as exc:
+            logger.debug("Could not load spaced-repetition queue: %s", exc)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            return []
+
     async def _get_knowledge_states(self, user_id: str) -> List[KnowledgeState]:
         """Retrieve mastery from the canonical personalization model.
 
@@ -835,26 +947,30 @@ class ClassroomDirector:
         return decision
 
     async def _evaluate_scene_need(self, trigger: Trigger, context: ContextSnapshot) -> DirectorDecision:
-        """Choose the next pedagogical move in the guided mastery loop."""
+        """Choose the next pedagogical move in the evidence-based mastery loop."""
         action_data = trigger.action_data or {}
         action_intent = action_data.get("action_intent")
-        answer_correct = (
+        answer_data = action_data.get("answer_data", {})
+        quiz_correct = (
             action_intent == ActionIntent.SUBMIT_ANSWER
-            and action_data.get("answer_data", {}).get("is_correct") is True
+            and answer_data.get("is_correct") is True
         )
+        transfer_correct = (
+            action_intent == ActionIntent.SUBMIT_TRANSFER
+            and answer_data.get("is_correct") is True
+        )
+        newly_correct = quiz_correct or transfer_correct
 
-        # Do not turn a newly correct answer into another correction merely
-        # because the learner struggled on earlier attempts.
         if (
             context.frustration.frustration_score > 0.6
             and context.frustration.consecutive_failures >= 3
-            and not answer_correct
+            and not newly_correct
         ):
             return DirectorDecision(
                 selected_scene_type=SceneType.CORRECTION,
                 reasoning="Repeated misses require a smaller step and explicit reteaching",
                 confidence=0.9,
-                suggested_components=[ComponentType.STUDENT_PROMPT, ComponentType.TEACHER_MESSAGE],
+                suggested_components=[ComponentType.TEACHER_MESSAGE],
                 require_audio=True,
             )
 
@@ -872,9 +988,9 @@ class ClassroomDirector:
                 if context.course_complete:
                     return DirectorDecision(
                         selected_scene_type=SceneType.CELEBRATION,
-                        reasoning="All lesson checkpoints are mastered",
+                        reasoning="All lesson checkpoints have recognition and transfer evidence",
                         confidence=0.95,
-                        suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CELEBRATION],
+                        suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.LESSON_BLOCK],
                         estimated_duration_seconds=15,
                     )
                 if action_data.get("advanced_after_mastery"):
@@ -886,7 +1002,7 @@ class ClassroomDirector:
                     )
                 return DirectorDecision(
                     selected_scene_type=SceneType.CHALLENGE,
-                    reasoning="Check understanding before advancing",
+                    reasoning="Collect recognition evidence before transfer",
                     confidence=0.9,
                     suggested_components=[ComponentType.QUIZ_CARD],
                     require_interaction=True,
@@ -894,12 +1010,13 @@ class ClassroomDirector:
                 )
 
             if action_intent == ActionIntent.REQUEST_HINT:
+                hint = context.hint_level.value if context.hint_level else HintLevel.NUDGE.value
                 return DirectorDecision(
                     selected_scene_type=SceneType.INSTRUCTION,
-                    reasoning="Learner is confused - reteach with a smaller step and worked example",
-                    confidence=0.9,
-                    difficulty_adjustment=-0.2,
-                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                    reasoning=f"Provide graduated help at the {hint} level",
+                    confidence=0.92,
+                    difficulty_adjustment=-0.1 if hint == HintLevel.NUDGE.value else -0.25,
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.EXAMPLE_BLOCK],
                     require_audio=True,
                 )
 
@@ -925,57 +1042,100 @@ class ClassroomDirector:
                     selected_scene_type=SceneType.INSTRUCTION,
                     reasoning="Provide a concrete worked example",
                     confidence=0.9,
-                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.EXAMPLE_BLOCK],
                 )
 
             if action_intent == ActionIntent.SKIP_AHEAD:
                 return DirectorDecision(
                     selected_scene_type=SceneType.INSTRUCTION,
-                    reasoning="Learner reports low challenge - increase depth without skipping the objective",
+                    reasoning="Increase depth and transfer without skipping the objective",
                     confidence=0.85,
                     difficulty_adjustment=0.25,
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                )
+
+            if action_intent in (ActionIntent.REQUEST_REVIEW, ActionIntent.SET_MODE):
+                if context.classroom_mode == ClassroomMode.REVIEW:
+                    return DirectorDecision(
+                        selected_scene_type=SceneType.CHALLENGE,
+                        reasoning="Run retrieval practice from the learner's due-review queue",
+                        confidence=0.9,
+                        suggested_components=[ComponentType.QUIZ_CARD],
+                        require_interaction=True,
+                    )
+                return DirectorDecision(
+                    selected_scene_type=SceneType.INSTRUCTION,
+                    reasoning=f"Adopt the learner-selected {context.classroom_mode.value} format",
+                    confidence=0.9,
                     suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
                 )
 
             if action_intent == ActionIntent.RETRY:
                 return DirectorDecision(
                     selected_scene_type=SceneType.CHALLENGE,
-                    reasoning="Retry the checkpoint after correction",
+                    reasoning="Retry the recognition checkpoint after targeted correction",
                     confidence=0.9,
                     suggested_components=[ComponentType.QUIZ_CARD],
                     require_interaction=True,
                 )
 
             if action_intent == ActionIntent.SUBMIT_ANSWER:
-                if answer_correct:
+                if quiz_correct:
+                    return DirectorDecision(
+                        selected_scene_type=SceneType.REFLECTION,
+                        reasoning="Recognition passed; require explanation or application before mastery",
+                        confidence=0.97,
+                        suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.INPUT_FIELD],
+                        require_interaction=True,
+                        estimated_duration_seconds=60,
+                    )
+                return DirectorDecision(
+                    selected_scene_type=SceneType.CORRECTION,
+                    reasoning="Use the chosen distractor's misconception and remediation metadata",
+                    confidence=0.95,
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                    require_audio=True,
+                )
+
+            if action_intent == ActionIntent.SUBMIT_TRANSFER:
+                if transfer_correct:
                     return DirectorDecision(
                         selected_scene_type=SceneType.CELEBRATION,
-                        reasoning="Checkpoint passed - acknowledge mastery before advancing",
-                        confidence=0.95,
+                        reasoning="Recognition plus transfer evidence demonstrates lesson mastery",
+                        confidence=0.98,
                         suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CELEBRATION, ComponentType.CTA_BUTTON],
                         estimated_duration_seconds=12,
                     )
                 return DirectorDecision(
                     selected_scene_type=SceneType.CORRECTION,
-                    reasoning="Checkpoint missed - explain the misconception and retry",
-                    confidence=0.95,
-                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                    reasoning="Transfer response needs one precise revision before mastery",
+                    confidence=0.96,
+                    suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.INPUT_FIELD],
+                    require_interaction=True,
                     require_audio=True,
                 )
 
         if context.course_complete:
             return DirectorDecision(
                 selected_scene_type=SceneType.CELEBRATION,
-                reasoning="Persisted session shows every checkpoint complete",
+                reasoning="Persisted session shows every lesson has multiple forms of evidence",
                 confidence=0.95,
-                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CELEBRATION],
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.LESSON_BLOCK],
                 estimated_duration_seconds=15,
             )
 
         if trigger.trigger_type == TriggerType.SYSTEM_TIMEOUT:
+            if context.classroom_mode == ClassroomMode.REVIEW and context.review_due_items:
+                return DirectorDecision(
+                    selected_scene_type=SceneType.CHALLENGE,
+                    reasoning="Open with a due spaced-retrieval item",
+                    confidence=0.9,
+                    suggested_components=[ComponentType.QUIZ_CARD],
+                    require_interaction=True,
+                )
             return DirectorDecision(
                 selected_scene_type=SceneType.INSTRUCTION,
-                reasoning="Open or re-engage the lesson with explicit teaching",
+                reasoning="Open or re-engage with explicit teaching",
                 confidence=0.8,
                 suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
                 require_audio=True,
@@ -1061,6 +1221,9 @@ class SceneCompiler:
         if decision.selected_scene_type == SceneType.INSTRUCTION:
             components.extend(await self._create_instruction_components(context))
 
+        elif decision.selected_scene_type == SceneType.REFLECTION:
+            components.extend(self._create_transfer_components(context))
+
         elif decision.selected_scene_type == SceneType.CHALLENGE:
             components.extend(await self._create_challenge_components(context))
 
@@ -1093,7 +1256,10 @@ class SceneCompiler:
         return components
 
     async def _create_instruction_components(self, context: ContextSnapshot) -> List[Component]:
-        """Create components for instruction scenes"""
+        """Create components for instruction scenes."""
+        if context.hint_level:
+            return self._create_hint_components(context)
+
         components = []
 
         # Main teacher message
@@ -1118,6 +1284,7 @@ class SceneCompiler:
                 emotion="encouraging",
                 audio_mood=AudioMood.CALM,
                 concept_tags=[context.topic or "current_topic"],
+                source_attributions=context.source_attributions,
                 priority=0,
                 delay_ms=0
             ))
@@ -1131,6 +1298,7 @@ class SceneCompiler:
                     emotion="encouraging",
                     audio_mood=AudioMood.CALM,
                     concept_tags=[context.topic or "current_topic"],
+                    source_attributions=context.source_attributions,
                     priority=idx,
                     delay_ms=delay
                 ))
@@ -1146,6 +1314,90 @@ class SceneCompiler:
 
         return components
 
+    def _create_hint_components(self, context: ContextSnapshot) -> List[Component]:
+        """Return the requested rung of the hint ladder without hiding the level."""
+        level = context.hint_level or HintLevel.NUDGE
+        objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
+        remediation = context.remediation_hint or ""
+        guidance = {
+            HintLevel.NUDGE: f"Small nudge: identify the one rule that connects the question to {objective}.",
+            HintLevel.PRINCIPLE: f"Principle: state the governing idea behind {objective} before calculating or choosing.",
+            HintLevel.WORKED_STEP: f"First step: name the known information, then connect it to {objective}.",
+            HintLevel.FULL_EXAMPLE: f"Worked example: choose a simple case, apply {objective} one step at a time, and check the result.",
+            HintLevel.PREREQUISITE: f"Prerequisite review: define the key terms inside {objective}, then rebuild the relationship between them.",
+        }[level]
+        if remediation:
+            guidance = f"{guidance} Focus especially on: {remediation}"
+        components: List[Component] = [
+            TeacherMessage(
+                text=guidance,
+                emotion="thinking",
+                audio_mood=AudioMood.GENTLE,
+                concept_tags=[objective],
+                source_attributions=context.source_attributions,
+                priority=0,
+            )
+        ]
+        if level in (HintLevel.WORKED_STEP, HintLevel.FULL_EXAMPLE, HintLevel.PREREQUISITE):
+            components.append(ExampleBlock(
+                title={
+                    HintLevel.WORKED_STEP: "Start here",
+                    HintLevel.FULL_EXAMPLE: "Worked example",
+                    HintLevel.PREREQUISITE: "Foundation refresher",
+                }[level],
+                content=context.lesson_content[:1200] if context.lesson_content else guidance,
+                example_type="real_world",
+                interactive=level == HintLevel.FULL_EXAMPLE,
+                priority=1,
+            ))
+        components.append(CTAButton(
+            label="Try the checkpoint",
+            action_intent=ActionIntent.CONTINUE,
+            button_style="primary",
+            priority=100,
+        ))
+        return components
+
+    def _create_transfer_components(self, context: ContextSnapshot) -> List[Component]:
+        """Ask for explanation/application evidence after recognition succeeds."""
+        objective = context.learning_objective or context.lesson_title or context.topic or "the lesson idea"
+        keywords = expected_transfer_keywords(objective, context.lesson_content or "")
+        if context.classroom_mode == ClassroomMode.CHALLENGE:
+            question = (
+                f"Apply {objective} to a new or boundary case. Explain your reasoning "
+                "and name one condition where the idea would not apply."
+            )
+        elif context.classroom_mode == ClassroomMode.REVIEW:
+            question = f"Without looking back, explain {objective} and give one concrete example."
+        else:
+            question = (
+                f"In your own words, apply {objective} to a new example or situation. "
+                "Explain why your example works."
+            )
+        return [
+            TeacherMessage(
+                text="The choice shows recognition. One short application will show that the idea is usable.",
+                emotion="thinking",
+                audio_mood=AudioMood.CALM,
+                concept_tags=[objective],
+                source_attributions=context.source_attributions,
+                priority=0,
+            ),
+            InputField(
+                question=question,
+                placeholder="Explain and apply the idea…",
+                action_intent=ActionIntent.SUBMIT_TRANSFER,
+                concept_id=objective,
+                evidence_type="retrieval" if context.classroom_mode == ClassroomMode.REVIEW else "transfer",
+                expected_keywords=keywords,
+                min_words=6,
+                max_words=120,
+                min_score=0.25,
+                source_attributions=context.source_attributions,
+                priority=1,
+            ),
+        ]
+
     async def _create_challenge_components(self, context: ContextSnapshot) -> List[Component]:
         """Create components for challenge/quiz scenes"""
         components = []
@@ -1157,78 +1409,120 @@ class SceneCompiler:
         return components
 
     async def _create_correction_components(self, context: ContextSnapshot, trigger: Trigger) -> List[Component]:
-        """Create components for correction scenes"""
-        components = []
+        """Create precise remediation from the submitted evidence."""
+        components: List[Component] = []
 
-        # Check if we should include peer normalization
-        if context.frustration.consecutive_failures >= 2 and not context.peer_cooldown_active:
-            # Add AI peer to normalize the error
+        if (
+            context.classroom_mode == ClassroomMode.CLASSROOM
+            and context.frustration.consecutive_failures >= 2
+            and not context.peer_cooldown_active
+        ):
             components.append(StudentPrompt(
                 student_name="Sam",
-                text="I thought that too! These concepts can be tricky at first.",
+                text="That choice follows a common shortcut. Let's inspect exactly where it breaks.",
                 personality_trait="supportive",
                 purpose="normalize_error",
-                priority=0
+                priority=0,
             ))
 
-        # Reteach the missed idea rather than merely saying it was wrong.
-        if self.ai_service:
+        focus = context.remediation_hint or context.misconception_tag
+        feedback = context.answer_feedback
+        if feedback or focus:
+            correction_text = " ".join(
+                part for part in [
+                    feedback or "The response is close, but one link in the reasoning needs revision.",
+                    f"Focus on {focus}." if focus else "",
+                ] if part
+            )
+        elif self.ai_service:
             correction_text = await self._generate_instruction_content(context)
         else:
             correction_text = self._local_instruction_fallback(context)
+
         components.append(TeacherMessage(
             text=correction_text,
             emotion="concerned",
             audio_mood=AudioMood.GENTLE,
             concept_tags=[context.learning_objective or context.topic or "current_topic"],
-            priority=1
+            source_attributions=context.source_attributions,
+            priority=1,
         ))
 
-        # Try again button
-        components.append(CTAButton(
-            label="Try Again",
-            action_intent=ActionIntent.RETRY,
-            button_style="secondary",
-            priority=2
-        ))
+        action_intent = (trigger.action_data or {}).get("action_intent")
+        if action_intent == ActionIntent.SUBMIT_TRANSFER:
+            transfer_input = self._create_transfer_components(context)[-1]
+            transfer_input.question = (
+                f"Revise your application of {context.learning_objective or context.topic or 'the idea'}. "
+                + (
+                    f"Make sure you address {focus}."
+                    if focus
+                    else "Add the missing reasoning link and explain why the example works."
+                )
+            )
+            transfer_input.priority = 2
+            components.append(transfer_input)
+        else:
+            components.append(CTAButton(
+                label="Retry checkpoint",
+                action_intent=ActionIntent.RETRY,
+                button_style="secondary",
+                priority=2,
+            ))
 
         return components
 
     async def _create_celebration_components(self, context: ContextSnapshot) -> List[Component]:
-        """Create components for celebration scenes"""
-        components = []
+        """Close with evidence, a useful summary, and the next retrieval step."""
+        progress = _SESSION_PROGRESS.get(context.session_id, {})
+        covered = list(progress.get("covered", []))[-3:]
+        objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
+        components: List[Component] = []
 
         if context.course_complete:
-            components.append(TeacherMessage(
-                text=(
-                    f"You completed {context.course_title or context.topic or 'this course'} "
-                    "and demonstrated the key ideas at every checkpoint. "
-                    "Review your notebook, then choose one idea to apply outside the classroom."
-                ),
-                emotion="excited",
-                audio_mood=AudioMood.ENCOURAGING,
-                priority=0,
-            ))
-            celebration_message = "Course complete — you earned this! 🎉"
+            message = (
+                f"You completed {context.course_title or context.topic or 'this course'}. "
+                "Each lesson now has both recognition and application evidence."
+            )
+            celebration_message = "Course mastery demonstrated"
         else:
-            components.append(TeacherMessage(
-                text=(
-                    f"Yes — that shows you understand "
-                    f"{context.learning_objective or context.lesson_title or context.topic or 'this idea'}."
-                ),
-                emotion="encouraging",
-                audio_mood=AudioMood.ENCOURAGING,
-                priority=0,
-            ))
-            celebration_message = "Checkpoint mastered! 🎉"
+            message = (
+                f"You recognized and applied {objective}. "
+                "That is stronger evidence than a correct choice alone."
+            )
+            celebration_message = "Lesson mastered"
 
+        components.append(TeacherMessage(
+            text=message,
+            emotion="excited",
+            audio_mood=AudioMood.ENCOURAGING,
+            concept_tags=[objective],
+            source_attributions=context.source_attributions,
+            priority=0,
+        ))
+
+        summary_items = covered or [
+            f"Objective: {objective}",
+            "Evidence: recognition plus explanation/application",
+            "Next: retrieve the idea again after spacing",
+        ]
+        components.append(LessonBlock(
+            block_type="summary",
+            block={
+                "title": "What you can now do",
+                "content": f"Use {objective} without relying on answer choices.",
+                "items": summary_items,
+                "source_attributions": context.source_attributions,
+                "retrieval_scheduled": True,
+            },
+            priority=1,
+        ))
         components.append(Celebration(
             message=celebration_message,
             celebration_type="standard",
             particle_effect="confetti",
             achievement_type="mastery",
             points_earned=10,
-            priority=1
+            priority=2,
         ))
 
         if not context.course_complete:
@@ -1236,7 +1530,7 @@ class SceneCompiler:
                 label="Next lesson",
                 action_intent=ActionIntent.CONTINUE,
                 button_style="primary",
-                priority=2
+                priority=3,
             ))
 
         return components
@@ -1286,10 +1580,16 @@ learner_context: {json.dumps(context.learner_context or "No stored learner prefe
 last_session_recap: {json.dumps(covered[-1] if covered else "")}
 already_covered: {json.dumps(covered)}
 user_level: "{user_level}"
+classroom_mode: "{context.classroom_mode.value}"
+target_duration_minutes: {context.target_duration_minutes}
 learning_objective: {json.dumps(context.learning_objective or context.lesson_title or topic)}
 learner_signal: {json.dumps(context.learner_signal or "")}
+hint_level: {json.dumps(context.hint_level.value if context.hint_level else "")}
+misconception_tag: {json.dumps(context.misconception_tag or "")}
+remediation_hint: {json.dumps(context.remediation_hint or "")}
 learner_question: {json.dumps(context.learner_message or "")}
 learner_response: {json.dumps(context.learner_response or "")}
+review_due_items: {json.dumps(context.review_due_items)}
 lesson_title: "{context.lesson_title or topic}"
 lesson_content: {json.dumps(context.lesson_content or "")}
 
@@ -1299,8 +1599,12 @@ TEACHING RESPONSE RULES:
 - If learner_response is present, acknowledge its reasoning briefly and use it as evidence; do not pretend it was a question.
 - If learner_signal is request_hint or confused, slow down, diagnose the likely gap, and use one worked example.
 - If learner_signal is skip_ahead or too_easy, increase depth and transfer difficulty; do not merely move on.
-- If learner_signal is incorrect_answer, explicitly explain the likely misconception, then show one worked example.
-- Use learner_context only when relevant. Never invent preferences or history.
+- If learner_signal is incorrect_answer, use misconception_tag and remediation_hint when present; never give generic correction.
+- If classroom_mode is solo, only the Teacher and Lyo may appear. If classroom, classmates remain optional and pedagogically necessary.
+- If classroom_mode is challenge, shorten explanation and deepen boundary/transfer cases. If review, prioritize retrieval over re-lecturing.
+- Match the target duration by choosing depth, not filler or speed.
+- Use an explorable only when changing a parameter exposes a relationship in the learning objective; always follow it with a prediction or explanation prompt.
+- Use learner_context only when relevant. Never invent preferences, observations, sources, or history.
 - Teach first. AI classmates are optional and may speak only when they clarify a misconception or model reasoning.
 
 PROGRESSION RULES (CRITICAL):
@@ -1535,7 +1839,11 @@ PROGRESSION RULES (CRITICAL):
         from lyo_app.core.ai_resilience import ai_resilience_manager
         import json as _json
 
-        topic = context.topic or "the current concept"
+        topic = (
+            context.review_due_items[0]
+            if context.classroom_mode == ClassroomMode.REVIEW and context.review_due_items
+            else context.topic or "the current concept"
+        )
         lesson_content = context.lesson_content or ""
 
         try:
@@ -1546,12 +1854,14 @@ PROGRESSION RULES (CRITICAL):
                 f"Lesson Content:\n{lesson_content}\n\n"
                 f"What the teacher just taught in class (test THIS material):\n{taught_context}\n\n"
                 f"The question must test understanding of the specific concepts described above — never a generic question.\n"
+                f"Each distractor must represent a plausible, distinct misconception. "
+                f"Give option-specific feedback and a remediation cue.\n"
                 f"Return ONLY valid JSON (no markdown) with this exact structure:\n"
                 f'{{"question": "...", "options": ['
-                f'{{"id": "a", "label": "...", "is_correct": false}}, '
-                f'{{"id": "b", "label": "...", "is_correct": true}}, '
-                f'{{"id": "c", "label": "...", "is_correct": false}}, '
-                f'{{"id": "d", "label": "...", "is_correct": false}}'
+                f'{{"id": "a", "label": "...", "is_correct": false, "feedback_correct": null, "feedback_incorrect": "...", "misconception_tag": "...", "remediation_hint": "..."}}, '
+                f'{{"id": "b", "label": "...", "is_correct": true, "feedback_correct": "...", "feedback_incorrect": null, "misconception_tag": null, "remediation_hint": null}}, '
+                f'{{"id": "c", "label": "...", "is_correct": false, "feedback_correct": null, "feedback_incorrect": "...", "misconception_tag": "...", "remediation_hint": "..."}}, '
+                f'{{"id": "d", "label": "...", "is_correct": false, "feedback_correct": null, "feedback_incorrect": "...", "misconception_tag": "...", "remediation_hint": "..."}}'
                 f']}}'
             )
 
@@ -1603,6 +1913,10 @@ PROGRESSION RULES (CRITICAL):
                     id=opt["id"],
                     label=opt["label"],
                     is_correct=opt.get("is_correct", False),
+                    feedback_correct=opt.get("feedback_correct"),
+                    feedback_incorrect=opt.get("feedback_incorrect"),
+                    misconception_tag=opt.get("misconception_tag"),
+                    remediation_hint=opt.get("remediation_hint"),
                 )
                 for opt in data["options"]
             ]
@@ -1618,11 +1932,38 @@ PROGRESSION RULES (CRITICAL):
             logger.error(f"❌ Resilient AI quiz generation failed, using fallback: {e}")
 
         # Fallback static question (only when AI is unavailable)
+        core = (lesson_content.strip().split(".")[0] or f"The lesson's stated relationship in {topic}")[:260]
         options = [
-            QuizOption(id="a", label=f"Understanding {topic}", is_correct=True),
-            QuizOption(id="b", label="Applying the concept", is_correct=False),
-            QuizOption(id="c", label="Reviewing the basics", is_correct=False),
-            QuizOption(id="d", label="None of the above", is_correct=False)
+            QuizOption(
+                id="a",
+                label=core,
+                is_correct=True,
+                feedback_correct="That matches the relationship taught in the lesson.",
+            ),
+            QuizOption(
+                id="b",
+                label=f"{topic} works only when every value is identical.",
+                is_correct=False,
+                feedback_incorrect="That adds an absolute condition the lesson did not establish.",
+                misconception_tag="overgeneralized_condition",
+                remediation_hint="Separate the core relationship from special cases.",
+            ),
+            QuizOption(
+                id="c",
+                label=f"{topic} is mainly a rule to memorize without reasoning.",
+                is_correct=False,
+                feedback_incorrect="The lesson treats the idea as a relationship you can explain and apply.",
+                misconception_tag="procedure_without_meaning",
+                remediation_hint="Reconnect the procedure to why it works.",
+            ),
+            QuizOption(
+                id="d",
+                label=f"{topic} cannot be applied outside the example shown.",
+                is_correct=False,
+                feedback_incorrect="A worked example illustrates the idea; it does not limit its use.",
+                misconception_tag="example_as_boundary",
+                remediation_hint="Identify which features of the example are essential.",
+            ),
         ]
         return QuizCard(
             question=f"Which of the following represents the core objective when studying {topic}?",
@@ -1708,8 +2049,13 @@ class SceneLifecycleEngine:
             durable_context.update({
                 "current_lesson_index": context.lesson_index,
                 "mastered_lessons": list(progress.get("mastered_lessons", [])),
+                "evidence": dict(progress.get("evidence", {})),
+                "hint_counts": dict(progress.get("hint_counts", {})),
+                "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
                 "difficulty": progress.get("difficulty"),
+                "classroom_mode": progress.get("classroom_mode", ClassroomMode.SOLO.value),
+                "target_duration_minutes": progress.get("target_duration_minutes", 10),
                 "course_complete": context.course_complete,
                 "scene": progress.get("scene", 0),
                 "covered": list(progress.get("covered", []))[-8:],
@@ -1765,23 +2111,42 @@ class SceneLifecycleEngine:
             self.session_contexts[trigger.session_id] = context
             logger.debug(f"Phase 2 (Context): {len(context.knowledge_states)} concepts analyzed")
 
-            # Guided mastery gate: a correct checkpoint masters the current
-            # lesson; only the following Continue may advance to the next one.
+            # Guided mastery gate: recognition unlocks a transfer task; only
+            # recognition plus transfer marks a lesson as mastered.
             action_data = trigger.action_data or {}
             action_intent = action_data.get("action_intent")
+            answer_data = action_data.get("answer_data", {})
             progress = _SESSION_PROGRESS.setdefault(
                 trigger.session_id, {"scene": 0, "covered": [], "mastered_lessons": []}
             )
             mastered_lessons = set(progress.get("mastered_lessons", []))
+            evidence = progress.setdefault("evidence", {})
+            lesson_key = str(context.lesson_index)
+            lesson_evidence = evidence.setdefault(
+                lesson_key, {"recognition": False, "transfer": False}
+            )
 
             if action_intent == ActionIntent.SUBMIT_ANSWER:
-                answer_is_correct = (
-                    action_data.get("answer_data", {}).get("is_correct") is True
-                )
+                answer_is_correct = answer_data.get("is_correct") is True
                 context.learner_signal = (
                     "correct_answer" if answer_is_correct else "incorrect_answer"
                 )
-                if answer_is_correct:
+                lesson_evidence["recognition"] = answer_is_correct
+                if not answer_is_correct and answer_data.get("misconception_tag"):
+                    history = progress.setdefault("misconception_history", [])
+                    history.append({
+                        "lesson_index": context.lesson_index,
+                        "tag": answer_data.get("misconception_tag"),
+                        "at": datetime.utcnow().isoformat(),
+                    })
+
+            if action_intent == ActionIntent.SUBMIT_TRANSFER:
+                transfer_is_correct = answer_data.get("is_correct") is True
+                context.learner_signal = (
+                    "correct_transfer" if transfer_is_correct else "incorrect_transfer"
+                )
+                lesson_evidence["transfer"] = transfer_is_correct
+                if transfer_is_correct and lesson_evidence.get("recognition"):
                     mastered_lessons.add(context.lesson_index)
                     progress["mastered_lessons"] = sorted(mastered_lessons)
 
@@ -1796,6 +2161,11 @@ class SceneLifecycleEngine:
                             context.course_id, next_index
                         )
                     context.learning_objective = context.lesson_title or context.topic
+                    context.source_attributions = [
+                        "Course material"
+                        + (f": {context.course_title}" if context.course_title else "")
+                        + (f" — {context.lesson_title}" if context.lesson_title else "")
+                    ]
                     try:
                         from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
                         conv_session = get_conversation_manager().get_session(trigger.session_id)
@@ -1803,7 +2173,7 @@ class SceneLifecycleEngine:
                             conv_session.current_lesson_index = next_index
                     except Exception:
                         pass
-                    logger.info(f"📖 Mastery gate advanced lesson to {next_index}")
+                    logger.info(f"📖 Evidence gate advanced lesson to {next_index}")
                 else:
                     context.course_complete = True
                     action_data["course_complete"] = True
@@ -1911,68 +2281,81 @@ class SceneLifecycleEngine:
         quiz_component_id: str,
         selected_option_id: str,
         is_correct: bool,
-        response_time_ms: int
+        response_time_ms: int,
     ) -> Scene:
-        """Public API: Handle quiz answer submission with server-side validation"""
-
-        # ── Server-side correctness check ────────────────────────────
-
-        # Look up the active QuizCard scene to validate the answer.
-        # The client-supplied `is_correct` is treated as a hint only;
-        # the authoritative answer lives in the scene's QuizCard options.
-        validated_correct = False  # fail closed if the authoritative scene is unavailable
+        """Validate a quiz server-side and preserve distractor diagnosis."""
+        validated_correct = False
         validated_skill_id = (
             self.session_contexts.get(session_id).learning_objective
             if self.session_contexts.get(session_id)
             else None
         )
+        selected_feedback = None
+        misconception_tag = None
+        remediation_hint = None
         active_scene = self.active_scenes.get(
             next(
-                (sid for sid, s in self.active_scenes.items()
-                 if any(c.component_id == quiz_component_id for c in s.components)),
-                None
+                (
+                    sid for sid, scene in self.active_scenes.items()
+                    if any(c.component_id == quiz_component_id for c in scene.components)
+                ),
+                None,
             )
         ) if self.active_scenes else None
 
         if active_scene:
             for comp in active_scene.components:
-                if comp.component_id == quiz_component_id and hasattr(comp, 'options'):
+                if comp.component_id == quiz_component_id and hasattr(comp, "options"):
                     validated_skill_id = getattr(comp, "concept_id", None) or validated_skill_id
-                    for opt in comp.options:
-                        if opt.id == selected_option_id:
-                            validated_correct = opt.is_correct
+                    for option in comp.options:
+                        if option.id == selected_option_id:
+                            validated_correct = option.is_correct
+                            selected_feedback = (
+                                option.feedback_correct
+                                if validated_correct
+                                else option.feedback_incorrect
+                            )
+                            misconception_tag = option.misconception_tag
+                            remediation_hint = option.remediation_hint
                             if validated_correct != is_correct:
                                 logger.warning(
-                                    f"⚠️ Quiz validation mismatch: client said "
-                                    f"is_correct={is_correct}, server says {validated_correct}"
+                                    "Quiz validation mismatch: client=%s server=%s",
+                                    is_correct,
+                                    validated_correct,
                                 )
                             break
                     break
 
-        # Persist the authoritative result in the same mastery model used by
-        # personalization and by ContextAssembler. Guest sessions remain ephemeral.
+        progress = _SESSION_PROGRESS.get(session_id, {})
+        session_context = self.session_contexts.get(session_id)
+        lesson_index = session_context.lesson_index if session_context else 0
+        hints_used = int(
+            progress.get("hint_counts", {}).get(str(lesson_index), 0)
+        )
+
         try:
             user_id_int = int(user_id)
+            from lyo_app.personalization.schemas import KnowledgeTraceRequest
             from lyo_app.personalization.service import PersonalizationEngine
-            await PersonalizationEngine().dkt.update_mastery(
+            await PersonalizationEngine().trace_knowledge(
                 self.db,
-                user_id_int,
-                validated_skill_id or "current_concept",
-                validated_correct,
-                max(response_time_ms / 1000.0, 1.0),
-                0,
+                KnowledgeTraceRequest(
+                    learner_id=str(user_id_int),
+                    skill_id=validated_skill_id or "current_concept",
+                    item_id=validated_skill_id or "current_concept",
+                    correct=validated_correct,
+                    time_taken_seconds=max(response_time_ms / 1000.0, 1.0),
+                    hints_used=hints_used,
+                ),
             )
         except (ValueError, TypeError):
             logger.debug("Guest quiz result is not persisted")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not persist classroom mastery: {e}")
+        except Exception as exc:
+            logger.warning("Could not persist classroom recognition evidence: %s", exc)
             try:
                 await self.db.rollback()
             except Exception:
                 pass
-
-        # Determine frustration based on correctness and time
-        urgency = 7 if not validated_correct else 3
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
@@ -1983,13 +2366,114 @@ class SceneLifecycleEngine:
                 "answer_data": {
                     "selected_option_id": selected_option_id,
                     "is_correct": validated_correct,
-                    "response_time_ms": response_time_ms
-                }
+                    "response_time_ms": response_time_ms,
+                    "feedback": selected_feedback,
+                    "misconception_tag": misconception_tag,
+                    "remediation_hint": remediation_hint,
+                },
             },
             component_id=quiz_component_id,
-            urgency=urgency
+            urgency=7 if not validated_correct else 3,
+        )
+        return await self.process_trigger(trigger)
+
+    async def handle_transfer_submission(
+        self,
+        user_id: str,
+        session_id: str,
+        input_component_id: str,
+        response: str,
+        response_time_ms: int = 0,
+    ) -> Scene:
+        """Score explanation/application evidence from the active server rubric."""
+        validated_correct = False
+        coverage = 0.0
+        missing: List[str] = []
+        skill_id = (
+            self.session_contexts.get(session_id).learning_objective
+            if self.session_contexts.get(session_id)
+            else "current_concept"
+        )
+        expected_keywords: List[str] = []
+        min_words = 6
+        min_score = 0.25
+
+        active_scene = self.active_scenes.get(
+            next(
+                (
+                    sid for sid, scene in self.active_scenes.items()
+                    if any(c.component_id == input_component_id for c in scene.components)
+                ),
+                None,
+            )
+        ) if self.active_scenes else None
+        if active_scene:
+            for comp in active_scene.components:
+                if isinstance(comp, InputField) and comp.component_id == input_component_id:
+                    skill_id = comp.concept_id or skill_id
+                    expected_keywords = list(comp.expected_keywords)
+                    min_words = comp.min_words
+                    min_score = comp.min_score
+                    validated_correct, coverage, missing = score_transfer_response(
+                        response,
+                        expected_keywords,
+                        min_words=min_words,
+                        min_score=min_score,
+                    )
+                    break
+
+        feedback = (
+            "Your explanation uses the lesson idea in a new situation."
+            if validated_correct
+            else (
+                "Add the missing reasoning link"
+                + (f" around {', '.join(missing)}" if missing else "")
+                + f". Aim for at least {min_words} words and explain why the example works."
+            )
         )
 
+        progress = _SESSION_PROGRESS.get(session_id, {})
+        session_context = self.session_contexts.get(session_id)
+        lesson_index = session_context.lesson_index if session_context else 0
+        hints_used = int(progress.get("hint_counts", {}).get(str(lesson_index), 0))
+        try:
+            user_id_int = int(user_id)
+            from lyo_app.personalization.service import PersonalizationEngine
+            await PersonalizationEngine().dkt.update_mastery(
+                self.db,
+                user_id_int,
+                skill_id or "current_concept",
+                validated_correct,
+                max(response_time_ms / 1000.0, 1.0),
+                hints_used,
+            )
+        except (ValueError, TypeError):
+            logger.debug("Guest transfer evidence is not persisted")
+        except Exception as exc:
+            logger.warning("Could not persist classroom transfer evidence: %s", exc)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
+        trigger = Trigger(
+            trigger_type=TriggerType.USER_ACTION,
+            user_id=user_id,
+            session_id=session_id,
+            action_data={
+                "action_intent": ActionIntent.SUBMIT_TRANSFER,
+                "message": response,
+                "answer_data": {
+                    "is_correct": validated_correct,
+                    "coverage": coverage,
+                    "missing_keywords": missing,
+                    "feedback": feedback,
+                    "remediation_hint": ", ".join(missing) if missing else None,
+                },
+            },
+            component_id=input_component_id,
+            urgency=6 if not validated_correct else 3,
+        )
         return await self.process_trigger(trigger)
 
     async def trigger_celebration(
@@ -2030,6 +2514,7 @@ __all__ = [
     "SceneLifecycleEngine",
     "TriggerType", "Trigger", "TriggerListener",
     "ContextSnapshot", "ContextAssembler",
+    "expected_transfer_keywords", "score_transfer_response",
     "ClassroomDirector", "DirectorDecision",
     "SceneCompiler"
 ]
