@@ -321,8 +321,12 @@ async def _send_welcome_scene(
         return
 
     try:
-        # Topic passed explicitly by iOS client (courseTitle from the course proposal)
+        # Explicit course context comes from the generated course card. Keep it
+        # attached to the session so instruction is driven by a goal, not only
+        # a display title.
         topic_from_query = connection.websocket.query_params.get("topic")
+        objective_from_query = connection.websocket.query_params.get("objective")
+        difficulty_from_query = connection.websocket.query_params.get("difficulty")
 
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
@@ -363,7 +367,12 @@ async def _send_welcome_scene(
             user_id=connection.user_id,
             session_id=connection.session_id,
             course_id=course_id,
-            action_data={"welcome": True, "topic": resolved_topic},
+            action_data={
+                "welcome": True,
+                "topic": resolved_topic,
+                "objective": objective_from_query,
+                "difficulty": difficulty_from_query,
+            },
             urgency=1
         )
 
