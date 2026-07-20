@@ -7,14 +7,14 @@ database built from the alembic chain (and CommunityPost(...) raises for
 unknown kwargs on create).
 
 Revision ID: community_sync_001
-Revises: users_sync_001
+Revises: chat_004
 Create Date: 2026-07-20
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "community_sync_001"
-down_revision = "users_sync_001"
+down_revision = "chat_004"
 branch_labels = None
 depends_on = None
 
