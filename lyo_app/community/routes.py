@@ -959,6 +959,9 @@ async def delete_comment(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found or access denied")
     except HTTPException:
         raise
+    except ValueError as e:
+        # Service raises ValueError when the requester is not the author
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete comment")
 

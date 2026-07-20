@@ -35,6 +35,15 @@ from lyo_app.models.enhanced import User
 from lyo_app.stack.models import StackItem, StackItemType, StackItemStatus
 import uuid
 
+
+def _display_name(user) -> str:
+    """Human-readable name for a user row (no display_name column exists)."""
+    if user is None:
+        return ""
+    full = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    return full or user.username or ""
+
+
 class CommunityService:
     """Service class for community features - study groups and events."""
 
@@ -1630,7 +1639,7 @@ class CommunityService:
         
         db_post = CommunityPost(
             author_id=author_id,
-            author_name=user.display_name or user.username or f"User {author_id}",
+            author_name=_display_name(user) or f"User {author_id}",
             author_avatar=user.avatar_url,
             author_level=getattr(user, 'level', 1) or 1,
             content=post_data.content,
@@ -1983,8 +1992,20 @@ class CommunityService:
         
         result = await db.execute(query)
         comments = result.scalars().all()
-        
-        items = [self._comment_to_dict(c, False) for c in comments]
+
+        # Which of these comments has the requesting user liked?
+        liked_ids: set = set()
+        if comments:
+            from lyo_app.community.models import PostLike
+            liked_result = await db.execute(
+                select(PostLike.comment_id).where(
+                    PostLike.comment_id.in_([c.id for c in comments]),
+                    PostLike.user_id == user_id
+                )
+            )
+            liked_ids = {row[0] for row in liked_result.all()}
+
+        items = [self._comment_to_dict(c, c.id in liked_ids) for c in comments]
         
         return {
             "items": items,
@@ -2024,7 +2045,7 @@ class CommunityService:
         db_comment = PostComment(
             post_id=post_id,
             author_id=author_id,
-            author_name=user.display_name or user.username or f"User {author_id}",
+            author_name=_display_name(user) or f"User {author_id}",
             author_avatar=user.avatar_url,
             content=comment_data.content,
             parent_id=comment_data.parent_id,
@@ -2093,11 +2114,9 @@ class CommunityService:
         comment_id: uuid.UUID,
         user_id: int
     ) -> Dict[str, Any]:
-        """Toggle like on a comment."""
-        from lyo_app.community.models import PostComment
-        
-        # Note: For simplicity, we're just tracking like_count on the comment
-        # A full implementation would have a CommentLike junction table
+        """Toggle like on a comment (PostLike rows with comment_id set)."""
+        from lyo_app.community.models import PostComment, PostLike
+
         result = await db.execute(
             select(PostComment).where(
                 PostComment.id == comment_id,
@@ -2105,17 +2124,30 @@ class CommunityService:
             )
         )
         comment = result.scalar_one_or_none()
-        
+
         if not comment:
             raise ValueError("Comment not found")
-        
-        # Simple toggle (in production, use a junction table)
-        # For now, just increment/decrement
-        comment.like_count += 1
-        
+
+        like_result = await db.execute(
+            select(PostLike).where(
+                PostLike.comment_id == comment_id,
+                PostLike.user_id == user_id
+            )
+        )
+        existing_like = like_result.scalar_one_or_none()
+
+        if existing_like:
+            await db.delete(existing_like)
+            comment.like_count = max(0, comment.like_count - 1)
+            liked = False
+        else:
+            db.add(PostLike(comment_id=comment_id, user_id=user_id))
+            comment.like_count += 1
+            liked = True
+
         await db.commit()
-        
-        return {"liked": True, "like_count": comment.like_count}
+
+        return {"liked": liked, "like_count": comment.like_count}
 
     async def create_report(
         self,
@@ -2164,7 +2196,7 @@ class CommunityService:
                 blocked_list.append({
                     "id": block.id,
                     "user_id": block.blocked_id,
-                    "user_name": user.display_name or user.username or f"User {block.blocked_id}",
+                    "user_name": _display_name(user) or f"User {block.blocked_id}",
                     "user_avatar": user.avatar_url,
                     "blocked_at": block.created_at
                 })
@@ -2205,7 +2237,7 @@ class CommunityService:
         return {
             "id": db_block.id,
             "user_id": block_data.user_id,
-            "user_name": user.display_name if user else f"User {block_data.user_id}",
+            "user_name": _display_name(user) or f"User {block_data.user_id}",
             "user_avatar": user.avatar_url if user else None,
             "blocked_at": db_block.created_at
         }
