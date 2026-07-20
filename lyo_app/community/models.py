@@ -476,26 +476,31 @@ class CommunityPost(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     
-    # Author
+    # Author (name/avatar/level are denormalized for feed performance; the
+    # service writes them on create and PostRead serializes them directly)
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    
+    author_name: Mapped[str] = mapped_column(String(150), default="")
+    author_avatar: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    author_level: Mapped[int] = mapped_column(Integer, default=1)
+
     # Content
     content: Mapped[str] = mapped_column(Text, nullable=False)
     media_urls = Column(JSON, nullable=True)  # List of media URLs
     tags = Column(JSON, nullable=True)  # List of tags
-    
+
     # Type and visibility
     post_type: Mapped[PostType] = mapped_column(SQLEnum(PostType), default=PostType.TEXT)
     visibility: Mapped[PostVisibility] = mapped_column(SQLEnum(PostVisibility), default=PostVisibility.PUBLIC)
-    
+
     # Linked content
     linked_course_id: Mapped[Optional[int]] = mapped_column(ForeignKey("courses.id"), nullable=True)
     linked_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("study_groups.id"), nullable=True)
-    
+
     # Status
     is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # Hidden by moderation
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)  # Soft delete
     
     # Denormalized counts (for performance)
     like_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -523,13 +528,18 @@ class PostComment(Base):
     post_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("community_posts.id"), index=True)
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("post_comments.id"), nullable=True)  # For replies
-    
+
+    # Denormalized author info (written on create, serialized by CommentRead)
+    author_name: Mapped[str] = mapped_column(String(150), default="")
+    author_avatar: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
     # Content
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    
+
     # Status
     is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)  # Soft delete
     
     # Denormalized counts
     like_count: Mapped[int] = mapped_column(Integer, default=0)
