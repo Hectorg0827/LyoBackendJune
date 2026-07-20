@@ -7,6 +7,7 @@ Provides async CRUD operations and intelligent caching.
 
 import json
 import hashlib
+import inspect
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
@@ -14,6 +15,7 @@ from uuid import uuid4
 
 from sqlalchemy import select, func, and_, or_, desc, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from lyo_app.chat.models import (
@@ -398,6 +400,58 @@ class ConversationStore:
         
         result = await db.execute(query)
         return result.scalar_one_or_none()
+
+    async def get_owned_conversation(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+        include_messages: bool = False,
+    ) -> Optional[ChatConversation]:
+        """Return a conversation only when it belongs to the requesting user."""
+        query = select(ChatConversation).where(
+            and_(
+                ChatConversation.id == conversation_id,
+                ChatConversation.user_id == user_id,
+            )
+        )
+        if include_messages:
+            query = query.options(selectinload(ChatConversation.messages))
+        result = await db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def list_for_user(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        limit: int = 30,
+        offset: int = 0,
+        active_only: bool = True,
+    ) -> List[ChatConversation]:
+        query = select(ChatConversation).where(ChatConversation.user_id == user_id)
+        if active_only:
+            query = query.where(ChatConversation.is_active.is_(True))
+        query = query.order_by(
+            desc(func.coalesce(ChatConversation.last_message_at, ChatConversation.created_at))
+        ).offset(offset).limit(limit)
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
+    async def set_title(
+        self, db: AsyncSession, conversation: ChatConversation, title: str
+    ) -> ChatConversation:
+        conversation.topic = title.strip()[:200]
+        await db.commit()
+        await db.refresh(conversation)
+        return conversation
+
+    async def set_active(
+        self, db: AsyncSession, conversation: ChatConversation, is_active: bool
+    ) -> ChatConversation:
+        conversation.is_active = is_active
+        await db.commit()
+        await db.refresh(conversation)
+        return conversation
     
     async def get_active_conversation(
         self,
@@ -434,9 +488,17 @@ class ConversationStore:
         latency_ms: Optional[int] = None,
         ctas: Optional[List[Dict]] = None,
         chip_actions: Optional[List[str]] = None,
-        cache_hit: bool = False
+        cache_hit: bool = False,
+        client_message_id: Optional[str] = None,
     ) -> ChatMessage:
         """Add a message to a conversation"""
+        if client_message_id:
+            existing = await self.get_message_by_client_id(
+                db, conversation_id, client_message_id
+            )
+            if existing:
+                return existing
+
         message = ChatMessage(
             id=str(uuid4()),
             conversation_id=conversation_id,
@@ -449,7 +511,8 @@ class ConversationStore:
             latency_ms=latency_ms,
             ctas=ctas,
             chip_actions=chip_actions,
-            cache_hit=cache_hit
+            cache_hit=cache_hit,
+            client_message_id=client_message_id,
         )
         
         db.add(message)
@@ -464,10 +527,38 @@ class ConversationStore:
             conv.last_message_at = datetime.utcnow()
             conv.current_mode = mode_used
         
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # A concurrent retry may win between the lookup and INSERT.  The
+            # unique index is the final exactly-once guard.
+            await db.rollback()
+            if client_message_id:
+                existing = await self.get_message_by_client_id(
+                    db, conversation_id, client_message_id
+                )
+                if existing:
+                    return existing
+            raise
         await db.refresh(message)
         
         return message
+
+    async def get_message_by_client_id(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+        client_message_id: str,
+    ) -> Optional[ChatMessage]:
+        result = await db.execute(
+            select(ChatMessage).where(
+                and_(
+                    ChatMessage.conversation_id == conversation_id,
+                    ChatMessage.client_message_id == client_message_id,
+                )
+            )
+        )
+        return result.scalar_one_or_none()
     
     async def get_messages(
         self,
@@ -489,7 +580,17 @@ class ConversationStore:
         query = query.order_by(desc(ChatMessage.created_at)).limit(limit)
         
         result = await db.execute(query)
-        messages = list(result.scalars().all())
+        # SQLAlchemy's AsyncSession returns a synchronous ScalarResult after
+        # ``execute``. Some compatible adapters and our async route fixtures
+        # expose the intermediate calls as awaitables, so normalize both
+        # shapes at this boundary.
+        scalars = result.scalars()
+        if inspect.isawaitable(scalars):
+            scalars = await scalars
+        rows = scalars.all()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        messages = list(rows)
         # Return in chronological order
         return list(reversed(messages))
     

@@ -19,6 +19,13 @@ from lyo_app.core.config import settings
 pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
 
 
+def _bcrypt_safe(password: str) -> str:
+    """bcrypt only reads the first 72 bytes; newer bcrypt versions raise instead
+    of truncating. Truncate explicitly (standard practice) so hashing and
+    verification stay consistent."""
+    return password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+
+
 def hash_password(password: str) -> str:
     """
     Hash a password using bcrypt.
@@ -29,7 +36,7 @@ def hash_password(password: str) -> str:
     Returns:
         Hashed password string
     """
-    return pwd_context.hash(password)
+    return pwd_context.hash(_bcrypt_safe(password))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -43,7 +50,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns:
         True if password matches, False otherwise
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(_bcrypt_safe(plain_password), hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

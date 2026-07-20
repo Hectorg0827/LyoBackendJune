@@ -341,6 +341,12 @@ class AIResilienceManager:
             print(f">>> [PID {os.getpid()}] AI Resilience: Triggering Lazy Init", flush=True)
             await self.initialize()
             
+        # Clamp to the smallest completion cap across our models (gpt-4o-mini
+        # tops out at 16384). Oversized requests were 400ing and poisoning the
+        # shared circuit breaker — which then starved unrelated features
+        # (e.g. the classroom director) into their local fallbacks.
+        max_tokens = min(max_tokens, 16384)
+
         message_str = json.dumps(messages)
         print(f">>> [PID {os.getpid()}] AI Resilience Chat: Request for '{message_str[:50]}'", flush=True)
         if use_cache:
