@@ -45,6 +45,7 @@ class Clip(Base):
     view_count = Column(Integer, default=0)
     like_count = Column(Integer, default=0)
     share_count = Column(Integer, default=0)
+    comment_count = Column(Integer, default=0)
     
     # Visibility
     is_public = Column(Boolean, default=True)
@@ -90,6 +91,7 @@ class Clip(Base):
             "viewCount": self.view_count,
             "likeCount": self.like_count,
             "shareCount": self.share_count,
+            "commentCount": self.comment_count or 0,
             "isLiked": False,  # Will be set by the API based on current user
             "isSaved": False,  # Will be set by the API based on current user
             "authorName": author_name,
@@ -125,6 +127,33 @@ class ClipSave(Base):
     # Relationships
     clip = relationship("Clip", back_populates="saves")
     user = relationship("User")
+
+
+class ClipComment(Base):
+    """Comment on a clip (denormalized author info, like community comments)."""
+    __tablename__ = "clip_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    clip_id = Column(Integer, ForeignKey("clips.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    author_name = Column(String(150), default="")
+    author_avatar = Column(String(500), nullable=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    clip = relationship("Clip")
+    user = relationship("User")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "clipId": str(self.clip_id),
+            "userId": self.user_id,
+            "authorName": self.author_name,
+            "authorAvatarURL": self.author_avatar,
+            "content": self.content,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class ClipView(Base):
