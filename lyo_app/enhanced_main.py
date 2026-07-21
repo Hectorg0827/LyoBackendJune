@@ -516,6 +516,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Clips routes not available: {e}")
     
+    # User media Router - multipart upload + public serving for reels/posts
+    try:
+        from lyo_app.routers.user_media import router as user_media_router
+        app.include_router(user_media_router)
+        logger.info("✅ User media routes integrated - reel/post uploads active!")
+    except ImportError as e:
+        logger.warning(f"User media routes not available: {e}")
+
     # Messaging Router - Direct messages between users
     try:
         from lyo_app.routers.messaging import router as messaging_router
