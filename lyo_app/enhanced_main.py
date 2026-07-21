@@ -516,6 +516,14 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Clips routes not available: {e}")
     
+    # Search Router - cross-entity search (users, groups, events, posts)
+    try:
+        from lyo_app.routers.search import router as search_router
+        app.include_router(search_router, prefix="/api/v1")
+        logger.info("✅ Search routes integrated - cross-entity search active!")
+    except ImportError as e:
+        logger.warning(f"Search routes not available: {e}")
+
     # User media Router - multipart upload + public serving for reels/posts
     try:
         from lyo_app.routers.user_media import router as user_media_router
