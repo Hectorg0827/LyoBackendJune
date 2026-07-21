@@ -61,6 +61,7 @@ async def list_study_groups(
     limit: int = Query(20, ge=1, le=100),
     privacy: Optional[StudyGroupPrivacy] = Query(None),
     course_id: Optional[int] = Query(None),
+    q: Optional[str] = Query(None, max_length=200, description="Text search over name/description"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -72,7 +73,8 @@ async def list_study_groups(
             limit=limit,
             privacy=privacy,
             course_id=course_id,
-            user_id=current_user.id
+            user_id=current_user.id,
+            q=q,
         )
         return study_groups
     except Exception as e:
@@ -300,6 +302,7 @@ async def list_community_events(
     event_type: Optional[EventType] = Query(None),
     study_group_id: Optional[int] = Query(None),
     upcoming_only: bool = Query(True),
+    q: Optional[str] = Query(None, max_length=200, description="Text search over title/description/location"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -312,7 +315,8 @@ async def list_community_events(
             event_type=event_type,
             study_group_id=study_group_id,
             upcoming_only=upcoming_only,
-            user_id=current_user.id
+            user_id=current_user.id,
+            q=q,
         )
         
         # response_model is List[CommunityEventRead]; the previous dict

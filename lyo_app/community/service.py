@@ -365,6 +365,7 @@ class CommunityService:
         course_id: Optional[int] = None,
         privacy: Optional[StudyGroupPrivacy] = None,
         status: Optional[StudyGroupStatus] = StudyGroupStatus.ACTIVE,
+        q: Optional[str] = None,
         skip: int = 0, 
         limit: int = 20
     ) -> List[Dict[str, Any]]:
@@ -397,6 +398,12 @@ class CommunityService:
             # Only show public groups by default unless user is specified
             if not user_id:
                 conditions.append(StudyGroup.privacy == StudyGroupPrivacy.PUBLIC)
+        if q:
+            pattern = f"%{q.strip()}%"
+            conditions.append(or_(
+                StudyGroup.name.ilike(pattern),
+                StudyGroup.description.ilike(pattern),
+            ))
         
         if conditions:
             query = query.where(and_(*conditions))
@@ -925,6 +932,7 @@ class CommunityService:
         event_type: Optional[str] = None,
         status: Optional[EventStatus] = None,
         upcoming_only: bool = False,
+        q: Optional[str] = None,
         skip: int = 0, 
         limit: int = 20
     ) -> List[Dict[str, Any]]:
@@ -959,6 +967,13 @@ class CommunityService:
             conditions.append(CommunityEvent.event_type == event_type)
         if upcoming_only:
             conditions.append(CommunityEvent.start_time > datetime.utcnow())
+        if q:
+            pattern = f"%{q.strip()}%"
+            conditions.append(or_(
+                CommunityEvent.title.ilike(pattern),
+                CommunityEvent.description.ilike(pattern),
+                CommunityEvent.location.ilike(pattern),
+            ))
         
         if conditions:
             query = query.where(and_(*conditions))

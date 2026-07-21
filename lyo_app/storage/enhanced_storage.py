@@ -343,21 +343,21 @@ class EnhancedStorageSystem:
         
         try:
             # Initialize Redis for caching
-            if REDIS_AVAILABLE and settings.REDIS_URL:
+            if REDIS_AVAILABLE and getattr(settings, "redis_url", None):
                 self.redis_client = redis.from_url(
-                    settings.REDIS_URL,
+                    settings.redis_url,
                     encoding="utf-8",
                     decode_responses=True
                 )
                 logger.info("Redis client initialized")
             
             # Initialize AWS S3
-            if BOTO3_AVAILABLE and settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+            if BOTO3_AVAILABLE and getattr(settings, "aws_access_key_id", None) and getattr(settings, "aws_secret_access_key", None):
                 self.s3_client = boto3.client(
                     's3',
-                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                    region_name=settings.AWS_REGION or 'us-east-1'
+                    aws_access_key_id=settings.aws_access_key_id,
+                    aws_secret_access_key=settings.aws_secret_access_key,
+                    region_name=getattr(settings, "aws_region", None) or 'us-east-1'
                 )
                 logger.info("AWS S3 client initialized")
             
@@ -576,7 +576,7 @@ class EnhancedStorageSystem:
         """Upload to AWS S3"""
         
         self.s3_client.put_object(
-            Bucket=settings.AWS_S3_BUCKET,
+            Bucket=(getattr(settings, "storage_bucket", None) or getattr(settings, "gcs_bucket", None)),
             Key=storage_path,
             Body=file_data,
             ContentType=content_type,
@@ -605,7 +605,7 @@ class EnhancedStorageSystem:
     async def _upload_to_local(self, file_data: bytes, storage_path: str):
         """Upload to local storage"""
         
-        local_path = Path(settings.UPLOAD_DIR) / storage_path
+        local_path = Path(getattr(settings, "upload_dir", None) or "uploads") / storage_path
         local_path.parent.mkdir(parents=True, exist_ok=True)
         
         async with aiofiles.open(local_path, 'wb') as f:
@@ -658,14 +658,14 @@ class EnhancedStorageSystem:
         # Delete from S3
         if self.s3_client:
             try:
-                self.s3_client.delete_object(Bucket=settings.AWS_S3_BUCKET, Key=storage_path)
+                self.s3_client.delete_object(Bucket=(getattr(settings, "storage_bucket", None) or getattr(settings, "gcs_bucket", None)), Key=storage_path)
             except Exception as e:
                 logger.warning(f"S3 deletion failed: {e}")
                 success = False
         
         # Delete from local storage
         try:
-            local_path = Path(settings.UPLOAD_DIR) / storage_path
+            local_path = Path(getattr(settings, "upload_dir", None) or "uploads") / storage_path
             if local_path.exists():
                 local_path.unlink()
         except Exception as e:

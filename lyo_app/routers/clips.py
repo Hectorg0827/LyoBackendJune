@@ -13,7 +13,7 @@ from sqlalchemy import select, func, desc
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
 from lyo_app.core.database import get_async_session
-from lyo_app.models.clips import Clip, ClipLike, ClipView, ClipSave
+from lyo_app.models.clips import Clip, ClipLike, ClipView, ClipSave, ClipComment
 
 import logging
 
@@ -253,6 +253,71 @@ async def get_discover_clips(
         
     except Exception as e:
         logger.error(f"Error fetching discover clips: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+# NOTE: declared before "/{clip_id}" so the literal path wins route matching.
+@router.get("/saved", response_model=ClipsListResponse)
+async def get_saved_clips(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get clips saved by the current user."""
+    try:
+        offset = (page - 1) * per_page
+        
+        # Join with ClipSave
+        query = (
+            select(Clip)
+            .join(ClipSave, Clip.id == ClipSave.clip_id)
+            .where(ClipSave.user_id == current_user.id)
+            .order_by(desc(ClipSave.created_at))
+            .offset(offset)
+            .limit(per_page)
+        )
+        
+        # Count total
+        count_query = select(func.count()).select_from(ClipSave).where(
+            ClipSave.user_id == current_user.id
+        )
+        
+        total_result = await db.execute(count_query)
+        total = total_result.scalar() or 0
+        
+        result = await db.execute(query)
+        clips = result.scalars().all()
+        
+        # Populate isLiked and isSaved (which is always true here)
+        clip_dicts = []
+        for clip in clips:
+            clip_dict = clip.to_dict()
+            clip_dict["isSaved"] = True
+            
+            # Check isLiked
+            like_query = select(ClipLike).where(
+                ClipLike.clip_id == clip.id,
+                ClipLike.user_id == current_user.id
+            )
+            like_result = await db.execute(like_query)
+            clip_dict["isLiked"] = like_result.scalar() is not None
+            
+            clip_dicts.append(clip_dict)
+            
+        return ClipsListResponse(
+            success=True,
+            clips=clip_dicts,
+            total=total,
+            page=page,
+            perPage=per_page
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching saved clips: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
@@ -631,65 +696,142 @@ async def toggle_clip_save(
         )
 
 
-@router.get("/saved", response_model=ClipsListResponse)
-async def get_saved_clips(
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
+# ── Sharing ──────────────────────────────────────────────────────────────────
+
+@router.post("/{clip_id}/share")
+async def record_clip_share(
+    clip_id: int,
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get clips saved by the current user."""
+    """Record that a clip was shared (clients open the native share sheet)."""
     try:
-        offset = (page - 1) * per_page
-        
-        # Join with ClipSave
-        query = (
-            select(Clip)
-            .join(ClipSave, Clip.id == ClipSave.clip_id)
-            .where(ClipSave.user_id == current_user.id)
-            .order_by(desc(ClipSave.created_at))
-            .offset(offset)
+        result = await db.execute(select(Clip).where(Clip.id == clip_id))
+        clip = result.scalar_one_or_none()
+        if not clip:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
+
+        clip.share_count = (clip.share_count or 0) + 1
+        await db.commit()
+        return {"success": True, "shareCount": clip.share_count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error recording clip share: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ── Comments ─────────────────────────────────────────────────────────────────
+
+class ClipCommentCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+
+
+def _clip_author_display_name(user: User) -> str:
+    full = f"{getattr(user, 'first_name', None) or ''} {getattr(user, 'last_name', None) or ''}".strip()
+    return full or getattr(user, "username", None) or f"User {user.id}"
+
+
+@router.get("/{clip_id}/comments")
+async def list_clip_comments(
+    clip_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """List comments for a clip, newest first."""
+    try:
+        count_result = await db.execute(
+            select(func.count()).select_from(ClipComment).where(ClipComment.clip_id == clip_id)
+        )
+        total = count_result.scalar() or 0
+
+        result = await db.execute(
+            select(ClipComment)
+            .where(ClipComment.clip_id == clip_id)
+            .order_by(desc(ClipComment.created_at))
+            .offset((page - 1) * per_page)
             .limit(per_page)
         )
-        
-        # Count total
-        count_query = select(func.count()).select_from(ClipSave).where(
-            ClipSave.user_id == current_user.id
-        )
-        
-        total_result = await db.execute(count_query)
-        total = total_result.scalar() or 0
-        
-        result = await db.execute(query)
-        clips = result.scalars().all()
-        
-        # Populate isLiked and isSaved (which is always true here)
-        clip_dicts = []
-        for clip in clips:
-            clip_dict = clip.to_dict()
-            clip_dict["isSaved"] = True
-            
-            # Check isLiked
-            like_query = select(ClipLike).where(
-                ClipLike.clip_id == clip.id,
-                ClipLike.user_id == current_user.id
-            )
-            like_result = await db.execute(like_query)
-            clip_dict["isLiked"] = like_result.scalar() is not None
-            
-            clip_dicts.append(clip_dict)
-            
-        return ClipsListResponse(
-            success=True,
-            clips=clip_dicts,
-            total=total,
-            page=page,
-            perPage=per_page
-        )
-        
+        comments = result.scalars().all()
+        return {
+            "success": True,
+            "items": [c.to_dict() for c in comments],
+            "total_count": total,
+            "page": page,
+            "per_page": per_page,
+        }
     except Exception as e:
-        logger.error(f"Error fetching saved clips: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+        logger.error(f"Error listing clip comments: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/{clip_id}/comments", status_code=status.HTTP_201_CREATED)
+async def create_clip_comment(
+    clip_id: int,
+    request: ClipCommentCreate,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Comment on a clip."""
+    try:
+        result = await db.execute(select(Clip).where(Clip.id == clip_id))
+        clip = result.scalar_one_or_none()
+        if not clip:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
+
+        comment = ClipComment(
+            clip_id=clip_id,
+            user_id=current_user.id,
+            author_name=_clip_author_display_name(current_user),
+            author_avatar=getattr(current_user, "avatar_url", None),
+            content=request.content,
         )
+        db.add(comment)
+        clip.comment_count = (clip.comment_count or 0) + 1
+        await db.commit()
+        await db.refresh(comment)
+        return comment.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating clip comment: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.delete("/{clip_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_clip_comment(
+    clip_id: int,
+    comment_id: int,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete own comment on a clip (author only)."""
+    try:
+        result = await db.execute(
+            select(ClipComment).where(
+                ClipComment.id == comment_id, ClipComment.clip_id == clip_id
+            )
+        )
+        comment = result.scalar_one_or_none()
+        if not comment:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+        if comment.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this comment")
+
+        clip_result = await db.execute(select(Clip).where(Clip.id == clip_id))
+        clip = clip_result.scalar_one_or_none()
+        if clip:
+            clip.comment_count = max(0, (clip.comment_count or 0) - 1)
+
+        await db.delete(comment)
+        await db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting clip comment: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
