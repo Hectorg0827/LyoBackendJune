@@ -226,6 +226,10 @@ class ContextSnapshot(BaseModel):
     course_complete: bool = False
     classroom_mode: ClassroomMode = ClassroomMode.SOLO
     target_duration_minutes: int = Field(default=10, ge=3, le=60)
+    language_code: str = Field(
+        default="en-US",
+        description="BCP-47 locale used for lesson generation and speech",
+    )
     source_attributions: List[str] = Field(default_factory=list)
     review_due_items: List[str] = Field(default_factory=list)
 
@@ -260,6 +264,15 @@ class ContextSnapshot(BaseModel):
     preferred_difficulty: float = Field(default=0.5, ge=0.0, le=1.0)
     learning_velocity: float = Field(default=0.5, ge=0.0, le=2.0)
     attention_span_estimate: int = Field(default=300, description="Estimated attention span in seconds")
+
+
+class TeachingBeat(BaseModel):
+    """One learner-gated teaching turn, never a multi-character script."""
+
+    speech: str = Field(..., min_length=3, max_length=700)
+    board_title: str = Field(..., min_length=1, max_length=100)
+    board_content: str = Field(..., min_length=1, max_length=1200)
+    example_type: str = Field(default="real_world")
 
 
 class ContextAssembler:
@@ -353,6 +366,23 @@ class ContextAssembler:
         context.target_duration_minutes = int(
             progress.get("target_duration_minutes", context.target_duration_minutes)
         )
+
+        language = action_data.get("language") or action_data.get("language_code")
+        if language:
+            progress["language_code"] = str(language)
+        from lyo_app.tts.service import TTSService
+        context.language_code = TTSService.normalize_language(
+            progress.get("language_code", "auto"),
+            " ".join(
+                value for value in (
+                    context.lesson_title,
+                    context.lesson_content,
+                    context.topic,
+                ) if value
+            ),
+            "en-US",
+        )
+        progress["language_code"] = context.language_code
 
         hint_level = action_data.get("hint_level")
         if hint_level:
@@ -1256,78 +1286,77 @@ class SceneCompiler:
         return components
 
     async def _create_instruction_components(self, context: ContextSnapshot) -> List[Component]:
-        """Create components for instruction scenes."""
+        """Create one short teaching beat, then yield control to the learner."""
         if context.hint_level:
             return self._create_hint_components(context)
 
-        components = []
-
-        # Main teacher message
         if self.ai_service:
-            # Dynamic AI-generated content
-            instruction_text = await self._generate_instruction_content(context)
+            beat = await self._generate_instruction_content(context)
         else:
-            # Template fallback — still include the topic when available
-            topic = context.topic or "the next concept"
-            instruction_text = f'[ {{"type": "speech", "speaker": "Teacher", "text": "Let\'s continue learning about {topic}. Are you ready?"}} ]'
+            beat = self._local_teaching_beat(context)
 
-        # Degenerate output (empty / bare brackets) teaches nothing and fails
-        # TeacherMessage validation — swap in the topic-aware local fallback.
-        if len(instruction_text.strip()) < 10 or instruction_text.strip() in ("[]", "[ ]", "{}"):
-            instruction_text = self._local_instruction_fallback(context)
-
-        # If the text is JSON (starts with '[' and ends with ']'), do not split it by paragraphs
-        text_to_check = instruction_text.strip()
-        if text_to_check.startswith('[') and text_to_check.endswith(']'):
-            components.append(TeacherMessage(
-                text=text_to_check,
+        return [
+            TeacherMessage(
+                text=beat.speech,
                 emotion="encouraging",
                 audio_mood=AudioMood.CALM,
-                concept_tags=[context.topic or "current_topic"],
+                concept_tags=[context.learning_objective or context.topic or "current_topic"],
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=0,
-                delay_ms=0
-            ))
-        else:
-            paragraphs = [p.strip() for p in instruction_text.split('\n\n') if p.strip()]
-            
-            for idx, paragraph in enumerate(paragraphs):
-                delay = min(idx * 1500, 4900)  # Cap delay to 4900ms
-                components.append(TeacherMessage(
-                    text=paragraph,
-                    emotion="encouraging",
-                    audio_mood=AudioMood.CALM,
-                    concept_tags=[context.topic or "current_topic"],
-                    source_attributions=context.source_attributions,
-                    priority=idx,
-                    delay_ms=delay
-                ))
-
-        # Continue button
-        components.append(CTAButton(
-            label="Check understanding",
-            action_intent=ActionIntent.CONTINUE,
-            button_style="primary",
-            priority=100,  # Ensure it comes last
-            delay_ms=5000
-        ))
-
-        return components
+                delay_ms=0,
+            ),
+            ExampleBlock(
+                title=beat.board_title,
+                content=beat.board_content,
+                example_type=beat.example_type
+                if beat.example_type in {"code", "visual", "analogy", "real_world"}
+                else "real_world",
+                language_code=context.language_code,
+                priority=1,
+                delay_ms=0,
+            ),
+            CTAButton(
+                label=self._localized_copy(
+                    context.language_code,
+                    english="Check understanding",
+                    spanish="Comprobar comprensión",
+                ),
+                action_intent=ActionIntent.CONTINUE,
+                button_style="primary",
+                language_code=context.language_code,
+                priority=2,
+                delay_ms=0,
+            ),
+        ]
 
     def _create_hint_components(self, context: ContextSnapshot) -> List[Component]:
         """Return the requested rung of the hint ladder without hiding the level."""
         level = context.hint_level or HintLevel.NUDGE
         objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
         remediation = context.remediation_hint or ""
-        guidance = {
-            HintLevel.NUDGE: f"Small nudge: identify the one rule that connects the question to {objective}.",
-            HintLevel.PRINCIPLE: f"Principle: state the governing idea behind {objective} before calculating or choosing.",
-            HintLevel.WORKED_STEP: f"First step: name the known information, then connect it to {objective}.",
-            HintLevel.FULL_EXAMPLE: f"Worked example: choose a simple case, apply {objective} one step at a time, and check the result.",
-            HintLevel.PREREQUISITE: f"Prerequisite review: define the key terms inside {objective}, then rebuild the relationship between them.",
-        }[level]
+        if context.language_code.lower().startswith("es"):
+            guidance = {
+                HintLevel.NUDGE: f"Una pista: identifica la regla que conecta la pregunta con {objective}.",
+                HintLevel.PRINCIPLE: f"Principio: expresa la idea que gobierna {objective} antes de elegir o calcular.",
+                HintLevel.WORKED_STEP: f"Primer paso: identifica la información conocida y conéctala con {objective}.",
+                HintLevel.FULL_EXAMPLE: f"Ejemplo resuelto: elige un caso sencillo, aplica {objective} paso a paso y comprueba el resultado.",
+                HintLevel.PREREQUISITE: f"Base necesaria: define los términos clave de {objective} y reconstruye su relación.",
+            }[level]
+        else:
+            guidance = {
+                HintLevel.NUDGE: f"Small nudge: identify the one rule that connects the question to {objective}.",
+                HintLevel.PRINCIPLE: f"Principle: state the governing idea behind {objective} before calculating or choosing.",
+                HintLevel.WORKED_STEP: f"First step: name the known information, then connect it to {objective}.",
+                HintLevel.FULL_EXAMPLE: f"Worked example: choose a simple case, apply {objective} one step at a time, and check the result.",
+                HintLevel.PREREQUISITE: f"Prerequisite review: define the key terms inside {objective}, then rebuild the relationship between them.",
+            }[level]
         if remediation:
-            guidance = f"{guidance} Focus especially on: {remediation}"
+            guidance = (
+                f"{guidance} Enfócate especialmente en: {remediation}"
+                if context.language_code.lower().startswith("es")
+                else f"{guidance} Focus especially on: {remediation}"
+            )
         components: List[Component] = [
             TeacherMessage(
                 text=guidance,
@@ -1335,25 +1364,42 @@ class SceneCompiler:
                 audio_mood=AudioMood.GENTLE,
                 concept_tags=[objective],
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=0,
             )
         ]
         if level in (HintLevel.WORKED_STEP, HintLevel.FULL_EXAMPLE, HintLevel.PREREQUISITE):
+            spanish_titles = {
+                HintLevel.WORKED_STEP: "Empieza aquí",
+                HintLevel.FULL_EXAMPLE: "Ejemplo resuelto",
+                HintLevel.PREREQUISITE: "Repaso de fundamentos",
+            }
+            english_titles = {
+                HintLevel.WORKED_STEP: "Start here",
+                HintLevel.FULL_EXAMPLE: "Worked example",
+                HintLevel.PREREQUISITE: "Foundation refresher",
+            }
             components.append(ExampleBlock(
-                title={
-                    HintLevel.WORKED_STEP: "Start here",
-                    HintLevel.FULL_EXAMPLE: "Worked example",
-                    HintLevel.PREREQUISITE: "Foundation refresher",
-                }[level],
+                title=(
+                    spanish_titles[level]
+                    if context.language_code.lower().startswith("es")
+                    else english_titles[level]
+                ),
                 content=context.lesson_content[:1200] if context.lesson_content else guidance,
                 example_type="real_world",
                 interactive=level == HintLevel.FULL_EXAMPLE,
+                language_code=context.language_code,
                 priority=1,
             ))
         components.append(CTAButton(
-            label="Try the checkpoint",
+            label=self._localized_copy(
+                context.language_code,
+                english="Try the checkpoint",
+                spanish="Intentar la comprobación",
+            ),
             action_intent=ActionIntent.CONTINUE,
             button_style="primary",
+            language_code=context.language_code,
             priority=100,
         ))
         return components
@@ -1362,7 +1408,20 @@ class SceneCompiler:
         """Ask for explanation/application evidence after recognition succeeds."""
         objective = context.learning_objective or context.lesson_title or context.topic or "the lesson idea"
         keywords = expected_transfer_keywords(objective, context.lesson_content or "")
-        if context.classroom_mode == ClassroomMode.CHALLENGE:
+        is_spanish = context.language_code.lower().startswith("es")
+        if is_spanish and context.classroom_mode == ClassroomMode.CHALLENGE:
+            question = (
+                f"Aplica {objective} a un caso nuevo o límite. Explica tu razonamiento "
+                "y menciona una condición en la que la idea no se aplicaría."
+            )
+        elif is_spanish and context.classroom_mode == ClassroomMode.REVIEW:
+            question = f"Sin mirar atrás, explica {objective} y da un ejemplo concreto."
+        elif is_spanish:
+            question = (
+                f"Con tus propias palabras, aplica {objective} a un ejemplo o situación nueva. "
+                "Explica por qué funciona tu ejemplo."
+            )
+        elif context.classroom_mode == ClassroomMode.CHALLENGE:
             question = (
                 f"Apply {objective} to a new or boundary case. Explain your reasoning "
                 "and name one condition where the idea would not apply."
@@ -1376,16 +1435,25 @@ class SceneCompiler:
             )
         return [
             TeacherMessage(
-                text="The choice shows recognition. One short application will show that the idea is usable.",
+                text=(
+                    "La elección muestra reconocimiento. Una aplicación breve mostrará que puedes usar la idea."
+                    if is_spanish
+                    else "The choice shows recognition. One short application will show that the idea is usable."
+                ),
                 emotion="thinking",
                 audio_mood=AudioMood.CALM,
                 concept_tags=[objective],
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=0,
             ),
             InputField(
                 question=question,
-                placeholder="Explain and apply the idea…",
+                placeholder=(
+                    "Explica y aplica la idea…"
+                    if is_spanish
+                    else "Explain and apply the idea…"
+                ),
                 action_intent=ActionIntent.SUBMIT_TRANSFER,
                 concept_id=objective,
                 evidence_type="retrieval" if context.classroom_mode == ClassroomMode.REVIEW else "transfer",
@@ -1394,6 +1462,7 @@ class SceneCompiler:
                 max_words=120,
                 min_score=0.25,
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=1,
             ),
         ]
@@ -1411,6 +1480,7 @@ class SceneCompiler:
     async def _create_correction_components(self, context: ContextSnapshot, trigger: Trigger) -> List[Component]:
         """Create precise remediation from the submitted evidence."""
         components: List[Component] = []
+        is_spanish = context.language_code.lower().startswith("es")
 
         if (
             context.classroom_mode == ClassroomMode.CLASSROOM
@@ -1419,9 +1489,14 @@ class SceneCompiler:
         ):
             components.append(StudentPrompt(
                 student_name="Sam",
-                text="That choice follows a common shortcut. Let's inspect exactly where it breaks.",
+                text=(
+                    "Esa elección sigue un atajo común. Veamos exactamente dónde falla."
+                    if is_spanish
+                    else "That choice follows a common shortcut. Let's inspect exactly where it breaks."
+                ),
                 personality_trait="supportive",
                 purpose="normalize_error",
+                language_code=context.language_code,
                 priority=0,
             ))
 
@@ -1430,14 +1505,24 @@ class SceneCompiler:
         if feedback or focus:
             correction_text = " ".join(
                 part for part in [
-                    feedback or "The response is close, but one link in the reasoning needs revision.",
-                    f"Focus on {focus}." if focus else "",
+                    feedback or (
+                        "La respuesta está cerca, pero falta corregir un vínculo del razonamiento."
+                        if is_spanish
+                        else "The response is close, but one link in the reasoning needs revision."
+                    ),
+                    (
+                        f"Enfócate en {focus}."
+                        if is_spanish and focus
+                        else f"Focus on {focus}." if focus else ""
+                    ),
                 ] if part
             )
         elif self.ai_service:
-            correction_text = await self._generate_instruction_content(context)
+            correction_text = (
+                await self._generate_instruction_content(context)
+            ).speech
         else:
-            correction_text = self._local_instruction_fallback(context)
+            correction_text = self._local_teaching_beat(context).speech
 
         components.append(TeacherMessage(
             text=correction_text,
@@ -1445,27 +1530,40 @@ class SceneCompiler:
             audio_mood=AudioMood.GENTLE,
             concept_tags=[context.learning_objective or context.topic or "current_topic"],
             source_attributions=context.source_attributions,
+            language_code=context.language_code,
             priority=1,
         ))
 
         action_intent = (trigger.action_data or {}).get("action_intent")
         if action_intent == ActionIntent.SUBMIT_TRANSFER:
             transfer_input = self._create_transfer_components(context)[-1]
-            transfer_input.question = (
-                f"Revise your application of {context.learning_objective or context.topic or 'the idea'}. "
-                + (
-                    f"Make sure you address {focus}."
-                    if focus
-                    else "Add the missing reasoning link and explain why the example works."
+            objective = context.learning_objective or context.topic
+            if is_spanish:
+                transfer_input.question = (
+                    f"Revisa tu aplicación de {objective or 'la idea'}. "
+                    + (
+                        f"Asegúrate de abordar {focus}."
+                        if focus
+                        else "Añade el vínculo que falta y explica por qué funciona el ejemplo."
+                    )
                 )
-            )
+            else:
+                transfer_input.question = (
+                    f"Revise your application of {objective or 'the idea'}. "
+                    + (
+                        f"Make sure you address {focus}."
+                        if focus
+                        else "Add the missing reasoning link and explain why the example works."
+                    )
+                )
             transfer_input.priority = 2
             components.append(transfer_input)
         else:
             components.append(CTAButton(
-                label="Retry checkpoint",
+                label="Reintentar comprobación" if is_spanish else "Retry checkpoint",
                 action_intent=ActionIntent.RETRY,
                 button_style="secondary",
+                language_code=context.language_code,
                 priority=2,
             ))
 
@@ -1476,20 +1574,35 @@ class SceneCompiler:
         progress = _SESSION_PROGRESS.get(context.session_id, {})
         covered = list(progress.get("covered", []))[-3:]
         objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
+        is_spanish = context.language_code.lower().startswith("es")
         components: List[Component] = []
 
         if context.course_complete:
-            message = (
-                f"You completed {context.course_title or context.topic or 'this course'}. "
-                "Each lesson now has both recognition and application evidence."
-            )
-            celebration_message = "Course mastery demonstrated"
+            if is_spanish:
+                message = (
+                    f"Completaste {context.course_title or context.topic or 'este curso'}. "
+                    "Cada lección ya tiene evidencia de reconocimiento y aplicación."
+                )
+                celebration_message = "Dominio del curso demostrado"
+            else:
+                message = (
+                    f"You completed {context.course_title or context.topic or 'this course'}. "
+                    "Each lesson now has both recognition and application evidence."
+                )
+                celebration_message = "Course mastery demonstrated"
         else:
-            message = (
-                f"You recognized and applied {objective}. "
-                "That is stronger evidence than a correct choice alone."
-            )
-            celebration_message = "Lesson mastered"
+            if is_spanish:
+                message = (
+                    f"Reconociste y aplicaste {objective}. "
+                    "Eso demuestra más comprensión que una elección correcta por sí sola."
+                )
+                celebration_message = "Lección dominada"
+            else:
+                message = (
+                    f"You recognized and applied {objective}. "
+                    "That is stronger evidence than a correct choice alone."
+                )
+                celebration_message = "Lesson mastered"
 
         components.append(TeacherMessage(
             text=message,
@@ -1497,29 +1610,48 @@ class SceneCompiler:
             audio_mood=AudioMood.ENCOURAGING,
             concept_tags=[objective],
             source_attributions=context.source_attributions,
+            language_code=context.language_code,
             priority=0,
         ))
 
         summary_items = covered or [
-            f"Objective: {objective}",
-            "Evidence: recognition plus explanation/application",
-            "Next: retrieve the idea again after spacing",
+            (
+                f"Objetivo: {objective}"
+                if is_spanish
+                else f"Objective: {objective}"
+            ),
+            (
+                "Evidencia: reconocimiento más explicación o aplicación"
+                if is_spanish
+                else "Evidence: recognition plus explanation/application"
+            ),
+            (
+                "Siguiente paso: recuperar la idea de nuevo después de una pausa"
+                if is_spanish
+                else "Next: retrieve the idea again after spacing"
+            ),
         ]
         components.append(LessonBlock(
             block_type="summary",
             block={
-                "title": "What you can now do",
-                "content": f"Use {objective} without relying on answer choices.",
+                "title": "Lo que ahora puedes hacer" if is_spanish else "What you can now do",
+                "content": (
+                    f"Usar {objective} sin depender de opciones de respuesta."
+                    if is_spanish
+                    else f"Use {objective} without relying on answer choices."
+                ),
                 "items": summary_items,
                 "source_attributions": context.source_attributions,
                 "retrieval_scheduled": True,
             },
+            language_code=context.language_code,
             priority=1,
         ))
         components.append(Celebration(
             message=celebration_message,
             celebration_type="standard",
             particle_effect="confetti",
+            language_code=context.language_code,
             achievement_type="mastery",
             points_earned=10,
             priority=2,
@@ -1535,17 +1667,15 @@ class SceneCompiler:
 
         return components
 
-    async def _generate_instruction_content(self, context: ContextSnapshot) -> str:
-        """Generate dynamic instruction content using the Classroom Director System Prompt"""
+    async def _generate_teaching_beat(
+        self, context: ContextSnapshot
+    ) -> TeachingBeat:
+        """Generate one 10-20 second explanation and one supporting board item."""
         try:
-            from lyo_app.ai_classroom.director_prompt import CLASSROOM_DIRECTOR_PROMPT
             from lyo_app.core.ai_resilience import ai_resilience_manager
-            import json
-            
+
             topic = context.topic or "general learning"
-            course_title = context.course_title or topic
-            session_number = context.lesson_index + 1
-            user_name = "Learner"
+            objective = context.learning_objective or context.lesson_title or topic
             avg_mastery = (
                 sum(k.mastery_level for k in context.knowledge_states)
                 / max(len(context.knowledge_states), 1)
@@ -1555,283 +1685,158 @@ class SceneCompiler:
                 else "intermediate" if max(avg_mastery, context.preferred_difficulty) >= 0.5
                 else "beginner"
             )
-
-            logger.info(
-                f"📝 Generating instruction via AI Resilience Manager: lesson_title={context.lesson_title!r}, "
-                f"lesson_index={context.lesson_index}, total={context.total_lessons}, "
-                f"topic={topic!r}, course={course_title!r}"
+            progress = _SESSION_PROGRESS.setdefault(
+                context.session_id,
+                {"scene": 0, "covered": [], "mastered_lessons": []},
             )
+            progress["scene"] = int(progress.get("scene", 0)) + 1
+            covered = list(progress.get("covered", []))[-8:]
 
-            # Progression: without this, every scene regenerated the same
-            # opening class (and the response cache then replayed it verbatim).
-            prog = _SESSION_PROGRESS.setdefault(
-                context.session_id, {"scene": 0, "covered": []})
-            prog["scene"] += 1
-            scene_number = prog["scene"]
-            covered = prog["covered"][-8:]
+            prompt = f"""
+Create exactly ONE learner-gated teaching beat.
 
-            input_block = f"""
-INPUT FORMAT:
-subject: "{course_title}"
-session_number: {session_number}
-scene_number: {scene_number}
-user_name: "{user_name}"
-learner_context: {json.dumps(context.learner_context or "No stored learner preferences yet.")}
-last_session_recap: {json.dumps(covered[-1] if covered else "")}
-already_covered: {json.dumps(covered)}
-user_level: "{user_level}"
-classroom_mode: "{context.classroom_mode.value}"
-target_duration_minutes: {context.target_duration_minutes}
-learning_objective: {json.dumps(context.learning_objective or context.lesson_title or topic)}
-learner_signal: {json.dumps(context.learner_signal or "")}
-hint_level: {json.dumps(context.hint_level.value if context.hint_level else "")}
-misconception_tag: {json.dumps(context.misconception_tag or "")}
-remediation_hint: {json.dumps(context.remediation_hint or "")}
-learner_question: {json.dumps(context.learner_message or "")}
-learner_response: {json.dumps(context.learner_response or "")}
-review_due_items: {json.dumps(context.review_due_items)}
-lesson_title: "{context.lesson_title or topic}"
-lesson_content: {json.dumps(context.lesson_content or "")}
+Spoken language: {context.language_code}
+Topic: {topic}
+Lesson: {context.lesson_title or topic}
+Learning objective: {objective}
+Learner level: {user_level}
+Classroom mode: {context.classroom_mode.value}
+Beat number: {progress["scene"]}
+Already covered: {json.dumps(covered, ensure_ascii=False)}
+Learner question: {json.dumps(context.learner_message or "", ensure_ascii=False)}
+Learner response: {json.dumps(context.learner_response or "", ensure_ascii=False)}
+Learner signal: {json.dumps(context.learner_signal or "", ensure_ascii=False)}
+Misconception: {json.dumps(context.misconception_tag or "", ensure_ascii=False)}
+Remediation cue: {json.dumps(context.remediation_hint or "", ensure_ascii=False)}
+Lesson material:
+{(context.lesson_content or "")[:6000]}
 
-TEACHING RESPONSE RULES:
-- Keep the learning_objective visible in your reasoning and make every turn serve it.
-- If learner_question is present, answer it directly before resuming the sequence.
-- If learner_response is present, acknowledge its reasoning briefly and use it as evidence; do not pretend it was a question.
-- If learner_signal is request_hint or confused, slow down, diagnose the likely gap, and use one worked example.
-- If learner_signal is skip_ahead or too_easy, increase depth and transfer difficulty; do not merely move on.
-- If learner_signal is incorrect_answer, use misconception_tag and remediation_hint when present; never give generic correction.
-- If classroom_mode is solo, only the Teacher and Lyo may appear. If classroom, classmates remain optional and pedagogically necessary.
-- If classroom_mode is challenge, shorten explanation and deepen boundary/transfer cases. If review, prioritize retrieval over re-lecturing.
-- Match the target duration by choosing depth, not filler or speed.
-- Use an explorable only when changing a parameter exposes a relationship in the learning objective; always follow it with a prediction or explanation prompt.
-- Use learner_context only when relevant. Never invent preferences, observations, sources, or history.
-- Teach first. AI classmates are optional and may speak only when they clarify a misconception or model reasoning.
+Return ONLY one JSON object:
+{{
+  "speech": "28-55 natural spoken words in {context.language_code}, at most two sentences",
+  "board_title": "short title in {context.language_code}",
+  "board_content": "one concrete example, comparison, formula, or 2-4 concise bullets",
+  "example_type": "real_world|analogy|visual|code"
+}}
 
-PROGRESSION RULES (CRITICAL):
-- scene_number 1 is the ONLY scene that may use the opening protocol.
-- If scene_number > 1: NO welcome, NO re-introduction, NO repeating the hook.
-  Continue the SAME class exactly where it left off and teach the NEXT idea,
-  strictly deeper or adjacent to what came before.
-- NEVER re-teach anything listed in already_covered.
-- Only emit session_end when the topic is genuinely concluded (never before
-  scene 4) — most scenes should end mid-lesson, awaiting the learner.
-- NEVER return an empty array. There is ALWAYS a deeper or adjacent idea to
-  teach next; every scene must contain at least 6 turns.
+Rules:
+- Teach one idea accurately; do not write a scene, dialogue, welcome, or cast.
+- The Teacher is the only speaker. Never supply an AI student's answer.
+- If a learner question exists, answer it directly.
+- If the learner was confused or incorrect, explain the exact gap differently.
+- Refer naturally to the board in the speech.
+- Do not ask a question in the speech; the server presents the checkpoint next.
+- Do not repeat anything in Already covered.
+- Use only supplied course material and never invent a citation.
 """
-            # Injecting explicit instruction to use the generated lesson content
-            prompt = (
-                CLASSROOM_DIRECTOR_PROMPT + "\n\n"
-                "## CURRENT LESSON TO TEACH:\n"
-                "You must teach the following content:\n"
-                f"Lesson Title: {context.lesson_title or topic}\n"
-                f"Lesson Content:\n{context.lesson_content or ''}\n\n"
-                "## INPUT STATE:\n"
-                + input_block
-            )
-
-            # Call the resilient AI manager with Gemini and OpenAI fallbacks.
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous, warm classroom teacher. Teach the exact lesson_content toward the stated learning_objective. Respond directly to learner_question, learner_response, and learner_signal. Use explanation, a worked example, and a concise check for understanding. AI classmates are optional and must never displace the teacher or the learner. Use learner_context only when relevant. Return ONLY a valid, non-empty JSON list of director turns. No prose or markdown."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a rigorous, warm teacher. Produce one short "
+                            "learner-gated teaching beat as valid JSON, with no "
+                            "markdown or surrounding prose."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
                 ],
-                # gpt-4o-mini first: the Gemini key is currently revoked
-                # ("reported as leaked"), so leading with it just burns a
-                # circuit-breaker failure per scene.
                 provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
-                # The director script is 20-25 JSON turns (~2500+ tokens); the
-                # 1000-token default truncated mid-array, normalizing to "[]"
-                # and killing every scene with a TeacherMessage validation error.
-                max_tokens=3500,
-                # Never serve a lesson from cache: identical inputs used to
-                # replay the exact same lecture on every scene.
+                max_tokens=650,
                 use_cache=False,
             )
-
-            # CRITICAL: when every provider has failed, ai_resilience_manager
-            # does NOT raise — it returns a canned apology string with
-            # is_fallback=True. Without this guard, that apology string was
-            # being shipped verbatim to iOS as TeacherMessage.text, which is
-            # exactly the "Experiencing technical issues" bug users hit.
             if response.get("is_fallback"):
-                logger.warning(
-                    "⚠️ AI resilience returned fallback for instruction — "
-                    "falling back to local template (topic=%r)", topic
-                )
-                raise RuntimeError("ai_resilience returned is_fallback")
+                raise RuntimeError("AI service returned fallback content")
 
-            text = response.get("content", "").strip()
-            # Remove Markdown fences if any
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].strip()
+            raw = (response.get("content") or "").strip()
+            first_brace = raw.find("{")
+            last_brace = raw.rfind("}")
+            if first_brace < 0 or last_brace <= first_brace:
+                raise ValueError("Teaching beat did not contain a JSON object")
+            data = json.loads(raw[first_brace:last_brace + 1])
+            beat = self._normalize_teaching_beat(data)
+            progress.setdefault("covered", []).append(beat.speech[:220])
+            return beat
+        except Exception as exc:
+            logger.error("Teaching-beat generation failed: %s", type(exc).__name__)
+            return self._local_teaching_beat(context)
 
-            # Resilient JSON Array extraction: find first [ and last ]
-            first_bracket = text.find('[')
-            last_bracket = text.rfind(']')
-            if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-                text = text[first_bracket:last_bracket+1].strip()
+    def _normalize_teaching_beat(self, data: Dict[str, Any]) -> TeachingBeat:
+        speech = self._plain_text(str(data.get("speech") or ""))
+        board_title = self._plain_text(str(data.get("board_title") or ""))
+        board_content = str(data.get("board_content") or "").strip()
+        if len(speech.split()) < 3 or not board_title or not board_content:
+            raise ValueError("Teaching beat is missing required content")
 
-            # Belt-and-suspenders: if the upstream service somehow returned an
-            # apology string without setting is_fallback (e.g., a Gemini safety
-            # block), reject it before it reaches the user.
-            APOLOGY_PHRASES = (
-                "Experiencing technical issues",
-                "AI services unavailable",
-                "temporarily unable to process",
+        example_type = str(data.get("example_type") or "real_world")
+        if example_type not in {"real_world", "analogy", "visual", "code"}:
+            example_type = "real_world"
+        return TeachingBeat(
+            speech=self._clip_words(speech, 55),
+            board_title=self._clip_words(board_title, 10),
+            board_content=board_content[:1200],
+            example_type=example_type,
+        )
+
+    def _local_teaching_beat(self, context: ContextSnapshot) -> TeachingBeat:
+        """Keep teaching locally when model generation is unavailable."""
+        topic = (
+            context.lesson_title
+            or context.topic
+            or context.course_title
+            or "this concept"
+        )
+        raw_content = (
+            context.lesson_content
+            or context.learning_objective
+            or topic
+        )
+        plain_content = self._plain_text(raw_content)
+        main_point = self._clip_words(plain_content or topic, 28)
+        if context.language_code.lower().startswith("es"):
+            speech = (
+                f"Centremos la atención en una sola idea sobre {topic}: {main_point} "
+                "Mira el ejemplo del tablero y observa cómo conecta la idea "
+                "con un caso concreto."
             )
-            if any(phrase in text for phrase in APOLOGY_PHRASES):
-                logger.warning("⚠️ AI returned apology string — using local template (topic=%r)", topic)
-                raise RuntimeError("ai_resilience returned apology content")
-
-            # Ensure we return a clean JSON array string (starting with [ and ending with ])
-            try:
-                parsed = None
-                try:
-                    parsed = json.loads(text)
-                except Exception as json_err:
-                    logger.warning(f"⚠️ json.loads failed, trying ast.literal_eval: {json_err}")
-                    try:
-                        import ast
-                        parsed = ast.literal_eval(text)
-                    except Exception as ast_err:
-                        logger.error(f"❌ Both json.loads and ast.literal_eval failed: {ast_err}")
-                        raise RuntimeError(f"Failed to parse instruction JSON: {json_err}")
-
-                if isinstance(parsed, dict):
-                    # Extract the first list value found (e.g., 'turns', 'scene', 'components')
-                    list_extracted = False
-                    for key, val in parsed.items():
-                        if isinstance(val, list):
-                            text = json.dumps(val)
-                            list_extracted = True
-                            break
-                    if not list_extracted:
-                        # Fallback: if no list is found inside the dict, wrap the dict in a list
-                        text = json.dumps([parsed])
-                elif isinstance(parsed, list):
-                    if not parsed:
-                        # Flaky model behavior — one retry with a direct nudge
-                        # usually recovers before we resort to the template.
-                        logger.warning("⚠️ Director returned []; retrying once")
-                        retry = await ai_resilience_manager.chat_completion(
-                            messages=[
-                                {"role": "system", "content": "You are the classroom director. Return ONLY a non-empty JSON array of director turns (at least 6 turns). Never return an empty array."},
-                                {"role": "user", "content": prompt},
-                            ],
-                            provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
-                            max_tokens=3500,
-                            use_cache=False,
-                        )
-                        retry_text = (retry.get("content") or "").strip()
-                        fb = retry_text.find('[')
-                        lb = retry_text.rfind(']')
-                        if fb != -1 and lb > fb:
-                            retry_text = retry_text[fb:lb + 1]
-                        parsed = json.loads(retry_text)
-                        if not isinstance(parsed, list) or not parsed:
-                            raise RuntimeError("Director returned an empty turn list twice")
-                    text = json.dumps(parsed)
-                else:
-                    raise RuntimeError("Parsed JSON is neither a list nor a dictionary")
-            except Exception as e:
-                logger.error(f"❌ JSON normalization failed: {e}")
-                # Clear resilience manager cache so we don't get stuck with a broken cached AI response
-                try:
-                    ai_resilience_manager.request_cache.clear()
-                    logger.info("🧹 Cleared AI Resilience Manager cache due to JSON parsing failure")
-                except Exception as cache_err:
-                    logger.warning(f"Failed to clear cache: {cache_err}")
-                raise
-
-            # Remember what this scene taught so the next one moves forward.
-            try:
-                speech_texts = [
-                    t.get("text", "") for t in (parsed if isinstance(parsed, list) else [])
-                    if isinstance(t, dict) and t.get("type") == "speech" and t.get("speaker") == "Teacher"
-                ]
-                summary = " / ".join(s[:110] for s in speech_texts[:2] if s)
-                if summary:
-                    prog["covered"].append(summary)
-            except Exception:
-                pass
-
-            return text
-
-        except Exception as e:
-            logger.error(f"❌ TutorAgent resilient instruction generation failed: {e}")
-            return self._local_instruction_fallback(context)
-
-    def _local_instruction_fallback(self, context: ContextSnapshot) -> str:
-        """Topic-aware multi-turn lesson opener used when every AI provider
-        is down. Better than 'try again later' — gives the user something
-        actually teachable while we recover.
-        """
-        import json
-        import re
-        topic = context.topic or context.course_title or "this concept"
-        course_title = context.course_title or topic
-        session = context.lesson_index + 1
-        total = context.total_lessons or 1
-        lesson_content = context.lesson_content or ""
-
-        if lesson_content:
-            paragraphs = [p.strip() for p in lesson_content.split('\n\n') if p.strip()]
-            main_point = paragraphs[0] if paragraphs else f"Let's dive into {topic}."
-            if main_point.startswith("#"):
-                main_point = re.sub(r'^#+\s*', '', main_point)
-            
-            turns = [
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Welcome back. Today we're learning about {topic} — lesson {session} of {total}."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Here is the core concept: {main_point}"
-                }
-            ]
-            if len(paragraphs) > 1:
-                sub_point = paragraphs[1]
-                if sub_point.startswith("#"):
-                    sub_point = re.sub(r'^#+\s*', '', sub_point)
-                turns.append({
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"To understand this better, remember: {sub_point}"
-                })
-            turns.append({
-                "type": "speech",
-                "speaker": "Teacher",
-                "text": "Let's work through this concept together. When you are ready, tap continue!"
-            })
+            title = "Idea central"
         else:
-            turns = [
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Welcome to {course_title} — lesson {session} of {total}. We're going to keep this focused and practical."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Here's the goal for today: get a clear, working understanding of {topic} — what it is, why it matters, and where you'll see it."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Think of {topic} as a tool. We'll start with the simplest version, then layer on the real-world details so it sticks."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": "When you're ready, tap continue and I'll walk you through the first idea step by step."
-                }
-            ]
-        return json.dumps(turns)
+            speech = (
+                f"Focus on one useful idea about {topic}: {main_point} "
+                "Look at the board example and notice how it connects the idea "
+                "to a concrete case."
+            )
+            title = "Core idea"
+        return TeachingBeat(
+            speech=self._clip_words(speech, 55),
+            board_title=title,
+            board_content=self._clip_words(plain_content or topic, 80),
+            example_type="real_world",
+        )
+
+    @staticmethod
+    def _plain_text(value: str) -> str:
+        text = re.sub(r"```(?:[a-zA-Z0-9_+-]+)?", " ", value or "")
+        text = text.replace("```", " ")
+        text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+        text = re.sub(r"[*_`]+", "", text)
+        return " ".join(text.split())
+
+    @staticmethod
+    def _clip_words(value: str, limit: int) -> str:
+        clipped = " ".join(value.split()[:limit]).strip()
+        if clipped and clipped[-1] not in ".!?":
+            clipped += "."
+        return clipped
+
+    @staticmethod
+    def _localized_copy(language_code: str, english: str, spanish: str) -> str:
+        return spanish if language_code.lower().startswith("es") else english
+
+    async def _generate_instruction_content(
+        self, context: ContextSnapshot
+    ) -> TeachingBeat:
+        return await self._generate_teaching_beat(context)
 
     async def _generate_quiz_question(self, context: ContextSnapshot) -> QuizCard:
         """Generate dynamic quiz question using AI"""
@@ -1851,6 +1856,7 @@ PROGRESSION RULES (CRITICAL):
             taught_context = "\n".join(covered[-4:]) if covered else ""
             prompt = (
                 f"Generate a single multiple-choice quiz question about the following lesson: '{context.lesson_title or topic}'.\n"
+                f"Write the question, options, and feedback in {context.language_code}.\n"
                 f"Lesson Content:\n{lesson_content}\n\n"
                 f"What the teacher just taught in class (test THIS material):\n{taught_context}\n\n"
                 f"The question must test understanding of the specific concepts described above — never a generic question.\n"
@@ -1866,11 +1872,9 @@ PROGRESSION RULES (CRITICAL):
             )
 
             # Call the resilient AI manager with Gemini and OpenAI fallbacks.
-            # Strict JSON mode dropped here too — see _generate_instruction_content
-            # for the full rationale (Gemini fails hard on strict mode + long prompts).
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON quiz questions. No prose, no markdown — pure JSON."},
+                    {"role": "system", "content": f"You are a world-class course designer. Write in {context.language_code}. Output ONLY valid JSON quiz questions. No prose, no markdown — pure JSON."},
                     {"role": "user", "content": prompt}
                 ],
                 provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
@@ -1926,50 +1930,88 @@ PROGRESSION RULES (CRITICAL):
                 options=options,
                 allow_multiple_attempts=True,
                 concept_id=context.learning_objective or context.topic or "current_concept",
+                language_code=context.language_code,
             )
 
         except Exception as e:
             logger.error(f"❌ Resilient AI quiz generation failed, using fallback: {e}")
 
         # Fallback static question (only when AI is unavailable)
-        core = (lesson_content.strip().split(".")[0] or f"The lesson's stated relationship in {topic}")[:260]
+        is_spanish = context.language_code.lower().startswith("es")
+        core = (
+            lesson_content.strip().split(".")[0]
+            or (
+                f"La relación principal de la lección sobre {topic}"
+                if is_spanish
+                else f"The lesson's stated relationship in {topic}"
+            )
+        )[:260]
+        if is_spanish:
+            option_copy = {
+                "correct": "Eso coincide con la relación enseñada en la lección.",
+                "b_label": f"{topic} funciona solo cuando todos los valores son idénticos.",
+                "b_feedback": "Eso añade una condición absoluta que la lección no estableció.",
+                "b_hint": "Separa la relación principal de los casos especiales.",
+                "c_label": f"{topic} es principalmente una regla que se memoriza sin razonar.",
+                "c_feedback": "La lección presenta la idea como una relación que puedes explicar y aplicar.",
+                "c_hint": "Vuelve a conectar el procedimiento con la razón por la que funciona.",
+                "d_label": f"{topic} no puede aplicarse fuera del ejemplo mostrado.",
+                "d_feedback": "Un ejemplo ilustra la idea; no limita dónde puede usarse.",
+                "d_hint": "Identifica qué rasgos del ejemplo son esenciales.",
+                "question": f"¿Cuál opción representa el objetivo principal al estudiar {topic}?",
+            }
+        else:
+            option_copy = {
+                "correct": "That matches the relationship taught in the lesson.",
+                "b_label": f"{topic} works only when every value is identical.",
+                "b_feedback": "That adds an absolute condition the lesson did not establish.",
+                "b_hint": "Separate the core relationship from special cases.",
+                "c_label": f"{topic} is mainly a rule to memorize without reasoning.",
+                "c_feedback": "The lesson treats the idea as a relationship you can explain and apply.",
+                "c_hint": "Reconnect the procedure to why it works.",
+                "d_label": f"{topic} cannot be applied outside the example shown.",
+                "d_feedback": "A worked example illustrates the idea; it does not limit its use.",
+                "d_hint": "Identify which features of the example are essential.",
+                "question": f"Which option represents the core objective when studying {topic}?",
+            }
         options = [
             QuizOption(
                 id="a",
                 label=core,
                 is_correct=True,
-                feedback_correct="That matches the relationship taught in the lesson.",
+                feedback_correct=option_copy["correct"],
             ),
             QuizOption(
                 id="b",
-                label=f"{topic} works only when every value is identical.",
+                label=option_copy["b_label"],
                 is_correct=False,
-                feedback_incorrect="That adds an absolute condition the lesson did not establish.",
+                feedback_incorrect=option_copy["b_feedback"],
                 misconception_tag="overgeneralized_condition",
-                remediation_hint="Separate the core relationship from special cases.",
+                remediation_hint=option_copy["b_hint"],
             ),
             QuizOption(
                 id="c",
-                label=f"{topic} is mainly a rule to memorize without reasoning.",
+                label=option_copy["c_label"],
                 is_correct=False,
-                feedback_incorrect="The lesson treats the idea as a relationship you can explain and apply.",
+                feedback_incorrect=option_copy["c_feedback"],
                 misconception_tag="procedure_without_meaning",
-                remediation_hint="Reconnect the procedure to why it works.",
+                remediation_hint=option_copy["c_hint"],
             ),
             QuizOption(
                 id="d",
-                label=f"{topic} cannot be applied outside the example shown.",
+                label=option_copy["d_label"],
                 is_correct=False,
-                feedback_incorrect="A worked example illustrates the idea; it does not limit its use.",
+                feedback_incorrect=option_copy["d_feedback"],
                 misconception_tag="example_as_boundary",
-                remediation_hint="Identify which features of the example are essential.",
+                remediation_hint=option_copy["d_hint"],
             ),
         ]
         return QuizCard(
-            question=f"Which of the following represents the core objective when studying {topic}?",
+            question=option_copy["question"],
             options=options,
             allow_multiple_attempts=True,
-            concept_id=context.learning_objective or context.topic or "current_concept"
+            concept_id=context.learning_objective or context.topic or "current_concept",
+            language_code=context.language_code,
         )
 
 
@@ -2056,6 +2098,7 @@ class SceneLifecycleEngine:
                 "difficulty": progress.get("difficulty"),
                 "classroom_mode": progress.get("classroom_mode", ClassroomMode.SOLO.value),
                 "target_duration_minutes": progress.get("target_duration_minutes", 10),
+                "language_code": progress.get("language_code", context.language_code),
                 "course_complete": context.course_complete,
                 "scene": progress.get("scene", 0),
                 "covered": list(progress.get("covered", []))[-8:],
@@ -2217,10 +2260,10 @@ class SceneLifecycleEngine:
         self.trigger_listener.cancel_timeout(trigger.session_id)
 
         # Process the action
-        scene = await self.process_trigger(trigger)
+        await self.process_trigger(trigger)
 
-        # Schedule next timeout
-        self.trigger_listener.schedule_timeout(trigger.session_id, delay_seconds=45)
+        # Deliberately do not schedule an inactivity scene. The learner owns the
+        # floor until they answer, ask for help, skip, or explicitly continue.
 
     async def _handle_timeout_trigger(self, trigger: Trigger):
         """Handle system timeout triggers"""
@@ -2236,14 +2279,30 @@ class SceneLifecycleEngine:
 
     async def _create_fallback_scene(self, trigger: Trigger) -> Scene:
         """Create safe fallback scene when errors occur"""
+        language_code = str(
+            _SESSION_PROGRESS.get(trigger.session_id, {}).get(
+                "language_code", "en-US"
+            )
+        )
+        is_spanish = language_code.lower().startswith("es")
         return Scene(
             scene_type=SceneType.INSTRUCTION,
             components=[
                 TeacherMessage(
-                    text="Let's continue with your learning journey.",
+                    text=(
+                        "Retomemos una idea a la vez cuando estés listo."
+                        if is_spanish
+                        else "Let's continue with one idea at a time when you're ready."
+                    ),
                     emotion="encouraging",
-                    audio_mood=AudioMood.CALM
-                )
+                    audio_mood=AudioMood.CALM,
+                    language_code=language_code,
+                ),
+                CTAButton(
+                    label="Continuar" if is_spanish else "Continue",
+                    action_intent=ActionIntent.CONTINUE,
+                    language_code=language_code,
+                ),
             ]
         )
 

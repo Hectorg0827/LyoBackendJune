@@ -1,18 +1,23 @@
 """Contract tests for the evidence-based AI Classroom teaching loop."""
 
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent,
     ClassroomMode,
     HintLevel,
     InputField,
+    TeacherMessage,
+    ExampleBlock,
+    CTAButton,
     SceneType,
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     ClassroomDirector,
     ContextSnapshot,
+    SceneCompiler,
+    SceneLifecycleEngine,
     Trigger,
     TriggerType,
     expected_transfer_keywords,
@@ -213,6 +218,55 @@ class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
             self.context,
         )
         self.assertEqual(decision.selected_scene_type, SceneType.CHALLENGE)
+
+
+class LearnerGatedTeachingBeatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_instruction_is_one_short_teacher_turn_then_a_checkpoint(self):
+        compiler = SceneCompiler(ai_service=None)
+        context = ContextSnapshot(
+            user_id="42",
+            session_id="spanish-course",
+            topic="Fracciones",
+            lesson_title="Comparar fracciones",
+            lesson_content=(
+                "Para comparar fracciones con denominadores distintos, "
+                "primero usa un denominador común."
+            ),
+            learning_objective="Comparar fracciones",
+            language_code="es-US",
+        )
+
+        components = await compiler._create_instruction_components(context)
+        teacher_messages = [
+            component for component in components
+            if isinstance(component, TeacherMessage)
+        ]
+
+        self.assertEqual(len(teacher_messages), 1)
+        self.assertLessEqual(len(teacher_messages[0].text.split()), 55)
+        self.assertFalse(teacher_messages[0].text.lstrip().startswith("["))
+        self.assertEqual(teacher_messages[0].language_code, "es-US")
+        self.assertTrue(any(isinstance(c, ExampleBlock) for c in components))
+        self.assertIsInstance(components[-1], CTAButton)
+        self.assertEqual(components[-1].action_intent, ActionIntent.CONTINUE.value)
+        self.assertEqual(components[-1].delay_ms, 0)
+
+    async def test_user_action_never_schedules_unattended_continuation(self):
+        engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+        engine.trigger_listener = MagicMock()
+        engine.process_trigger = AsyncMock()
+        trigger = Trigger(
+            trigger_type=TriggerType.USER_ACTION,
+            user_id="42",
+            session_id="course-1",
+            action_data={"action_intent": ActionIntent.CONTINUE},
+        )
+
+        await engine._handle_user_action_trigger(trigger)
+
+        engine.trigger_listener.cancel_timeout.assert_called_once_with("course-1")
+        engine.trigger_listener.schedule_timeout.assert_not_called()
+        engine.process_trigger.assert_awaited_once_with(trigger)
 
 
 if __name__ == "__main__":

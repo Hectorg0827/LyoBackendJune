@@ -1,18 +1,23 @@
-"""
-TTS Routes - REST API for Text-to-Speech
-Premium audio experience for Lyo's AI Classroom
-"""
+"""Authenticated REST routes for Lyo's shared classroom voice."""
 
-import asyncio
-import json
 import base64
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
-from fastapi.responses import StreamingResponse, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 import logging
 
-from .service import TTSService, get_tts_service, Voice, AudioFormat, Model, VOICE_PROFILES
+from lyo_app.auth.dependencies import get_current_user_or_guest
+from lyo_app.auth.schemas import UserRead
+
+from .service import (
+    get_tts_service,
+    Voice,
+    AudioFormat,
+    Model,
+    TTSUnavailableError,
+    VOICE_PROFILES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +27,17 @@ router = APIRouter(prefix="/api/v1/tts", tags=["Text-to-Speech"])
 # Request/Response Models
 class SynthesizeRequest(BaseModel):
     """Request to synthesize speech"""
-    text: str = Field(..., min_length=1, max_length=4096, description="Text to synthesize")
+    text: str = Field(..., min_length=1, max_length=1200, description="One short teaching turn")
     voice: Optional[Voice] = Field(default=None, description="Voice to use")
     model: Optional[Model] = Field(default="tts-1-hd", description="TTS model")
     format: Optional[AudioFormat] = Field(default="mp3", description="Output format")
-    speed: float = Field(default=1.0, ge=0.25, le=4.0, description="Speech speed")
+    speed: float = Field(default=0.98, ge=0.75, le=1.25, description="Classroom speech speed")
     content_type: Optional[str] = Field(default=None, description="Content type for auto voice selection")
+    language: str = Field(
+        default="auto",
+        max_length=16,
+        description="BCP-47 locale such as es-US, or auto for text detection",
+    )
     
     
 class SynthesizeResponse(BaseModel):
@@ -36,11 +46,18 @@ class SynthesizeResponse(BaseModel):
     voice: str = Field(..., description="Voice used")
     format: str = Field(..., description="Audio format")
     duration_estimate_seconds: float = Field(..., description="Estimated duration")
+    language_code: str = Field(..., description="Resolved spoken locale")
+    provider: str = Field(..., description="Configured rendering provider")
+    provider_voice: str = Field(..., description="Canonical provider voice")
     
 
 class VoiceInfo(BaseModel):
     """Voice information"""
     voice: str
+    id: str
+    name: str
+    language: str
+    gender: Optional[str] = None
     description: str
     best_for: List[str]
     personality: str
@@ -57,6 +74,7 @@ class LessonAudioRequest(BaseModel):
     lesson_content: dict = Field(..., description="Lesson content with blocks")
     voice: Optional[Voice] = Field(default=None, description="Override voice for all segments")
     format: Optional[AudioFormat] = Field(default="mp3", description="Output format")
+    language: str = Field(default="auto", max_length=16)
 
 
 class LessonAudioSegment(BaseModel):
@@ -80,32 +98,32 @@ async def tts_health():
     """Check TTS service health"""
     try:
         service = await get_tts_service()
+        provider_configured = service.provider_available
         return {
-            "status": "healthy",
+            "status": "healthy" if provider_configured else "degraded",
             "service": "tts",
             "voices_available": len(VOICE_PROFILES),
-            "api_configured": bool(service.config.api_key)
+            "provider": service.config.provider,
+            "provider_configured": provider_configured,
+            "paid_fallback_enabled": bool(service.config.allow_openai_tts),
         }
-    except Exception as e:
+    except Exception:
         return {
             "status": "degraded",
             "service": "tts",
-            "error": str(e)
+            "provider_configured": False,
         }
 
 
 @router.get("/voices", response_model=VoicesResponse)
-async def list_voices():
+async def list_voices(
+    _current_user: UserRead = Depends(get_current_user_or_guest),
+):
     """
     List all available voices with their profiles
     
-    Returns 6 premium OpenAI voices optimized for education:
-    - alloy: Neutral - general explanations
-    - echo: Deep - storytelling
-    - fable: British - engaging content
-    - onyx: Authoritative - technical topics
-    - nova: Energetic - interactive lessons
-    - shimmer: Soft - calm study sessions
+    Existing aliases remain stable for older clients. The server maps them to
+    one canonical teacher identity for each spoken language.
     """
     service = await get_tts_service()
     voices = service.list_voices()
@@ -114,6 +132,9 @@ async def list_voices():
         voices=[
             VoiceInfo(
                 voice=v,
+                id=v,
+                name=v.title(),
+                language="multilingual",
                 description=info["description"],
                 best_for=info["best_for"],
                 personality=info["personality"]
@@ -125,7 +146,10 @@ async def list_voices():
 
 
 @router.post("/synthesize", response_model=SynthesizeResponse)
-async def synthesize_speech(request: SynthesizeRequest):
+async def synthesize_speech(
+    request: SynthesizeRequest,
+    _current_user: UserRead = Depends(get_current_user_or_guest),
+):
     """
     Synthesize speech from text
     
@@ -135,20 +159,26 @@ async def synthesize_speech(request: SynthesizeRequest):
     try:
         service = await get_tts_service()
         
-        if not service.config.api_key:
-            logger.error("❌ TTS synthesis failed: OPENAI_API_KEY not configured on this environment")
+        if not service.provider_available:
             raise HTTPException(
                 status_code=503,
-                detail="TTS service unavailable: OPENAI_API_KEY not configured"
+                detail="Shared classroom voice is not configured"
             )
-        
+
+        resolved = service.resolve_voice(
+            request.text,
+            voice=request.voice,
+            language=request.language,
+            content_type=request.content_type,
+        )
         audio_data = await service.synthesize(
             text=request.text,
             voice=request.voice,
             model=request.model,
             format=request.format,
             speed=request.speed,
-            content_type=request.content_type
+            content_type=request.content_type,
+            language=request.language,
         )
         
         # Estimate duration (rough: ~150 words per minute at speed 1.0)
@@ -159,45 +189,47 @@ async def synthesize_speech(request: SynthesizeRequest):
             audio_base64=base64.b64encode(audio_data).decode(),
             voice=request.voice or service.config.default_voice,
             format=request.format or "mp3",
-            duration_estimate_seconds=duration_estimate
+            duration_estimate_seconds=duration_estimate,
+            language_code=resolved.language_code,
+            provider=resolved.provider,
+            provider_voice=resolved.provider_voice,
         )
-        
+
+    except TTSUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"❌ TTS synthesis error: {type(e).__name__}: {error_msg}")
-        # Surface whether it's an auth issue with OpenAI
-        if "401" in error_msg or "Unauthorized" in error_msg:
-            raise HTTPException(
-                status_code=502,
-                detail="TTS API authentication failed — OPENAI_API_KEY may be invalid or expired"
-            )
-        raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {type(e).__name__}")
+        logger.error("TTS synthesis error: %s", type(e).__name__)
+        raise HTTPException(status_code=502, detail="Speech provider failed")
 
 
 @router.post("/synthesize/stream")
-async def synthesize_stream(request: SynthesizeRequest):
+async def synthesize_stream(
+    request: SynthesizeRequest,
+    _current_user: UserRead = Depends(get_current_user_or_guest),
+):
     """
     Stream synthesized speech
     
-    Returns audio as streaming response for real-time playback.
-    Ideal for long content or immediate playback start.
+    Returns the shared cached audio response used by the Web classroom.
+    Teaching turns are deliberately short, so rendering before the response
+    also lets provider errors return a useful HTTP status instead of failing
+    after streaming headers have already been sent.
     """
     try:
         service = await get_tts_service()
-        
-        async def audio_stream():
-            async for chunk in service.synthesize_streaming(
-                text=request.text,
-                voice=request.voice,
-                model=request.model,
-                format=request.format or "mp3",
-                speed=request.speed
-            ):
-                yield chunk
+        audio_data = await service.synthesize(
+            text=request.text,
+            voice=request.voice,
+            model=request.model,
+            format=request.format or "mp3",
+            speed=request.speed,
+            content_type=request.content_type,
+            language=request.language,
+        )
                 
         content_type = {
             "mp3": "audio/mpeg",
@@ -208,21 +240,26 @@ async def synthesize_stream(request: SynthesizeRequest):
             "pcm": "audio/pcm"
         }.get(request.format, "audio/mpeg")
         
-        return StreamingResponse(
-            audio_stream(),
+        return Response(
+            content=audio_data,
             media_type=content_type,
             headers={
                 "Content-Disposition": f"inline; filename=speech.{request.format or 'mp3'}"
             }
         )
         
+    except TTSUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"TTS streaming error: {e}")
-        raise HTTPException(status_code=500, detail="Speech streaming failed")
+        logger.error("TTS streaming error: %s", type(e).__name__)
+        raise HTTPException(status_code=502, detail="Speech provider failed")
 
 
 @router.post("/lesson/audio", response_model=LessonAudioResponse)
-async def generate_lesson_audio(request: LessonAudioRequest):
+async def generate_lesson_audio(
+    request: LessonAudioRequest,
+    _current_user: UserRead = Depends(get_current_user_or_guest),
+):
     """
     Generate audio for an entire lesson
     
@@ -238,7 +275,8 @@ async def generate_lesson_audio(request: LessonAudioRequest):
         
         audio_segments = await service.synthesize_lesson_audio(
             lesson_content=request.lesson_content,
-            voice=request.voice
+            voice=request.voice,
+            language=request.language,
         )
         
         segments = []
@@ -270,7 +308,9 @@ async def generate_lesson_audio(request: LessonAudioRequest):
 async def quick_synthesize(
     text: str = Query(..., min_length=1, max_length=1000, description="Text to speak"),
     voice: Optional[Voice] = Query(default="nova", description="Voice"),
-    format: AudioFormat = Query(default="mp3", description="Format")
+    format: AudioFormat = Query(default="mp3", description="Format"),
+    language: str = Query(default="auto", max_length=16),
+    _current_user: UserRead = Depends(get_current_user_or_guest),
 ):
     """
     Quick synthesis via GET request
@@ -284,7 +324,8 @@ async def quick_synthesize(
         audio_data = await service.synthesize(
             text=text,
             voice=voice,
-            format=format
+            format=format,
+            language=language,
         )
         
         content_type = {
@@ -310,7 +351,11 @@ async def quick_synthesize(
 
 
 @router.get("/voice/{voice_id}")
-async def get_voice_sample(voice_id: Voice):
+async def get_voice_sample(
+    voice_id: Voice,
+    language: str = Query(default="en-US", max_length=16),
+    _current_user: UserRead = Depends(get_current_user_or_guest),
+):
     """
     Get voice sample/preview
     
@@ -334,7 +379,8 @@ async def get_voice_sample(voice_id: Voice):
         audio_data = await service.synthesize(
             text=sample_text,
             voice=voice_id,
-            model="tts-1-hd"
+            model="tts-1-hd",
+            language=language,
         )
         
         voice_info = service.get_voice_info(voice_id)
