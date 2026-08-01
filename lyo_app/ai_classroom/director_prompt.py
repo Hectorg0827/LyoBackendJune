@@ -181,8 +181,11 @@ Return a JSON array of turns. Each turn is exactly one of these shapes:
   "state": "reading" | "thinking" | "listening" | "curious" | "surprised" | "celebrating" | "confused" | "shy" | "sleeping" }
 
 { "type": "board",
-  "action": "write" | "draw" | "highlight",
+  "action": "write" | "draw",
   "content": "speed = distance / time" }
+
+{ "type": "board", "action": "highlight",
+  "content": "3x" }
 
 { "type": "board", "action": "image",
   "query": "chloroplast cross section diagram",
@@ -212,6 +215,7 @@ Return a JSON array of turns. Each turn is exactly one of these shapes:
 - When comparing quantities or showing change over time, emit a board chart turn with real illustrative numbers.
 - Use a board explorable only when changing 1-2 parameters reveals a relationship central to the objective. Its prompt must ask for a prediction or explanation after manipulation; never add one as decoration. Expressions may use x, the named params, + - * / ^ ( ), and sin/cos/tan/exp/log/sqrt/abs.
 - The teacher should VERBALLY REFER to what's on the board ("look at how the curve bends here...") so speech and board feel like one performance.
+- Use a board highlight turn to point at ONE specific piece of something already on the board while speech is explaining exactly that piece — e.g. after writing "3x + 7 = 22", emit a highlight turn with content "3x" right as the speech turn explains the coefficient. `content` must be copied character-for-character from what was just written (not paraphrased) so it can be located on the board; it circles/marks the existing term, it does not add new content. Never let a highlight turn substitute for a write/draw turn, and never highlight something that isn't already on the board.
 - Never invent a citation or claim live web research. Source attribution comes from the server's course material metadata.
 
 { "type": "ambient",
