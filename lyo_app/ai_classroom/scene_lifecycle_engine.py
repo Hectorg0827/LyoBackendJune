@@ -71,7 +71,14 @@ def score_transfer_response(
     min_words: int = 6,
     min_score: float = 0.25,
 ) -> tuple[bool, float, List[str]]:
-    """Score open evidence deterministically; return correctness, coverage, gaps."""
+    """Score open evidence deterministically; return correctness, coverage, gaps.
+
+    This is the hidden Evaluator: its output (correctness, coverage, and the
+    specific missing rubric keywords) is for internal scoring and mastery
+    tracking only. Never surface `missing` verbatim to the learner — that
+    would hand them the exact words the grader is looking for. Use
+    `describe_transfer_gap` to turn this into learner-safe feedback instead.
+    """
     tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "").lower())
     token_set = set(tokens)
     rubric = [k.lower().strip() for k in expected_keywords if k and k.strip()]
@@ -81,6 +88,60 @@ def score_transfer_response(
     correct = substantive and (not rubric or coverage >= min_score)
     missing = [k for k in rubric if k not in hits]
     return correct, round(coverage, 3), missing[:4]
+
+
+def describe_transfer_gap(
+    response: str,
+    min_words: int,
+    coverage: float,
+    min_score: float,
+) -> str:
+    """Translate the Evaluator's internal score into learner-safe feedback.
+
+    Describes the *category* of gap (too short vs. not yet on-target) without
+    ever quoting the rubric's expected keywords, so a learner can't just
+    parrot back the words the grader wants to see.
+    """
+    word_count = len(re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "")))
+    if word_count < min_words:
+        return (
+            f"Say a bit more — aim for at least {min_words} words and walk "
+            "through your reasoning, not just the result."
+        )
+    if coverage < min_score:
+        return (
+            "You're close, but the explanation doesn't yet connect back to "
+            "the core idea. Explain why the example works, not just what "
+            "you did."
+        )
+    return "Add one more precise detail to make the reasoning airtight."
+
+
+_HESITATION_PHRASES = (
+    "not sure", "not really sure", "not certain", "unsure",
+    "no idea", "i don't know", "i dont know", "idk", "no clue",
+    "i'm confused", "im confused", "confused",
+    "i'm stuck", "im stuck", "stuck",
+    "i give up", "give up",
+    "help me", "i need help", "can you help",
+    "not following", "i'm lost", "im lost", "lost me",
+)
+
+
+def detect_hesitation(text: Optional[str]) -> bool:
+    """Lightweight keyword classifier for learner uncertainty.
+
+    Runs before the response is scored or handed to the Director LLM, so a
+    learner who signals they're stuck gets routed to a small scaffolding
+    hint instead of being scored against the rubric or shown a rubric-derived
+    correction.
+    """
+    if not text:
+        return False
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    return any(phrase in normalized for phrase in _HESITATION_PHRASES)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -961,6 +1022,20 @@ class ClassroomDirector:
         )
         newly_correct = quiz_correct or transfer_correct
 
+        # State shift: Assessment → Scaffolding. A hesitant learner is not
+        # pushed through the standard evaluation/correction path at all —
+        # this takes priority over both the frustration-driven CORRECTION
+        # branch and the normal correct/incorrect routing below.
+        if context.learner_signal == "hesitant":
+            return DirectorDecision(
+                selected_scene_type=SceneType.INSTRUCTION,
+                reasoning="Learner signaled uncertainty; shift from assessment to scaffolding with one small hint",
+                confidence=0.93,
+                difficulty_adjustment=-0.15,
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                require_audio=True,
+            )
+
         if (
             context.frustration.frustration_score > 0.6
             and context.frustration.consecutive_failures >= 3
@@ -1598,8 +1673,10 @@ TEACHING RESPONSE RULES:
 - If learner_question is present, answer it directly before resuming the sequence.
 - If learner_response is present, acknowledge its reasoning briefly and use it as evidence; do not pretend it was a question.
 - If learner_signal is request_hint or confused, slow down, diagnose the likely gap, and use one worked example.
+- If learner_signal is hesitant, the learner is stuck (said things like "not sure," "idk," "help"). Do NOT reveal the grading rubric, expected keywords, or the direct answer, and do not evaluate their last response. Give exactly ONE small, concrete hint that nudges them toward the next step, then re-ask a smaller version of the question.
 - If learner_signal is skip_ahead or too_easy, increase depth and transfer difficulty; do not merely move on.
 - If learner_signal is incorrect_answer, use misconception_tag and remediation_hint when present; never give generic correction.
+- Never reveal internal grading rubrics, expected keywords, coverage scores, or other scoring criteria to the learner, regardless of learner_signal.
 - If classroom_mode is solo, only the Teacher and Lyo may appear. If classroom, classmates remain optional and pedagogically necessary.
 - If classroom_mode is challenge, shorten explanation and deepen boundary/transfer cases. If review, prioritize retrieval over re-lecturing.
 - Match the target duration by choosing depth, not filler or speed.
@@ -1632,7 +1709,7 @@ PROGRESSION RULES (CRITICAL):
             # Call the resilient AI manager with Gemini and OpenAI fallbacks.
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous, warm classroom teacher. Teach the exact lesson_content toward the stated learning_objective. Respond directly to learner_question, learner_response, and learner_signal. Use explanation, a worked example, and a concise check for understanding. AI classmates are optional and must never displace the teacher or the learner. Use learner_context only when relevant. Return ONLY a valid, non-empty JSON list of director turns. No prose or markdown."},
+                    {"role": "system", "content": "You are a rigorous, warm classroom teacher. Teach the exact lesson_content toward the stated learning_objective. Respond directly to learner_question, learner_response, and learner_signal. Use explanation, a worked example, and a concise check for understanding. AI classmates are optional and must never displace the teacher or the learner. Use learner_context only when relevant. If learner_signal is hesitant, the learner is stuck: never reveal the grading rubric, expected keywords, or the direct answer — give exactly one small hint instead. Never reveal grading rubrics or scoring criteria to the learner under any signal. Return ONLY a valid, non-empty JSON list of director turns. No prose or markdown."},
                     {"role": "user", "content": prompt}
                 ],
                 # gpt-4o-mini first: the Gemini key is currently revoked
@@ -2150,6 +2227,16 @@ class SceneLifecycleEngine:
                     mastered_lessons.add(context.lesson_index)
                     progress["mastered_lessons"] = sorted(mastered_lessons)
 
+            # A learner who signals uncertainty ("not sure", "idk", "help")
+            # gets shifted out of assessment entirely, regardless of how the
+            # Evaluator scored their response — a stuck learner needs a hint,
+            # not a rubric-based correction.
+            if answer_data.get("hesitant") or (
+                action_intent == ActionIntent.USER_MESSAGE
+                and detect_hesitation(action_data.get("message"))
+            ):
+                context.learner_signal = "hesitant"
+
             if action_intent == ActionIntent.CONTINUE and context.lesson_index in mastered_lessons:
                 next_index = context.lesson_index + 1
                 if context.total_lessons > 0 and next_index < context.total_lessons:
@@ -2382,6 +2469,7 @@ class SceneLifecycleEngine:
         validated_correct = False
         coverage = 0.0
         missing: List[str] = []
+        hesitant = detect_hesitation(response)
         skill_id = (
             self.session_contexts.get(session_id).learning_objective
             if self.session_contexts.get(session_id)
@@ -2415,15 +2503,16 @@ class SceneLifecycleEngine:
                     )
                     break
 
-        feedback = (
-            "Your explanation uses the lesson idea in a new situation."
-            if validated_correct
-            else (
-                "Add the missing reasoning link"
-                + (f" around {', '.join(missing)}" if missing else "")
-                + f". Aim for at least {min_words} words and explain why the example works."
-            )
-        )
+        # Tutor-facing feedback: never quote the Evaluator's raw `missing`
+        # keyword list here — that would hand the learner the exact words
+        # the rubric is scoring for. `describe_transfer_gap` turns the score
+        # into a plain-language hint about the *category* of gap instead.
+        if hesitant:
+            feedback = "No problem — let's break this into a smaller step."
+        elif validated_correct:
+            feedback = "Your explanation uses the lesson idea in a new situation."
+        else:
+            feedback = describe_transfer_gap(response, min_words, coverage, min_score)
 
         progress = _SESSION_PROGRESS.get(session_id, {})
         session_context = self.session_contexts.get(session_id)
@@ -2459,9 +2548,15 @@ class SceneLifecycleEngine:
                 "answer_data": {
                     "is_correct": validated_correct,
                     "coverage": coverage,
+                    # Internal telemetry only (mastery tracking / analytics) —
+                    # never rendered as chat text. Unlike quiz distractors,
+                    # transfer responses have no author-curated remediation
+                    # hint, so `remediation_hint` stays None here rather than
+                    # being built from the rubric's keyword list.
                     "missing_keywords": missing,
                     "feedback": feedback,
-                    "remediation_hint": ", ".join(missing) if missing else None,
+                    "remediation_hint": None,
+                    "hesitant": hesitant,
                 },
             },
             component_id=input_component_id,
