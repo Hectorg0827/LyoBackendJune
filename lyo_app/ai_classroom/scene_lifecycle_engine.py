@@ -371,16 +371,27 @@ class ContextAssembler:
                 + (f" — {context.lesson_title}" if context.lesson_title else "")
             ]
 
-        # Preserve the instructional goal and learner-selected pace for the
-        # entire classroom session. These values arrive on the welcome trigger
-        # and must remain available on later WebSocket actions.
+        # Preserve the learner-selected pace for the entire classroom
+        # session. These values arrive on the welcome trigger and must
+        # remain available on later WebSocket actions.
         action_data = trigger.action_data or {}
         explicit_objective = action_data.get("objective")
         if explicit_objective:
             progress["learning_objective"] = str(explicit_objective)
+
+        # The per-scene teaching objective must track the CURRENT lesson,
+        # not freeze on whatever generic prompt the learner typed at course
+        # creation (e.g. "Learn the basic concepts of algebra"). That prompt
+        # used to win here for the whole session, so every later lesson's
+        # transfer question and rubric keywords were derived from it instead
+        # of the actual lesson content — producing junk pseudo-concepts like
+        # "learn"/"basic"/"concepts" ("Revise your application of Learn the
+        # basic concepts..."). Prefer the resolved lesson_title when one
+        # exists; fall back to the course-creation objective only for
+        # freeform sessions with no discrete lesson to resolve.
         context.learning_objective = (
-            progress.get("learning_objective")
-            or context.lesson_title
+            context.lesson_title
+            or progress.get("learning_objective")
             or context.topic
         )
 
