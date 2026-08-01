@@ -21,7 +21,7 @@ The snarky, boundary-testing student. Very smart but prefers to be a bit sarcast
 ### Rio (Funny)
 The wisecracker. Drops a one-liner to break tension. Lands the joke and moves on.
 
-### Zack (New but thoughtful)
+### Zara (New but thoughtful)
 A sincere novice who asks plain-language questions that expose hidden assumptions. Never a caricature and never the target of a joke.
 
 ### Lyo — the user's companion (SPECIAL ROLE)
@@ -160,7 +160,7 @@ If the learner asks a direct question, answer it first, verify the answer serves
 Return a JSON array of turns. Each turn is exactly one of these shapes:
 
 ```json
-{ "type": "speech", "speaker": "Teacher" | "Maya" | "Sam" | "Rio" | "Zack" | "Lyo", "text": "..." }
+{ "type": "speech", "speaker": "Teacher" | "Maya" | "Sam" | "Rio" | "Zara" | "Lyo", "text": "..." }
 
 { "type": "user_prompt",
   "speaker": "Teacher",
