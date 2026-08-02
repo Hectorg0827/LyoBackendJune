@@ -71,7 +71,14 @@ def score_transfer_response(
     min_words: int = 6,
     min_score: float = 0.25,
 ) -> tuple[bool, float, List[str]]:
-    """Score open evidence deterministically; return correctness, coverage, gaps."""
+    """Score open evidence deterministically; return correctness, coverage, gaps.
+
+    This is the hidden Evaluator: its output (correctness, coverage, and the
+    specific missing rubric keywords) is for internal scoring and mastery
+    tracking only. Never surface `missing` verbatim to the learner — that
+    would hand them the exact words the grader is looking for. Use
+    `describe_transfer_gap` to turn this into learner-safe feedback instead.
+    """
     tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "").lower())
     token_set = set(tokens)
     rubric = [k.lower().strip() for k in expected_keywords if k and k.strip()]
@@ -81,6 +88,60 @@ def score_transfer_response(
     correct = substantive and (not rubric or coverage >= min_score)
     missing = [k for k in rubric if k not in hits]
     return correct, round(coverage, 3), missing[:4]
+
+
+def describe_transfer_gap(
+    response: str,
+    min_words: int,
+    coverage: float,
+    min_score: float,
+) -> str:
+    """Translate the Evaluator's internal score into learner-safe feedback.
+
+    Describes the *category* of gap (too short vs. not yet on-target) without
+    ever quoting the rubric's expected keywords, so a learner can't just
+    parrot back the words the grader wants to see.
+    """
+    word_count = len(re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "")))
+    if word_count < min_words:
+        return (
+            f"Say a bit more — aim for at least {min_words} words and walk "
+            "through your reasoning, not just the result."
+        )
+    if coverage < min_score:
+        return (
+            "You're close, but the explanation doesn't yet connect back to "
+            "the core idea. Explain why the example works, not just what "
+            "you did."
+        )
+    return "Add one more precise detail to make the reasoning airtight."
+
+
+_HESITATION_PHRASES = (
+    "not sure", "not really sure", "not certain", "unsure",
+    "no idea", "i don't know", "i dont know", "idk", "no clue",
+    "i'm confused", "im confused", "confused",
+    "i'm stuck", "im stuck", "stuck",
+    "i give up", "give up",
+    "help me", "i need help", "can you help",
+    "not following", "i'm lost", "im lost", "lost me",
+)
+
+
+def detect_hesitation(text: Optional[str]) -> bool:
+    """Lightweight keyword classifier for learner uncertainty.
+
+    Runs before the response is scored or handed to the Director LLM, so a
+    learner who signals they're stuck gets routed to a small scaffolding
+    hint instead of being scored against the rubric or shown a rubric-derived
+    correction.
+    """
+    if not text:
+        return False
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    return any(phrase in normalized for phrase in _HESITATION_PHRASES)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -217,6 +278,7 @@ class ContextSnapshot(BaseModel):
     # Course / topic context
     topic: Optional[str] = None
     course_id: Optional[str] = None
+    lesson_id: Optional[str] = None
     course_title: Optional[str] = None
     lesson_index: int = 0
     lesson_title: Optional[str] = None
@@ -308,11 +370,41 @@ class ContextAssembler:
             progress["_hydrated"] = True
         if "current_lesson_index" in progress:
             context.lesson_index = int(progress["current_lesson_index"] or 0)
+        context.course_id = str(progress.get("course_id") or context.course_id or "") or None
+        context.lesson_id = str(progress.get("lesson_id") or "") or None
         context.course_complete = bool(progress.get("course_complete", False))
 
+        # Apply explicit launch identity before resolving content. A lesson URL
+        # must open that authored lesson, rather than silently teaching index 0.
+        action_data = trigger.action_data or {}
+        explicit_course_id = action_data.get("course_id")
+        explicit_lesson_id = action_data.get("lesson_id")
+        if explicit_course_id:
+            context.course_id = str(explicit_course_id)
+            progress["course_id"] = context.course_id
+        elif context.course_id:
+            progress["course_id"] = context.course_id
+
         # Resolve current lesson content from the DB
-        context.lesson_title, context.lesson_content, context.total_lessons = \
-            await self._resolve_current_lesson(context.course_id, context.lesson_index)
+        (
+            resolved_lesson_id,
+            context.lesson_index,
+            context.lesson_title,
+            context.lesson_content,
+            context.total_lessons,
+        ) = await self._resolve_current_lesson(
+            context.course_id,
+            context.lesson_index,
+            requested_lesson_id=(
+                str(explicit_lesson_id) if explicit_lesson_id else None
+            ),
+        )
+        context.lesson_id = resolved_lesson_id or (
+            str(explicit_lesson_id) if explicit_lesson_id else context.lesson_id
+        )
+        progress["current_lesson_index"] = context.lesson_index
+        if context.lesson_id:
+            progress["lesson_id"] = context.lesson_id
         # If lesson gave us a more specific topic, use it
         if context.lesson_title and not context.topic:
             context.topic = context.lesson_title
@@ -323,16 +415,26 @@ class ContextAssembler:
                 + (f" — {context.lesson_title}" if context.lesson_title else "")
             ]
 
-        # Preserve the instructional goal and learner-selected pace for the
-        # entire classroom session. These values arrive on the welcome trigger
-        # and must remain available on later WebSocket actions.
-        action_data = trigger.action_data or {}
+        # Preserve the learner-selected pace for the entire classroom
+        # session. These values arrive on the welcome trigger and must
+        # remain available on later WebSocket actions.
         explicit_objective = action_data.get("objective")
         if explicit_objective:
             progress["learning_objective"] = str(explicit_objective)
+
+        # The per-scene teaching objective must track the CURRENT lesson,
+        # not freeze on whatever generic prompt the learner typed at course
+        # creation (e.g. "Learn the basic concepts of algebra"). That prompt
+        # used to win here for the whole session, so every later lesson's
+        # transfer question and rubric keywords were derived from it instead
+        # of the actual lesson content — producing junk pseudo-concepts like
+        # "learn"/"basic"/"concepts" ("Revise your application of Learn the
+        # basic concepts..."). Prefer the resolved lesson_title when one
+        # exists; fall back to the course-creation objective only for
+        # freeform sessions with no discrete lesson to resolve.
         context.learning_objective = (
-            progress.get("learning_objective")
-            or context.lesson_title
+            context.lesson_title
+            or progress.get("learning_objective")
             or context.topic
         )
 
@@ -345,6 +447,9 @@ class ContextAssembler:
         )
 
         mode = action_data.get("mode")
+        requested_intent = action_data.get("action_intent")
+        if requested_intent == ActionIntent.REQUEST_REVIEW:
+            mode = ClassroomMode.REVIEW.value
         if mode:
             try:
                 progress["classroom_mode"] = ClassroomMode(str(mode).lower()).value
@@ -356,6 +461,47 @@ class ContextAssembler:
             )
         except ValueError:
             context.classroom_mode = ClassroomMode.SOLO
+
+        # Review mode re-opens the oldest skipped checkpoint against its own
+        # authored lesson, while preserving the learner's normal course cursor.
+        review_queue = list(progress.get("review_queue", []))
+        if context.classroom_mode == ClassroomMode.REVIEW and review_queue:
+            review_item = review_queue[0]
+            try:
+                context.lesson_index = int(review_item.get("lesson_index", context.lesson_index))
+            except (TypeError, ValueError):
+                pass
+            requested_review_lesson_id = (
+                str(review_item.get("lesson_id"))
+                if review_item.get("lesson_id")
+                else None
+            )
+            (
+                resolved_review_lesson_id,
+                context.lesson_index,
+                context.lesson_title,
+                context.lesson_content,
+                context.total_lessons,
+            ) = await self._resolve_current_lesson(
+                context.course_id,
+                context.lesson_index,
+                requested_lesson_id=requested_review_lesson_id,
+            )
+            context.lesson_id = (
+                resolved_review_lesson_id
+                or requested_review_lesson_id
+                or context.lesson_id
+            )
+            context.learning_objective = (
+                review_item.get("objective")
+                or context.lesson_title
+                or context.learning_objective
+            )
+            context.source_attributions = [
+                "Course material"
+                + (f": {context.course_title}" if context.course_title else "")
+                + (f" — {context.lesson_title}" if context.lesson_title else "")
+            ]
 
         duration = action_data.get("duration_minutes")
         if duration is not None:
@@ -411,8 +557,18 @@ class ContextAssembler:
         context.learner_context = await self._get_learner_context(
             trigger.user_id, context.lesson_title or context.topic
         )
+        skipped_review = [
+            str(item.get("objective") or item.get("lesson_title") or "").strip()
+            for item in review_queue
+        ]
+        context.review_due_items = list(dict.fromkeys(
+            item for item in skipped_review if item
+        ))
         if context.classroom_mode == ClassroomMode.REVIEW:
-            context.review_due_items = await self._get_due_review_items(trigger.user_id)
+            scheduled_review = await self._get_due_review_items(trigger.user_id)
+            context.review_due_items = list(dict.fromkeys(
+                item for item in [*context.review_due_items, *scheduled_review] if item
+            ))
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)
@@ -470,7 +626,9 @@ class ContextAssembler:
     ) -> tuple:
         """Resolve topic, course_id, course_title and lesson_index from the session."""
         topic = None
-        course_id = trigger.course_id
+        course_id = trigger.course_id or (
+            (trigger.action_data or {}).get("course_id")
+        )
         course_title = None
         lesson_index = 0
 
@@ -566,36 +724,71 @@ class ContextAssembler:
         return topic, course_id, course_title, lesson_index
 
     async def _resolve_current_lesson(
-        self, course_id: Optional[str], lesson_index: int
+        self,
+        course_id: Optional[str],
+        lesson_index: int,
+        requested_lesson_id: Optional[str] = None,
     ) -> tuple:
-        """Fetch the current lesson title, content, and total lessons for the course."""
+        """Resolve canonical lesson identity and authored content for a course."""
+        resolved_lesson_id = None
+        resolved_lesson_index = lesson_index
         lesson_title = None
         lesson_content = None
         total_lessons = 0
 
         if not course_id:
-            return lesson_title, lesson_content, total_lessons
+            return (
+                resolved_lesson_id,
+                resolved_lesson_index,
+                lesson_title,
+                lesson_content,
+                total_lessons,
+            )
 
         try:
             course_id_int = int(course_id)
             from lyo_app.learning.models import Lesson
 
-            # Get the current lesson by order_index
+            requested_lesson_id_int = None
+            if requested_lesson_id:
+                try:
+                    requested_lesson_id_int = int(requested_lesson_id)
+                except (TypeError, ValueError):
+                    pass
+
+            # A canonical lesson ID from the launch URL wins over the cursor.
+            lesson_filter = (
+                Lesson.id == requested_lesson_id_int
+                if requested_lesson_id_int is not None
+                else Lesson.order_index == lesson_index
+            )
             result = await self.db.execute(
-                select(Lesson.title, Lesson.content, Lesson.description, Lesson.topic)
+                select(
+                    Lesson.id,
+                    Lesson.order_index,
+                    Lesson.title,
+                    Lesson.content,
+                    Lesson.description,
+                    Lesson.topic,
+                )
                 .where(
                     and_(
                         Lesson.course_id == course_id_int,
-                        Lesson.order_index == lesson_index
+                        lesson_filter,
                     )
                 )
                 .limit(1)
             )
             row = result.first()
             if row:
+                resolved_lesson_id = str(row.id)
+                resolved_lesson_index = int(row.order_index)
                 lesson_title = row.title
                 lesson_content = row.content or row.description or ""
-                logger.info(f"📖 Resolved lesson {lesson_index}: {lesson_title}")
+                logger.info(
+                    f"📖 Resolved lesson {resolved_lesson_index} "
+                    f"({resolved_lesson_id}): {lesson_title}"
+                )
 
             # Get total lesson count
             count_result = await self.db.execute(
@@ -608,7 +801,7 @@ class ContextAssembler:
             # It's a UUID, try getting lesson from GraphCourse first, then ChatCourse or GeneratedCourseModel
             try:
                 from lyo_app.ai_classroom.models import GraphCourse, LearningNode
-                from sqlalchemy import select, or_
+                from sqlalchemy import or_
                 
                 # Check if this course exists in GraphCourse by ID or Subject/Title (for topic sessions)
                 course_result = await self.db.execute(
@@ -639,25 +832,44 @@ class ContextAssembler:
                     
                     total_lessons = len(narrative_nodes)
                     if total_lessons > 0:
-                        if 0 <= lesson_index < total_lessons:
-                            target_node = narrative_nodes[lesson_index]
+                        target_index = lesson_index
+                        if requested_lesson_id:
+                            requested_index = next(
+                                (
+                                    index
+                                    for index, node in enumerate(narrative_nodes)
+                                    if str(node.id) == str(requested_lesson_id)
+                                ),
+                                None,
+                            )
+                            if requested_index is not None:
+                                target_index = requested_index
+                        if 0 <= target_index < total_lessons:
+                            target_node = narrative_nodes[target_index]
+                            resolved_lesson_id = str(target_node.id)
+                            resolved_lesson_index = target_index
                             keywords = target_node.content.get("keywords") or ["Overview"]
                             keyword = keywords[0] if keywords else "Overview"
-                            lesson_title = target_node.content.get("title") or f"Lesson {lesson_index + 1}: {keyword.title()}"
+                            lesson_title = target_node.content.get("title") or f"Lesson {target_index + 1}: {keyword.title()}"
                             lesson_content = target_node.content.get("narration", "")
                             if target_node.content.get("code"):
                                 lang = target_node.content.get("language") or ""
                                 code_str = target_node.content.get("code")
                                 lesson_content += f"\n\nCode Example:\n```{lang}\n{code_str}\n```"
-                            logger.info(f"📖 Resolved GraphCourse lesson {lesson_index}: {lesson_title}")
-                    return lesson_title, lesson_content, total_lessons
+                            logger.info(f"📖 Resolved GraphCourse lesson {target_index}: {lesson_title}")
+                    return (
+                        resolved_lesson_id,
+                        resolved_lesson_index,
+                        lesson_title,
+                        lesson_content,
+                        total_lessons,
+                    )
             except Exception as e:
                 logger.warning(f"⚠️ Could not query GraphCourse for lessons: {e}")
 
             # Fallback to other UUID models (ChatCourse or GeneratedCourseModel)
             try:
                 from lyo_app.chat.models import ChatCourse
-                from sqlalchemy import select
                 result = await self.db.execute(
                     select(ChatCourse.modules).where(ChatCourse.id == course_id)
                 )
@@ -690,18 +902,42 @@ class ContextAssembler:
                         all_lessons.extend(module_lessons)
                     
                     total_lessons = len(all_lessons)
-                    if 0 <= lesson_index < total_lessons:
-                        lesson = all_lessons[lesson_index]
+                    target_index = lesson_index
+                    if requested_lesson_id:
+                        requested_index = next(
+                            (
+                                index
+                                for index, lesson in enumerate(all_lessons)
+                                if str(lesson.get("id") or lesson.get("lesson_id") or "")
+                                == str(requested_lesson_id)
+                            ),
+                            None,
+                        )
+                        if requested_index is not None:
+                            target_index = requested_index
+                    if 0 <= target_index < total_lessons:
+                        lesson = all_lessons[target_index]
+                        raw_lesson_id = lesson.get("id") or lesson.get("lesson_id")
+                        resolved_lesson_id = (
+                            str(raw_lesson_id) if raw_lesson_id is not None else None
+                        )
+                        resolved_lesson_index = target_index
                         lesson_title = lesson.get("title")
                         lesson_content = lesson.get("content") or lesson.get("description") or lesson.get("summary") or ""
-                        logger.info(f"📖 Resolved chat/gen lesson {lesson_index}: {lesson_title}")
+                        logger.info(f"📖 Resolved chat/gen lesson {target_index}: {lesson_title}")
                     
             except Exception as e:
                 logger.warning(f"⚠️ Could not query UUID course models for lesson: {e}")
         except Exception as e:
             logger.warning(f"⚠️ Could not query Lesson: {e}")
 
-        return lesson_title, lesson_content, total_lessons
+        return (
+            resolved_lesson_id,
+            resolved_lesson_index,
+            lesson_title,
+            lesson_content,
+            total_lessons,
+        )
 
     async def _get_due_review_items(self, user_id: str) -> List[str]:
         """Return scheduled retrieval items without blocking guest sessions."""
@@ -991,6 +1227,30 @@ class ClassroomDirector:
         )
         newly_correct = quiz_correct or transfer_correct
 
+        if context.learner_signal == ActionIntent.SKIP_QUESTION.value:
+            return DirectorDecision(
+                selected_scene_type=SceneType.INSTRUCTION,
+                reasoning="Record a neutral skip, queue the checkpoint for review, and wait for explicit continuation",
+                confidence=0.99,
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                require_audio=True,
+                require_interaction=True,
+            )
+
+        # State shift: Assessment → Scaffolding. A hesitant learner is not
+        # pushed through the standard evaluation/correction path at all —
+        # this takes priority over both the frustration-driven CORRECTION
+        # branch and the normal correct/incorrect routing below.
+        if context.learner_signal == "hesitant":
+            return DirectorDecision(
+                selected_scene_type=SceneType.INSTRUCTION,
+                reasoning="Learner signaled uncertainty; shift from assessment to scaffolding with one small hint",
+                confidence=0.93,
+                difficulty_adjustment=-0.15,
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                require_audio=True,
+            )
+
         if (
             context.frustration.frustration_score > 0.6
             and context.frustration.consecutive_failures >= 3
@@ -1015,10 +1275,21 @@ class ClassroomDirector:
 
         if trigger.trigger_type == TriggerType.USER_ACTION:
             if action_intent == ActionIntent.CONTINUE:
+                if action_data.get("advanced_after_skip") and not context.course_complete:
+                    return DirectorDecision(
+                        selected_scene_type=SceneType.INSTRUCTION,
+                        reasoning="Begin the next lesson while preserving the skipped checkpoint for review",
+                        confidence=0.95,
+                        suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                    )
                 if context.course_complete:
                     return DirectorDecision(
                         selected_scene_type=SceneType.CELEBRATION,
-                        reasoning="All lesson checkpoints have recognition and transfer evidence",
+                        reasoning=(
+                            "The course path is complete with skipped checkpoints saved for review"
+                            if context.review_due_items
+                            else "All lesson checkpoints have recognition and transfer evidence"
+                        ),
                         confidence=0.95,
                         suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.LESSON_BLOCK],
                         estimated_duration_seconds=15,
@@ -1086,6 +1357,13 @@ class ClassroomDirector:
 
             if action_intent in (ActionIntent.REQUEST_REVIEW, ActionIntent.SET_MODE):
                 if context.classroom_mode == ClassroomMode.REVIEW:
+                    if not context.review_due_items:
+                        return DirectorDecision(
+                            selected_scene_type=SceneType.CELEBRATION,
+                            reasoning="The learner has no skipped or scheduled review items",
+                            confidence=0.95,
+                            suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.LESSON_BLOCK],
+                        )
                     return DirectorDecision(
                         selected_scene_type=SceneType.CHALLENGE,
                         reasoning="Run retrieval practice from the learner's due-review queue",
@@ -1145,7 +1423,10 @@ class ClassroomDirector:
                     require_audio=True,
                 )
 
-        if context.course_complete:
+        if context.course_complete and not (
+            context.classroom_mode == ClassroomMode.REVIEW
+            and context.review_due_items
+        ):
             return DirectorDecision(
                 selected_scene_type=SceneType.CELEBRATION,
                 reasoning="Persisted session shows every lesson has multiple forms of evidence",
@@ -1287,6 +1568,33 @@ class SceneCompiler:
 
     async def _create_instruction_components(self, context: ContextSnapshot) -> List[Component]:
         """Create one short teaching beat, then yield control to the learner."""
+        if context.learner_signal == ActionIntent.SKIP_QUESTION.value:
+            is_spanish = context.language_code.lower().startswith("es")
+            return [
+                TeacherMessage(
+                    text=(
+                        "De acuerdo. Omitir esta pregunta no cuenta como error. "
+                        "La guardé para repasarla más tarde."
+                        if is_spanish
+                        else "Okay. Skipping this question does not count as an error. "
+                        "I saved it for later review."
+                    ),
+                    emotion="encouraging",
+                    audio_mood=AudioMood.GENTLE,
+                    concept_tags=[context.learning_objective or context.topic or "current_topic"],
+                    source_attributions=context.source_attributions,
+                    language_code=context.language_code,
+                    priority=0,
+                ),
+                CTAButton(
+                    label="Siguiente lección" if is_spanish else "Next lesson",
+                    action_intent=ActionIntent.CONTINUE,
+                    button_style="primary",
+                    language_code=context.language_code,
+                    priority=1,
+                ),
+            ]
+
         if context.hint_level:
             return self._create_hint_components(context)
 
@@ -1575,21 +1883,40 @@ class SceneCompiler:
         covered = list(progress.get("covered", []))[-3:]
         objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
         is_spanish = context.language_code.lower().startswith("es")
+        review_count = len(context.review_due_items)
         components: List[Component] = []
 
         if context.course_complete:
             if is_spanish:
-                message = (
-                    f"Completaste {context.course_title or context.topic or 'este curso'}. "
-                    "Cada lección ya tiene evidencia de reconocimiento y aplicación."
-                )
-                celebration_message = "Dominio del curso demostrado"
+                if context.review_due_items:
+                    message = (
+                        f"Terminaste el recorrido de {context.course_title or context.topic or 'este curso'}. "
+                        f"Guardé {review_count} "
+                        f"{'comprobación' if review_count == 1 else 'comprobaciones'} "
+                        f"para repasar; {'no cuenta como error' if review_count == 1 else 'no cuentan como errores'}."
+                    )
+                    celebration_message = "Recorrido completado"
+                else:
+                    message = (
+                        f"Completaste {context.course_title or context.topic or 'este curso'}. "
+                        "Cada lección ya tiene evidencia de reconocimiento y aplicación."
+                    )
+                    celebration_message = "Dominio del curso demostrado"
             else:
-                message = (
-                    f"You completed {context.course_title or context.topic or 'this course'}. "
-                    "Each lesson now has both recognition and application evidence."
-                )
-                celebration_message = "Course mastery demonstrated"
+                if context.review_due_items:
+                    message = (
+                        f"You finished the {context.course_title or context.topic or 'course'} path. "
+                        f"I saved {review_count} "
+                        f"{'checkpoint' if review_count == 1 else 'checkpoints'} "
+                        f"for review; {'it does' if review_count == 1 else 'they do'} not count as wrong."
+                    )
+                    celebration_message = "Course path complete"
+                else:
+                    message = (
+                        f"You completed {context.course_title or context.topic or 'this course'}. "
+                        "Each lesson now has both recognition and application evidence."
+                    )
+                    celebration_message = "Course mastery demonstrated"
         else:
             if is_spanish:
                 message = (
@@ -1657,11 +1984,28 @@ class SceneCompiler:
             priority=2,
         ))
 
-        if not context.course_complete:
+        if context.course_complete and context.review_due_items:
             components.append(CTAButton(
-                label="Next lesson",
+                label="Repasar ahora" if is_spanish else "Review saved checks",
+                action_intent=ActionIntent.REQUEST_REVIEW,
+                button_style="primary",
+                language_code=context.language_code,
+                priority=3,
+            ))
+        elif context.classroom_mode == ClassroomMode.REVIEW and context.review_due_items:
+            components.append(CTAButton(
+                label="Siguiente repaso" if is_spanish else "Next review",
+                action_intent=ActionIntent.REQUEST_REVIEW,
+                button_style="primary",
+                language_code=context.language_code,
+                priority=3,
+            ))
+        elif not context.course_complete:
+            components.append(CTAButton(
+                label="Siguiente lección" if is_spanish else "Next lesson",
                 action_intent=ActionIntent.CONTINUE,
                 button_style="primary",
+                language_code=context.language_code,
                 priority=3,
             ))
 
@@ -1722,11 +2066,21 @@ Return ONLY one JSON object:
 Rules:
 - Teach one idea accurately; do not write a scene, dialogue, welcome, or cast.
 - The Teacher is the only speaker. Never supply an AI student's answer.
-- If a learner question exists, answer it directly.
-- If the learner was confused or incorrect, explain the exact gap differently.
+- Make every sentence serve the learning objective.
+- If a learner question exists, answer it directly before resuming.
+- If a learner response exists, acknowledge its reasoning as evidence; do not
+  pretend it was a question.
+- If the learner was confused or incorrect, explain the supplied gap differently.
+- If the learner is hesitant, give exactly one small hint without revealing the
+  direct answer or any internal grading rubric.
+- If the learner asked to skip ahead or said this is too easy, deepen the
+  application without dropping the objective.
+- In challenge mode, compress explanation and deepen transfer. In review mode,
+  prioritize retrieval over re-lecturing.
 - Refer naturally to the board in the speech.
 - Do not ask a question in the speech; the server presents the checkpoint next.
 - Do not repeat anything in Already covered.
+- Never reveal expected keywords, coverage scores, or grading criteria.
 - Use only supplied course material and never invent a citation.
 """
             response = await ai_resilience_manager.chat_completion(
@@ -2063,7 +2417,7 @@ class SceneLifecycleEngine:
         """Persist guided classroom position in ClassroomSession.context."""
         try:
             user_id = int(trigger.user_id)
-            from lyo_app.classroom.models import ClassroomSession
+            from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
             result = await self.db.execute(
                 select(ClassroomSession)
                 .where(
@@ -2086,12 +2440,21 @@ class SceneLifecycleEngine:
                     context={},
                 )
                 self.db.add(session)
+                await self.db.flush()
 
             durable_context = dict(session.context or {})
             durable_context.update({
-                "current_lesson_index": context.lesson_index,
+                "current_lesson_index": progress.get(
+                    "current_lesson_index", context.lesson_index
+                ),
+                "active_review_lesson_index": progress.get("active_review_lesson_index"),
+                "course_id": progress.get("course_id") or context.course_id,
+                "lesson_id": progress.get("lesson_id") or context.lesson_id,
                 "mastered_lessons": list(progress.get("mastered_lessons", [])),
+                "skipped_lessons": list(progress.get("skipped_lessons", [])),
                 "evidence": dict(progress.get("evidence", {})),
+                "attempt_history": list(progress.get("attempt_history", []))[-100:],
+                "review_queue": list(progress.get("review_queue", []))[-50:],
                 "hint_counts": dict(progress.get("hint_counts", {})),
                 "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
@@ -2105,10 +2468,60 @@ class SceneLifecycleEngine:
             })
             session.context = durable_context
             session.subject = context.topic or session.subject
-            session.is_active = not context.course_complete
+            has_pending_review = bool(progress.get("review_queue"))
+            session.is_active = not context.course_complete or has_pending_review
             session.updated_at = datetime.utcnow()
-            if context.course_complete:
+            if context.course_complete and not has_pending_review:
                 session.ended_at = datetime.utcnow()
+
+            action_data = trigger.action_data or {}
+            raw_intent = action_data.get("action_intent")
+            try:
+                action_intent = (
+                    raw_intent
+                    if isinstance(raw_intent, ActionIntent)
+                    else ActionIntent(raw_intent)
+                )
+            except (TypeError, ValueError):
+                action_intent = None
+            recordable_intents = {
+                ActionIntent.SUBMIT_ANSWER,
+                ActionIntent.SUBMIT_TRANSFER,
+                ActionIntent.SKIP_QUESTION,
+                ActionIntent.REQUEST_HINT,
+                ActionIntent.RETRY,
+            }
+            if action_intent in recordable_intents:
+                answer_data = action_data.get("answer_data", {})
+                response = str(
+                    answer_data.get("response")
+                    or action_data.get("message")
+                    or ""
+                ).strip()
+                response_time_ms = (
+                    answer_data.get("response_time_ms")
+                    or action_data.get("response_time_ms")
+                )
+                try:
+                    duration_seconds = (
+                        max(float(response_time_ms) / 1000.0, 0.0)
+                        if response_time_ms is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    duration_seconds = None
+                is_correct = answer_data.get("is_correct")
+                if not isinstance(is_correct, bool):
+                    is_correct = None
+                self.db.add(ClassroomInteraction(
+                    session_id=session.id,
+                    event_type=action_intent.value,
+                    card_id=trigger.component_id or f"lesson-{context.lesson_index}",
+                    topic=context.learning_objective or context.lesson_title or context.topic,
+                    duration_seconds=duration_seconds,
+                    is_correct=is_correct,
+                    word_count=len(response.split()) if response else None,
+                ))
             await self.db.commit()
         except (ValueError, TypeError):
             return
@@ -2142,13 +2555,21 @@ class SceneLifecycleEngine:
             # PHASE 2: Context Assembly (Think)
             context = await self.context_assembler.assemble_context(trigger)
             # Inject cached lesson_index from previous CONTINUE advances
-            if trigger.session_id in self.session_lesson_indices:
+            if (
+                context.classroom_mode != ClassroomMode.REVIEW
+                and trigger.session_id in self.session_lesson_indices
+            ):
                 context.lesson_index = self.session_lesson_indices[trigger.session_id]
                 # Re-resolve lesson data with updated index
-                context.lesson_title, context.lesson_content, context.total_lessons = \
-                    await self.context_assembler._resolve_current_lesson(
-                        context.course_id, context.lesson_index
-                    )
+                (
+                    context.lesson_id,
+                    context.lesson_index,
+                    context.lesson_title,
+                    context.lesson_content,
+                    context.total_lessons,
+                ) = await self.context_assembler._resolve_current_lesson(
+                    context.course_id, context.lesson_index
+                )
                 if context.lesson_title and not context.topic:
                     context.topic = context.lesson_title
             self.session_contexts[trigger.session_id] = context
@@ -2166,15 +2587,55 @@ class SceneLifecycleEngine:
             evidence = progress.setdefault("evidence", {})
             lesson_key = str(context.lesson_index)
             lesson_evidence = evidence.setdefault(
-                lesson_key, {"recognition": False, "transfer": False}
+                lesson_key,
+                {"recognition": False, "transfer": False, "status": "in_progress"},
             )
+            attempts = progress.setdefault("attempt_history", [])
+            skipped_lessons = set(progress.get("skipped_lessons", []))
+            review_queue = list(progress.get("review_queue", []))
+
+            def record_attempt(
+                outcome: str,
+                is_correct: Optional[bool] = None,
+            ) -> None:
+                response = str(
+                    answer_data.get("response")
+                    or action_data.get("message")
+                    or ""
+                ).strip()
+                attempts.append({
+                    "event_id": str(uuid4()),
+                    "at": datetime.utcnow().isoformat(),
+                    "lesson_index": context.lesson_index,
+                    "lesson_id": context.lesson_id,
+                    "intent": (
+                        action_intent.value
+                        if isinstance(action_intent, ActionIntent)
+                        else str(action_intent or "unknown")
+                    ),
+                    "component_id": trigger.component_id,
+                    "outcome": outcome,
+                    "is_correct": is_correct,
+                    "response_time_ms": answer_data.get("response_time_ms"),
+                    "word_count": len(response.split()) if response else None,
+                })
+                del attempts[:-100]
 
             if action_intent == ActionIntent.SUBMIT_ANSWER:
                 answer_is_correct = answer_data.get("is_correct") is True
                 context.learner_signal = (
                     "correct_answer" if answer_is_correct else "incorrect_answer"
                 )
-                lesson_evidence["recognition"] = answer_is_correct
+                lesson_evidence["recognition"] = bool(
+                    lesson_evidence.get("recognition") or answer_is_correct
+                )
+                lesson_evidence["status"] = (
+                    "recognition_passed" if answer_is_correct else "needs_support"
+                )
+                record_attempt(
+                    "recognition_correct" if answer_is_correct else "recognition_incorrect",
+                    answer_is_correct,
+                )
                 if not answer_is_correct and answer_data.get("misconception_tag"):
                     history = progress.setdefault("misconception_history", [])
                     history.append({
@@ -2188,21 +2649,106 @@ class SceneLifecycleEngine:
                 context.learner_signal = (
                     "correct_transfer" if transfer_is_correct else "incorrect_transfer"
                 )
-                lesson_evidence["transfer"] = transfer_is_correct
+                lesson_evidence["transfer"] = bool(
+                    lesson_evidence.get("transfer") or transfer_is_correct
+                )
+                lesson_evidence["status"] = (
+                    "mastered"
+                    if transfer_is_correct and lesson_evidence.get("recognition")
+                    else "needs_support"
+                )
+                record_attempt(
+                    "transfer_correct" if transfer_is_correct else "transfer_incorrect",
+                    transfer_is_correct,
+                )
                 if transfer_is_correct and lesson_evidence.get("recognition"):
                     mastered_lessons.add(context.lesson_index)
                     progress["mastered_lessons"] = sorted(mastered_lessons)
+                    skipped_lessons.discard(context.lesson_index)
+                    review_queue = [
+                        item for item in review_queue
+                        if str(item.get("lesson_index", "")) != str(context.lesson_index)
+                    ]
+                    progress["skipped_lessons"] = sorted(skipped_lessons)
+                    progress["review_queue"] = review_queue
+                    context.review_due_items = [
+                        item for item in context.review_due_items
+                        if item != (context.learning_objective or context.lesson_title)
+                    ]
 
-            if action_intent == ActionIntent.CONTINUE and context.lesson_index in mastered_lessons:
+            if action_intent == ActionIntent.SKIP_QUESTION:
+                context.learner_signal = ActionIntent.SKIP_QUESTION.value
+                lesson_evidence["status"] = "skipped"
+                skipped_lessons.add(context.lesson_index)
+                progress["skipped_lessons"] = sorted(skipped_lessons)
+                if not any(
+                    str(item.get("lesson_index", "")) == str(context.lesson_index)
+                    for item in review_queue
+                ):
+                    review_queue.append({
+                        "lesson_index": context.lesson_index,
+                        "lesson_id": context.lesson_id,
+                        "lesson_title": context.lesson_title,
+                        "objective": (
+                            context.learning_objective
+                            or context.lesson_title
+                            or context.topic
+                        ),
+                        "queued_at": datetime.utcnow().isoformat(),
+                    })
+                progress["review_queue"] = review_queue
+                context.review_due_items = list(dict.fromkeys(
+                    item for item in [
+                        *context.review_due_items,
+                        context.learning_objective or context.lesson_title or context.topic,
+                    ] if item
+                ))
+                record_attempt("skipped", None)
+
+            if action_intent == ActionIntent.REQUEST_HINT:
+                lesson_evidence["status"] = "receiving_help"
+                record_attempt("hint_requested", None)
+
+            # A learner who signals uncertainty ("not sure", "idk", "help")
+            # gets shifted out of assessment entirely, regardless of how the
+            # Evaluator scored their response — a stuck learner needs a hint,
+            # not a rubric-based correction.
+            if answer_data.get("hesitant") or (
+                action_intent == ActionIntent.USER_MESSAGE
+                and detect_hesitation(action_data.get("message"))
+            ):
+                context.learner_signal = "hesitant"
+
+            can_advance = (
+                context.lesson_index in mastered_lessons
+                or context.lesson_index in skipped_lessons
+            )
+            if (
+                action_intent == ActionIntent.CONTINUE
+                and context.classroom_mode != ClassroomMode.REVIEW
+                and can_advance
+            ):
+                advanced_after_skip = (
+                    context.lesson_index in skipped_lessons
+                    and context.lesson_index not in mastered_lessons
+                )
                 next_index = context.lesson_index + 1
                 if context.total_lessons > 0 and next_index < context.total_lessons:
                     context.lesson_index = next_index
                     self.session_lesson_indices[trigger.session_id] = next_index
-                    action_data["advanced_after_mastery"] = True
-                    context.lesson_title, context.lesson_content, context.total_lessons = \
-                        await self.context_assembler._resolve_current_lesson(
-                            context.course_id, next_index
-                        )
+                    action_data[
+                        "advanced_after_skip" if advanced_after_skip else "advanced_after_mastery"
+                    ] = True
+                    (
+                        context.lesson_id,
+                        context.lesson_index,
+                        context.lesson_title,
+                        context.lesson_content,
+                        context.total_lessons,
+                    ) = await self.context_assembler._resolve_current_lesson(
+                        context.course_id, next_index
+                    )
+                    progress["lesson_id"] = context.lesson_id
                     context.learning_objective = context.lesson_title or context.topic
                     context.source_attributions = [
                         "Course material"
@@ -2220,13 +2766,17 @@ class SceneLifecycleEngine:
                 else:
                     context.course_complete = True
                     action_data["course_complete"] = True
-                    logger.info("🏁 All available classroom lessons mastered")
+                    action_data["advanced_after_skip"] = advanced_after_skip
+                    logger.info("🏁 Learner reached the end of the classroom path")
 
             context.overall_progress = min(
                 1.0,
                 len(mastered_lessons) / max(context.total_lessons, 1),
             )
-            progress["current_lesson_index"] = context.lesson_index
+            if context.classroom_mode != ClassroomMode.REVIEW:
+                progress["current_lesson_index"] = context.lesson_index
+            else:
+                progress["active_review_lesson_index"] = context.lesson_index
             progress["course_complete"] = context.course_complete
             self.session_contexts[trigger.session_id] = context
             await self._persist_session_progress(trigger, context, progress)
@@ -2441,6 +2991,7 @@ class SceneLifecycleEngine:
         validated_correct = False
         coverage = 0.0
         missing: List[str] = []
+        hesitant = detect_hesitation(response)
         skill_id = (
             self.session_contexts.get(session_id).learning_objective
             if self.session_contexts.get(session_id)
@@ -2474,15 +3025,16 @@ class SceneLifecycleEngine:
                     )
                     break
 
-        feedback = (
-            "Your explanation uses the lesson idea in a new situation."
-            if validated_correct
-            else (
-                "Add the missing reasoning link"
-                + (f" around {', '.join(missing)}" if missing else "")
-                + f". Aim for at least {min_words} words and explain why the example works."
-            )
-        )
+        # Tutor-facing feedback: never quote the Evaluator's raw `missing`
+        # keyword list here — that would hand the learner the exact words
+        # the rubric is scoring for. `describe_transfer_gap` turns the score
+        # into a plain-language hint about the *category* of gap instead.
+        if hesitant:
+            feedback = "No problem — let's break this into a smaller step."
+        elif validated_correct:
+            feedback = "Your explanation uses the lesson idea in a new situation."
+        else:
+            feedback = describe_transfer_gap(response, min_words, coverage, min_score)
 
         progress = _SESSION_PROGRESS.get(session_id, {})
         session_context = self.session_contexts.get(session_id)
@@ -2518,9 +3070,15 @@ class SceneLifecycleEngine:
                 "answer_data": {
                     "is_correct": validated_correct,
                     "coverage": coverage,
+                    # Internal telemetry only (mastery tracking / analytics) —
+                    # never rendered as chat text. Unlike quiz distractors,
+                    # transfer responses have no author-curated remediation
+                    # hint, so `remediation_hint` stays None here rather than
+                    # being built from the rubric's keyword list.
                     "missing_keywords": missing,
                     "feedback": feedback,
-                    "remediation_hint": ", ".join(missing) if missing else None,
+                    "remediation_hint": None,
+                    "hesitant": hesitant,
                 },
             },
             component_id=input_component_id,

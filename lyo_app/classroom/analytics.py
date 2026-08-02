@@ -15,7 +15,14 @@ router = APIRouter()
 
 # Schema for the incoming iOS telemetry
 class LyoAnalyticsEvent(BaseModel):
-    event_type: Literal["card_viewed", "quiz_answered", "reflection_submitted", "lesson_completed"]
+    event_type: Literal[
+        "card_viewed",
+        "quiz_answered",
+        "check_skipped",
+        "help_requested",
+        "reflection_submitted",
+        "lesson_completed",
+    ]
     card_id: str
     topic: Optional[str] = None
     

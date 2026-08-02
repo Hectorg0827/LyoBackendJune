@@ -360,6 +360,8 @@ async def _send_welcome_scene(
         # attached to the session so instruction is driven by a goal, not only
         # a display title.
         topic_from_query = connection.websocket.query_params.get("topic")
+        course_id_from_query = connection.websocket.query_params.get("course_id")
+        lesson_id_from_query = connection.websocket.query_params.get("lesson_id")
         objective_from_query = connection.websocket.query_params.get("objective")
         difficulty_from_query = connection.websocket.query_params.get("difficulty")
         mode_from_query = connection.websocket.query_params.get("mode") or "solo"
@@ -374,25 +376,25 @@ async def _send_welcome_scene(
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
         topic = None
-        course_id = None
+        course_id = course_id_from_query
         try:
             from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
             cm = get_conversation_manager()
             conv_session = cm.get_session(connection.session_id)
             if conv_session:
                 topic = conv_session.current_topic
-                course_id = conv_session.current_course_id
+                course_id = course_id or conv_session.current_course_id
             else:
                 # iOS sends courseId as session_id — create a session for it
                 from lyo_app.ai_classroom.conversation_flow import ConversationSession as ConvSession
                 conv_session = ConvSession(
                     session_id=connection.session_id,
                     user_id=connection.user_id,
-                    current_course_id=connection.session_id,
+                    current_course_id=course_id_from_query or connection.session_id,
                     current_lesson_index=0,
                 )
                 cm._sessions[connection.session_id] = conv_session
-                course_id = connection.session_id
+                course_id = course_id_from_query or connection.session_id
                 logger.info(f"📚 Created ConversationSession for WS classroom: {connection.session_id}")
         except Exception as e:
             logger.warning(f"⚠️ Could not resolve topic from ConversationManager: {e}")
@@ -413,6 +415,11 @@ async def _send_welcome_scene(
             action_data={
                 "welcome": True,
                 "topic": resolved_topic,
+                "course_id": course_id,
+                "lesson_id": lesson_id_from_query,
+                "client_contract_version": (
+                    connection.websocket.query_params.get("client_contract_version") or "1"
+                ),
                 "objective": objective_from_query,
                 "difficulty": difficulty_from_query,
                 "mode": mode_from_query,
