@@ -1,6 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Any
-import asyncio
 import logging
 import json
 
@@ -14,10 +13,13 @@ router = APIRouter(
     tags=["classroom"]
 )
 
-# How long (seconds) to wait for a "continue" ack from the client before
-# automatically advancing.  Prevents the lesson hanging forever if the iOS
-# app never sends the acknowledgement (e.g. due to a network hiccup).
-AUTO_ADVANCE_TIMEOUT = 120  # 2 minutes
+ADVANCE_INTENTS = {
+    "continue",
+    "skip_question",
+    "submit_answer",
+    "submit_transfer",
+    "quiz_answer",
+}
 
 
 @router.websocket("/ws/lesson/{topic}")
@@ -95,29 +97,30 @@ async def websocket_lesson_stream(websocket: WebSocket, topic: str):
             if index == total_cards - 1:
                 break
 
-            # Wait for the client to send any message (typically
-            # {"action_intent": "continue"}) before proceeding.
-            try:
-                raw = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=AUTO_ADVANCE_TIMEOUT,
-                )
-                client_msg = json.loads(raw)
-                intent = client_msg.get("action_intent", "")
-                logger.info(f"[{topic}] Received client intent: '{intent}' (card {index + 1})")
-                # We accept any intent as a signal to continue (continue,
-                # skip, hint, etc.).  Quiz-answer data is logged but ignored
-                # for the purposes of card progression here.
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[{topic}] No client ack after {AUTO_ADVANCE_TIMEOUT}s "
-                    f"— auto-advancing past card {index + 1}"
-                )
-            except WebSocketDisconnect:
-                logger.info(f"[{topic}] Client disconnected at card {index + 1}")
-                return
-            except json.JSONDecodeError:
-                logger.warning(f"[{topic}] Received non-JSON message — advancing anyway")
+            # Wait indefinitely for an explicit learner action. Help, malformed
+            # messages, and silence never advance the lesson on the learner's
+            # behalf.
+            while True:
+                try:
+                    raw = await websocket.receive_text()
+                    client_msg = json.loads(raw)
+                    intent = str(client_msg.get("action_intent", "")).lower()
+                    logger.info(
+                        f"[{topic}] Received client intent: '{intent}' "
+                        f"(card {index + 1})"
+                    )
+                    if intent in ADVANCE_INTENTS:
+                        break
+                    logger.info(
+                        f"[{topic}] Intent '{intent}' did not advance the lesson"
+                    )
+                except WebSocketDisconnect:
+                    logger.info(f"[{topic}] Client disconnected at card {index + 1}")
+                    return
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"[{topic}] Received non-JSON message — still waiting"
+                    )
 
         # --- 3. Signal lesson completion ---
         await websocket.send_json({"is_complete": True, "total_cards": total_cards})

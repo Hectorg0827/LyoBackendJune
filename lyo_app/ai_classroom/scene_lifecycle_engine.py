@@ -71,7 +71,14 @@ def score_transfer_response(
     min_words: int = 6,
     min_score: float = 0.25,
 ) -> tuple[bool, float, List[str]]:
-    """Score open evidence deterministically; return correctness, coverage, gaps."""
+    """Score open evidence deterministically; return correctness, coverage, gaps.
+
+    This is the hidden Evaluator: its output (correctness, coverage, and the
+    specific missing rubric keywords) is for internal scoring and mastery
+    tracking only. Never surface `missing` verbatim to the learner — that
+    would hand them the exact words the grader is looking for. Use
+    `describe_transfer_gap` to turn this into learner-safe feedback instead.
+    """
     tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "").lower())
     token_set = set(tokens)
     rubric = [k.lower().strip() for k in expected_keywords if k and k.strip()]
@@ -81,6 +88,60 @@ def score_transfer_response(
     correct = substantive and (not rubric or coverage >= min_score)
     missing = [k for k in rubric if k not in hits]
     return correct, round(coverage, 3), missing[:4]
+
+
+def describe_transfer_gap(
+    response: str,
+    min_words: int,
+    coverage: float,
+    min_score: float,
+) -> str:
+    """Translate the Evaluator's internal score into learner-safe feedback.
+
+    Describes the *category* of gap (too short vs. not yet on-target) without
+    ever quoting the rubric's expected keywords, so a learner can't just
+    parrot back the words the grader wants to see.
+    """
+    word_count = len(re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{1,}", (response or "")))
+    if word_count < min_words:
+        return (
+            f"Say a bit more — aim for at least {min_words} words and walk "
+            "through your reasoning, not just the result."
+        )
+    if coverage < min_score:
+        return (
+            "You're close, but the explanation doesn't yet connect back to "
+            "the core idea. Explain why the example works, not just what "
+            "you did."
+        )
+    return "Add one more precise detail to make the reasoning airtight."
+
+
+_HESITATION_PHRASES = (
+    "not sure", "not really sure", "not certain", "unsure",
+    "no idea", "i don't know", "i dont know", "idk", "no clue",
+    "i'm confused", "im confused", "confused",
+    "i'm stuck", "im stuck", "stuck",
+    "i give up", "give up",
+    "help me", "i need help", "can you help",
+    "not following", "i'm lost", "im lost", "lost me",
+)
+
+
+def detect_hesitation(text: Optional[str]) -> bool:
+    """Lightweight keyword classifier for learner uncertainty.
+
+    Runs before the response is scored or handed to the Director LLM, so a
+    learner who signals they're stuck gets routed to a small scaffolding
+    hint instead of being scored against the rubric or shown a rubric-derived
+    correction.
+    """
+    if not text:
+        return False
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    return any(phrase in normalized for phrase in _HESITATION_PHRASES)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -217,6 +278,7 @@ class ContextSnapshot(BaseModel):
     # Course / topic context
     topic: Optional[str] = None
     course_id: Optional[str] = None
+    lesson_id: Optional[str] = None
     course_title: Optional[str] = None
     lesson_index: int = 0
     lesson_title: Optional[str] = None
@@ -226,6 +288,10 @@ class ContextSnapshot(BaseModel):
     course_complete: bool = False
     classroom_mode: ClassroomMode = ClassroomMode.SOLO
     target_duration_minutes: int = Field(default=10, ge=3, le=60)
+    language_code: str = Field(
+        default="en-US",
+        description="BCP-47 locale used for lesson generation and speech",
+    )
     source_attributions: List[str] = Field(default_factory=list)
     review_due_items: List[str] = Field(default_factory=list)
 
@@ -262,6 +328,15 @@ class ContextSnapshot(BaseModel):
     attention_span_estimate: int = Field(default=300, description="Estimated attention span in seconds")
 
 
+class TeachingBeat(BaseModel):
+    """One learner-gated teaching turn, never a multi-character script."""
+
+    speech: str = Field(..., min_length=3, max_length=700)
+    board_title: str = Field(..., min_length=1, max_length=100)
+    board_content: str = Field(..., min_length=1, max_length=1200)
+    example_type: str = Field(default="real_world")
+
+
 class ContextAssembler:
     """Builds comprehensive context snapshots for scene generation"""
 
@@ -295,11 +370,41 @@ class ContextAssembler:
             progress["_hydrated"] = True
         if "current_lesson_index" in progress:
             context.lesson_index = int(progress["current_lesson_index"] or 0)
+        context.course_id = str(progress.get("course_id") or context.course_id or "") or None
+        context.lesson_id = str(progress.get("lesson_id") or "") or None
         context.course_complete = bool(progress.get("course_complete", False))
 
+        # Apply explicit launch identity before resolving content. A lesson URL
+        # must open that authored lesson, rather than silently teaching index 0.
+        action_data = trigger.action_data or {}
+        explicit_course_id = action_data.get("course_id")
+        explicit_lesson_id = action_data.get("lesson_id")
+        if explicit_course_id:
+            context.course_id = str(explicit_course_id)
+            progress["course_id"] = context.course_id
+        elif context.course_id:
+            progress["course_id"] = context.course_id
+
         # Resolve current lesson content from the DB
-        context.lesson_title, context.lesson_content, context.total_lessons = \
-            await self._resolve_current_lesson(context.course_id, context.lesson_index)
+        (
+            resolved_lesson_id,
+            context.lesson_index,
+            context.lesson_title,
+            context.lesson_content,
+            context.total_lessons,
+        ) = await self._resolve_current_lesson(
+            context.course_id,
+            context.lesson_index,
+            requested_lesson_id=(
+                str(explicit_lesson_id) if explicit_lesson_id else None
+            ),
+        )
+        context.lesson_id = resolved_lesson_id or (
+            str(explicit_lesson_id) if explicit_lesson_id else context.lesson_id
+        )
+        progress["current_lesson_index"] = context.lesson_index
+        if context.lesson_id:
+            progress["lesson_id"] = context.lesson_id
         # If lesson gave us a more specific topic, use it
         if context.lesson_title and not context.topic:
             context.topic = context.lesson_title
@@ -310,16 +415,26 @@ class ContextAssembler:
                 + (f" — {context.lesson_title}" if context.lesson_title else "")
             ]
 
-        # Preserve the instructional goal and learner-selected pace for the
-        # entire classroom session. These values arrive on the welcome trigger
-        # and must remain available on later WebSocket actions.
-        action_data = trigger.action_data or {}
+        # Preserve the learner-selected pace for the entire classroom
+        # session. These values arrive on the welcome trigger and must
+        # remain available on later WebSocket actions.
         explicit_objective = action_data.get("objective")
         if explicit_objective:
             progress["learning_objective"] = str(explicit_objective)
+
+        # The per-scene teaching objective must track the CURRENT lesson,
+        # not freeze on whatever generic prompt the learner typed at course
+        # creation (e.g. "Learn the basic concepts of algebra"). That prompt
+        # used to win here for the whole session, so every later lesson's
+        # transfer question and rubric keywords were derived from it instead
+        # of the actual lesson content — producing junk pseudo-concepts like
+        # "learn"/"basic"/"concepts" ("Revise your application of Learn the
+        # basic concepts..."). Prefer the resolved lesson_title when one
+        # exists; fall back to the course-creation objective only for
+        # freeform sessions with no discrete lesson to resolve.
         context.learning_objective = (
-            progress.get("learning_objective")
-            or context.lesson_title
+            context.lesson_title
+            or progress.get("learning_objective")
             or context.topic
         )
 
@@ -332,6 +447,9 @@ class ContextAssembler:
         )
 
         mode = action_data.get("mode")
+        requested_intent = action_data.get("action_intent")
+        if requested_intent == ActionIntent.REQUEST_REVIEW:
+            mode = ClassroomMode.REVIEW.value
         if mode:
             try:
                 progress["classroom_mode"] = ClassroomMode(str(mode).lower()).value
@@ -344,6 +462,47 @@ class ContextAssembler:
         except ValueError:
             context.classroom_mode = ClassroomMode.SOLO
 
+        # Review mode re-opens the oldest skipped checkpoint against its own
+        # authored lesson, while preserving the learner's normal course cursor.
+        review_queue = list(progress.get("review_queue", []))
+        if context.classroom_mode == ClassroomMode.REVIEW and review_queue:
+            review_item = review_queue[0]
+            try:
+                context.lesson_index = int(review_item.get("lesson_index", context.lesson_index))
+            except (TypeError, ValueError):
+                pass
+            requested_review_lesson_id = (
+                str(review_item.get("lesson_id"))
+                if review_item.get("lesson_id")
+                else None
+            )
+            (
+                resolved_review_lesson_id,
+                context.lesson_index,
+                context.lesson_title,
+                context.lesson_content,
+                context.total_lessons,
+            ) = await self._resolve_current_lesson(
+                context.course_id,
+                context.lesson_index,
+                requested_lesson_id=requested_review_lesson_id,
+            )
+            context.lesson_id = (
+                resolved_review_lesson_id
+                or requested_review_lesson_id
+                or context.lesson_id
+            )
+            context.learning_objective = (
+                review_item.get("objective")
+                or context.lesson_title
+                or context.learning_objective
+            )
+            context.source_attributions = [
+                "Course material"
+                + (f": {context.course_title}" if context.course_title else "")
+                + (f" — {context.lesson_title}" if context.lesson_title else "")
+            ]
+
         duration = action_data.get("duration_minutes")
         if duration is not None:
             try:
@@ -353,6 +512,23 @@ class ContextAssembler:
         context.target_duration_minutes = int(
             progress.get("target_duration_minutes", context.target_duration_minutes)
         )
+
+        language = action_data.get("language") or action_data.get("language_code")
+        if language:
+            progress["language_code"] = str(language)
+        from lyo_app.tts.service import TTSService
+        context.language_code = TTSService.normalize_language(
+            progress.get("language_code", "auto"),
+            " ".join(
+                value for value in (
+                    context.lesson_title,
+                    context.lesson_content,
+                    context.topic,
+                ) if value
+            ),
+            "en-US",
+        )
+        progress["language_code"] = context.language_code
 
         hint_level = action_data.get("hint_level")
         if hint_level:
@@ -381,8 +557,18 @@ class ContextAssembler:
         context.learner_context = await self._get_learner_context(
             trigger.user_id, context.lesson_title or context.topic
         )
+        skipped_review = [
+            str(item.get("objective") or item.get("lesson_title") or "").strip()
+            for item in review_queue
+        ]
+        context.review_due_items = list(dict.fromkeys(
+            item for item in skipped_review if item
+        ))
         if context.classroom_mode == ClassroomMode.REVIEW:
-            context.review_due_items = await self._get_due_review_items(trigger.user_id)
+            scheduled_review = await self._get_due_review_items(trigger.user_id)
+            context.review_due_items = list(dict.fromkeys(
+                item for item in [*context.review_due_items, *scheduled_review] if item
+            ))
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)
@@ -440,7 +626,9 @@ class ContextAssembler:
     ) -> tuple:
         """Resolve topic, course_id, course_title and lesson_index from the session."""
         topic = None
-        course_id = trigger.course_id
+        course_id = trigger.course_id or (
+            (trigger.action_data or {}).get("course_id")
+        )
         course_title = None
         lesson_index = 0
 
@@ -536,36 +724,71 @@ class ContextAssembler:
         return topic, course_id, course_title, lesson_index
 
     async def _resolve_current_lesson(
-        self, course_id: Optional[str], lesson_index: int
+        self,
+        course_id: Optional[str],
+        lesson_index: int,
+        requested_lesson_id: Optional[str] = None,
     ) -> tuple:
-        """Fetch the current lesson title, content, and total lessons for the course."""
+        """Resolve canonical lesson identity and authored content for a course."""
+        resolved_lesson_id = None
+        resolved_lesson_index = lesson_index
         lesson_title = None
         lesson_content = None
         total_lessons = 0
 
         if not course_id:
-            return lesson_title, lesson_content, total_lessons
+            return (
+                resolved_lesson_id,
+                resolved_lesson_index,
+                lesson_title,
+                lesson_content,
+                total_lessons,
+            )
 
         try:
             course_id_int = int(course_id)
             from lyo_app.learning.models import Lesson
 
-            # Get the current lesson by order_index
+            requested_lesson_id_int = None
+            if requested_lesson_id:
+                try:
+                    requested_lesson_id_int = int(requested_lesson_id)
+                except (TypeError, ValueError):
+                    pass
+
+            # A canonical lesson ID from the launch URL wins over the cursor.
+            lesson_filter = (
+                Lesson.id == requested_lesson_id_int
+                if requested_lesson_id_int is not None
+                else Lesson.order_index == lesson_index
+            )
             result = await self.db.execute(
-                select(Lesson.title, Lesson.content, Lesson.description, Lesson.topic)
+                select(
+                    Lesson.id,
+                    Lesson.order_index,
+                    Lesson.title,
+                    Lesson.content,
+                    Lesson.description,
+                    Lesson.topic,
+                )
                 .where(
                     and_(
                         Lesson.course_id == course_id_int,
-                        Lesson.order_index == lesson_index
+                        lesson_filter,
                     )
                 )
                 .limit(1)
             )
             row = result.first()
             if row:
+                resolved_lesson_id = str(row.id)
+                resolved_lesson_index = int(row.order_index)
                 lesson_title = row.title
                 lesson_content = row.content or row.description or ""
-                logger.info(f"📖 Resolved lesson {lesson_index}: {lesson_title}")
+                logger.info(
+                    f"📖 Resolved lesson {resolved_lesson_index} "
+                    f"({resolved_lesson_id}): {lesson_title}"
+                )
 
             # Get total lesson count
             count_result = await self.db.execute(
@@ -578,7 +801,7 @@ class ContextAssembler:
             # It's a UUID, try getting lesson from GraphCourse first, then ChatCourse or GeneratedCourseModel
             try:
                 from lyo_app.ai_classroom.models import GraphCourse, LearningNode
-                from sqlalchemy import select, or_
+                from sqlalchemy import or_
                 
                 # Check if this course exists in GraphCourse by ID or Subject/Title (for topic sessions)
                 course_result = await self.db.execute(
@@ -609,25 +832,44 @@ class ContextAssembler:
                     
                     total_lessons = len(narrative_nodes)
                     if total_lessons > 0:
-                        if 0 <= lesson_index < total_lessons:
-                            target_node = narrative_nodes[lesson_index]
+                        target_index = lesson_index
+                        if requested_lesson_id:
+                            requested_index = next(
+                                (
+                                    index
+                                    for index, node in enumerate(narrative_nodes)
+                                    if str(node.id) == str(requested_lesson_id)
+                                ),
+                                None,
+                            )
+                            if requested_index is not None:
+                                target_index = requested_index
+                        if 0 <= target_index < total_lessons:
+                            target_node = narrative_nodes[target_index]
+                            resolved_lesson_id = str(target_node.id)
+                            resolved_lesson_index = target_index
                             keywords = target_node.content.get("keywords") or ["Overview"]
                             keyword = keywords[0] if keywords else "Overview"
-                            lesson_title = target_node.content.get("title") or f"Lesson {lesson_index + 1}: {keyword.title()}"
+                            lesson_title = target_node.content.get("title") or f"Lesson {target_index + 1}: {keyword.title()}"
                             lesson_content = target_node.content.get("narration", "")
                             if target_node.content.get("code"):
                                 lang = target_node.content.get("language") or ""
                                 code_str = target_node.content.get("code")
                                 lesson_content += f"\n\nCode Example:\n```{lang}\n{code_str}\n```"
-                            logger.info(f"📖 Resolved GraphCourse lesson {lesson_index}: {lesson_title}")
-                    return lesson_title, lesson_content, total_lessons
+                            logger.info(f"📖 Resolved GraphCourse lesson {target_index}: {lesson_title}")
+                    return (
+                        resolved_lesson_id,
+                        resolved_lesson_index,
+                        lesson_title,
+                        lesson_content,
+                        total_lessons,
+                    )
             except Exception as e:
                 logger.warning(f"⚠️ Could not query GraphCourse for lessons: {e}")
 
             # Fallback to other UUID models (ChatCourse or GeneratedCourseModel)
             try:
                 from lyo_app.chat.models import ChatCourse
-                from sqlalchemy import select
                 result = await self.db.execute(
                     select(ChatCourse.modules).where(ChatCourse.id == course_id)
                 )
@@ -660,18 +902,42 @@ class ContextAssembler:
                         all_lessons.extend(module_lessons)
                     
                     total_lessons = len(all_lessons)
-                    if 0 <= lesson_index < total_lessons:
-                        lesson = all_lessons[lesson_index]
+                    target_index = lesson_index
+                    if requested_lesson_id:
+                        requested_index = next(
+                            (
+                                index
+                                for index, lesson in enumerate(all_lessons)
+                                if str(lesson.get("id") or lesson.get("lesson_id") or "")
+                                == str(requested_lesson_id)
+                            ),
+                            None,
+                        )
+                        if requested_index is not None:
+                            target_index = requested_index
+                    if 0 <= target_index < total_lessons:
+                        lesson = all_lessons[target_index]
+                        raw_lesson_id = lesson.get("id") or lesson.get("lesson_id")
+                        resolved_lesson_id = (
+                            str(raw_lesson_id) if raw_lesson_id is not None else None
+                        )
+                        resolved_lesson_index = target_index
                         lesson_title = lesson.get("title")
                         lesson_content = lesson.get("content") or lesson.get("description") or lesson.get("summary") or ""
-                        logger.info(f"📖 Resolved chat/gen lesson {lesson_index}: {lesson_title}")
+                        logger.info(f"📖 Resolved chat/gen lesson {target_index}: {lesson_title}")
                     
             except Exception as e:
                 logger.warning(f"⚠️ Could not query UUID course models for lesson: {e}")
         except Exception as e:
             logger.warning(f"⚠️ Could not query Lesson: {e}")
 
-        return lesson_title, lesson_content, total_lessons
+        return (
+            resolved_lesson_id,
+            resolved_lesson_index,
+            lesson_title,
+            lesson_content,
+            total_lessons,
+        )
 
     async def _get_due_review_items(self, user_id: str) -> List[str]:
         """Return scheduled retrieval items without blocking guest sessions."""
@@ -961,6 +1227,30 @@ class ClassroomDirector:
         )
         newly_correct = quiz_correct or transfer_correct
 
+        if context.learner_signal == ActionIntent.SKIP_QUESTION.value:
+            return DirectorDecision(
+                selected_scene_type=SceneType.INSTRUCTION,
+                reasoning="Record a neutral skip, queue the checkpoint for review, and wait for explicit continuation",
+                confidence=0.99,
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                require_audio=True,
+                require_interaction=True,
+            )
+
+        # State shift: Assessment → Scaffolding. A hesitant learner is not
+        # pushed through the standard evaluation/correction path at all —
+        # this takes priority over both the frustration-driven CORRECTION
+        # branch and the normal correct/incorrect routing below.
+        if context.learner_signal == "hesitant":
+            return DirectorDecision(
+                selected_scene_type=SceneType.INSTRUCTION,
+                reasoning="Learner signaled uncertainty; shift from assessment to scaffolding with one small hint",
+                confidence=0.93,
+                difficulty_adjustment=-0.15,
+                suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                require_audio=True,
+            )
+
         if (
             context.frustration.frustration_score > 0.6
             and context.frustration.consecutive_failures >= 3
@@ -985,10 +1275,21 @@ class ClassroomDirector:
 
         if trigger.trigger_type == TriggerType.USER_ACTION:
             if action_intent == ActionIntent.CONTINUE:
+                if action_data.get("advanced_after_skip") and not context.course_complete:
+                    return DirectorDecision(
+                        selected_scene_type=SceneType.INSTRUCTION,
+                        reasoning="Begin the next lesson while preserving the skipped checkpoint for review",
+                        confidence=0.95,
+                        suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.CTA_BUTTON],
+                    )
                 if context.course_complete:
                     return DirectorDecision(
                         selected_scene_type=SceneType.CELEBRATION,
-                        reasoning="All lesson checkpoints have recognition and transfer evidence",
+                        reasoning=(
+                            "The course path is complete with skipped checkpoints saved for review"
+                            if context.review_due_items
+                            else "All lesson checkpoints have recognition and transfer evidence"
+                        ),
                         confidence=0.95,
                         suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.LESSON_BLOCK],
                         estimated_duration_seconds=15,
@@ -1056,6 +1357,13 @@ class ClassroomDirector:
 
             if action_intent in (ActionIntent.REQUEST_REVIEW, ActionIntent.SET_MODE):
                 if context.classroom_mode == ClassroomMode.REVIEW:
+                    if not context.review_due_items:
+                        return DirectorDecision(
+                            selected_scene_type=SceneType.CELEBRATION,
+                            reasoning="The learner has no skipped or scheduled review items",
+                            confidence=0.95,
+                            suggested_components=[ComponentType.TEACHER_MESSAGE, ComponentType.LESSON_BLOCK],
+                        )
                     return DirectorDecision(
                         selected_scene_type=SceneType.CHALLENGE,
                         reasoning="Run retrieval practice from the learner's due-review queue",
@@ -1115,7 +1423,10 @@ class ClassroomDirector:
                     require_audio=True,
                 )
 
-        if context.course_complete:
+        if context.course_complete and not (
+            context.classroom_mode == ClassroomMode.REVIEW
+            and context.review_due_items
+        ):
             return DirectorDecision(
                 selected_scene_type=SceneType.CELEBRATION,
                 reasoning="Persisted session shows every lesson has multiple forms of evidence",
@@ -1256,78 +1567,104 @@ class SceneCompiler:
         return components
 
     async def _create_instruction_components(self, context: ContextSnapshot) -> List[Component]:
-        """Create components for instruction scenes."""
+        """Create one short teaching beat, then yield control to the learner."""
+        if context.learner_signal == ActionIntent.SKIP_QUESTION.value:
+            is_spanish = context.language_code.lower().startswith("es")
+            return [
+                TeacherMessage(
+                    text=(
+                        "De acuerdo. Omitir esta pregunta no cuenta como error. "
+                        "La guardé para repasarla más tarde."
+                        if is_spanish
+                        else "Okay. Skipping this question does not count as an error. "
+                        "I saved it for later review."
+                    ),
+                    emotion="encouraging",
+                    audio_mood=AudioMood.GENTLE,
+                    concept_tags=[context.learning_objective or context.topic or "current_topic"],
+                    source_attributions=context.source_attributions,
+                    language_code=context.language_code,
+                    priority=0,
+                ),
+                CTAButton(
+                    label="Siguiente lección" if is_spanish else "Next lesson",
+                    action_intent=ActionIntent.CONTINUE,
+                    button_style="primary",
+                    language_code=context.language_code,
+                    priority=1,
+                ),
+            ]
+
         if context.hint_level:
             return self._create_hint_components(context)
 
-        components = []
-
-        # Main teacher message
         if self.ai_service:
-            # Dynamic AI-generated content
-            instruction_text = await self._generate_instruction_content(context)
+            beat = await self._generate_instruction_content(context)
         else:
-            # Template fallback — still include the topic when available
-            topic = context.topic or "the next concept"
-            instruction_text = f'[ {{"type": "speech", "speaker": "Teacher", "text": "Let\'s continue learning about {topic}. Are you ready?"}} ]'
+            beat = self._local_teaching_beat(context)
 
-        # Degenerate output (empty / bare brackets) teaches nothing and fails
-        # TeacherMessage validation — swap in the topic-aware local fallback.
-        if len(instruction_text.strip()) < 10 or instruction_text.strip() in ("[]", "[ ]", "{}"):
-            instruction_text = self._local_instruction_fallback(context)
-
-        # If the text is JSON (starts with '[' and ends with ']'), do not split it by paragraphs
-        text_to_check = instruction_text.strip()
-        if text_to_check.startswith('[') and text_to_check.endswith(']'):
-            components.append(TeacherMessage(
-                text=text_to_check,
+        return [
+            TeacherMessage(
+                text=beat.speech,
                 emotion="encouraging",
                 audio_mood=AudioMood.CALM,
-                concept_tags=[context.topic or "current_topic"],
+                concept_tags=[context.learning_objective or context.topic or "current_topic"],
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=0,
-                delay_ms=0
-            ))
-        else:
-            paragraphs = [p.strip() for p in instruction_text.split('\n\n') if p.strip()]
-            
-            for idx, paragraph in enumerate(paragraphs):
-                delay = min(idx * 1500, 4900)  # Cap delay to 4900ms
-                components.append(TeacherMessage(
-                    text=paragraph,
-                    emotion="encouraging",
-                    audio_mood=AudioMood.CALM,
-                    concept_tags=[context.topic or "current_topic"],
-                    source_attributions=context.source_attributions,
-                    priority=idx,
-                    delay_ms=delay
-                ))
-
-        # Continue button
-        components.append(CTAButton(
-            label="Check understanding",
-            action_intent=ActionIntent.CONTINUE,
-            button_style="primary",
-            priority=100,  # Ensure it comes last
-            delay_ms=5000
-        ))
-
-        return components
+                delay_ms=0,
+            ),
+            ExampleBlock(
+                title=beat.board_title,
+                content=beat.board_content,
+                example_type=beat.example_type
+                if beat.example_type in {"code", "visual", "analogy", "real_world"}
+                else "real_world",
+                language_code=context.language_code,
+                priority=1,
+                delay_ms=0,
+            ),
+            CTAButton(
+                label=self._localized_copy(
+                    context.language_code,
+                    english="Check understanding",
+                    spanish="Comprobar comprensión",
+                ),
+                action_intent=ActionIntent.CONTINUE,
+                button_style="primary",
+                language_code=context.language_code,
+                priority=2,
+                delay_ms=0,
+            ),
+        ]
 
     def _create_hint_components(self, context: ContextSnapshot) -> List[Component]:
         """Return the requested rung of the hint ladder without hiding the level."""
         level = context.hint_level or HintLevel.NUDGE
         objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
         remediation = context.remediation_hint or ""
-        guidance = {
-            HintLevel.NUDGE: f"Small nudge: identify the one rule that connects the question to {objective}.",
-            HintLevel.PRINCIPLE: f"Principle: state the governing idea behind {objective} before calculating or choosing.",
-            HintLevel.WORKED_STEP: f"First step: name the known information, then connect it to {objective}.",
-            HintLevel.FULL_EXAMPLE: f"Worked example: choose a simple case, apply {objective} one step at a time, and check the result.",
-            HintLevel.PREREQUISITE: f"Prerequisite review: define the key terms inside {objective}, then rebuild the relationship between them.",
-        }[level]
+        if context.language_code.lower().startswith("es"):
+            guidance = {
+                HintLevel.NUDGE: f"Una pista: identifica la regla que conecta la pregunta con {objective}.",
+                HintLevel.PRINCIPLE: f"Principio: expresa la idea que gobierna {objective} antes de elegir o calcular.",
+                HintLevel.WORKED_STEP: f"Primer paso: identifica la información conocida y conéctala con {objective}.",
+                HintLevel.FULL_EXAMPLE: f"Ejemplo resuelto: elige un caso sencillo, aplica {objective} paso a paso y comprueba el resultado.",
+                HintLevel.PREREQUISITE: f"Base necesaria: define los términos clave de {objective} y reconstruye su relación.",
+            }[level]
+        else:
+            guidance = {
+                HintLevel.NUDGE: f"Small nudge: identify the one rule that connects the question to {objective}.",
+                HintLevel.PRINCIPLE: f"Principle: state the governing idea behind {objective} before calculating or choosing.",
+                HintLevel.WORKED_STEP: f"First step: name the known information, then connect it to {objective}.",
+                HintLevel.FULL_EXAMPLE: f"Worked example: choose a simple case, apply {objective} one step at a time, and check the result.",
+                HintLevel.PREREQUISITE: f"Prerequisite review: define the key terms inside {objective}, then rebuild the relationship between them.",
+            }[level]
         if remediation:
-            guidance = f"{guidance} Focus especially on: {remediation}"
+            guidance = (
+                f"{guidance} Enfócate especialmente en: {remediation}"
+                if context.language_code.lower().startswith("es")
+                else f"{guidance} Focus especially on: {remediation}"
+            )
         components: List[Component] = [
             TeacherMessage(
                 text=guidance,
@@ -1335,25 +1672,42 @@ class SceneCompiler:
                 audio_mood=AudioMood.GENTLE,
                 concept_tags=[objective],
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=0,
             )
         ]
         if level in (HintLevel.WORKED_STEP, HintLevel.FULL_EXAMPLE, HintLevel.PREREQUISITE):
+            spanish_titles = {
+                HintLevel.WORKED_STEP: "Empieza aquí",
+                HintLevel.FULL_EXAMPLE: "Ejemplo resuelto",
+                HintLevel.PREREQUISITE: "Repaso de fundamentos",
+            }
+            english_titles = {
+                HintLevel.WORKED_STEP: "Start here",
+                HintLevel.FULL_EXAMPLE: "Worked example",
+                HintLevel.PREREQUISITE: "Foundation refresher",
+            }
             components.append(ExampleBlock(
-                title={
-                    HintLevel.WORKED_STEP: "Start here",
-                    HintLevel.FULL_EXAMPLE: "Worked example",
-                    HintLevel.PREREQUISITE: "Foundation refresher",
-                }[level],
+                title=(
+                    spanish_titles[level]
+                    if context.language_code.lower().startswith("es")
+                    else english_titles[level]
+                ),
                 content=context.lesson_content[:1200] if context.lesson_content else guidance,
                 example_type="real_world",
                 interactive=level == HintLevel.FULL_EXAMPLE,
+                language_code=context.language_code,
                 priority=1,
             ))
         components.append(CTAButton(
-            label="Try the checkpoint",
+            label=self._localized_copy(
+                context.language_code,
+                english="Try the checkpoint",
+                spanish="Intentar la comprobación",
+            ),
             action_intent=ActionIntent.CONTINUE,
             button_style="primary",
+            language_code=context.language_code,
             priority=100,
         ))
         return components
@@ -1362,7 +1716,20 @@ class SceneCompiler:
         """Ask for explanation/application evidence after recognition succeeds."""
         objective = context.learning_objective or context.lesson_title or context.topic or "the lesson idea"
         keywords = expected_transfer_keywords(objective, context.lesson_content or "")
-        if context.classroom_mode == ClassroomMode.CHALLENGE:
+        is_spanish = context.language_code.lower().startswith("es")
+        if is_spanish and context.classroom_mode == ClassroomMode.CHALLENGE:
+            question = (
+                f"Aplica {objective} a un caso nuevo o límite. Explica tu razonamiento "
+                "y menciona una condición en la que la idea no se aplicaría."
+            )
+        elif is_spanish and context.classroom_mode == ClassroomMode.REVIEW:
+            question = f"Sin mirar atrás, explica {objective} y da un ejemplo concreto."
+        elif is_spanish:
+            question = (
+                f"Con tus propias palabras, aplica {objective} a un ejemplo o situación nueva. "
+                "Explica por qué funciona tu ejemplo."
+            )
+        elif context.classroom_mode == ClassroomMode.CHALLENGE:
             question = (
                 f"Apply {objective} to a new or boundary case. Explain your reasoning "
                 "and name one condition where the idea would not apply."
@@ -1376,16 +1743,25 @@ class SceneCompiler:
             )
         return [
             TeacherMessage(
-                text="The choice shows recognition. One short application will show that the idea is usable.",
+                text=(
+                    "La elección muestra reconocimiento. Una aplicación breve mostrará que puedes usar la idea."
+                    if is_spanish
+                    else "The choice shows recognition. One short application will show that the idea is usable."
+                ),
                 emotion="thinking",
                 audio_mood=AudioMood.CALM,
                 concept_tags=[objective],
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=0,
             ),
             InputField(
                 question=question,
-                placeholder="Explain and apply the idea…",
+                placeholder=(
+                    "Explica y aplica la idea…"
+                    if is_spanish
+                    else "Explain and apply the idea…"
+                ),
                 action_intent=ActionIntent.SUBMIT_TRANSFER,
                 concept_id=objective,
                 evidence_type="retrieval" if context.classroom_mode == ClassroomMode.REVIEW else "transfer",
@@ -1394,6 +1770,7 @@ class SceneCompiler:
                 max_words=120,
                 min_score=0.25,
                 source_attributions=context.source_attributions,
+                language_code=context.language_code,
                 priority=1,
             ),
         ]
@@ -1411,6 +1788,7 @@ class SceneCompiler:
     async def _create_correction_components(self, context: ContextSnapshot, trigger: Trigger) -> List[Component]:
         """Create precise remediation from the submitted evidence."""
         components: List[Component] = []
+        is_spanish = context.language_code.lower().startswith("es")
 
         if (
             context.classroom_mode == ClassroomMode.CLASSROOM
@@ -1419,9 +1797,14 @@ class SceneCompiler:
         ):
             components.append(StudentPrompt(
                 student_name="Sam",
-                text="That choice follows a common shortcut. Let's inspect exactly where it breaks.",
+                text=(
+                    "Esa elección sigue un atajo común. Veamos exactamente dónde falla."
+                    if is_spanish
+                    else "That choice follows a common shortcut. Let's inspect exactly where it breaks."
+                ),
                 personality_trait="supportive",
                 purpose="normalize_error",
+                language_code=context.language_code,
                 priority=0,
             ))
 
@@ -1430,14 +1813,24 @@ class SceneCompiler:
         if feedback or focus:
             correction_text = " ".join(
                 part for part in [
-                    feedback or "The response is close, but one link in the reasoning needs revision.",
-                    f"Focus on {focus}." if focus else "",
+                    feedback or (
+                        "La respuesta está cerca, pero falta corregir un vínculo del razonamiento."
+                        if is_spanish
+                        else "The response is close, but one link in the reasoning needs revision."
+                    ),
+                    (
+                        f"Enfócate en {focus}."
+                        if is_spanish and focus
+                        else f"Focus on {focus}." if focus else ""
+                    ),
                 ] if part
             )
         elif self.ai_service:
-            correction_text = await self._generate_instruction_content(context)
+            correction_text = (
+                await self._generate_instruction_content(context)
+            ).speech
         else:
-            correction_text = self._local_instruction_fallback(context)
+            correction_text = self._local_teaching_beat(context).speech
 
         components.append(TeacherMessage(
             text=correction_text,
@@ -1445,27 +1838,40 @@ class SceneCompiler:
             audio_mood=AudioMood.GENTLE,
             concept_tags=[context.learning_objective or context.topic or "current_topic"],
             source_attributions=context.source_attributions,
+            language_code=context.language_code,
             priority=1,
         ))
 
         action_intent = (trigger.action_data or {}).get("action_intent")
         if action_intent == ActionIntent.SUBMIT_TRANSFER:
             transfer_input = self._create_transfer_components(context)[-1]
-            transfer_input.question = (
-                f"Revise your application of {context.learning_objective or context.topic or 'the idea'}. "
-                + (
-                    f"Make sure you address {focus}."
-                    if focus
-                    else "Add the missing reasoning link and explain why the example works."
+            objective = context.learning_objective or context.topic
+            if is_spanish:
+                transfer_input.question = (
+                    f"Revisa tu aplicación de {objective or 'la idea'}. "
+                    + (
+                        f"Asegúrate de abordar {focus}."
+                        if focus
+                        else "Añade el vínculo que falta y explica por qué funciona el ejemplo."
+                    )
                 )
-            )
+            else:
+                transfer_input.question = (
+                    f"Revise your application of {objective or 'the idea'}. "
+                    + (
+                        f"Make sure you address {focus}."
+                        if focus
+                        else "Add the missing reasoning link and explain why the example works."
+                    )
+                )
             transfer_input.priority = 2
             components.append(transfer_input)
         else:
             components.append(CTAButton(
-                label="Retry checkpoint",
+                label="Reintentar comprobación" if is_spanish else "Retry checkpoint",
                 action_intent=ActionIntent.RETRY,
                 button_style="secondary",
+                language_code=context.language_code,
                 priority=2,
             ))
 
@@ -1476,20 +1882,54 @@ class SceneCompiler:
         progress = _SESSION_PROGRESS.get(context.session_id, {})
         covered = list(progress.get("covered", []))[-3:]
         objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
+        is_spanish = context.language_code.lower().startswith("es")
+        review_count = len(context.review_due_items)
         components: List[Component] = []
 
         if context.course_complete:
-            message = (
-                f"You completed {context.course_title or context.topic or 'this course'}. "
-                "Each lesson now has both recognition and application evidence."
-            )
-            celebration_message = "Course mastery demonstrated"
+            if is_spanish:
+                if context.review_due_items:
+                    message = (
+                        f"Terminaste el recorrido de {context.course_title or context.topic or 'este curso'}. "
+                        f"Guardé {review_count} "
+                        f"{'comprobación' if review_count == 1 else 'comprobaciones'} "
+                        f"para repasar; {'no cuenta como error' if review_count == 1 else 'no cuentan como errores'}."
+                    )
+                    celebration_message = "Recorrido completado"
+                else:
+                    message = (
+                        f"Completaste {context.course_title or context.topic or 'este curso'}. "
+                        "Cada lección ya tiene evidencia de reconocimiento y aplicación."
+                    )
+                    celebration_message = "Dominio del curso demostrado"
+            else:
+                if context.review_due_items:
+                    message = (
+                        f"You finished the {context.course_title or context.topic or 'course'} path. "
+                        f"I saved {review_count} "
+                        f"{'checkpoint' if review_count == 1 else 'checkpoints'} "
+                        f"for review; {'it does' if review_count == 1 else 'they do'} not count as wrong."
+                    )
+                    celebration_message = "Course path complete"
+                else:
+                    message = (
+                        f"You completed {context.course_title or context.topic or 'this course'}. "
+                        "Each lesson now has both recognition and application evidence."
+                    )
+                    celebration_message = "Course mastery demonstrated"
         else:
-            message = (
-                f"You recognized and applied {objective}. "
-                "That is stronger evidence than a correct choice alone."
-            )
-            celebration_message = "Lesson mastered"
+            if is_spanish:
+                message = (
+                    f"Reconociste y aplicaste {objective}. "
+                    "Eso demuestra más comprensión que una elección correcta por sí sola."
+                )
+                celebration_message = "Lección dominada"
+            else:
+                message = (
+                    f"You recognized and applied {objective}. "
+                    "That is stronger evidence than a correct choice alone."
+                )
+                celebration_message = "Lesson mastered"
 
         components.append(TeacherMessage(
             text=message,
@@ -1497,55 +1937,89 @@ class SceneCompiler:
             audio_mood=AudioMood.ENCOURAGING,
             concept_tags=[objective],
             source_attributions=context.source_attributions,
+            language_code=context.language_code,
             priority=0,
         ))
 
         summary_items = covered or [
-            f"Objective: {objective}",
-            "Evidence: recognition plus explanation/application",
-            "Next: retrieve the idea again after spacing",
+            (
+                f"Objetivo: {objective}"
+                if is_spanish
+                else f"Objective: {objective}"
+            ),
+            (
+                "Evidencia: reconocimiento más explicación o aplicación"
+                if is_spanish
+                else "Evidence: recognition plus explanation/application"
+            ),
+            (
+                "Siguiente paso: recuperar la idea de nuevo después de una pausa"
+                if is_spanish
+                else "Next: retrieve the idea again after spacing"
+            ),
         ]
         components.append(LessonBlock(
             block_type="summary",
             block={
-                "title": "What you can now do",
-                "content": f"Use {objective} without relying on answer choices.",
+                "title": "Lo que ahora puedes hacer" if is_spanish else "What you can now do",
+                "content": (
+                    f"Usar {objective} sin depender de opciones de respuesta."
+                    if is_spanish
+                    else f"Use {objective} without relying on answer choices."
+                ),
                 "items": summary_items,
                 "source_attributions": context.source_attributions,
                 "retrieval_scheduled": True,
             },
+            language_code=context.language_code,
             priority=1,
         ))
         components.append(Celebration(
             message=celebration_message,
             celebration_type="standard",
             particle_effect="confetti",
+            language_code=context.language_code,
             achievement_type="mastery",
             points_earned=10,
             priority=2,
         ))
 
-        if not context.course_complete:
+        if context.course_complete and context.review_due_items:
             components.append(CTAButton(
-                label="Next lesson",
+                label="Repasar ahora" if is_spanish else "Review saved checks",
+                action_intent=ActionIntent.REQUEST_REVIEW,
+                button_style="primary",
+                language_code=context.language_code,
+                priority=3,
+            ))
+        elif context.classroom_mode == ClassroomMode.REVIEW and context.review_due_items:
+            components.append(CTAButton(
+                label="Siguiente repaso" if is_spanish else "Next review",
+                action_intent=ActionIntent.REQUEST_REVIEW,
+                button_style="primary",
+                language_code=context.language_code,
+                priority=3,
+            ))
+        elif not context.course_complete:
+            components.append(CTAButton(
+                label="Siguiente lección" if is_spanish else "Next lesson",
                 action_intent=ActionIntent.CONTINUE,
                 button_style="primary",
+                language_code=context.language_code,
                 priority=3,
             ))
 
         return components
 
-    async def _generate_instruction_content(self, context: ContextSnapshot) -> str:
-        """Generate dynamic instruction content using the Classroom Director System Prompt"""
+    async def _generate_teaching_beat(
+        self, context: ContextSnapshot
+    ) -> TeachingBeat:
+        """Generate one 10-20 second explanation and one supporting board item."""
         try:
-            from lyo_app.ai_classroom.director_prompt import CLASSROOM_DIRECTOR_PROMPT
             from lyo_app.core.ai_resilience import ai_resilience_manager
-            import json
-            
+
             topic = context.topic or "general learning"
-            course_title = context.course_title or topic
-            session_number = context.lesson_index + 1
-            user_name = "Learner"
+            objective = context.learning_objective or context.lesson_title or topic
             avg_mastery = (
                 sum(k.mastery_level for k in context.knowledge_states)
                 / max(len(context.knowledge_states), 1)
@@ -1555,283 +2029,168 @@ class SceneCompiler:
                 else "intermediate" if max(avg_mastery, context.preferred_difficulty) >= 0.5
                 else "beginner"
             )
-
-            logger.info(
-                f"📝 Generating instruction via AI Resilience Manager: lesson_title={context.lesson_title!r}, "
-                f"lesson_index={context.lesson_index}, total={context.total_lessons}, "
-                f"topic={topic!r}, course={course_title!r}"
+            progress = _SESSION_PROGRESS.setdefault(
+                context.session_id,
+                {"scene": 0, "covered": [], "mastered_lessons": []},
             )
+            progress["scene"] = int(progress.get("scene", 0)) + 1
+            covered = list(progress.get("covered", []))[-8:]
 
-            # Progression: without this, every scene regenerated the same
-            # opening class (and the response cache then replayed it verbatim).
-            prog = _SESSION_PROGRESS.setdefault(
-                context.session_id, {"scene": 0, "covered": []})
-            prog["scene"] += 1
-            scene_number = prog["scene"]
-            covered = prog["covered"][-8:]
+            prompt = f"""
+Create exactly ONE learner-gated teaching beat.
 
-            input_block = f"""
-INPUT FORMAT:
-subject: "{course_title}"
-session_number: {session_number}
-scene_number: {scene_number}
-user_name: "{user_name}"
-learner_context: {json.dumps(context.learner_context or "No stored learner preferences yet.")}
-last_session_recap: {json.dumps(covered[-1] if covered else "")}
-already_covered: {json.dumps(covered)}
-user_level: "{user_level}"
-classroom_mode: "{context.classroom_mode.value}"
-target_duration_minutes: {context.target_duration_minutes}
-learning_objective: {json.dumps(context.learning_objective or context.lesson_title or topic)}
-learner_signal: {json.dumps(context.learner_signal or "")}
-hint_level: {json.dumps(context.hint_level.value if context.hint_level else "")}
-misconception_tag: {json.dumps(context.misconception_tag or "")}
-remediation_hint: {json.dumps(context.remediation_hint or "")}
-learner_question: {json.dumps(context.learner_message or "")}
-learner_response: {json.dumps(context.learner_response or "")}
-review_due_items: {json.dumps(context.review_due_items)}
-lesson_title: "{context.lesson_title or topic}"
-lesson_content: {json.dumps(context.lesson_content or "")}
+Spoken language: {context.language_code}
+Topic: {topic}
+Lesson: {context.lesson_title or topic}
+Learning objective: {objective}
+Learner level: {user_level}
+Classroom mode: {context.classroom_mode.value}
+Beat number: {progress["scene"]}
+Already covered: {json.dumps(covered, ensure_ascii=False)}
+Learner question: {json.dumps(context.learner_message or "", ensure_ascii=False)}
+Learner response: {json.dumps(context.learner_response or "", ensure_ascii=False)}
+Learner signal: {json.dumps(context.learner_signal or "", ensure_ascii=False)}
+Misconception: {json.dumps(context.misconception_tag or "", ensure_ascii=False)}
+Remediation cue: {json.dumps(context.remediation_hint or "", ensure_ascii=False)}
+Lesson material:
+{(context.lesson_content or "")[:6000]}
 
-TEACHING RESPONSE RULES:
-- Keep the learning_objective visible in your reasoning and make every turn serve it.
-- If learner_question is present, answer it directly before resuming the sequence.
-- If learner_response is present, acknowledge its reasoning briefly and use it as evidence; do not pretend it was a question.
-- If learner_signal is request_hint or confused, slow down, diagnose the likely gap, and use one worked example.
-- If learner_signal is skip_ahead or too_easy, increase depth and transfer difficulty; do not merely move on.
-- If learner_signal is incorrect_answer, use misconception_tag and remediation_hint when present; never give generic correction.
-- If classroom_mode is solo, only the Teacher and Lyo may appear. If classroom, classmates remain optional and pedagogically necessary.
-- If classroom_mode is challenge, shorten explanation and deepen boundary/transfer cases. If review, prioritize retrieval over re-lecturing.
-- Match the target duration by choosing depth, not filler or speed.
-- Use an explorable only when changing a parameter exposes a relationship in the learning objective; always follow it with a prediction or explanation prompt.
-- Use learner_context only when relevant. Never invent preferences, observations, sources, or history.
-- Teach first. AI classmates are optional and may speak only when they clarify a misconception or model reasoning.
+Return ONLY one JSON object:
+{{
+  "speech": "28-55 natural spoken words in {context.language_code}, at most two sentences",
+  "board_title": "short title in {context.language_code}",
+  "board_content": "one concrete example, comparison, formula, or 2-4 concise bullets",
+  "example_type": "real_world|analogy|visual|code"
+}}
 
-PROGRESSION RULES (CRITICAL):
-- scene_number 1 is the ONLY scene that may use the opening protocol.
-- If scene_number > 1: NO welcome, NO re-introduction, NO repeating the hook.
-  Continue the SAME class exactly where it left off and teach the NEXT idea,
-  strictly deeper or adjacent to what came before.
-- NEVER re-teach anything listed in already_covered.
-- Only emit session_end when the topic is genuinely concluded (never before
-  scene 4) — most scenes should end mid-lesson, awaiting the learner.
-- NEVER return an empty array. There is ALWAYS a deeper or adjacent idea to
-  teach next; every scene must contain at least 6 turns.
+Rules:
+- Teach one idea accurately; do not write a scene, dialogue, welcome, or cast.
+- The Teacher is the only speaker. Never supply an AI student's answer.
+- Make every sentence serve the learning objective.
+- If a learner question exists, answer it directly before resuming.
+- If a learner response exists, acknowledge its reasoning as evidence; do not
+  pretend it was a question.
+- If the learner was confused or incorrect, explain the supplied gap differently.
+- If the learner is hesitant, give exactly one small hint without revealing the
+  direct answer or any internal grading rubric.
+- If the learner asked to skip ahead or said this is too easy, deepen the
+  application without dropping the objective.
+- In challenge mode, compress explanation and deepen transfer. In review mode,
+  prioritize retrieval over re-lecturing.
+- Refer naturally to the board in the speech.
+- Do not ask a question in the speech; the server presents the checkpoint next.
+- Do not repeat anything in Already covered.
+- Never reveal expected keywords, coverage scores, or grading criteria.
+- Use only supplied course material and never invent a citation.
 """
-            # Injecting explicit instruction to use the generated lesson content
-            prompt = (
-                CLASSROOM_DIRECTOR_PROMPT + "\n\n"
-                "## CURRENT LESSON TO TEACH:\n"
-                "You must teach the following content:\n"
-                f"Lesson Title: {context.lesson_title or topic}\n"
-                f"Lesson Content:\n{context.lesson_content or ''}\n\n"
-                "## INPUT STATE:\n"
-                + input_block
-            )
-
-            # Call the resilient AI manager with Gemini and OpenAI fallbacks.
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous, warm classroom teacher. Teach the exact lesson_content toward the stated learning_objective. Respond directly to learner_question, learner_response, and learner_signal. Use explanation, a worked example, and a concise check for understanding. AI classmates are optional and must never displace the teacher or the learner. Use learner_context only when relevant. Return ONLY a valid, non-empty JSON list of director turns. No prose or markdown."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a rigorous, warm teacher. Produce one short "
+                            "learner-gated teaching beat as valid JSON, with no "
+                            "markdown or surrounding prose."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
                 ],
-                # gpt-4o-mini first: the Gemini key is currently revoked
-                # ("reported as leaked"), so leading with it just burns a
-                # circuit-breaker failure per scene.
                 provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
-                # The director script is 20-25 JSON turns (~2500+ tokens); the
-                # 1000-token default truncated mid-array, normalizing to "[]"
-                # and killing every scene with a TeacherMessage validation error.
-                max_tokens=3500,
-                # Never serve a lesson from cache: identical inputs used to
-                # replay the exact same lecture on every scene.
+                max_tokens=650,
                 use_cache=False,
             )
-
-            # CRITICAL: when every provider has failed, ai_resilience_manager
-            # does NOT raise — it returns a canned apology string with
-            # is_fallback=True. Without this guard, that apology string was
-            # being shipped verbatim to iOS as TeacherMessage.text, which is
-            # exactly the "Experiencing technical issues" bug users hit.
             if response.get("is_fallback"):
-                logger.warning(
-                    "⚠️ AI resilience returned fallback for instruction — "
-                    "falling back to local template (topic=%r)", topic
-                )
-                raise RuntimeError("ai_resilience returned is_fallback")
+                raise RuntimeError("AI service returned fallback content")
 
-            text = response.get("content", "").strip()
-            # Remove Markdown fences if any
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].strip()
+            raw = (response.get("content") or "").strip()
+            first_brace = raw.find("{")
+            last_brace = raw.rfind("}")
+            if first_brace < 0 or last_brace <= first_brace:
+                raise ValueError("Teaching beat did not contain a JSON object")
+            data = json.loads(raw[first_brace:last_brace + 1])
+            beat = self._normalize_teaching_beat(data)
+            progress.setdefault("covered", []).append(beat.speech[:220])
+            return beat
+        except Exception as exc:
+            logger.error("Teaching-beat generation failed: %s", type(exc).__name__)
+            return self._local_teaching_beat(context)
 
-            # Resilient JSON Array extraction: find first [ and last ]
-            first_bracket = text.find('[')
-            last_bracket = text.rfind(']')
-            if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-                text = text[first_bracket:last_bracket+1].strip()
+    def _normalize_teaching_beat(self, data: Dict[str, Any]) -> TeachingBeat:
+        speech = self._plain_text(str(data.get("speech") or ""))
+        board_title = self._plain_text(str(data.get("board_title") or ""))
+        board_content = str(data.get("board_content") or "").strip()
+        if len(speech.split()) < 3 or not board_title or not board_content:
+            raise ValueError("Teaching beat is missing required content")
 
-            # Belt-and-suspenders: if the upstream service somehow returned an
-            # apology string without setting is_fallback (e.g., a Gemini safety
-            # block), reject it before it reaches the user.
-            APOLOGY_PHRASES = (
-                "Experiencing technical issues",
-                "AI services unavailable",
-                "temporarily unable to process",
+        example_type = str(data.get("example_type") or "real_world")
+        if example_type not in {"real_world", "analogy", "visual", "code"}:
+            example_type = "real_world"
+        return TeachingBeat(
+            speech=self._clip_words(speech, 55),
+            board_title=self._clip_words(board_title, 10),
+            board_content=board_content[:1200],
+            example_type=example_type,
+        )
+
+    def _local_teaching_beat(self, context: ContextSnapshot) -> TeachingBeat:
+        """Keep teaching locally when model generation is unavailable."""
+        topic = (
+            context.lesson_title
+            or context.topic
+            or context.course_title
+            or "this concept"
+        )
+        raw_content = (
+            context.lesson_content
+            or context.learning_objective
+            or topic
+        )
+        plain_content = self._plain_text(raw_content)
+        main_point = self._clip_words(plain_content or topic, 28)
+        if context.language_code.lower().startswith("es"):
+            speech = (
+                f"Centremos la atención en una sola idea sobre {topic}: {main_point} "
+                "Mira el ejemplo del tablero y observa cómo conecta la idea "
+                "con un caso concreto."
             )
-            if any(phrase in text for phrase in APOLOGY_PHRASES):
-                logger.warning("⚠️ AI returned apology string — using local template (topic=%r)", topic)
-                raise RuntimeError("ai_resilience returned apology content")
-
-            # Ensure we return a clean JSON array string (starting with [ and ending with ])
-            try:
-                parsed = None
-                try:
-                    parsed = json.loads(text)
-                except Exception as json_err:
-                    logger.warning(f"⚠️ json.loads failed, trying ast.literal_eval: {json_err}")
-                    try:
-                        import ast
-                        parsed = ast.literal_eval(text)
-                    except Exception as ast_err:
-                        logger.error(f"❌ Both json.loads and ast.literal_eval failed: {ast_err}")
-                        raise RuntimeError(f"Failed to parse instruction JSON: {json_err}")
-
-                if isinstance(parsed, dict):
-                    # Extract the first list value found (e.g., 'turns', 'scene', 'components')
-                    list_extracted = False
-                    for key, val in parsed.items():
-                        if isinstance(val, list):
-                            text = json.dumps(val)
-                            list_extracted = True
-                            break
-                    if not list_extracted:
-                        # Fallback: if no list is found inside the dict, wrap the dict in a list
-                        text = json.dumps([parsed])
-                elif isinstance(parsed, list):
-                    if not parsed:
-                        # Flaky model behavior — one retry with a direct nudge
-                        # usually recovers before we resort to the template.
-                        logger.warning("⚠️ Director returned []; retrying once")
-                        retry = await ai_resilience_manager.chat_completion(
-                            messages=[
-                                {"role": "system", "content": "You are the classroom director. Return ONLY a non-empty JSON array of director turns (at least 6 turns). Never return an empty array."},
-                                {"role": "user", "content": prompt},
-                            ],
-                            provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
-                            max_tokens=3500,
-                            use_cache=False,
-                        )
-                        retry_text = (retry.get("content") or "").strip()
-                        fb = retry_text.find('[')
-                        lb = retry_text.rfind(']')
-                        if fb != -1 and lb > fb:
-                            retry_text = retry_text[fb:lb + 1]
-                        parsed = json.loads(retry_text)
-                        if not isinstance(parsed, list) or not parsed:
-                            raise RuntimeError("Director returned an empty turn list twice")
-                    text = json.dumps(parsed)
-                else:
-                    raise RuntimeError("Parsed JSON is neither a list nor a dictionary")
-            except Exception as e:
-                logger.error(f"❌ JSON normalization failed: {e}")
-                # Clear resilience manager cache so we don't get stuck with a broken cached AI response
-                try:
-                    ai_resilience_manager.request_cache.clear()
-                    logger.info("🧹 Cleared AI Resilience Manager cache due to JSON parsing failure")
-                except Exception as cache_err:
-                    logger.warning(f"Failed to clear cache: {cache_err}")
-                raise
-
-            # Remember what this scene taught so the next one moves forward.
-            try:
-                speech_texts = [
-                    t.get("text", "") for t in (parsed if isinstance(parsed, list) else [])
-                    if isinstance(t, dict) and t.get("type") == "speech" and t.get("speaker") == "Teacher"
-                ]
-                summary = " / ".join(s[:110] for s in speech_texts[:2] if s)
-                if summary:
-                    prog["covered"].append(summary)
-            except Exception:
-                pass
-
-            return text
-
-        except Exception as e:
-            logger.error(f"❌ TutorAgent resilient instruction generation failed: {e}")
-            return self._local_instruction_fallback(context)
-
-    def _local_instruction_fallback(self, context: ContextSnapshot) -> str:
-        """Topic-aware multi-turn lesson opener used when every AI provider
-        is down. Better than 'try again later' — gives the user something
-        actually teachable while we recover.
-        """
-        import json
-        import re
-        topic = context.topic or context.course_title or "this concept"
-        course_title = context.course_title or topic
-        session = context.lesson_index + 1
-        total = context.total_lessons or 1
-        lesson_content = context.lesson_content or ""
-
-        if lesson_content:
-            paragraphs = [p.strip() for p in lesson_content.split('\n\n') if p.strip()]
-            main_point = paragraphs[0] if paragraphs else f"Let's dive into {topic}."
-            if main_point.startswith("#"):
-                main_point = re.sub(r'^#+\s*', '', main_point)
-            
-            turns = [
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Welcome back. Today we're learning about {topic} — lesson {session} of {total}."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Here is the core concept: {main_point}"
-                }
-            ]
-            if len(paragraphs) > 1:
-                sub_point = paragraphs[1]
-                if sub_point.startswith("#"):
-                    sub_point = re.sub(r'^#+\s*', '', sub_point)
-                turns.append({
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"To understand this better, remember: {sub_point}"
-                })
-            turns.append({
-                "type": "speech",
-                "speaker": "Teacher",
-                "text": "Let's work through this concept together. When you are ready, tap continue!"
-            })
+            title = "Idea central"
         else:
-            turns = [
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Welcome to {course_title} — lesson {session} of {total}. We're going to keep this focused and practical."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Here's the goal for today: get a clear, working understanding of {topic} — what it is, why it matters, and where you'll see it."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": f"Think of {topic} as a tool. We'll start with the simplest version, then layer on the real-world details so it sticks."
-                },
-                {
-                    "type": "speech",
-                    "speaker": "Teacher",
-                    "text": "When you're ready, tap continue and I'll walk you through the first idea step by step."
-                }
-            ]
-        return json.dumps(turns)
+            speech = (
+                f"Focus on one useful idea about {topic}: {main_point} "
+                "Look at the board example and notice how it connects the idea "
+                "to a concrete case."
+            )
+            title = "Core idea"
+        return TeachingBeat(
+            speech=self._clip_words(speech, 55),
+            board_title=title,
+            board_content=self._clip_words(plain_content or topic, 80),
+            example_type="real_world",
+        )
+
+    @staticmethod
+    def _plain_text(value: str) -> str:
+        text = re.sub(r"```(?:[a-zA-Z0-9_+-]+)?", " ", value or "")
+        text = text.replace("```", " ")
+        text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+        text = re.sub(r"[*_`]+", "", text)
+        return " ".join(text.split())
+
+    @staticmethod
+    def _clip_words(value: str, limit: int) -> str:
+        clipped = " ".join(value.split()[:limit]).strip()
+        if clipped and clipped[-1] not in ".!?":
+            clipped += "."
+        return clipped
+
+    @staticmethod
+    def _localized_copy(language_code: str, english: str, spanish: str) -> str:
+        return spanish if language_code.lower().startswith("es") else english
+
+    async def _generate_instruction_content(
+        self, context: ContextSnapshot
+    ) -> TeachingBeat:
+        return await self._generate_teaching_beat(context)
 
     async def _generate_quiz_question(self, context: ContextSnapshot) -> QuizCard:
         """Generate dynamic quiz question using AI"""
@@ -1851,6 +2210,7 @@ PROGRESSION RULES (CRITICAL):
             taught_context = "\n".join(covered[-4:]) if covered else ""
             prompt = (
                 f"Generate a single multiple-choice quiz question about the following lesson: '{context.lesson_title or topic}'.\n"
+                f"Write the question, options, and feedback in {context.language_code}.\n"
                 f"Lesson Content:\n{lesson_content}\n\n"
                 f"What the teacher just taught in class (test THIS material):\n{taught_context}\n\n"
                 f"The question must test understanding of the specific concepts described above — never a generic question.\n"
@@ -1866,11 +2226,9 @@ PROGRESSION RULES (CRITICAL):
             )
 
             # Call the resilient AI manager with Gemini and OpenAI fallbacks.
-            # Strict JSON mode dropped here too — see _generate_instruction_content
-            # for the full rationale (Gemini fails hard on strict mode + long prompts).
             response = await ai_resilience_manager.chat_completion(
                 messages=[
-                    {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON quiz questions. No prose, no markdown — pure JSON."},
+                    {"role": "system", "content": f"You are a world-class course designer. Write in {context.language_code}. Output ONLY valid JSON quiz questions. No prose, no markdown — pure JSON."},
                     {"role": "user", "content": prompt}
                 ],
                 provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
@@ -1926,50 +2284,88 @@ PROGRESSION RULES (CRITICAL):
                 options=options,
                 allow_multiple_attempts=True,
                 concept_id=context.learning_objective or context.topic or "current_concept",
+                language_code=context.language_code,
             )
 
         except Exception as e:
             logger.error(f"❌ Resilient AI quiz generation failed, using fallback: {e}")
 
         # Fallback static question (only when AI is unavailable)
-        core = (lesson_content.strip().split(".")[0] or f"The lesson's stated relationship in {topic}")[:260]
+        is_spanish = context.language_code.lower().startswith("es")
+        core = (
+            lesson_content.strip().split(".")[0]
+            or (
+                f"La relación principal de la lección sobre {topic}"
+                if is_spanish
+                else f"The lesson's stated relationship in {topic}"
+            )
+        )[:260]
+        if is_spanish:
+            option_copy = {
+                "correct": "Eso coincide con la relación enseñada en la lección.",
+                "b_label": f"{topic} funciona solo cuando todos los valores son idénticos.",
+                "b_feedback": "Eso añade una condición absoluta que la lección no estableció.",
+                "b_hint": "Separa la relación principal de los casos especiales.",
+                "c_label": f"{topic} es principalmente una regla que se memoriza sin razonar.",
+                "c_feedback": "La lección presenta la idea como una relación que puedes explicar y aplicar.",
+                "c_hint": "Vuelve a conectar el procedimiento con la razón por la que funciona.",
+                "d_label": f"{topic} no puede aplicarse fuera del ejemplo mostrado.",
+                "d_feedback": "Un ejemplo ilustra la idea; no limita dónde puede usarse.",
+                "d_hint": "Identifica qué rasgos del ejemplo son esenciales.",
+                "question": f"¿Cuál opción representa el objetivo principal al estudiar {topic}?",
+            }
+        else:
+            option_copy = {
+                "correct": "That matches the relationship taught in the lesson.",
+                "b_label": f"{topic} works only when every value is identical.",
+                "b_feedback": "That adds an absolute condition the lesson did not establish.",
+                "b_hint": "Separate the core relationship from special cases.",
+                "c_label": f"{topic} is mainly a rule to memorize without reasoning.",
+                "c_feedback": "The lesson treats the idea as a relationship you can explain and apply.",
+                "c_hint": "Reconnect the procedure to why it works.",
+                "d_label": f"{topic} cannot be applied outside the example shown.",
+                "d_feedback": "A worked example illustrates the idea; it does not limit its use.",
+                "d_hint": "Identify which features of the example are essential.",
+                "question": f"Which option represents the core objective when studying {topic}?",
+            }
         options = [
             QuizOption(
                 id="a",
                 label=core,
                 is_correct=True,
-                feedback_correct="That matches the relationship taught in the lesson.",
+                feedback_correct=option_copy["correct"],
             ),
             QuizOption(
                 id="b",
-                label=f"{topic} works only when every value is identical.",
+                label=option_copy["b_label"],
                 is_correct=False,
-                feedback_incorrect="That adds an absolute condition the lesson did not establish.",
+                feedback_incorrect=option_copy["b_feedback"],
                 misconception_tag="overgeneralized_condition",
-                remediation_hint="Separate the core relationship from special cases.",
+                remediation_hint=option_copy["b_hint"],
             ),
             QuizOption(
                 id="c",
-                label=f"{topic} is mainly a rule to memorize without reasoning.",
+                label=option_copy["c_label"],
                 is_correct=False,
-                feedback_incorrect="The lesson treats the idea as a relationship you can explain and apply.",
+                feedback_incorrect=option_copy["c_feedback"],
                 misconception_tag="procedure_without_meaning",
-                remediation_hint="Reconnect the procedure to why it works.",
+                remediation_hint=option_copy["c_hint"],
             ),
             QuizOption(
                 id="d",
-                label=f"{topic} cannot be applied outside the example shown.",
+                label=option_copy["d_label"],
                 is_correct=False,
-                feedback_incorrect="A worked example illustrates the idea; it does not limit its use.",
+                feedback_incorrect=option_copy["d_feedback"],
                 misconception_tag="example_as_boundary",
-                remediation_hint="Identify which features of the example are essential.",
+                remediation_hint=option_copy["d_hint"],
             ),
         ]
         return QuizCard(
-            question=f"Which of the following represents the core objective when studying {topic}?",
+            question=option_copy["question"],
             options=options,
             allow_multiple_attempts=True,
-            concept_id=context.learning_objective or context.topic or "current_concept"
+            concept_id=context.learning_objective or context.topic or "current_concept",
+            language_code=context.language_code,
         )
 
 
@@ -2021,7 +2417,7 @@ class SceneLifecycleEngine:
         """Persist guided classroom position in ClassroomSession.context."""
         try:
             user_id = int(trigger.user_id)
-            from lyo_app.classroom.models import ClassroomSession
+            from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
             result = await self.db.execute(
                 select(ClassroomSession)
                 .where(
@@ -2044,28 +2440,88 @@ class SceneLifecycleEngine:
                     context={},
                 )
                 self.db.add(session)
+                await self.db.flush()
 
             durable_context = dict(session.context or {})
             durable_context.update({
-                "current_lesson_index": context.lesson_index,
+                "current_lesson_index": progress.get(
+                    "current_lesson_index", context.lesson_index
+                ),
+                "active_review_lesson_index": progress.get("active_review_lesson_index"),
+                "course_id": progress.get("course_id") or context.course_id,
+                "lesson_id": progress.get("lesson_id") or context.lesson_id,
                 "mastered_lessons": list(progress.get("mastered_lessons", [])),
+                "skipped_lessons": list(progress.get("skipped_lessons", [])),
                 "evidence": dict(progress.get("evidence", {})),
+                "attempt_history": list(progress.get("attempt_history", []))[-100:],
+                "review_queue": list(progress.get("review_queue", []))[-50:],
                 "hint_counts": dict(progress.get("hint_counts", {})),
                 "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
                 "difficulty": progress.get("difficulty"),
                 "classroom_mode": progress.get("classroom_mode", ClassroomMode.SOLO.value),
                 "target_duration_minutes": progress.get("target_duration_minutes", 10),
+                "language_code": progress.get("language_code", context.language_code),
                 "course_complete": context.course_complete,
                 "scene": progress.get("scene", 0),
                 "covered": list(progress.get("covered", []))[-8:],
             })
             session.context = durable_context
             session.subject = context.topic or session.subject
-            session.is_active = not context.course_complete
+            has_pending_review = bool(progress.get("review_queue"))
+            session.is_active = not context.course_complete or has_pending_review
             session.updated_at = datetime.utcnow()
-            if context.course_complete:
+            if context.course_complete and not has_pending_review:
                 session.ended_at = datetime.utcnow()
+
+            action_data = trigger.action_data or {}
+            raw_intent = action_data.get("action_intent")
+            try:
+                action_intent = (
+                    raw_intent
+                    if isinstance(raw_intent, ActionIntent)
+                    else ActionIntent(raw_intent)
+                )
+            except (TypeError, ValueError):
+                action_intent = None
+            recordable_intents = {
+                ActionIntent.SUBMIT_ANSWER,
+                ActionIntent.SUBMIT_TRANSFER,
+                ActionIntent.SKIP_QUESTION,
+                ActionIntent.REQUEST_HINT,
+                ActionIntent.RETRY,
+            }
+            if action_intent in recordable_intents:
+                answer_data = action_data.get("answer_data", {})
+                response = str(
+                    answer_data.get("response")
+                    or action_data.get("message")
+                    or ""
+                ).strip()
+                response_time_ms = (
+                    answer_data.get("response_time_ms")
+                    or action_data.get("response_time_ms")
+                )
+                try:
+                    duration_seconds = (
+                        max(float(response_time_ms) / 1000.0, 0.0)
+                        if response_time_ms is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    duration_seconds = None
+                is_correct = answer_data.get("is_correct")
+                if not isinstance(is_correct, bool):
+                    is_correct = None
+                self.db.add(ClassroomInteraction(
+                    session_id=session.id,
+                    event_type=action_intent.value,
+                    card_id=trigger.component_id or f"lesson-{context.lesson_index}",
+                    topic=context.learning_objective or context.lesson_title or context.topic,
+                    duration_seconds=duration_seconds,
+                    is_correct=is_correct,
+                    word_count=len(response.split()) if response else None,
+                ))
             await self.db.commit()
         except (ValueError, TypeError):
             return
@@ -2099,13 +2555,21 @@ class SceneLifecycleEngine:
             # PHASE 2: Context Assembly (Think)
             context = await self.context_assembler.assemble_context(trigger)
             # Inject cached lesson_index from previous CONTINUE advances
-            if trigger.session_id in self.session_lesson_indices:
+            if (
+                context.classroom_mode != ClassroomMode.REVIEW
+                and trigger.session_id in self.session_lesson_indices
+            ):
                 context.lesson_index = self.session_lesson_indices[trigger.session_id]
                 # Re-resolve lesson data with updated index
-                context.lesson_title, context.lesson_content, context.total_lessons = \
-                    await self.context_assembler._resolve_current_lesson(
-                        context.course_id, context.lesson_index
-                    )
+                (
+                    context.lesson_id,
+                    context.lesson_index,
+                    context.lesson_title,
+                    context.lesson_content,
+                    context.total_lessons,
+                ) = await self.context_assembler._resolve_current_lesson(
+                    context.course_id, context.lesson_index
+                )
                 if context.lesson_title and not context.topic:
                     context.topic = context.lesson_title
             self.session_contexts[trigger.session_id] = context
@@ -2123,15 +2587,55 @@ class SceneLifecycleEngine:
             evidence = progress.setdefault("evidence", {})
             lesson_key = str(context.lesson_index)
             lesson_evidence = evidence.setdefault(
-                lesson_key, {"recognition": False, "transfer": False}
+                lesson_key,
+                {"recognition": False, "transfer": False, "status": "in_progress"},
             )
+            attempts = progress.setdefault("attempt_history", [])
+            skipped_lessons = set(progress.get("skipped_lessons", []))
+            review_queue = list(progress.get("review_queue", []))
+
+            def record_attempt(
+                outcome: str,
+                is_correct: Optional[bool] = None,
+            ) -> None:
+                response = str(
+                    answer_data.get("response")
+                    or action_data.get("message")
+                    or ""
+                ).strip()
+                attempts.append({
+                    "event_id": str(uuid4()),
+                    "at": datetime.utcnow().isoformat(),
+                    "lesson_index": context.lesson_index,
+                    "lesson_id": context.lesson_id,
+                    "intent": (
+                        action_intent.value
+                        if isinstance(action_intent, ActionIntent)
+                        else str(action_intent or "unknown")
+                    ),
+                    "component_id": trigger.component_id,
+                    "outcome": outcome,
+                    "is_correct": is_correct,
+                    "response_time_ms": answer_data.get("response_time_ms"),
+                    "word_count": len(response.split()) if response else None,
+                })
+                del attempts[:-100]
 
             if action_intent == ActionIntent.SUBMIT_ANSWER:
                 answer_is_correct = answer_data.get("is_correct") is True
                 context.learner_signal = (
                     "correct_answer" if answer_is_correct else "incorrect_answer"
                 )
-                lesson_evidence["recognition"] = answer_is_correct
+                lesson_evidence["recognition"] = bool(
+                    lesson_evidence.get("recognition") or answer_is_correct
+                )
+                lesson_evidence["status"] = (
+                    "recognition_passed" if answer_is_correct else "needs_support"
+                )
+                record_attempt(
+                    "recognition_correct" if answer_is_correct else "recognition_incorrect",
+                    answer_is_correct,
+                )
                 if not answer_is_correct and answer_data.get("misconception_tag"):
                     history = progress.setdefault("misconception_history", [])
                     history.append({
@@ -2145,21 +2649,106 @@ class SceneLifecycleEngine:
                 context.learner_signal = (
                     "correct_transfer" if transfer_is_correct else "incorrect_transfer"
                 )
-                lesson_evidence["transfer"] = transfer_is_correct
+                lesson_evidence["transfer"] = bool(
+                    lesson_evidence.get("transfer") or transfer_is_correct
+                )
+                lesson_evidence["status"] = (
+                    "mastered"
+                    if transfer_is_correct and lesson_evidence.get("recognition")
+                    else "needs_support"
+                )
+                record_attempt(
+                    "transfer_correct" if transfer_is_correct else "transfer_incorrect",
+                    transfer_is_correct,
+                )
                 if transfer_is_correct and lesson_evidence.get("recognition"):
                     mastered_lessons.add(context.lesson_index)
                     progress["mastered_lessons"] = sorted(mastered_lessons)
+                    skipped_lessons.discard(context.lesson_index)
+                    review_queue = [
+                        item for item in review_queue
+                        if str(item.get("lesson_index", "")) != str(context.lesson_index)
+                    ]
+                    progress["skipped_lessons"] = sorted(skipped_lessons)
+                    progress["review_queue"] = review_queue
+                    context.review_due_items = [
+                        item for item in context.review_due_items
+                        if item != (context.learning_objective or context.lesson_title)
+                    ]
 
-            if action_intent == ActionIntent.CONTINUE and context.lesson_index in mastered_lessons:
+            if action_intent == ActionIntent.SKIP_QUESTION:
+                context.learner_signal = ActionIntent.SKIP_QUESTION.value
+                lesson_evidence["status"] = "skipped"
+                skipped_lessons.add(context.lesson_index)
+                progress["skipped_lessons"] = sorted(skipped_lessons)
+                if not any(
+                    str(item.get("lesson_index", "")) == str(context.lesson_index)
+                    for item in review_queue
+                ):
+                    review_queue.append({
+                        "lesson_index": context.lesson_index,
+                        "lesson_id": context.lesson_id,
+                        "lesson_title": context.lesson_title,
+                        "objective": (
+                            context.learning_objective
+                            or context.lesson_title
+                            or context.topic
+                        ),
+                        "queued_at": datetime.utcnow().isoformat(),
+                    })
+                progress["review_queue"] = review_queue
+                context.review_due_items = list(dict.fromkeys(
+                    item for item in [
+                        *context.review_due_items,
+                        context.learning_objective or context.lesson_title or context.topic,
+                    ] if item
+                ))
+                record_attempt("skipped", None)
+
+            if action_intent == ActionIntent.REQUEST_HINT:
+                lesson_evidence["status"] = "receiving_help"
+                record_attempt("hint_requested", None)
+
+            # A learner who signals uncertainty ("not sure", "idk", "help")
+            # gets shifted out of assessment entirely, regardless of how the
+            # Evaluator scored their response — a stuck learner needs a hint,
+            # not a rubric-based correction.
+            if answer_data.get("hesitant") or (
+                action_intent == ActionIntent.USER_MESSAGE
+                and detect_hesitation(action_data.get("message"))
+            ):
+                context.learner_signal = "hesitant"
+
+            can_advance = (
+                context.lesson_index in mastered_lessons
+                or context.lesson_index in skipped_lessons
+            )
+            if (
+                action_intent == ActionIntent.CONTINUE
+                and context.classroom_mode != ClassroomMode.REVIEW
+                and can_advance
+            ):
+                advanced_after_skip = (
+                    context.lesson_index in skipped_lessons
+                    and context.lesson_index not in mastered_lessons
+                )
                 next_index = context.lesson_index + 1
                 if context.total_lessons > 0 and next_index < context.total_lessons:
                     context.lesson_index = next_index
                     self.session_lesson_indices[trigger.session_id] = next_index
-                    action_data["advanced_after_mastery"] = True
-                    context.lesson_title, context.lesson_content, context.total_lessons = \
-                        await self.context_assembler._resolve_current_lesson(
-                            context.course_id, next_index
-                        )
+                    action_data[
+                        "advanced_after_skip" if advanced_after_skip else "advanced_after_mastery"
+                    ] = True
+                    (
+                        context.lesson_id,
+                        context.lesson_index,
+                        context.lesson_title,
+                        context.lesson_content,
+                        context.total_lessons,
+                    ) = await self.context_assembler._resolve_current_lesson(
+                        context.course_id, next_index
+                    )
+                    progress["lesson_id"] = context.lesson_id
                     context.learning_objective = context.lesson_title or context.topic
                     context.source_attributions = [
                         "Course material"
@@ -2177,13 +2766,17 @@ class SceneLifecycleEngine:
                 else:
                     context.course_complete = True
                     action_data["course_complete"] = True
-                    logger.info("🏁 All available classroom lessons mastered")
+                    action_data["advanced_after_skip"] = advanced_after_skip
+                    logger.info("🏁 Learner reached the end of the classroom path")
 
             context.overall_progress = min(
                 1.0,
                 len(mastered_lessons) / max(context.total_lessons, 1),
             )
-            progress["current_lesson_index"] = context.lesson_index
+            if context.classroom_mode != ClassroomMode.REVIEW:
+                progress["current_lesson_index"] = context.lesson_index
+            else:
+                progress["active_review_lesson_index"] = context.lesson_index
             progress["course_complete"] = context.course_complete
             self.session_contexts[trigger.session_id] = context
             await self._persist_session_progress(trigger, context, progress)
@@ -2217,10 +2810,10 @@ class SceneLifecycleEngine:
         self.trigger_listener.cancel_timeout(trigger.session_id)
 
         # Process the action
-        scene = await self.process_trigger(trigger)
+        await self.process_trigger(trigger)
 
-        # Schedule next timeout
-        self.trigger_listener.schedule_timeout(trigger.session_id, delay_seconds=45)
+        # Deliberately do not schedule an inactivity scene. The learner owns the
+        # floor until they answer, ask for help, skip, or explicitly continue.
 
     async def _handle_timeout_trigger(self, trigger: Trigger):
         """Handle system timeout triggers"""
@@ -2236,14 +2829,30 @@ class SceneLifecycleEngine:
 
     async def _create_fallback_scene(self, trigger: Trigger) -> Scene:
         """Create safe fallback scene when errors occur"""
+        language_code = str(
+            _SESSION_PROGRESS.get(trigger.session_id, {}).get(
+                "language_code", "en-US"
+            )
+        )
+        is_spanish = language_code.lower().startswith("es")
         return Scene(
             scene_type=SceneType.INSTRUCTION,
             components=[
                 TeacherMessage(
-                    text="Let's continue with your learning journey.",
+                    text=(
+                        "Retomemos una idea a la vez cuando estés listo."
+                        if is_spanish
+                        else "Let's continue with one idea at a time when you're ready."
+                    ),
                     emotion="encouraging",
-                    audio_mood=AudioMood.CALM
-                )
+                    audio_mood=AudioMood.CALM,
+                    language_code=language_code,
+                ),
+                CTAButton(
+                    label="Continuar" if is_spanish else "Continue",
+                    action_intent=ActionIntent.CONTINUE,
+                    language_code=language_code,
+                ),
             ]
         )
 
@@ -2382,6 +2991,7 @@ class SceneLifecycleEngine:
         validated_correct = False
         coverage = 0.0
         missing: List[str] = []
+        hesitant = detect_hesitation(response)
         skill_id = (
             self.session_contexts.get(session_id).learning_objective
             if self.session_contexts.get(session_id)
@@ -2415,15 +3025,16 @@ class SceneLifecycleEngine:
                     )
                     break
 
-        feedback = (
-            "Your explanation uses the lesson idea in a new situation."
-            if validated_correct
-            else (
-                "Add the missing reasoning link"
-                + (f" around {', '.join(missing)}" if missing else "")
-                + f". Aim for at least {min_words} words and explain why the example works."
-            )
-        )
+        # Tutor-facing feedback: never quote the Evaluator's raw `missing`
+        # keyword list here — that would hand the learner the exact words
+        # the rubric is scoring for. `describe_transfer_gap` turns the score
+        # into a plain-language hint about the *category* of gap instead.
+        if hesitant:
+            feedback = "No problem — let's break this into a smaller step."
+        elif validated_correct:
+            feedback = "Your explanation uses the lesson idea in a new situation."
+        else:
+            feedback = describe_transfer_gap(response, min_words, coverage, min_score)
 
         progress = _SESSION_PROGRESS.get(session_id, {})
         session_context = self.session_contexts.get(session_id)
@@ -2459,9 +3070,15 @@ class SceneLifecycleEngine:
                 "answer_data": {
                     "is_correct": validated_correct,
                     "coverage": coverage,
+                    # Internal telemetry only (mastery tracking / analytics) —
+                    # never rendered as chat text. Unlike quiz distractors,
+                    # transfer responses have no author-curated remediation
+                    # hint, so `remediation_hint` stays None here rather than
+                    # being built from the rubric's keyword list.
                     "missing_keywords": missing,
                     "feedback": feedback,
-                    "remediation_hint": ", ".join(missing) if missing else None,
+                    "remediation_hint": None,
+                    "hesitant": hesitant,
                 },
             },
             component_id=input_component_id,

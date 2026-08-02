@@ -167,6 +167,12 @@ async def websocket_endpoint(
         except Exception as e:
             logger.error(f"❌ Failed to initialize SceneLifecycleEngine: {e}", exc_info=True)
             # Send fallback welcome so iOS doesn't hang on "Connecting..."
+            requested_language = websocket.query_params.get("language") or "en-US"
+            fallback_text = (
+                "Estoy preparando el aula. Empezaremos con una idea a la vez."
+                if requested_language.lower().startswith("es")
+                else "I'm setting up your classroom. We'll begin with one idea at a time."
+            )
             fallback = {
                 "type": "scene_stream",
                 "session_id": session_id,
@@ -178,7 +184,8 @@ async def websocket_endpoint(
                         "components": [{
                             "component_id": f"db_err_msg_{session_id}",
                             "type": "TeacherMessage",
-                            "content": "Welcome! Setting up your classroom...",
+                            "text": fallback_text,
+                            "language_code": requested_language,
                             "delay_ms": 0,
                             "animation": "fade_in"
                         }]
@@ -312,6 +319,14 @@ async def _send_welcome_scene(
         logger.warning(f"⚠️ No lifecycle engine available — sending fallback welcome for {connection.connection_id}")
         # Send a minimal welcome message directly so the client isn't stuck
         from lyo_app.ai_classroom.websocket_manager import WebSocketPayload, WebSocketEventType
+        requested_language = (
+            connection.websocket.query_params.get("language") or "en-US"
+        )
+        fallback_text = (
+            "Bienvenido a tu aula. Empecemos con una idea a la vez."
+            if requested_language.lower().startswith("es")
+            else "Welcome to your classroom. We'll begin with one idea at a time."
+        )
         fallback = {
             "type": "scene_stream",
             "session_id": connection.session_id,
@@ -324,7 +339,8 @@ async def _send_welcome_scene(
                         {
                             "component_id": f"welcome_msg_{connection.session_id}",
                             "type": "TeacherMessage",
-                            "text": "Welcome to your classroom! Let's begin learning.",
+                            "text": fallback_text,
+                            "language_code": requested_language,
                             "delay_ms": 0,
                             "animation": "fade_in"
                         }
@@ -344,10 +360,15 @@ async def _send_welcome_scene(
         # attached to the session so instruction is driven by a goal, not only
         # a display title.
         topic_from_query = connection.websocket.query_params.get("topic")
+        course_id_from_query = connection.websocket.query_params.get("course_id")
+        lesson_id_from_query = connection.websocket.query_params.get("lesson_id")
         objective_from_query = connection.websocket.query_params.get("objective")
         difficulty_from_query = connection.websocket.query_params.get("difficulty")
         mode_from_query = connection.websocket.query_params.get("mode") or "solo"
         duration_from_query = connection.websocket.query_params.get("duration_minutes") or "10"
+        language_from_query = (
+            connection.websocket.query_params.get("language") or "auto"
+        )
         reduced_motion_from_query = (
             connection.websocket.query_params.get("reduced_motion") or "false"
         ).lower() == "true"
@@ -355,25 +376,25 @@ async def _send_welcome_scene(
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
         topic = None
-        course_id = None
+        course_id = course_id_from_query
         try:
             from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
             cm = get_conversation_manager()
             conv_session = cm.get_session(connection.session_id)
             if conv_session:
                 topic = conv_session.current_topic
-                course_id = conv_session.current_course_id
+                course_id = course_id or conv_session.current_course_id
             else:
                 # iOS sends courseId as session_id — create a session for it
                 from lyo_app.ai_classroom.conversation_flow import ConversationSession as ConvSession
                 conv_session = ConvSession(
                     session_id=connection.session_id,
                     user_id=connection.user_id,
-                    current_course_id=connection.session_id,
+                    current_course_id=course_id_from_query or connection.session_id,
                     current_lesson_index=0,
                 )
                 cm._sessions[connection.session_id] = conv_session
-                course_id = connection.session_id
+                course_id = course_id_from_query or connection.session_id
                 logger.info(f"📚 Created ConversationSession for WS classroom: {connection.session_id}")
         except Exception as e:
             logger.warning(f"⚠️ Could not resolve topic from ConversationManager: {e}")
@@ -394,43 +415,20 @@ async def _send_welcome_scene(
             action_data={
                 "welcome": True,
                 "topic": resolved_topic,
+                "course_id": course_id,
+                "lesson_id": lesson_id_from_query,
+                "client_contract_version": (
+                    connection.websocket.query_params.get("client_contract_version") or "1"
+                ),
                 "objective": objective_from_query,
                 "difficulty": difficulty_from_query,
                 "mode": mode_from_query,
                 "duration_minutes": duration_from_query,
+                "language": language_from_query,
                 "reduced_motion": reduced_motion_from_query,
             },
             urgency=1
         )
-
-        # ⚡ FAST INITIAL HOOK ⚡
-        # Send an immediate intro to completely eliminate the perceived wait time!
-        try:
-            intro_text = f"Glad you made it! Give me just a second to pull up my notes for {resolved_topic}..."
-            fast_scene = {
-                "type": "scene_stream",
-                "session_id": connection.session_id,
-                "data": {
-                    "event_type": "SCENE_START",
-                    "scene": {
-                        "scene_id": f"fast_welcome_{connection.session_id}",
-                        "scene_type": "welcome",
-                        "components": [
-                            {
-                                "component_id": f"fast_msg_{connection.session_id}",
-                                "type": "TeacherMessage",
-                                "text": intro_text,
-                                "delay_ms": 0,
-                                "animation": "fade_in"
-                            }
-                        ]
-                    }
-                }
-            }
-            await connection.websocket.send_text(json.dumps(fast_scene))
-            logger.info(f"⚡ Fast welcome scene sent to {connection.connection_id} to reduce wait time")
-        except Exception as e:
-            logger.warning(f"Failed to send fast welcome: {e}")
 
         # Fire welcome scene generation as a background task so the message loop
         # starts immediately. process_trigger streams directly to the WebSocket
@@ -449,6 +447,14 @@ async def _send_welcome_scene(
         logger.error(f"❌ Welcome scene setup failed: {e}", exc_info=True)
         # Send a placeholder so the client isn't stuck on "Connecting..."
         try:
+            requested_language = (
+                connection.websocket.query_params.get("language") or "en-US"
+            )
+            fallback_text = (
+                "Estoy preparando el aula. Dime qué te gustaría aprender."
+                if requested_language.lower().startswith("es")
+                else "I'm setting up your classroom. Tell me what you'd like to learn."
+            )
             fallback = {
                 "type": "scene_stream",
                 "session_id": connection.session_id,
@@ -461,7 +467,8 @@ async def _send_welcome_scene(
                             {
                                 "component_id": f"error_msg_{connection.session_id}",
                                 "type": "TeacherMessage",
-                                "text": "Welcome! I'm setting up your classroom. Let me know what you'd like to learn.",
+                                "text": fallback_text,
+                                "language_code": requested_language,
                                 "delay_ms": 0,
                                 "animation": "fade_in"
                             }

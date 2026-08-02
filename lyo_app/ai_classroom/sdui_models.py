@@ -68,6 +68,7 @@ class ActionIntent(str, Enum):
     SUBMIT_ANSWER = "submit_answer"
     ASK_QUESTION = "ask_question"
     REQUEST_EXAMPLE = "request_example"
+    SKIP_QUESTION = "skip_question"
     SKIP_AHEAD = "skip_ahead"
     SUBMIT_TRANSFER = "submit_transfer"
     SET_MODE = "set_mode"
