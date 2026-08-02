@@ -93,11 +93,18 @@ YOU MUST RESPOND ONLY WITH JSON.
             
         return "\n".join(prompt_parts)
 
-    async def route(self, request: RouterRequest) -> RouterResponse:
+    async def route(
+        self,
+        request: RouterRequest,
+        media_attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> RouterResponse:
         """
         Main routing method.
         """
-        result = await self.execute(request=request)
+        result = await self.execute(
+            request=request,
+            media_attachments=media_attachments or [],
+        )
         
         if not result.success:
             # Router failed — log the real error for debugging, then use
