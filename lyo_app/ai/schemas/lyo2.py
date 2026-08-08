@@ -9,6 +9,7 @@ class InputModality(str, Enum):
     IMAGE = "IMAGE"
     AUDIO = "AUDIO"
     VIDEO = "VIDEO"
+    DOCUMENT = "DOCUMENT"
 
 
 class Intent(str, Enum):
@@ -41,12 +42,14 @@ class ArtifactType(str, Enum):
 
 
 class MediaRef(BaseModel):
-    """Reference to uploaded media stored in GCS / Firebase Storage."""
+    """Reference to media uploaded through Lyo's authenticated media API."""
     model_config = ConfigDict(extra="forbid")
     modality: InputModality
-    uri: str  # gs://... or https://...
+    uri: str
     mime_type: Optional[str] = None
     duration_ms: Optional[int] = None
+    name: Optional[str] = None
+    size_bytes: Optional[int] = Field(default=None, ge=0)
 
 
 class ActiveArtifactContext(BaseModel):

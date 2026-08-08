@@ -14,6 +14,11 @@ from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
     ConversationTurn, MediaRef, UIBlock, UIBlockType,
 )
+from lyo_app.ai.multimodal import (
+    canonical_message_content,
+    load_media_attachments,
+    recent_media_refs,
+)
 from lyo_app.api.v1.chat import ChatRequest, ConversationMessage
 from lyo_app.chat.models import ChatMode
 from lyo_app.chat.stores import conversation_store
@@ -65,6 +70,11 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
     trace_id = str(uuid.uuid4())
     start_time = time.time()
     try:
+        display_content = canonical_message_content(request.text, request.media)
+        media_attachments = await load_media_attachments(request.media)
+        if not request.text and request.media:
+            request.text = "Please analyze the attached material and respond to what it contains."
+
         persistent_conversation = None
         assistant_client_message_id = None
         authenticated_user_id = (
@@ -125,18 +135,27 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                             "replayed": True,
                         },
                     )
-            if request.text:
+            if display_content:
                 await conversation_store.add_message(
                     db,
                     persistent_conversation.id,
                     "user",
-                    request.text,
+                    display_content,
                     client_message_id=request.client_message_id,
                 )
 
+        if not media_attachments:
+            historical_media = recent_media_refs(request.conversation_history)
+            media_attachments = await load_media_attachments(
+                historical_media, missing_ok=True
+            )
+
         # 1. Layer A: Multimodal Routing
         logger.info(f"[{trace_id}] Layer A: Routing request for user {current_user.id}")
-        routing_response = await router_agent.route(request)
+        routing_response = await router_agent.route(
+            request,
+            media_attachments=media_attachments,
+        )
         decision = routing_response.decision
         
         # Check for clarification gate
@@ -177,7 +196,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             conversation_history=[
                 {"role": turn.role, "content": turn.content}
                 for turn in request.conversation_history
-            ]
+            ],
+            media_attachments=media_attachments,
         )
         
         # Add trace metadata
@@ -203,6 +223,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         
         return execution_response
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[{trace_id}] Lyo 2.0 execution failed: {e}", exc_info=True)
         raise HTTPException(

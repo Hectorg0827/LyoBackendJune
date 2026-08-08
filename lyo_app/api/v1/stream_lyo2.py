@@ -15,6 +15,11 @@ from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import RouterRequest, ConversationTurn, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
+from lyo_app.ai.multimodal import (
+    canonical_message_content,
+    load_media_attachments,
+    recent_media_refs,
+)
 from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
@@ -224,6 +229,11 @@ async def stream_lyo2_chat(
         start_time = time.time()
         
         try:
+            display_content = canonical_message_content(request.text, request.media)
+            media_attachments = await load_media_attachments(request.media)
+            if not request.text and request.media:
+                request.text = "Please analyze the attached material and respond to what it contains."
+
             # Resolve one server-owned conversation before any AI work.  The
             # bearer identity, never a client-supplied user_id, owns the row.
             persistent_conversation = None
@@ -282,12 +292,12 @@ async def stream_lyo2_chat(
                         persistent_conversation.id,
                         assistant_client_message_id,
                     )
-                if request.text:
+                if display_content:
                     await conversation_store.add_message(
                         db,
                         persistent_conversation.id,
                         role="user",
-                        content=request.text,
+                        content=display_content,
                         mode_used=ChatMode.GENERAL.value,
                         client_message_id=request.client_message_id,
                     )
@@ -313,6 +323,12 @@ async def stream_lyo2_chat(
                     )
                     yield "data: [DONE]\n\n"
                     return
+
+            if not media_attachments:
+                historical_media = recent_media_refs(request.conversation_history)
+                media_attachments = await load_media_attachments(
+                    historical_media, missing_ok=True
+                )
 
             collected_bricks = []
             
@@ -377,7 +393,13 @@ async def stream_lyo2_chat(
                     except Exception as ne:
                         logger.warning(f"Failed to fetch proactive nudges: {ne}")
 
-                    routing_response = await asyncio.wait_for(router_agent.route(request), timeout=35.0)
+                    routing_response = await asyncio.wait_for(
+                        router_agent.route(
+                            request,
+                            media_attachments=media_attachments,
+                        ),
+                        timeout=35.0,
+                    )
                     decision = routing_response.decision
                 except asyncio.TimeoutError:
                     logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
@@ -522,7 +544,8 @@ async def stream_lyo2_chat(
                         plan=plan,
                         original_request=request.text or "",
                         conversation_history=history,
-                        intent=decision.intent.value if decision.intent else None
+                        intent=decision.intent.value if decision.intent else None,
+                        media_attachments=media_attachments,
                     ),
                     timeout=60.0 # Execution can take longer
                 )

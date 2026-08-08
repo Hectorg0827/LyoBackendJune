@@ -494,7 +494,11 @@ class AIResilienceManager:
                                     "fileUri": item["uri"]
                                 }
                             })
-                        elif item.get("type") == "image_base64":
+                        elif item.get("type") in {
+                            "image_base64",
+                            "media_base64",
+                            "file_base64",
+                        }:
                             message_parts.append({
                                 "inlineData": {
                                     "mimeType": item.get("mime_type", "image/jpeg"),
@@ -594,8 +598,20 @@ class AIResilienceManager:
         if not messages:
             return ["gemini-2.5-flash"]  # Default
         
-        last_message = messages[-1].get("content", "")
-        total_chars = sum(len(m.get("content", "")) for m in messages)
+        def _text_content(message: Dict[str, Any]) -> str:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return " ".join(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            return str(content)
+
+        last_message = _text_content(messages[-1])
+        total_chars = sum(len(_text_content(message)) for message in messages)
         
         # Simple query indicators
         simple_patterns = [

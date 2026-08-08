@@ -1,6 +1,6 @@
 """
 Simple authenticated media upload + public serving for user content
-(reel videos, thumbnails, post images).
+(chat attachments, reel videos, thumbnails, and post images).
 
 This is the consumer-grade path every client uses via multipart POST —
 no presigned URLs and no organization gating. Files land under the
@@ -34,9 +34,15 @@ ALLOWED_TYPES = {
     "image/png": ".png",
     "image/webp": ".webp",
     "image/heic": ".heic",
+    "application/pdf": ".pdf",
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "text/csv": ".csv",
+    "application/json": ".json",
 }
 MAX_VIDEO_BYTES = 200 * 1024 * 1024
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 _CHUNK = 1024 * 1024
 _FOLDER_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
@@ -54,7 +60,7 @@ async def upload_media(
     folder: str = Form("content"),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload a video or image; returns a public URL for the stored file."""
+    """Upload supported media; returns a public, unguessable URL and API path."""
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     if content_type not in ALLOWED_TYPES:
         raise HTTPException(
@@ -64,7 +70,12 @@ async def upload_media(
     if not _FOLDER_RE.match(folder):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid folder name")
 
-    max_bytes = MAX_VIDEO_BYTES if content_type.startswith("video/") else MAX_IMAGE_BYTES
+    if content_type.startswith("video/"):
+        max_bytes = MAX_VIDEO_BYTES
+    elif content_type.startswith("image/"):
+        max_bytes = MAX_IMAGE_BYTES
+    else:
+        max_bytes = MAX_DOCUMENT_BYTES
     name = f"{uuid.uuid4().hex}{ALLOWED_TYPES[content_type]}"
     dest_dir = _media_root() / folder
     dest_dir.mkdir(parents=True, exist_ok=True)
