@@ -627,14 +627,15 @@ class AIResilienceManager:
         ]
         is_complex = any(p in last_message.lower() for p in complex_patterns)
         
-        # Routing logic per user request:
-        # 1. Try cheap Gemini Flash
-        # 2. If it fails, try GPT-4o-mini
-        # 3. Only use stronger model for long course generation / deep reasoning
+        # Route through the currently reliable provider first. Gemini Flash has
+        # repeatedly circuit-opened in production when its key is rejected, so
+        # leading with it makes otherwise healthy chat/classroom requests pay a
+        # failure before falling through to OpenAI. Keep Gemini as a later
+        # fallback for the day its key is restored.
         if is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gemini-2.5-pro", "gpt-4o", "gemini-2.5-flash"]
+            return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-pro", "gemini-2.5-flash"]
         else:
-            return ["gemini-2.5-flash", "gpt-4o-mini"]
+            return ["gpt-4o-mini", "gemini-2.5-flash"]
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:
@@ -1085,4 +1086,3 @@ class AIResilienceManager:
 
 # Global instance
 ai_resilience_manager = AIResilienceManager()
-

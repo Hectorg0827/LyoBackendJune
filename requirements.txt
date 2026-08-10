@@ -72,22 +72,23 @@ slowapi==0.1.9
 kafka-python==2.0.2
 
 # AI/ML APIs 
-google-generativeai>=0.7.2
+google-generativeai==0.8.3
 openai>=1.35.0
 anthropic>=0.39.0
 google-cloud-secret-manager==2.20.2
 google-cloud-firestore==2.18.0
 google-cloud-storage==2.17.0
-google-cloud-aiplatform==1.133.0
+google-cloud-aiplatform==1.142.0
+google-genai==1.68.0
 firebase-admin==6.5.0
 google-cloud-texttospeech>=2.16.0
-runwayml>=4.6.0
-deepgram-sdk>=3.2.0
+runwayml==5.13.0
+deepgram-sdk==3.11.0
 tavily-python>=0.3.0
 resend>=0.8.0
 
 # Features & Utils
-websockets==13.1
+websockets==15.0.1
 scikit-learn==1.3.2
 numpy==1.26.2
 pandas==2.1.4
