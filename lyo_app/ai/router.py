@@ -63,7 +63,16 @@ Lyo is an Outcome Engine for learning.
 YOU MUST RESPOND ONLY WITH JSON.
 """
 
-    def build_prompt(self, request: RouterRequest) -> str:
+    def build_prompt(
+        self,
+        request: RouterRequest,
+        media_attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        # media_attachments are passed separately to the model by BaseAgent.
+        # Accept them here because BaseAgent forwards all execute() kwargs to
+        # build_prompt before constructing the multimodal model payload.
+        # The RouterRequest media references below remain useful textual context.
+        _ = media_attachments
         # Construct the user prompt based on the request
         prompt_parts = []
 
