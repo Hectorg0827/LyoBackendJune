@@ -254,7 +254,7 @@ class ChatRouter:
                 messages=messages,
                 temperature=0.0,
                 max_tokens=60, # Increased slightly for reasoning
-                provider_order=["gemini-2.5-flash", "gpt-4o-mini"] # Speed is key
+                provider_order=["gpt-4o-mini", "gemini-2.5-flash"] # Speed is key
             )
             
             content = response.get("content", "")

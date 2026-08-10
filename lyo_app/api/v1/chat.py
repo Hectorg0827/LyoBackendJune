@@ -86,7 +86,7 @@ Include 4-8 lessons. Make the course comprehensive and engaging."""
                 {"role": "system", "content": "You are a world-class course designer. Output ONLY valid JSON."},
                 {"role": "user", "content": prompt}
             ],
-            provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+            provider_order=["gpt-4o-mini", "gemini-2.5-flash"]
         )
 
         raw = response.get("content", "").strip()

@@ -374,7 +374,7 @@ async def _create_minimal_graph_course(
 
         ai_response = await ai_resilience_manager.chat_completion(
             messages=[{"role": "user", "content": narration_prompt}],
-            provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+            provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
             temperature=0.7,
         )
 
