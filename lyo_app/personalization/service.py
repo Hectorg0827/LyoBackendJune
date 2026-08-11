@@ -18,6 +18,24 @@ from lyo_app.evolution.recommendation_engine import get_next_upgrade
 
 logger = logging.getLogger(__name__)
 
+
+def _coerce_learner_id(learner_id: Any) -> Optional[int]:
+    """Normalize a learner id to the integer type the DB columns actually use.
+
+    Schemas carry ids as strings, but ``LearnerState.user_id`` and
+    ``LearnerMastery.user_id`` are Integer foreign keys. On PostgreSQL a
+    string/integer comparison raises instead of simply not matching, so an
+    uncast id turns every learner-state read into a swallowed error and an
+    empty result. Guests (non-numeric ids) legitimately have no learner
+    record, so they return None rather than raising.
+    """
+    if learner_id is None:
+        return None
+    try:
+        return int(learner_id)
+    except (TypeError, ValueError):
+        return None
+
 class DeepKnowledgeTracer:
     """
     Deep Knowledge Tracing implementation for skill mastery estimation
@@ -255,7 +273,9 @@ class PersonalizationEngine:
         This reuses existing personalization tables (no parallel memory system).
         Returns an empty string if no learner state exists yet.
         """
-        user_id = learner_id
+        user_id = _coerce_learner_id(learner_id)
+        if user_id is None:
+            return ""
 
         state = None
         masteries = []
@@ -458,19 +478,21 @@ class PersonalizationEngine:
         """
         Determine next best action based on state
         """
+        learner_pk = _coerce_learner_id(request.learner_id)
+
         # Get learner state
         result = await db.execute(
             select(LearnerState).where(
-                LearnerState.user_id == request.learner_id
+                LearnerState.user_id == learner_pk
             )
-        )
-        state = result.scalar_one_or_none()
-        
+        ) if learner_pk is not None else None
+        state = result.scalar_one_or_none() if result is not None else None
+
         if not state:
             # Even without a learner state (created by affect updates), a user
             # who has answered quizzes may have reviews due — check before
             # falling back to the new-learner default.
-            due_items = await self._get_due_repetitions(db, request.learner_id)
+            due_items = await self._get_due_repetitions(db, learner_pk) if learner_pk is not None else []
             if due_items:
                 return NextActionResponse(
                     action=ActionType.REVIEW,
@@ -543,7 +565,7 @@ class PersonalizationEngine:
             )
         
         # Check for spaced repetition
-        due_items = await self._get_due_repetitions(db, request.learner_id)
+        due_items = await self._get_due_repetitions(db, learner_pk) if learner_pk is not None else []
         if due_items:
             return NextActionResponse(
                 action=ActionType.REVIEW,
@@ -552,11 +574,11 @@ class PersonalizationEngine:
                 spaced_repetition_due=True,
                 content={"items": due_items[:3]}
             )
-        
+
         # Default: practice at optimal difficulty
-        if request.current_skill:
+        if request.current_skill and learner_pk is not None:
             mastery, confidence = await self.dkt.get_skill_readiness(
-                db, request.learner_id, request.current_skill
+                db, learner_pk, request.current_skill
             )
             
             if mastery < 0.3:
@@ -583,25 +605,38 @@ class PersonalizationEngine:
         """
         Get complete mastery profile
         """
+        user_id = _coerce_learner_id(learner_id)
+        if user_id is None:
+            # Guest / non-numeric id: no learner record exists to profile.
+            return MasteryProfile(
+                learner_id=learner_id,
+                skills={},
+                strengths=[],
+                weaknesses=[],
+                recommended_focus=[],
+                learning_velocity=0.5,
+                optimal_difficulty=0.5,
+            )
+
         result = await db.execute(
             select(LearnerMastery).where(
-                LearnerMastery.user_id == learner_id
+                LearnerMastery.user_id == user_id
             ).order_by(desc(LearnerMastery.mastery_level))
         )
         masteries = result.scalars().all()
-        
+
         skills = {m.skill_id: m.mastery_level for m in masteries}
         strengths = [m.skill_id for m in masteries if m.mastery_level >= 0.7][:5]
         weaknesses = [m.skill_id for m in masteries if m.mastery_level < 0.3][:5]
-        
+
         # Get learner state
         result = await db.execute(
             select(LearnerState).where(
-                LearnerState.user_id == learner_id
+                LearnerState.user_id == user_id
             )
         )
         state = result.scalar_one_or_none()
-        
+
         return MasteryProfile(
             learner_id=learner_id,
             skills=skills,
