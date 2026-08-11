@@ -239,6 +239,12 @@ class ChatMessage(TenantMixin, Base):
     # CTAs attached to this message
     ctas: Mapped[Optional[List]] = mapped_column(JSON, nullable=True)
     chip_actions: Mapped[Optional[List]] = mapped_column(JSON, nullable=True)
+
+    # Structured SmartBlocks rendered with this message. Persisted for two
+    # reasons: a reloaded conversation keeps its lesson structure instead of
+    # collapsing to plain text, and grading a check reads the correct answer
+    # from here — so the client is never the authority on correctness.
+    blocks: Mapped[Optional[List]] = mapped_column(JSON, nullable=True)
     
     # Cache info
     cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)

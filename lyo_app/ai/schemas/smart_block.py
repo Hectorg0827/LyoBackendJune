@@ -47,6 +47,10 @@ class CodeBlockContent(BaseModel):
 class QuizOption(BaseModel):
     id: str
     text: str
+    # For a distractor: the specific misconception choosing it reveals. Drives
+    # a targeted correction instead of a generic "not quite", and is what gets
+    # recorded to LearnerMastery.misconceptions on a miss.
+    reveals: Optional[str] = None
 
 class QuizBlockContent(BaseModel):
     question: str
@@ -54,6 +58,10 @@ class QuizBlockContent(BaseModel):
     correct_index: int
     explanation: Optional[str] = None
     hint: Optional[str] = None
+    # Index of an "I'm not sure — just explain it" opt-out, on calibration
+    # probes. Neither correct nor a misconception: selecting it skips grading
+    # so a probe never becomes a gate in front of a straight answer.
+    bailout_index: Optional[int] = None
 
 class FlashcardBlockContent(BaseModel):
     front: str
@@ -98,6 +106,11 @@ class MasteryMapBlockContent(BaseModel):
 # SmartBlock (top-level)
 # ---------------------------------------------------------------------------
 
+# Styling variants accepted by SmartBlock.callout. Module-level rather than a
+# class attribute because Pydantic treats bare class attributes as fields.
+CALLOUT_VARIANTS = ("trap", "insight", "warning")
+
+
 class SmartBlock(BaseModel):
     """A single renderable content block with schema versioning."""
     id: str = Field(default_factory=lambda: __import__("uuid").uuid4().hex[:12])
@@ -130,3 +143,38 @@ class SmartBlock(BaseModel):
     @classmethod
     def mastery_map(cls, title: str, nodes: List[MasteryNode], **kwargs) -> "SmartBlock":
         return cls(type=SmartBlockType.mastery_map, content=MasteryMapBlockContent(title=title, nodes=nodes, **kwargs).model_dump())
+
+    # -- Teaching blocks ----------------------------------------------------
+    # Both reuse existing types/subtypes rather than widening the vocabulary,
+    # so clients that already switch on `text` and `dataViz` keep working and
+    # only the styling is new.
+
+    @classmethod
+    def callout(cls, text: str, variant: str = "trap", **kwargs) -> "SmartBlock":
+        """A highlighted aside — used for the 'common mistakes' section.
+
+        `variant` rides in TextBlockContent.style, which is already a free-form
+        optional string, so no schema change is needed. Unknown variants fall
+        back to "trap" rather than rendering unstyled.
+        """
+        if variant not in CALLOUT_VARIANTS:
+            variant = "trap"
+        return cls(
+            type=SmartBlockType.text,
+            subtype="callout",
+            content=TextBlockContent(text=text, style=variant, **kwargs).model_dump(),
+        )
+
+    @classmethod
+    def table(cls, markdown: str, title: Optional[str] = None, **kwargs) -> "SmartBlock":
+        """A reference table carried as GitHub-flavored markdown.
+
+        `DataVizBlockContent.source` is an opaque string by design (it already
+        carries mermaid and latex), and every client that renders text can
+        render a markdown table, so this needs no new renderer on day one.
+        """
+        return cls(
+            type=SmartBlockType.data_viz,
+            subtype="table",
+            content=DataVizBlockContent(format="table", source=markdown, title=title, **kwargs).model_dump(),
+        )

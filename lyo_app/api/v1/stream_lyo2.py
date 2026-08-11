@@ -4,9 +4,10 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any, List, Optional
-from fastapi import APIRouter, Depends, Request
+from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user_or_guest, get_db
@@ -20,7 +21,8 @@ from lyo_app.ai.multimodal import (
     load_media_attachments,
     recent_media_refs,
 )
-from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption
+from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption, SmartBlockType
+from lyo_app.ai.lesson_composer import ChatLesson, SectionKind, compose as compose_lesson
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
@@ -144,6 +146,102 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
 
 import re as _re
 
+def _lesson_to_smart_blocks(lesson: "ChatLesson") -> List[Dict[str, Any]]:
+    """Render a composed lesson into the block vocabulary clients consume.
+
+    Each lesson beat becomes its own block so the client can style it
+    distinctly — that separation is what makes a lesson scannable instead of a
+    wall of prose. The check block carries the skill id in metadata so grading
+    knows which mastery row to update.
+    """
+    blocks: List[Dict[str, Any]] = []
+
+    for section in lesson.sections:
+        if section.kind is SectionKind.trap:
+            blocks.append(SmartBlock.callout(section.text, variant="trap").model_dump())
+        elif section.kind is SectionKind.reference and section.table_markdown:
+            blocks.append(
+                SmartBlock.table(section.table_markdown, title=section.text or None).model_dump()
+            )
+        else:
+            # hook/core/representation/example/method all render as text; the
+            # subtype carries the beat so the client can style it.
+            blocks.append(
+                SmartBlock.text(section.text, subtype=section.kind.value).model_dump()
+            )
+            if section.latex:
+                blocks.append(
+                    SmartBlock.data_viz(section.latex, fmt="math").model_dump()
+                )
+
+    if lesson.check:
+        check = lesson.check
+        block = SmartBlock.quiz(
+            question=check.question,
+            options=[
+                QuizOption(id=str(i), text=opt.text, reveals=opt.reveals)
+                for i, opt in enumerate(check.options)
+            ],
+            correct_index=check.correct_index,
+            explanation=check.explanation,
+            hint=check.hint,
+            bailout_index=check.bailout_index,
+        )
+        block.metadata = {"skill_id": lesson.skill_id, "is_probe": lesson.is_probe}
+        blocks.append(block.model_dump())
+
+    return blocks
+
+
+async def _has_prior_mastery(
+    db: AsyncSession, user_id: Optional[str], skill_id: str
+) -> bool:
+    """Has this learner already been assessed on this skill?
+
+    Decides probe vs. teach: only calibrate the first time. Any failure is
+    treated as "no prior evidence", which just means we calibrate again —
+    the safe direction to be wrong in.
+    """
+    if db is None or not user_id:
+        return False
+    try:
+        from sqlalchemy import and_, select as _select
+
+        from lyo_app.personalization.models import LearnerMastery
+        from lyo_app.personalization.service import _coerce_learner_id
+
+        pk = _coerce_learner_id(user_id)
+        if pk is None:
+            return False
+        result = await db.execute(
+            _select(LearnerMastery).where(
+                and_(LearnerMastery.user_id == pk, LearnerMastery.skill_id == skill_id)
+            )
+        )
+        row = result.scalar_one_or_none()
+        return bool(row and (row.attempts or 0) > 0)
+    except Exception as e:
+        logger.warning(f"Could not read prior mastery for {skill_id}: {e}")
+        return False
+
+
+async def _try_compose_lesson(
+    db: AsyncSession, user_id: Optional[str], user_text: str
+) -> Tuple[List[Dict[str, Any]], Optional[ChatLesson]]:
+    """Compose a structured lesson, or ([], None) to fall back to prose."""
+    from lyo_app.ai.lesson_composer import slugify_skill
+
+    topic = _extract_course_topic(user_text or "")
+    if not topic:
+        return [], None
+
+    mode = "teach" if await _has_prior_mastery(db, user_id, slugify_skill(topic)) else "probe"
+    lesson = await compose_lesson(topic, db=db, user_id=user_id, mode=mode)
+    if lesson is None:
+        return [], None
+    return _lesson_to_smart_blocks(lesson), lesson
+
+
 def _to_smart_blocks(
     answer_text: Optional[str], artifact: Optional[UIBlock]
 ) -> List[Dict[str, Any]]:
@@ -210,6 +308,222 @@ router = APIRouter()
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
 test_prep_agent = TestPrepAgent()
+
+class CheckAnswerRequest(BaseModel):
+    """A learner's answer to an in-chat check.
+
+    Deliberately does NOT carry the question or the correct answer: the server
+    reads those back from the persisted block, so a client cannot assert its
+    own correctness.
+    """
+
+    conversation_id: str
+    block_id: str
+    selected_index: int
+    time_taken_ms: int = 0
+    hint_used: bool = False
+
+
+class CheckAnswerResponse(BaseModel):
+    correct: bool
+    correct_index: int
+    # Echoed back so a client can render which option was chosen without
+    # having to remember it across a reload.
+    selected_index: int
+    explanation: Optional[str] = None
+    # The confusion this particular wrong answer reveals, when known.
+    misconception: Optional[str] = None
+    # True when the learner chose the "just explain it" opt-out: not graded,
+    # not recorded against mastery.
+    bailed_out: bool = False
+    skill_id: Optional[str] = None
+    mastery: Optional[float] = None
+    next_actions: List[str] = PydanticField(default_factory=list)
+
+
+def _find_check_block(
+    messages: List[Any], block_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Locate a persisted quiz block by id. Returns (block, skill_id)."""
+    block, skill_id, _ = _locate_check_block(messages, block_id)
+    return block, skill_id
+
+
+def _locate_check_block(
+    messages: List[Any], block_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Any]]:
+    """As _find_check_block, but also returns the owning message.
+
+    The message is needed to persist the verdict back onto the block, so a
+    reloaded conversation shows the check as already answered rather than
+    offering it again.
+    """
+    for message in messages:
+        for block in (getattr(message, "blocks", None) or []):
+            if not isinstance(block, dict) or block.get("id") != block_id:
+                continue
+            if block.get("type") != SmartBlockType.quiz.value:
+                return None, None, None
+            metadata = block.get("metadata") or {}
+            return block, metadata.get("skill_id"), message
+    return None, None, None
+
+
+def _grade_check_block(
+    block: Dict[str, Any], selected_index: int
+) -> Tuple[bool, bool, Optional[str], int, Optional[str]]:
+    """Pure grading over a stored block.
+
+    Returns (correct, bailed_out, misconception, correct_index, explanation).
+    Kept separate from the route so the decision this endpoint exists to make
+    is directly testable.
+    """
+    content = block.get("content") or {}
+    options = content.get("options") or []
+    try:
+        correct_index = int(content.get("correct_index"))
+    except (TypeError, ValueError):
+        correct_index = -1
+    bailout_index = content.get("bailout_index")
+
+    bailed_out = bailout_index is not None and selected_index == bailout_index
+    # Fail closed. A block with a missing or malformed correct_index sentinels
+    # to -1, and without this guard a client sending selected_index=-1 would
+    # match the sentinel and be told it was correct.
+    correct = (
+        (not bailed_out)
+        and correct_index >= 0
+        and selected_index == correct_index
+    )
+
+    misconception = None
+    if not correct and not bailed_out and 0 <= selected_index < len(options):
+        option = options[selected_index]
+        if isinstance(option, dict):
+            misconception = option.get("reveals")
+
+    return correct, bailed_out, misconception, correct_index, content.get("explanation")
+
+
+async def _persist_check_result(
+    db: AsyncSession,
+    message: Optional[Any],
+    block_id: str,
+    result: "CheckAnswerResponse",
+) -> None:
+    """Record the verdict on the stored block.
+
+    Without this the grade lives only in client memory, so reloading the
+    conversation re-enables an already-answered check and loses the learner's
+    selection. Best-effort: a bookkeeping failure must not fail the answer.
+    """
+    if message is None:
+        return
+    try:
+        blocks = list(getattr(message, "blocks", None) or [])
+        updated = []
+        changed = False
+        for block in blocks:
+            if isinstance(block, dict) and block.get("id") == block_id:
+                metadata = dict(block.get("metadata") or {})
+                metadata["result"] = result.model_dump()
+                block = {**block, "metadata": metadata}
+                changed = True
+            updated.append(block)
+        if not changed:
+            return
+        # Reassign rather than mutate: a JSON column tracks changes by
+        # identity, so an in-place edit would never be written.
+        message.blocks = updated
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Could not persist check result for {block_id}: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+@router.post("/chat/check", response_model=CheckAnswerResponse)
+async def check_lyo2_answer(
+    request: CheckAnswerRequest,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grade an in-chat check against the stored block and record the result.
+
+    This is the structural fix for chat praising a wrong answer: correctness is
+    decided here, from the question the server itself emitted — not by a model
+    re-reading the transcript, and not by the client.
+    """
+    authenticated_user_id = (
+        str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+    )
+    if not authenticated_user_id:
+        raise HTTPException(status_code=401, detail="Sign in to answer checks")
+
+    conversation = await conversation_store.get_owned_conversation(
+        db, request.conversation_id, authenticated_user_id
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = await conversation_store.get_messages(db, conversation.id, limit=50)
+    block, skill_id, owning_message = _locate_check_block(messages, request.block_id)
+    if block is None:
+        # Either the id was invented, or it names a block that is not a check.
+        raise HTTPException(status_code=404, detail="No such check in this conversation")
+
+    correct, bailed_out, misconception, correct_index, explanation = _grade_check_block(
+        block, request.selected_index
+    )
+
+    response = CheckAnswerResponse(
+        correct=correct,
+        correct_index=correct_index,
+        selected_index=request.selected_index,
+        explanation=explanation,
+        misconception=misconception,
+        bailed_out=bailed_out,
+        skill_id=skill_id,
+    )
+
+    # Persist the verdict onto the block so a reloaded conversation shows the
+    # check as already answered instead of offering it again.
+    await _persist_check_result(db, owning_message, request.block_id, response)
+
+    # An opt-out is not evidence about what the learner knows, so it is not
+    # recorded. Everything else updates mastery.
+    if bailed_out or not skill_id:
+        return response
+
+    try:
+        from lyo_app.personalization.schemas import KnowledgeTraceRequest
+        from lyo_app.personalization.service import personalization_engine
+
+        trace = await personalization_engine.trace_knowledge(
+            db,
+            KnowledgeTraceRequest(
+                learner_id=authenticated_user_id,
+                skill_id=skill_id,
+                item_id=request.block_id,
+                correct=correct,
+                time_taken_seconds=max(0.0, request.time_taken_ms / 1000.0),
+                hints_used=1 if request.hint_used else 0,
+            ),
+        )
+        response.mastery = trace.get("new_mastery")
+
+        if misconception:
+            await personalization_engine.record_misconception(
+                db, authenticated_user_id, skill_id, misconception
+            )
+    except Exception as e:
+        # The learner still gets an honest verdict even if bookkeeping fails.
+        logger.error(f"Failed to record check result for {skill_id}: {e}", exc_info=True)
+
+    return response
+
 
 @router.post("/chat/stream")
 async def stream_lyo2_chat(
@@ -479,6 +793,70 @@ async def stream_lyo2_chat(
                         return
                     # Optionally attach extracted data back to the request for the planner
                     request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
+
+            # 2c. Structured teaching path.
+            # A self-contained "explain X" is taught right here as a lesson
+            # with a server-gradeable check. Multi-session topics stay on the
+            # COURSE path above and hand off to the classroom instead.
+            if decision.intent == Intent.EXPLAIN and request.text:
+                lesson_blocks, lesson = await _try_compose_lesson(
+                    db, authenticated_user_id, request.text
+                )
+                if lesson is not None:
+                    # Clients that do not render blocks yet (iOS, Android) read
+                    # this plain-text event, so the lesson degrades instead of
+                    # disappearing.
+                    lesson_text = lesson.to_plain_text()
+                    answer_brick = {
+                        "type": "answer",
+                        "block": {
+                            "type": "TutorMessageBlock",
+                            "content": {"text": lesson_text},
+                            "priority": 0,
+                        },
+                    }
+                    collected_bricks.append(answer_brick)
+                    yield yield_safe_sse_event("answer", answer_brick)
+                    yield yield_safe_sse_event(
+                        "smart_blocks", {"type": "smart_blocks", "blocks": lesson_blocks}
+                    )
+
+                    if lesson.next_directions:
+                        actions_brick = {
+                            "type": "actions",
+                            "blocks": [{
+                                "type": "CTARow",
+                                "content": {"actions": lesson.next_directions},
+                                "priority": 0,
+                            }],
+                        }
+                        collected_bricks.append(actions_brick)
+                        yield yield_safe_sse_event("actions", actions_brick)
+
+                    if persistent_conversation:
+                        # Blocks are persisted so the check stays gradeable and
+                        # the lesson survives a reload.
+                        await conversation_store.add_message(
+                            db,
+                            persistent_conversation.id,
+                            role="assistant",
+                            content=lesson_text,
+                            mode_used=ChatMode.GENERAL.value,
+                            client_message_id=assistant_client_message_id,
+                            blocks=lesson_blocks,
+                        )
+
+                    yield "data: [DONE]\n\n"
+                    logger.info(
+                        f"📚 [STREAM][{trace_id}] Served composed lesson "
+                        f"(skill={lesson.skill_id}, probe={lesson.is_probe}, "
+                        f"blocks={len(lesson_blocks)}) in {time.time()-start_time:.2f}s"
+                    )
+                    return
+                logger.info(
+                    f"📋 [STREAM][{trace_id}] Lesson composition unavailable; "
+                    "falling back to prose path"
+                )
 
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
