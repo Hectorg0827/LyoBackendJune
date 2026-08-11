@@ -1,8 +1,16 @@
 """Add blocks column to chat_messages
 
-Revision ID: chat_003
-Revises: chat_002
+Revision ID: chat_blocks_001
+Revises: clips_sync_001
 Create Date: 2026-08-11
+
+Named chat_blocks_001 rather than the next chat_00N because chat_003 and
+chat_004 are already taken.
+
+Revises clips_sync_001 because that is the graph's single head. Chaining onto
+chat_002 instead (which looks like the natural home for a chat migration)
+forks the graph into two heads and makes `alembic upgrade head` fail outright
+with "Multiple head revisions are present".
 
 Stores the structured SmartBlocks rendered with an assistant message.
 
@@ -18,8 +26,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = 'chat_003'
-down_revision = 'chat_002'
+revision = 'chat_blocks_001'
+down_revision = 'clips_sync_001'
 branch_labels = None
 depends_on = None
 

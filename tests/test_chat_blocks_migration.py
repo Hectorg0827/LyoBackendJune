@@ -12,14 +12,12 @@ import sqlalchemy as sa
 from alembic.runtime.migration import MigrationContext
 from alembic.operations import Operations
 
-MIGRATION = (
-    Path(__file__).resolve().parents[1]
-    / "alembic" / "versions" / "chat_003_add_message_blocks.py"
-)
+VERSIONS_DIR = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+MIGRATION = VERSIONS_DIR / "chat_blocks_001_add_message_blocks.py"
 
 
 def _load_migration():
-    spec = importlib.util.spec_from_file_location("chat_003", MIGRATION)
+    spec = importlib.util.spec_from_file_location("chat_blocks_001", MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -36,10 +34,62 @@ def _with_ops(conn, fn):
         fn()
 
 
-def test_migration_declares_the_chat_lineage():
+def test_migration_declares_its_revision():
     module = _load_migration()
-    assert module.revision == "chat_003"
-    assert module.down_revision == "chat_002"
+    assert module.revision == "chat_blocks_001"
+    assert module.down_revision is not None
+
+
+def test_the_migration_graph_still_has_exactly_one_head():
+    """`alembic upgrade head` fails outright the moment there are two.
+
+    A new migration that chains onto a plausible-looking older revision
+    instead of the current head forks the graph and breaks every deploy —
+    which is exactly what a chat migration hanging off chat_002 did.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parents[1]
+    script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
+    heads = script.get_heads()
+    assert len(heads) == 1, f"migration graph forked into multiple heads: {heads}"
+
+
+def test_this_migration_is_the_head():
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parents[1]
+    script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
+    assert script.get_heads() == ["chat_blocks_001"]
+
+
+def test_no_two_migrations_share_a_revision_id():
+    """A duplicate revision id makes every `alembic upgrade` fail.
+
+    This is a whole-directory check rather than a check on one file: the
+    failure mode is a collision, so it can only be seen by looking at all of
+    them at once. Picking `chat_003` for a new migration looked free — the id
+    was already taken by a migration on a different lineage.
+    """
+    import re
+    from collections import Counter
+
+    ids = []
+    for path in sorted(VERSIONS_DIR.glob("*.py")):
+        match = re.search(
+            r"^revision(?::\s*str)?\s*=\s*['\"]([^'\"]+)", path.read_text(), re.M
+        )
+        if match:
+            ids.append((match.group(1), path.name))
+
+    duplicates = {
+        rev: [name for r, name in ids if r == rev]
+        for rev, count in Counter(r for r, _ in ids).items()
+        if count > 1
+    }
+    assert not duplicates, f"duplicate alembic revision ids: {duplicates}"
 
 
 def test_upgrade_adds_column_and_is_idempotent():
