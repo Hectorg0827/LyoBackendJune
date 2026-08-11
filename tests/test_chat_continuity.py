@@ -103,3 +103,36 @@ async def test_retried_client_turn_is_persisted_exactly_once(
     assert [(message.role, message.content) for message in messages] == [
         ("user", "Explain gravity")
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_all_messages_is_not_capped_at_the_default_window(
+    async_client, auth_headers, db_session
+):
+    """get_messages()'s default limit=50 exists for chat history/context
+    building, where only the recent tail matters. A read over the *whole*
+    conversation — e.g. the session-close summary's graded-check count —
+    must use get_all_messages instead, or it silently drops anything
+    earlier than the last 50 messages. Regression test for exactly that:
+    a 55-message conversation must report 55 through get_all_messages, not
+    the 50 get_messages() would cap it at.
+    """
+    created = await async_client.post(
+        "/api/v1/chat/conversations",
+        headers=auth_headers,
+        json={"title": "Long lesson", "device_id": "web"},
+    )
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["id"]
+
+    total_messages = 55
+    for i in range(total_messages):
+        await conversation_store.add_message(
+            db_session, conversation_id, "user", f"message {i}", ChatMode.GENERAL.value
+        )
+
+    windowed = await conversation_store.get_messages(db_session, conversation_id, limit=50)
+    assert len(windowed) == 50
+
+    everything = await conversation_store.get_all_messages(db_session, conversation_id)
+    assert len(everything) == total_messages

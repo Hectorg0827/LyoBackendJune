@@ -646,7 +646,10 @@ async def get_chat_session_summary(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    messages = await conversation_store.get_messages(db, conversation.id, limit=50)
+    # The unbounded read, not get_messages()'s default 50-message window —
+    # a session-close recap must cover every check answered in the
+    # conversation, not just the most recent 50 messages of it.
+    messages = await conversation_store.get_all_messages(db, conversation.id)
     attempts, total_checks, correct_checks = _collect_session_attempts(messages)
 
     masteries: Dict[str, float] = {}
