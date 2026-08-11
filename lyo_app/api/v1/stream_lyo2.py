@@ -345,15 +345,28 @@ def _find_check_block(
     messages: List[Any], block_id: str
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Locate a persisted quiz block by id. Returns (block, skill_id)."""
+    block, skill_id, _ = _locate_check_block(messages, block_id)
+    return block, skill_id
+
+
+def _locate_check_block(
+    messages: List[Any], block_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Any]]:
+    """As _find_check_block, but also returns the owning message.
+
+    The message is needed to persist the verdict back onto the block, so a
+    reloaded conversation shows the check as already answered rather than
+    offering it again.
+    """
     for message in messages:
         for block in (getattr(message, "blocks", None) or []):
             if not isinstance(block, dict) or block.get("id") != block_id:
                 continue
             if block.get("type") != SmartBlockType.quiz.value:
-                return None, None
+                return None, None, None
             metadata = block.get("metadata") or {}
-            return block, metadata.get("skill_id")
-    return None, None
+            return block, metadata.get("skill_id"), message
+    return None, None, None
 
 
 def _grade_check_block(
@@ -392,6 +405,45 @@ def _grade_check_block(
     return correct, bailed_out, misconception, correct_index, content.get("explanation")
 
 
+async def _persist_check_result(
+    db: AsyncSession,
+    message: Optional[Any],
+    block_id: str,
+    result: "CheckAnswerResponse",
+) -> None:
+    """Record the verdict on the stored block.
+
+    Without this the grade lives only in client memory, so reloading the
+    conversation re-enables an already-answered check and loses the learner's
+    selection. Best-effort: a bookkeeping failure must not fail the answer.
+    """
+    if message is None:
+        return
+    try:
+        blocks = list(getattr(message, "blocks", None) or [])
+        updated = []
+        changed = False
+        for block in blocks:
+            if isinstance(block, dict) and block.get("id") == block_id:
+                metadata = dict(block.get("metadata") or {})
+                metadata["result"] = result.model_dump()
+                block = {**block, "metadata": metadata}
+                changed = True
+            updated.append(block)
+        if not changed:
+            return
+        # Reassign rather than mutate: a JSON column tracks changes by
+        # identity, so an in-place edit would never be written.
+        message.blocks = updated
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"Could not persist check result for {block_id}: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
 @router.post("/chat/check", response_model=CheckAnswerResponse)
 async def check_lyo2_answer(
     request: CheckAnswerRequest,
@@ -417,7 +469,7 @@ async def check_lyo2_answer(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     messages = await conversation_store.get_messages(db, conversation.id, limit=50)
-    block, skill_id = _find_check_block(messages, request.block_id)
+    block, skill_id, owning_message = _locate_check_block(messages, request.block_id)
     if block is None:
         # Either the id was invented, or it names a block that is not a check.
         raise HTTPException(status_code=404, detail="No such check in this conversation")
@@ -435,6 +487,10 @@ async def check_lyo2_answer(
         bailed_out=bailed_out,
         skill_id=skill_id,
     )
+
+    # Persist the verdict onto the block so a reloaded conversation shows the
+    # check as already answered instead of offering it again.
+    await _persist_check_result(db, owning_message, request.block_id, response)
 
     # An opt-out is not evidence about what the learner knows, so it is not
     # recorded. Everything else updates mastery.

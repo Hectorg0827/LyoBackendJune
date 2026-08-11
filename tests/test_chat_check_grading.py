@@ -118,3 +118,81 @@ def test_non_quiz_block_is_refused():
 def test_messages_without_blocks_are_skipped_safely():
     found, _ = _find_check_block([_FakeMessage(None), _FakeMessage([])], "anything")
     assert found is None
+
+
+# --- verdict persistence ----------------------------------------------------
+
+def test_locate_check_block_returns_the_owning_message():
+    """The grader needs the message so it can write the verdict back."""
+    from lyo_app.api.v1.stream_lyo2 import _locate_check_block
+
+    block = _check_block()
+    msg = _FakeMessage([block])
+    found, skill_id, owner = _locate_check_block([_FakeMessage([]), msg], block["id"])
+    assert found is not None
+    assert skill_id == "square_roots"
+    assert owner is msg
+
+
+def test_persist_check_result_reassigns_blocks_so_json_column_saves():
+    """A JSON column tracks changes by identity — an in-place edit is lost."""
+    import asyncio
+
+    from lyo_app.api.v1.stream_lyo2 import CheckAnswerResponse, _persist_check_result
+
+    block = _check_block()
+    original_list = [block]
+    message = _FakeMessage(original_list)
+
+    class _FakeDB:
+        def __init__(self): self.commits = 0
+        async def commit(self): self.commits += 1
+        async def rollback(self): pass
+
+    db = _FakeDB()
+    verdict = CheckAnswerResponse(
+        correct=False, correct_index=0, selected_index=1,
+        explanation="7 x 7 = 49.", misconception="confusing root with square",
+        bailed_out=False, skill_id="square_roots",
+    )
+    asyncio.run(_persist_check_result(db, message, block["id"], verdict))
+
+    assert db.commits == 1
+    assert message.blocks is not original_list, "must reassign, not mutate in place"
+    stored = message.blocks[0]["metadata"]["result"]
+    assert stored["correct"] is False
+    assert stored["selected_index"] == 1
+    assert stored["misconception"] == "confusing root with square"
+
+
+def test_persist_check_result_is_a_noop_for_an_unknown_block():
+    import asyncio
+
+    from lyo_app.api.v1.stream_lyo2 import CheckAnswerResponse, _persist_check_result
+
+    message = _FakeMessage([_check_block()])
+    before = message.blocks
+
+    class _FakeDB:
+        def __init__(self): self.commits = 0
+        async def commit(self): self.commits += 1
+        async def rollback(self): pass
+
+    db = _FakeDB()
+    asyncio.run(_persist_check_result(
+        db, message, "not-a-real-id",
+        CheckAnswerResponse(correct=True, correct_index=0, selected_index=0),
+    ))
+    assert db.commits == 0
+    assert message.blocks is before
+
+
+def test_persist_check_result_tolerates_a_missing_message():
+    import asyncio
+
+    from lyo_app.api.v1.stream_lyo2 import CheckAnswerResponse, _persist_check_result
+
+    asyncio.run(_persist_check_result(
+        None, None, "x",
+        CheckAnswerResponse(correct=True, correct_index=0, selected_index=0),
+    ))  # must not raise
