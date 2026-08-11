@@ -490,6 +490,7 @@ class ConversationStore:
         chip_actions: Optional[List[str]] = None,
         cache_hit: bool = False,
         client_message_id: Optional[str] = None,
+        blocks: Optional[List[Dict]] = None,
     ) -> ChatMessage:
         """Add a message to a conversation"""
         if client_message_id:
@@ -513,6 +514,7 @@ class ConversationStore:
             chip_actions=chip_actions,
             cache_hit=cache_hit,
             client_message_id=client_message_id,
+            blocks=blocks,
         )
         
         db.add(message)

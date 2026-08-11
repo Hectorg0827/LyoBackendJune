@@ -597,6 +597,61 @@ class PersonalizationEngine:
             metadata={"optimal_difficulty": state.optimal_difficulty}
         )
     
+    async def record_misconception(
+        self,
+        db: AsyncSession,
+        learner_id: str,
+        skill_id: str,
+        misconception: str,
+    ) -> bool:
+        """Append an identified misconception to the learner's mastery row.
+
+        `LearnerMastery.misconceptions` has always existed; nothing wrote to
+        it. Recording the *specific* confusion behind a wrong answer is what
+        lets a later lesson aim its "common mistakes" section at this learner
+        instead of at a generic one.
+
+        Deduplicates, keeps the most recent 10, and never raises — a failed
+        bookkeeping write must not fail the learner's answer.
+        """
+        user_id = _coerce_learner_id(learner_id)
+        if user_id is None or not misconception:
+            return False
+        try:
+            result = await db.execute(
+                select(LearnerMastery).where(
+                    and_(
+                        LearnerMastery.user_id == user_id,
+                        LearnerMastery.skill_id == skill_id,
+                    )
+                )
+            )
+            mastery = result.scalar_one_or_none()
+            if mastery is None:
+                return False
+
+            existing = list(mastery.misconceptions or [])
+            if misconception in existing:
+                existing.remove(misconception)
+            existing.append(misconception)
+            # Reassign rather than mutate: a JSON column tracks changes by
+            # identity, so an in-place append would not be persisted.
+            mastery.misconceptions = existing[-10:]
+
+            patterns = dict(mastery.error_patterns or {})
+            patterns[misconception] = int(patterns.get(misconception, 0)) + 1
+            mastery.error_patterns = patterns
+
+            await db.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to record misconception for {skill_id}: {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            return False
+
     async def get_mastery_profile(
         self,
         db: AsyncSession,

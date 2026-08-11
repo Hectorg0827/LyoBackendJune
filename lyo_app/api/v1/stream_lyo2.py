@@ -4,9 +4,10 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any, List, Optional
-from fastapi import APIRouter, Depends, Request
+from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user_or_guest, get_db
@@ -20,7 +21,7 @@ from lyo_app.ai.multimodal import (
     load_media_attachments,
     recent_media_refs,
 )
-from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption
+from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption, SmartBlockType
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
@@ -210,6 +211,162 @@ router = APIRouter()
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
 test_prep_agent = TestPrepAgent()
+
+class CheckAnswerRequest(BaseModel):
+    """A learner's answer to an in-chat check.
+
+    Deliberately does NOT carry the question or the correct answer: the server
+    reads those back from the persisted block, so a client cannot assert its
+    own correctness.
+    """
+
+    conversation_id: str
+    block_id: str
+    selected_index: int
+    time_taken_ms: int = 0
+    hint_used: bool = False
+
+
+class CheckAnswerResponse(BaseModel):
+    correct: bool
+    correct_index: int
+    explanation: Optional[str] = None
+    # The confusion this particular wrong answer reveals, when known.
+    misconception: Optional[str] = None
+    # True when the learner chose the "just explain it" opt-out: not graded,
+    # not recorded against mastery.
+    bailed_out: bool = False
+    skill_id: Optional[str] = None
+    mastery: Optional[float] = None
+    next_actions: List[str] = PydanticField(default_factory=list)
+
+
+def _find_check_block(
+    messages: List[Any], block_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Locate a persisted quiz block by id. Returns (block, skill_id)."""
+    for message in messages:
+        for block in (getattr(message, "blocks", None) or []):
+            if not isinstance(block, dict) or block.get("id") != block_id:
+                continue
+            if block.get("type") != SmartBlockType.quiz.value:
+                return None, None
+            metadata = block.get("metadata") or {}
+            return block, metadata.get("skill_id")
+    return None, None
+
+
+def _grade_check_block(
+    block: Dict[str, Any], selected_index: int
+) -> Tuple[bool, bool, Optional[str], int, Optional[str]]:
+    """Pure grading over a stored block.
+
+    Returns (correct, bailed_out, misconception, correct_index, explanation).
+    Kept separate from the route so the decision this endpoint exists to make
+    is directly testable.
+    """
+    content = block.get("content") or {}
+    options = content.get("options") or []
+    try:
+        correct_index = int(content.get("correct_index"))
+    except (TypeError, ValueError):
+        correct_index = -1
+    bailout_index = content.get("bailout_index")
+
+    bailed_out = bailout_index is not None and selected_index == bailout_index
+    # Fail closed. A block with a missing or malformed correct_index sentinels
+    # to -1, and without this guard a client sending selected_index=-1 would
+    # match the sentinel and be told it was correct.
+    correct = (
+        (not bailed_out)
+        and correct_index >= 0
+        and selected_index == correct_index
+    )
+
+    misconception = None
+    if not correct and not bailed_out and 0 <= selected_index < len(options):
+        option = options[selected_index]
+        if isinstance(option, dict):
+            misconception = option.get("reveals")
+
+    return correct, bailed_out, misconception, correct_index, content.get("explanation")
+
+
+@router.post("/chat/check", response_model=CheckAnswerResponse)
+async def check_lyo2_answer(
+    request: CheckAnswerRequest,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grade an in-chat check against the stored block and record the result.
+
+    This is the structural fix for chat praising a wrong answer: correctness is
+    decided here, from the question the server itself emitted — not by a model
+    re-reading the transcript, and not by the client.
+    """
+    authenticated_user_id = (
+        str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+    )
+    if not authenticated_user_id:
+        raise HTTPException(status_code=401, detail="Sign in to answer checks")
+
+    conversation = await conversation_store.get_owned_conversation(
+        db, request.conversation_id, authenticated_user_id
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = await conversation_store.get_messages(db, conversation.id, limit=50)
+    block, skill_id = _find_check_block(messages, request.block_id)
+    if block is None:
+        # Either the id was invented, or it names a block that is not a check.
+        raise HTTPException(status_code=404, detail="No such check in this conversation")
+
+    correct, bailed_out, misconception, correct_index, explanation = _grade_check_block(
+        block, request.selected_index
+    )
+
+    response = CheckAnswerResponse(
+        correct=correct,
+        correct_index=correct_index,
+        explanation=explanation,
+        misconception=misconception,
+        bailed_out=bailed_out,
+        skill_id=skill_id,
+    )
+
+    # An opt-out is not evidence about what the learner knows, so it is not
+    # recorded. Everything else updates mastery.
+    if bailed_out or not skill_id:
+        return response
+
+    try:
+        from lyo_app.personalization.schemas import KnowledgeTraceRequest
+        from lyo_app.personalization.service import personalization_engine
+
+        trace = await personalization_engine.trace_knowledge(
+            db,
+            KnowledgeTraceRequest(
+                learner_id=authenticated_user_id,
+                skill_id=skill_id,
+                item_id=request.block_id,
+                correct=correct,
+                time_taken_seconds=max(0.0, request.time_taken_ms / 1000.0),
+                hints_used=1 if request.hint_used else 0,
+            ),
+        )
+        response.mastery = trace.get("new_mastery")
+
+        if misconception:
+            await personalization_engine.record_misconception(
+                db, authenticated_user_id, skill_id, misconception
+            )
+    except Exception as e:
+        # The learner still gets an honest verdict even if bookkeeping fails.
+        logger.error(f"Failed to record check result for {skill_id}: {e}", exc_info=True)
+
+    return response
+
 
 @router.post("/chat/stream")
 async def stream_lyo2_chat(
