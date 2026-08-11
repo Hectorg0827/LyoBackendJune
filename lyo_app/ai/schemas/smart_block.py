@@ -47,6 +47,10 @@ class CodeBlockContent(BaseModel):
 class QuizOption(BaseModel):
     id: str
     text: str
+    # For a distractor: the specific misconception choosing it reveals. Drives
+    # a targeted correction instead of a generic "not quite", and is what gets
+    # recorded to LearnerMastery.misconceptions on a miss.
+    reveals: Optional[str] = None
 
 class QuizBlockContent(BaseModel):
     question: str
@@ -54,6 +58,10 @@ class QuizBlockContent(BaseModel):
     correct_index: int
     explanation: Optional[str] = None
     hint: Optional[str] = None
+    # Index of an "I'm not sure — just explain it" opt-out, on calibration
+    # probes. Neither correct nor a misconception: selecting it skips grading
+    # so a probe never becomes a gate in front of a straight answer.
+    bailout_index: Optional[int] = None
 
 class FlashcardBlockContent(BaseModel):
     front: str

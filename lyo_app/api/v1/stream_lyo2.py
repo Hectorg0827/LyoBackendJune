@@ -22,6 +22,7 @@ from lyo_app.ai.multimodal import (
     recent_media_refs,
 )
 from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption, SmartBlockType
+from lyo_app.ai.lesson_composer import ChatLesson, SectionKind, compose as compose_lesson
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
@@ -144,6 +145,102 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
         return f"data: {json.dumps(error_data)}\n\n"
 
 import re as _re
+
+def _lesson_to_smart_blocks(lesson: "ChatLesson") -> List[Dict[str, Any]]:
+    """Render a composed lesson into the block vocabulary clients consume.
+
+    Each lesson beat becomes its own block so the client can style it
+    distinctly — that separation is what makes a lesson scannable instead of a
+    wall of prose. The check block carries the skill id in metadata so grading
+    knows which mastery row to update.
+    """
+    blocks: List[Dict[str, Any]] = []
+
+    for section in lesson.sections:
+        if section.kind is SectionKind.trap:
+            blocks.append(SmartBlock.callout(section.text, variant="trap").model_dump())
+        elif section.kind is SectionKind.reference and section.table_markdown:
+            blocks.append(
+                SmartBlock.table(section.table_markdown, title=section.text or None).model_dump()
+            )
+        else:
+            # hook/core/representation/example/method all render as text; the
+            # subtype carries the beat so the client can style it.
+            blocks.append(
+                SmartBlock.text(section.text, subtype=section.kind.value).model_dump()
+            )
+            if section.latex:
+                blocks.append(
+                    SmartBlock.data_viz(section.latex, fmt="math").model_dump()
+                )
+
+    if lesson.check:
+        check = lesson.check
+        block = SmartBlock.quiz(
+            question=check.question,
+            options=[
+                QuizOption(id=str(i), text=opt.text, reveals=opt.reveals)
+                for i, opt in enumerate(check.options)
+            ],
+            correct_index=check.correct_index,
+            explanation=check.explanation,
+            hint=check.hint,
+            bailout_index=check.bailout_index,
+        )
+        block.metadata = {"skill_id": lesson.skill_id, "is_probe": lesson.is_probe}
+        blocks.append(block.model_dump())
+
+    return blocks
+
+
+async def _has_prior_mastery(
+    db: AsyncSession, user_id: Optional[str], skill_id: str
+) -> bool:
+    """Has this learner already been assessed on this skill?
+
+    Decides probe vs. teach: only calibrate the first time. Any failure is
+    treated as "no prior evidence", which just means we calibrate again —
+    the safe direction to be wrong in.
+    """
+    if db is None or not user_id:
+        return False
+    try:
+        from sqlalchemy import and_, select as _select
+
+        from lyo_app.personalization.models import LearnerMastery
+        from lyo_app.personalization.service import _coerce_learner_id
+
+        pk = _coerce_learner_id(user_id)
+        if pk is None:
+            return False
+        result = await db.execute(
+            _select(LearnerMastery).where(
+                and_(LearnerMastery.user_id == pk, LearnerMastery.skill_id == skill_id)
+            )
+        )
+        row = result.scalar_one_or_none()
+        return bool(row and (row.attempts or 0) > 0)
+    except Exception as e:
+        logger.warning(f"Could not read prior mastery for {skill_id}: {e}")
+        return False
+
+
+async def _try_compose_lesson(
+    db: AsyncSession, user_id: Optional[str], user_text: str
+) -> Tuple[List[Dict[str, Any]], Optional[ChatLesson]]:
+    """Compose a structured lesson, or ([], None) to fall back to prose."""
+    from lyo_app.ai.lesson_composer import slugify_skill
+
+    topic = _extract_course_topic(user_text or "")
+    if not topic:
+        return [], None
+
+    mode = "teach" if await _has_prior_mastery(db, user_id, slugify_skill(topic)) else "probe"
+    lesson = await compose_lesson(topic, db=db, user_id=user_id, mode=mode)
+    if lesson is None:
+        return [], None
+    return _lesson_to_smart_blocks(lesson), lesson
+
 
 def _to_smart_blocks(
     answer_text: Optional[str], artifact: Optional[UIBlock]
@@ -636,6 +733,70 @@ async def stream_lyo2_chat(
                         return
                     # Optionally attach extracted data back to the request for the planner
                     request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
+
+            # 2c. Structured teaching path.
+            # A self-contained "explain X" is taught right here as a lesson
+            # with a server-gradeable check. Multi-session topics stay on the
+            # COURSE path above and hand off to the classroom instead.
+            if decision.intent == Intent.EXPLAIN and request.text:
+                lesson_blocks, lesson = await _try_compose_lesson(
+                    db, authenticated_user_id, request.text
+                )
+                if lesson is not None:
+                    # Clients that do not render blocks yet (iOS, Android) read
+                    # this plain-text event, so the lesson degrades instead of
+                    # disappearing.
+                    lesson_text = lesson.to_plain_text()
+                    answer_brick = {
+                        "type": "answer",
+                        "block": {
+                            "type": "TutorMessageBlock",
+                            "content": {"text": lesson_text},
+                            "priority": 0,
+                        },
+                    }
+                    collected_bricks.append(answer_brick)
+                    yield yield_safe_sse_event("answer", answer_brick)
+                    yield yield_safe_sse_event(
+                        "smart_blocks", {"type": "smart_blocks", "blocks": lesson_blocks}
+                    )
+
+                    if lesson.next_directions:
+                        actions_brick = {
+                            "type": "actions",
+                            "blocks": [{
+                                "type": "CTARow",
+                                "content": {"actions": lesson.next_directions},
+                                "priority": 0,
+                            }],
+                        }
+                        collected_bricks.append(actions_brick)
+                        yield yield_safe_sse_event("actions", actions_brick)
+
+                    if persistent_conversation:
+                        # Blocks are persisted so the check stays gradeable and
+                        # the lesson survives a reload.
+                        await conversation_store.add_message(
+                            db,
+                            persistent_conversation.id,
+                            role="assistant",
+                            content=lesson_text,
+                            mode_used=ChatMode.GENERAL.value,
+                            client_message_id=assistant_client_message_id,
+                            blocks=lesson_blocks,
+                        )
+
+                    yield "data: [DONE]\n\n"
+                    logger.info(
+                        f"📚 [STREAM][{trace_id}] Served composed lesson "
+                        f"(skill={lesson.skill_id}, probe={lesson.is_probe}, "
+                        f"blocks={len(lesson_blocks)}) in {time.time()-start_time:.2f}s"
+                    )
+                    return
+                logger.info(
+                    f"📋 [STREAM][{trace_id}] Lesson composition unavailable; "
+                    "falling back to prose path"
+                )
 
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
