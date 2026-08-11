@@ -36,6 +36,9 @@ class ConversationMessageRead(BaseModel):
     mode_used: str
     ctas: Optional[List[Dict[str, Any]]] = None
     chip_actions: Optional[List[Dict[str, Any]]] = None
+    # Structured lesson blocks, so a reloaded conversation keeps its lesson
+    # rather than collapsing to plain text.
+    blocks: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
 
 

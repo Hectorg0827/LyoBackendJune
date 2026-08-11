@@ -327,6 +327,9 @@ class CheckAnswerRequest(BaseModel):
 class CheckAnswerResponse(BaseModel):
     correct: bool
     correct_index: int
+    # Echoed back so a client can render which option was chosen without
+    # having to remember it across a reload.
+    selected_index: int
     explanation: Optional[str] = None
     # The confusion this particular wrong answer reveals, when known.
     misconception: Optional[str] = None
@@ -426,6 +429,7 @@ async def check_lyo2_answer(
     response = CheckAnswerResponse(
         correct=correct,
         correct_index=correct_index,
+        selected_index=request.selected_index,
         explanation=explanation,
         misconception=misconception,
         bailed_out=bailed_out,
