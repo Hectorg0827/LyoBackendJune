@@ -787,8 +787,68 @@ class PersonalizationEngine:
             ).limit(10)
         )
         schedules = result.scalars().all()
-        
+
         return [s.item_id for s in schedules]
+
+    async def get_due_reviews(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Due spaced-repetition items, enriched for a client to act on directly.
+
+        `_get_due_repetitions` above only ever fed a bare list of opaque
+        `item_id`s (chat check block ids) into `get_next_action`'s generic
+        recommendation payload. Resurfacing "you were shaky on this days ago"
+        as an actual nudge needs the skill name and what specifically went
+        wrong, not just an id — both already live on `LearnerMastery` (this
+        method reads them, it does not duplicate the write path). One row per
+        skill, most overdue first, so a repeatedly-missed skill with several
+        scheduled items does not crowd out everything else that is due.
+        """
+        result = await db.execute(
+            select(SpacedRepetitionSchedule)
+            .where(
+                and_(
+                    SpacedRepetitionSchedule.user_id == user_id,
+                    SpacedRepetitionSchedule.next_review <= datetime.utcnow(),
+                )
+            )
+            .order_by(SpacedRepetitionSchedule.next_review.asc())
+        )
+        schedules = result.scalars().all()
+
+        seen_skills: set = set()
+        due: List[Dict[str, Any]] = []
+        for schedule in schedules:
+            if schedule.skill_id in seen_skills:
+                continue
+            seen_skills.add(schedule.skill_id)
+
+            mastery_result = await db.execute(
+                select(LearnerMastery).where(
+                    and_(
+                        LearnerMastery.user_id == user_id,
+                        LearnerMastery.skill_id == schedule.skill_id,
+                    )
+                )
+            )
+            mastery = mastery_result.scalar_one_or_none()
+            misconceptions = list(mastery.misconceptions or []) if mastery else []
+
+            due.append({
+                "skill_id": schedule.skill_id,
+                "item_id": schedule.item_id,
+                "next_review": schedule.next_review,
+                "days_overdue": max(0, (datetime.utcnow() - schedule.next_review).days) if schedule.next_review else 0,
+                "mastery_level": mastery.mastery_level if mastery else None,
+                "last_misconception": misconceptions[-1] if misconceptions else None,
+            })
+            if len(due) >= limit:
+                break
+
+        return due
 
 # Singleton instance
 personalization_engine = PersonalizationEngine()
