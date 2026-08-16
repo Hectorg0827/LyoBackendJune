@@ -595,7 +595,34 @@ class ConversationStore:
         messages = list(rows)
         # Return in chronological order
         return list(reversed(messages))
-    
+
+    async def get_all_messages(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+    ) -> List[ChatMessage]:
+        """Every message in a conversation, chronological, unpaginated.
+
+        get_messages()'s `limit` (default 50) exists for chat history/
+        context building, where only the recent tail matters — but a read
+        that summarizes the *whole* conversation (e.g. a session-close
+        recap over every graded check) silently under-reports anything
+        before that window if it reuses the same call. This is the
+        unbounded counterpart for exactly that class of read.
+        """
+        query = select(ChatMessage).where(
+            ChatMessage.conversation_id == conversation_id
+        ).order_by(ChatMessage.created_at.asc())
+
+        result = await db.execute(query)
+        scalars = result.scalars()
+        if inspect.isawaitable(scalars):
+            scalars = await scalars
+        rows = scalars.all()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        return list(rows)
+
     async def update_context(
         self,
         db: AsyncSession,

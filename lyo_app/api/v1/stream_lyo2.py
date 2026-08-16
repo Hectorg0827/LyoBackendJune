@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field as PydanticField
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user_or_guest, get_db
@@ -341,6 +342,41 @@ class CheckAnswerResponse(BaseModel):
     next_actions: List[str] = PydanticField(default_factory=list)
 
 
+class SessionSummarySkill(BaseModel):
+    skill_id: str
+    mastery: Optional[float] = None
+    # The question text of the (latest) attempt, so a recap can say what was
+    # actually asked instead of just naming the skill id.
+    question: Optional[str] = None
+    misconception: Optional[str] = None
+
+
+class SessionSummaryResponse(BaseModel):
+    """What a just-finished conversation's checks show the learner nailed vs. shaky.
+
+    Built only from data the check-grading endpoint already writes: the
+    verdict persisted onto each block, plus the LearnerMastery row that
+    verdict updated. This is a read, not a new tracking mechanism.
+    """
+
+    conversation_id: str
+    total_checks: int = 0
+    correct_checks: int = 0
+    nailed: List[SessionSummarySkill] = PydanticField(default_factory=list)
+    shaky: List[SessionSummarySkill] = PydanticField(default_factory=list)
+
+
+class DueReviewItem(BaseModel):
+    skill_id: str
+    days_overdue: int = 0
+    mastery_level: Optional[float] = None
+    last_misconception: Optional[str] = None
+
+
+class DueReviewsResponse(BaseModel):
+    items: List[DueReviewItem] = PydanticField(default_factory=list)
+
+
 def _find_check_block(
     messages: List[Any], block_id: str
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -523,6 +559,157 @@ async def check_lyo2_answer(
         logger.error(f"Failed to record check result for {skill_id}: {e}", exc_info=True)
 
     return response
+
+
+def _collect_session_attempts(
+    messages: List[Any],
+) -> Tuple[Dict[str, Dict[str, Any]], int, int]:
+    """Latest graded attempt per skill answered in this conversation.
+
+    Pure over the same `message.blocks` shape `_locate_check_block` reads, so
+    it is testable without a database. A skill answered more than once
+    summarizes on its most recent attempt (later blocks overwrite earlier
+    ones), matching how a retry should read in a recap: how it ended, not how
+    it started. Bailed-out checks are not evidence of anything and are
+    excluded, same as they are from mastery itself.
+    """
+    attempts: Dict[str, Dict[str, Any]] = {}
+    total_checks = 0
+    correct_checks = 0
+    for message in messages:
+        for block in (getattr(message, "blocks", None) or []):
+            if not isinstance(block, dict) or block.get("type") != SmartBlockType.quiz.value:
+                continue
+            metadata = block.get("metadata") or {}
+            result = metadata.get("result")
+            skill_id = metadata.get("skill_id")
+            if not result or not skill_id or result.get("bailed_out"):
+                continue
+            total_checks += 1
+            if result.get("correct"):
+                correct_checks += 1
+            content = block.get("content") or {}
+            attempts[skill_id] = {
+                "question": content.get("question"),
+                "correct": bool(result.get("correct")),
+                "misconception": result.get("misconception"),
+            }
+    return attempts, total_checks, correct_checks
+
+
+def _classify_session_attempts(
+    attempts: Dict[str, Dict[str, Any]],
+    masteries: Dict[str, float],
+) -> Tuple[List[SessionSummarySkill], List[SessionSummarySkill]]:
+    """Split this session's attempted skills into nailed vs. shaky.
+
+    Nailed requires both "got it just now" and "the mastery estimate agrees"
+    — a lucky guess on a skill still tracked as weak stays in shaky, and a
+    momentary slip on an otherwise-solid skill does not erase it from nailed
+    only because mastery has not fully caught up yet.
+    """
+    nailed: List[SessionSummarySkill] = []
+    shaky: List[SessionSummarySkill] = []
+    for skill_id, attempt in attempts.items():
+        mastery = masteries.get(skill_id)
+        entry = SessionSummarySkill(
+            skill_id=skill_id,
+            mastery=mastery,
+            question=attempt["question"],
+            misconception=attempt["misconception"],
+        )
+        is_nailed = attempt["correct"] and (mastery is None or mastery >= 0.6)
+        (nailed if is_nailed else shaky).append(entry)
+    return nailed, shaky
+
+
+@router.get("/chat/{conversation_id}/summary", response_model=SessionSummaryResponse)
+async def get_chat_session_summary(
+    conversation_id: str,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Session-close recap: what this conversation's checks show the learner nailed vs. shaky.
+
+    Reads only what /chat/check already wrote — the verdict persisted onto
+    each block, and the LearnerMastery row that verdict updated.
+    """
+    authenticated_user_id = (
+        str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+    )
+    if not authenticated_user_id:
+        raise HTTPException(status_code=401, detail="Sign in to see a session summary")
+
+    conversation = await conversation_store.get_owned_conversation(
+        db, conversation_id, authenticated_user_id
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # The unbounded read, not get_messages()'s default 50-message window —
+    # a session-close recap must cover every check answered in the
+    # conversation, not just the most recent 50 messages of it.
+    messages = await conversation_store.get_all_messages(db, conversation.id)
+    attempts, total_checks, correct_checks = _collect_session_attempts(messages)
+
+    masteries: Dict[str, float] = {}
+    if attempts:
+        from lyo_app.personalization.models import LearnerMastery
+
+        mastery_result = await db.execute(
+            select(LearnerMastery).where(
+                and_(
+                    LearnerMastery.user_id == int(authenticated_user_id),
+                    LearnerMastery.skill_id.in_(list(attempts.keys())),
+                )
+            )
+        )
+        masteries = {row.skill_id: row.mastery_level for row in mastery_result.scalars().all()}
+
+    nailed, shaky = _classify_session_attempts(attempts, masteries)
+
+    return SessionSummaryResponse(
+        conversation_id=conversation.id,
+        total_checks=total_checks,
+        correct_checks=correct_checks,
+        nailed=nailed,
+        shaky=shaky,
+    )
+
+
+@router.get("/chat/reviews/due", response_model=DueReviewsResponse)
+async def get_due_chat_reviews(
+    current_user: UserRead = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spaced-repetition items ready to resurface, enriched for a client nudge.
+
+    Every check answered through /chat/check has updated a SM-2 schedule
+    since checks shipped (`PersonalizationEngine._update_repetition_schedule`)
+    — nothing has read it back out for chat until now. Guests have no
+    mastery record to schedule against, so they always get an empty list
+    rather than an error.
+    """
+    authenticated_user_id = (
+        str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+    )
+    if not authenticated_user_id:
+        return DueReviewsResponse(items=[])
+
+    from lyo_app.personalization.service import personalization_engine
+
+    due = await personalization_engine.get_due_reviews(db, int(authenticated_user_id))
+    return DueReviewsResponse(
+        items=[
+            DueReviewItem(
+                skill_id=item["skill_id"],
+                days_overdue=item["days_overdue"],
+                mastery_level=item["mastery_level"],
+                last_misconception=item["last_misconception"],
+            )
+            for item in due
+        ]
+    )
 
 
 @router.post("/chat/stream")

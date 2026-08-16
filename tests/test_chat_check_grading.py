@@ -196,3 +196,107 @@ def test_persist_check_result_tolerates_a_missing_message():
         None, None, "x",
         CheckAnswerResponse(correct=True, correct_index=0, selected_index=0),
     ))  # must not raise
+
+
+# --- session-close summary ---------------------------------------------------
+
+def _answered_block(skill_id, correct, question="What is the square root of 49?",
+                     misconception=None, bailed_out=False):
+    block = _check_block(with_bailout=False)
+    block["metadata"] = {
+        "skill_id": skill_id,
+        "result": {
+            "correct": correct,
+            "correct_index": 0,
+            "selected_index": 0 if correct else 1,
+            "misconception": misconception,
+            "bailed_out": bailed_out,
+        },
+    }
+    block["content"]["question"] = question
+    return block
+
+
+def test_collect_session_attempts_counts_and_extracts_skill():
+    from lyo_app.api.v1.stream_lyo2 import _collect_session_attempts
+
+    block = _answered_block("square_roots", correct=True)
+    attempts, total, correct = _collect_session_attempts([_FakeMessage([block])])
+
+    assert total == 1
+    assert correct == 1
+    assert attempts["square_roots"]["correct"] is True
+    assert attempts["square_roots"]["question"] == "What is the square root of 49?"
+
+
+def test_collect_session_attempts_keeps_latest_attempt_on_retry():
+    from lyo_app.api.v1.stream_lyo2 import _collect_session_attempts
+
+    first = _answered_block("square_roots", correct=False, misconception="confused root with square")
+    second = _answered_block("square_roots", correct=True)
+    attempts, total, correct = _collect_session_attempts(
+        [_FakeMessage([first]), _FakeMessage([second])]
+    )
+
+    assert total == 2
+    assert correct == 1
+    # Only the latest attempt survives per skill.
+    assert attempts["square_roots"]["correct"] is True
+    assert attempts["square_roots"]["misconception"] is None
+
+
+def test_collect_session_attempts_excludes_bailouts_and_unanswered():
+    from lyo_app.api.v1.stream_lyo2 import _collect_session_attempts
+
+    bailed = _answered_block("square_roots", correct=False, bailed_out=True)
+    unanswered = _check_block()
+    unanswered["metadata"] = {"skill_id": "square_roots"}  # no "result" yet
+    attempts, total, correct = _collect_session_attempts(
+        [_FakeMessage([bailed, unanswered])]
+    )
+
+    assert total == 0
+    assert correct == 0
+    assert attempts == {}
+
+
+def test_classify_session_attempts_nailed_requires_mastery_agreement():
+    from lyo_app.api.v1.stream_lyo2 import _classify_session_attempts
+
+    attempts = {
+        "square_roots": {"question": "q", "correct": True, "misconception": None},
+        "fractions": {"question": "q2", "correct": True, "misconception": None},
+    }
+    # square_roots: correct just now AND mastery agrees -> nailed.
+    # fractions: correct just now but mastery still tracks it as weak (a
+    # lucky guess) -> stays shaky.
+    masteries = {"square_roots": 0.8, "fractions": 0.2}
+
+    nailed, shaky = _classify_session_attempts(attempts, masteries)
+
+    assert [s.skill_id for s in nailed] == ["square_roots"]
+    assert [s.skill_id for s in shaky] == ["fractions"]
+
+
+def test_classify_session_attempts_wrong_answer_is_always_shaky():
+    from lyo_app.api.v1.stream_lyo2 import _classify_session_attempts
+
+    attempts = {
+        "square_roots": {"question": "q", "correct": False, "misconception": "confused root with square"},
+    }
+    nailed, shaky = _classify_session_attempts(attempts, {"square_roots": 0.9})
+
+    assert nailed == []
+    assert shaky[0].skill_id == "square_roots"
+    assert shaky[0].misconception == "confused root with square"
+
+
+def test_classify_session_attempts_no_mastery_row_falls_back_to_correctness():
+    """A skill mastered for the first time this session has no prior row yet."""
+    from lyo_app.api.v1.stream_lyo2 import _classify_session_attempts
+
+    attempts = {"new_skill": {"question": "q", "correct": True, "misconception": None}}
+    nailed, shaky = _classify_session_attempts(attempts, {})
+
+    assert [s.skill_id for s in nailed] == ["new_skill"]
+    assert shaky == []

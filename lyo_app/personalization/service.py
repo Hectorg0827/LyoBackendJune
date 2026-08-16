@@ -787,8 +787,83 @@ class PersonalizationEngine:
             ).limit(10)
         )
         schedules = result.scalars().all()
-        
+
         return [s.item_id for s in schedules]
+
+    async def get_due_reviews(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Due spaced-repetition items, enriched for a client to act on directly.
+
+        `_get_due_repetitions` above only ever fed a bare list of opaque
+        `item_id`s (chat check block ids) into `get_next_action`'s generic
+        recommendation payload. Resurfacing "you were shaky on this days ago"
+        as an actual nudge needs the skill name and what specifically went
+        wrong, not just an id — both already live on `LearnerMastery` (this
+        method reads them, it does not duplicate the write path). One row per
+        skill, most overdue first, so a repeatedly-missed skill with several
+        scheduled items does not crowd out everything else that is due.
+        """
+        # Computed once and reused below for both the filter and
+        # days_overdue — two separate datetime.utcnow() calls a few lines
+        # apart can disagree at a millisecond boundary, which would let
+        # days_overdue go slightly negative for an item that just became due.
+        now = datetime.utcnow()
+
+        result = await db.execute(
+            select(SpacedRepetitionSchedule)
+            .where(
+                and_(
+                    SpacedRepetitionSchedule.user_id == user_id,
+                    SpacedRepetitionSchedule.next_review <= now,
+                )
+            )
+            .order_by(SpacedRepetitionSchedule.next_review.asc())
+        )
+        schedules = result.scalars().all()
+
+        # One row per skill, most overdue first, capped at `limit` — decided
+        # before touching LearnerMastery so that table is only queried once,
+        # for exactly the skills that survive, instead of once per schedule.
+        seen_skills: set = set()
+        selected: List[SpacedRepetitionSchedule] = []
+        for schedule in schedules:
+            if schedule.skill_id in seen_skills:
+                continue
+            seen_skills.add(schedule.skill_id)
+            selected.append(schedule)
+            if len(selected) >= limit:
+                break
+
+        masteries: Dict[str, LearnerMastery] = {}
+        if selected:
+            mastery_result = await db.execute(
+                select(LearnerMastery).where(
+                    and_(
+                        LearnerMastery.user_id == user_id,
+                        LearnerMastery.skill_id.in_([s.skill_id for s in selected]),
+                    )
+                )
+            )
+            masteries = {m.skill_id: m for m in mastery_result.scalars().all()}
+
+        due: List[Dict[str, Any]] = []
+        for schedule in selected:
+            mastery = masteries.get(schedule.skill_id)
+            misconceptions = list(mastery.misconceptions or []) if mastery else []
+            due.append({
+                "skill_id": schedule.skill_id,
+                "item_id": schedule.item_id,
+                "next_review": schedule.next_review,
+                "days_overdue": max(0, (now - schedule.next_review).days) if schedule.next_review else 0,
+                "mastery_level": mastery.mastery_level if mastery else None,
+                "last_misconception": misconceptions[-1] if misconceptions else None,
+            })
+
+        return due
 
 # Singleton instance
 personalization_engine = PersonalizationEngine()
