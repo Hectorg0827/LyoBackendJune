@@ -33,6 +33,12 @@ class StudyGroupBase(BaseModel):
     max_members: Optional[int] = Field(None, ge=2, le=1000, description="Maximum number of members")
     requires_approval: bool = Field(default=False, description="Whether membership requires approval")
     course_id: Optional[int] = Field(None, description="Associated course ID")
+    location: Optional[str] = Field(None, max_length=300, description="Physical meeting location")
+    is_online: bool = Field(default=False, description="Whether this group meets online")
+    meeting_url: Optional[str] = Field(None, max_length=500, description="Online meeting URL")
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    image_url: Optional[str] = Field(None, max_length=500)
 
 
 class StudyGroupCreate(StudyGroupBase):
@@ -49,6 +55,12 @@ class StudyGroupUpdate(BaseModel):
     max_members: Optional[int] = Field(None, ge=2, le=1000)
     requires_approval: Optional[bool] = None
     status: Optional[StudyGroupStatus] = None
+    location: Optional[str] = Field(None, max_length=300)
+    is_online: Optional[bool] = None
+    meeting_url: Optional[str] = Field(None, max_length=500)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    image_url: Optional[str] = Field(None, max_length=500)
 
 
 class StudyGroupRead(StudyGroupBase):
@@ -106,6 +118,7 @@ class CommunityEventBase(BaseModel):
     description: Optional[str] = Field(None, max_length=2000, description="Event description")
     event_type: EventType = Field(default=EventType.STUDY_SESSION, description="Type of event")
     location: Optional[str] = Field(None, max_length=300, description="Event location")
+    is_online: bool = Field(default=False, description="Whether the event is online")
     meeting_url: Optional[str] = Field(None, max_length=500, description="Virtual meeting URL")
     max_attendees: Optional[int] = Field(None, ge=1, le=10000, description="Maximum attendees")
     start_time: datetime = Field(..., description="Event start time")
@@ -114,8 +127,8 @@ class CommunityEventBase(BaseModel):
     study_group_id: Optional[int] = Field(None, description="Associated study group ID")
     course_id: Optional[int] = Field(None, description="Associated course ID")
     lesson_id: Optional[int] = Field(None, description="Associated lesson ID")
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
     room_id: Optional[str] = None
     image_url: Optional[str] = None
 
@@ -132,12 +145,17 @@ class CommunityEventUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=2000)
     event_type: Optional[EventType] = None
     location: Optional[str] = Field(None, max_length=300)
+    is_online: Optional[bool] = None
     meeting_url: Optional[str] = Field(None, max_length=500)
     max_attendees: Optional[int] = Field(None, ge=1, le=10000)
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     timezone: Optional[str] = Field(None, max_length=50)
     status: Optional[EventStatus] = None
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    room_id: Optional[str] = Field(None, max_length=100)
+    image_url: Optional[str] = Field(None, max_length=500)
 
 
 class CommunityEventRead(CommunityEventBase):
@@ -160,6 +178,80 @@ class CommunityEventRead(CommunityEventBase):
     user_attendance_status: Optional[AttendanceStatus] = Field(None, description="Current user's attendance status")
     is_full: Optional[bool] = Field(None, description="Whether event is at capacity")
     organizer_profile: Optional[UserPreview] = None
+
+
+# Map-first Community contract shared by iOS, Android, and web.
+class LearningNodeKind(str, Enum):
+    EVENT = "event"
+    STUDY_GROUP = "study_group"
+    PRIVATE_LESSON = "private_lesson"
+    INSTITUTION = "institution"
+
+
+class LearningNodeCategory(str, Enum):
+    EVENT = "event"
+    WORKSHOP = "workshop"
+    CLASS = "class"
+    STUDY_GROUP = "study_group"
+    TUTOR = "tutor"
+    LIBRARY = "library"
+    MUSEUM = "museum"
+    EDUCATIONAL_CENTER = "educational_center"
+
+
+class LearningNode(BaseModel):
+    """One educational opportunity on the Learning Around Me map."""
+
+    key: str = Field(..., min_length=3, max_length=320)
+    kind: LearningNodeKind
+    category: LearningNodeCategory
+    id: str = Field(..., min_length=1, max_length=255)
+    title: str = Field(..., min_length=1, max_length=300)
+    description: Optional[str] = Field(None, max_length=3000)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    distance_km: Optional[float] = Field(None, ge=0)
+    location_name: Optional[str] = Field(None, max_length=500)
+    is_online: bool = False
+    meeting_url: Optional[str] = Field(None, max_length=1000)
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    timezone: Optional[str] = Field(None, max_length=50)
+    host: Optional[UserPreview] = None
+    member_count: Optional[int] = Field(None, ge=0)
+    attendee_count: Optional[int] = Field(None, ge=0)
+    capacity: Optional[int] = Field(None, ge=1)
+    is_joined: bool = False
+    is_attending: bool = False
+    is_saved: bool = False
+    course_id: Optional[int] = None
+    lesson_id: Optional[int] = None
+    study_group_id: Optional[int] = None
+    image_url: Optional[str] = Field(None, max_length=1000)
+    source: str = Field(default="lyo", max_length=50)
+    source_url: Optional[str] = Field(None, max_length=1000)
+
+
+class NearbyLearningResponse(BaseModel):
+    items: List[LearningNode]
+    center_latitude: float
+    center_longitude: float
+    radius_km: float
+    fetched_at: datetime
+
+
+class LearningNodeSaveRequest(BaseModel):
+    snapshot: LearningNode
+
+
+class CommunityMeResponse(BaseModel):
+    """Canonical account-owned Community state used on every platform."""
+
+    joined_groups: List[StudyGroupRead]
+    attending_events: List[CommunityEventRead]
+    saved_nodes: List[LearningNode]
+    following: List[UserPreview]
+    updated_at: datetime
 
 
 # Event Attendance Schemas
@@ -384,8 +476,11 @@ class PrivateLessonCreate(BaseModel):
     currency: str = Field(default="USD", max_length=10)
     duration_minutes: int = Field(default=60, ge=15, le=480)
     location: Optional[str] = Field(None, max_length=500)
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    is_online: bool = False
+    meeting_url: Optional[str] = Field(None, max_length=500)
+    image_url: Optional[str] = Field(None, max_length=500)
 
 
 class PrivateLessonRead(BaseModel):
@@ -402,6 +497,9 @@ class PrivateLessonRead(BaseModel):
     location: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    is_online: bool = False
+    meeting_url: Optional[str] = None
+    image_url: Optional[str] = None
     is_active: bool
     instructor_id: int
     instructor_name: Optional[str] = None
@@ -592,4 +690,3 @@ class PaginatedCommentsResponse(BaseModel):
     limit: int
     total_count: int
     total_pages: int
-

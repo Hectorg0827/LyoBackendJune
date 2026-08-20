@@ -3,10 +3,11 @@ Community API routes for study groups and community events.
 Provides RESTful endpoints for collaborative learning features.
 """
 
-from typing import List, Optional
+import logging
+from typing import List, Optional, Set
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
@@ -23,15 +24,130 @@ from lyo_app.community.schemas import (
     MarketplaceItemCreate, MarketplaceItemUpdate, MarketplaceItemRead,
     PrivateLessonCreate, PrivateLessonRead,
     BookingCreate, BookingRead, BookingSlotRead,
-    ReviewCreate, ReviewRead, ReviewStatsRead
+    ReviewCreate, ReviewRead, ReviewStatsRead,
+    CommunityMeResponse, LearningNode, LearningNodeCategory,
+    LearningNodeKind, LearningNodeSaveRequest, NearbyLearningResponse,
 )
 from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
+from lyo_app.community.learning_around import learning_around_service
+from lyo_app.services.conversation_sync import conversation_sync_service
 from lyo_app.stack import crud as stack_crud
 from lyo_app.stack.models import StackItemType
 import uuid
 
 router = APIRouter()
 community_service = CommunityService()
+logger = logging.getLogger(__name__)
+
+
+async def _notify_community_change(user_id: int, action: str, **data) -> None:
+    """Best-effort refresh signal; the database remains the source of truth."""
+    try:
+        await conversation_sync_service.sync_community_update(
+            user_id,
+            {"action": action, **data},
+        )
+    except Exception as exc:  # A sync outage must never roll back account state.
+        logger.warning("Could not broadcast Community update for user %s: %s", user_id, exc)
+
+
+@router.get("/nearby", response_model=NearbyLearningResponse)
+async def get_nearby_learning(
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(15.0, gt=0, le=100),
+    categories: Optional[str] = Query(
+        None,
+        description="Comma-separated categories: event, workshop, class, study_group, tutor, library, museum, educational_center",
+    ),
+    q: Optional[str] = Query(None, max_length=200),
+    include_online: bool = Query(True),
+    include_institutions: bool = Query(True),
+    limit: int = Query(100, ge=1, le=250),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the canonical, user-aware Learning Around Me map nodes."""
+    parsed_categories: Optional[Set[LearningNodeCategory]] = None
+    if categories:
+        try:
+            parsed_categories = {
+                LearningNodeCategory(value.strip())
+                for value in categories.split(",")
+                if value.strip()
+            }
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown learning node category: {exc}",
+            ) from exc
+    return await learning_around_service.get_nearby(
+        db,
+        user_id=current_user.id,
+        latitude=lat,
+        longitude=lng,
+        radius_km=radius_km,
+        categories=parsed_categories,
+        query_text=q,
+        include_online=include_online,
+        include_institutions=include_institutions,
+        limit=limit,
+    )
+
+
+@router.get("/me", response_model=CommunityMeResponse)
+async def get_my_community_state(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Account-owned groups, events, saves, and people followed by this user."""
+    return await learning_around_service.get_my_community(db, current_user.id)
+
+
+@router.put("/saved-nodes/{kind}/{node_id}", response_model=LearningNode)
+async def save_learning_node(
+    kind: LearningNodeKind,
+    payload: LearningNodeSaveRequest,
+    node_id: str = Path(..., min_length=1, max_length=255),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a map node to the authenticated Lyo account idempotently."""
+    try:
+        node = await learning_around_service.save_node(
+            db,
+            user_id=current_user.id,
+            kind=kind,
+            node_id=node_id,
+            snapshot=payload.snapshot,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await _notify_community_change(current_user.id, "node_saved", node_key=node.key)
+    return node
+
+
+@router.delete("/saved-nodes/{kind}/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unsave_learning_node(
+    kind: LearningNodeKind,
+    node_id: str = Path(..., min_length=1, max_length=255),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a saved node from the authenticated Lyo account."""
+    removed = await learning_around_service.unsave_node(
+        db,
+        user_id=current_user.id,
+        kind=kind,
+        node_id=node_id,
+    )
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved node not found")
+    await _notify_community_change(
+        current_user.id,
+        "node_unsaved",
+        node_key=f"{kind.value}:{node_id}",
+    )
 
 
 # Study Group Endpoints
@@ -47,6 +163,11 @@ async def create_study_group(
             db=db, 
             creator_id=current_user.id, 
             group_data=group_data
+        )
+        await _notify_community_change(
+            current_user.id,
+            "study_group_created",
+            group_id=study_group.id,
         )
         return study_group
     except ValueError as e:
@@ -120,9 +241,16 @@ async def update_study_group(
         )
         if not study_group:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study group not found")
+        await _notify_community_change(
+            current_user.id,
+            "study_group_updated",
+            group_id=group_id,
+        )
         return study_group
-    except ValueError as e:
+    except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -144,8 +272,15 @@ async def delete_study_group(
         )
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study group not found or access denied")
-    except ValueError as e:
+        await _notify_community_change(
+            current_user.id,
+            "study_group_deleted",
+            group_id=group_id,
+        )
+    except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -167,7 +302,14 @@ async def join_study_group(
             user_id=current_user.id,
             membership_data=membership_data
         )
+        await _notify_community_change(
+            current_user.id,
+            "study_group_joined",
+            group_id=group_id,
+        )
         return membership
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -189,6 +331,11 @@ async def leave_study_group(
         )
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+        await _notify_community_change(
+            current_user.id,
+            "study_group_left",
+            group_id=group_id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
@@ -215,7 +362,7 @@ async def get_group_members(
             limit=limit
         )
         return members
-    except ValueError as e:
+    except (ValueError, PermissionError) as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch group members")
@@ -241,7 +388,7 @@ async def update_group_membership(
         if not membership:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
         return membership
-    except ValueError as e:
+    except (ValueError, PermissionError) as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except HTTPException:
         raise
@@ -288,7 +435,14 @@ async def create_community_event(
             organizer_id=current_user.id,
             event_data=event_data
         )
+        await _notify_community_change(
+            current_user.id,
+            "event_created",
+            event_id=event.id,
+        )
         return event
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -364,9 +518,16 @@ async def update_community_event(
         )
         if not event:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        await _notify_community_change(
+            current_user.id,
+            "event_updated",
+            event_id=event_id,
+        )
         return event
-    except ValueError as e:
+    except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -388,8 +549,15 @@ async def delete_community_event(
         )
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found or access denied")
-    except ValueError as e:
+        await _notify_community_change(
+            current_user.id,
+            "event_deleted",
+            event_id=event_id,
+        )
+    except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -411,7 +579,14 @@ async def register_event_attendance(
             user_id=current_user.id,
             attendance_data=attendance_data
         )
+        await _notify_community_change(
+            current_user.id,
+            "event_attending",
+            event_id=event_id,
+        )
         return attendance
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -436,6 +611,11 @@ async def update_event_attendance(
         )
         if not attendance:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
+        await _notify_community_change(
+            current_user.id,
+            "event_attendance_updated",
+            event_id=event_id,
+        )
         return attendance
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -459,6 +639,11 @@ async def leave_event(
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance not found")
+    await _notify_community_change(
+        current_user.id,
+        "event_left",
+        event_id=event_id,
+    )
 
 
 # --- Phase 3: Campus Map & Beacons ---
@@ -1104,6 +1289,11 @@ async def create_private_lesson(
             instructor_id=current_user.id,
             lesson_data=lesson_data
         )
+        await _notify_community_change(
+            current_user.id,
+            "private_lesson_created",
+            lesson_id=lesson.id,
+        )
         return lesson
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -1308,4 +1498,3 @@ async def search_institutions(
 ):
     """Search institutions (stub)."""
     return []
-

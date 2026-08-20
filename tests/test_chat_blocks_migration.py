@@ -56,13 +56,17 @@ def test_the_migration_graph_still_has_exactly_one_head():
     assert len(heads) == 1, f"migration graph forked into multiple heads: {heads}"
 
 
-def test_this_migration_is_the_head():
+def test_chat_blocks_migration_remains_in_the_head_lineage():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
-    assert script.get_heads() == ["chat_blocks_001"]
+    lineage = {
+        revision.revision
+        for revision in script.iterate_revisions(script.get_current_head(), "base")
+    }
+    assert "chat_blocks_001" in lineage
 
 
 def test_no_two_migrations_share_a_revision_id():

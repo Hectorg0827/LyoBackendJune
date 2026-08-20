@@ -54,6 +54,7 @@ class SyncEventType(str, Enum):
     TYPING_STOPPED = "typing_stopped"
     SESSION_TRANSFERRED = "session_transferred"
     CONTEXT_UPDATED = "context_updated"
+    COMMUNITY_UPDATED = "community_updated"
 
 
 @dataclass
@@ -326,6 +327,23 @@ class ConversationSyncService:
                 data={"is_typing": is_typing}
             ),
             exclude_device=device_id
+        )
+
+    async def sync_community_update(
+        self,
+        user_id: int,
+        data: Dict[str, Any],
+        device_id: str = "server",
+    ) -> None:
+        """Tell every signed-in device to refresh canonical Community state."""
+        await self._broadcast_to_user(
+            user_id=user_id,
+            event=SyncEvent(
+                event_type=SyncEventType.COMMUNITY_UPDATED,
+                user_id=user_id,
+                device_id=device_id,
+                data=data,
+            ),
         )
 
     async def transfer_session(

@@ -7,7 +7,20 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum, Float, Uuid, JSON
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum as SQLEnum,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 import uuid
 
@@ -40,6 +53,8 @@ class EventType(str, Enum):
     """Community event type enumeration."""
     STUDY_SESSION = "study_session"
     WORKSHOP = "workshop"
+    CLASS = "class"
+    SEMINAR = "seminar"
     LECTURE = "lecture"
     DISCUSSION = "discussion"
     PROJECT_SHOWCASE = "project_showcase"
@@ -82,6 +97,15 @@ class StudyGroup(Base):
     # Group settings
     max_members = Column(Integer, nullable=True)  # None means unlimited
     requires_approval = Column(Boolean, nullable=False, default=False)
+
+    # Discovery / meeting location. These fields belong to the group itself so
+    # every client sees the same map node after signing in on another device.
+    location = Column(String(300), nullable=True)
+    is_online = Column(Boolean, nullable=False, default=False)
+    meeting_url = Column(String(500), nullable=True)
+    latitude = Column(Float, nullable=True, index=True)
+    longitude = Column(Float, nullable=True, index=True)
+    image_url = Column(String(500), nullable=True)
     
     # Associations
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=True, index=True)
@@ -345,6 +369,9 @@ class PrivateLesson(Base):
     location = Column(String(500), nullable=True)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    is_online = Column(Boolean, nullable=False, default=False)
+    meeting_url = Column(String(500), nullable=True)
+    image_url = Column(String(500), nullable=True)
 
     # Status
     is_active = Column(Boolean, nullable=False, default=True)
@@ -412,6 +439,37 @@ class Review(Base):
 
     # Relationships
     author = relationship("User", foreign_keys=[author_id], lazy="noload")
+
+
+class CommunitySavedNode(Base):
+    """A map node saved to a Lyo account, never to one device.
+
+    ``node_kind`` and ``node_id`` form a stable polymorphic reference for
+    Lyo-owned events, groups, lessons, and externally sourced institutions.
+    The snapshot keeps external places useful even if the provider is
+    temporarily unavailable when another platform loads My Community.
+    """
+
+    __tablename__ = "community_saved_nodes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    node_kind = Column(String(50), nullable=False, index=True)
+    node_id = Column(String(255), nullable=False, index=True)
+    snapshot = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id], lazy="noload")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "node_kind",
+            "node_id",
+            name="uq_community_saved_node_user_kind_id",
+        ),
+    )
 
 
 # =============================================================================
