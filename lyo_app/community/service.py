@@ -72,6 +72,12 @@ class CommunityService:
             max_members=group_data.max_members,
             requires_approval=group_data.requires_approval,
             course_id=group_data.course_id,
+            location=group_data.location,
+            is_online=group_data.is_online,
+            meeting_url=group_data.meeting_url,
+            latitude=group_data.latitude,
+            longitude=group_data.longitude,
+            image_url=group_data.image_url,
             creator_id=creator_id,
             status=StudyGroupStatus.ACTIVE,
             created_at=datetime.utcnow(),
@@ -79,9 +85,11 @@ class CommunityService:
         )
         
         db.add(db_group)
-        await db.commit()
-        await db.refresh(db_group)
-        
+        # Flush for the generated id, then commit the group and owner row as
+        # one account-level transaction. A platform must never observe a
+        # created group without its creator membership.
+        await db.flush()
+
         # Automatically add creator as owner
         creator_membership = GroupMembership(
             user_id=creator_id,
@@ -95,7 +103,8 @@ class CommunityService:
         
         db.add(creator_membership)
         await db.commit()
-        
+        await db.refresh(db_group)
+
         return db_group
 
     async def get_study_group_by_id(
@@ -191,19 +200,13 @@ class CommunityService:
         if not await self._has_group_permission(db, group_id, user_id, [MembershipRole.OWNER, MembershipRole.ADMIN]):
             raise PermissionError("Insufficient permissions to update this group")
         
-        # Update fields
-        if group_data.name is not None:
-            group.name = group_data.name
-        if group_data.description is not None:
-            group.description = group_data.description
-        if group_data.privacy is not None:
-            group.privacy = group_data.privacy
-        if group_data.max_members is not None:
-            group.max_members = group_data.max_members
-        if group_data.requires_approval is not None:
-            group.requires_approval = group_data.requires_approval
-        if group_data.status is not None:
-            group.status = group_data.status
+        # Only fields explicitly sent by the client are changed. This also
+        # allows a creator to clear an old meeting URL or location.
+        required_group_fields = {"name", "privacy", "requires_approval", "status", "is_online"}
+        for field, value in group_data.model_dump(exclude_unset=True).items():
+            if field in required_group_fields and value is None:
+                raise ValueError(f"{field} cannot be null")
+            setattr(group, field, value)
         
         group.updated_at = datetime.utcnow()
         
@@ -442,6 +445,12 @@ class CommunityService:
                 "max_members": group.max_members,
                 "requires_approval": group.requires_approval,
                 "course_id": group.course_id,
+                "location": group.location,
+                "is_online": group.is_online,
+                "meeting_url": group.meeting_url,
+                "latitude": group.latitude,
+                "longitude": group.longitude,
+                "image_url": group.image_url,
                 "creator_id": group.creator_id,
                 "created_at": group.created_at,
                 "updated_at": group.updated_at,
@@ -496,6 +505,7 @@ class CommunityService:
             description=event_data.description,
             event_type=event_data.event_type,
             location=event_data.location,
+            is_online=event_data.is_online,
             meeting_url=event_data.meeting_url,
             max_attendees=event_data.max_attendees,
             start_time=event_data.start_time,
@@ -505,15 +515,19 @@ class CommunityService:
             study_group_id=event_data.study_group_id,
             course_id=event_data.course_id,
             lesson_id=event_data.lesson_id,
+            latitude=event_data.latitude,
+            longitude=event_data.longitude,
+            room_id=event_data.room_id,
+            image_url=event_data.image_url,
             status=EventStatus.SCHEDULED,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
         
         db.add(db_event)
-        await db.commit()
-        await db.refresh(db_event)
-        
+        # The event and organizer RSVP are a single durable account write.
+        await db.flush()
+
         # Automatically register organizer
         organizer_attendance = EventAttendance(
             user_id=organizer_id,
@@ -524,7 +538,8 @@ class CommunityService:
         
         db.add(organizer_attendance)
         await db.commit()
-        
+        await db.refresh(db_event)
+
         return db_event
 
     async def get_community_event_by_id(
@@ -592,27 +607,21 @@ class CommunityService:
         if end_time <= start_time:
             raise ValueError("End time must be after start time")
         
-        # Update fields
-        if event_data.title is not None:
-            event.title = event_data.title
-        if event_data.description is not None:
-            event.description = event_data.description
-        if event_data.event_type is not None:
-            event.event_type = event_data.event_type
-        if event_data.location is not None:
-            event.location = event_data.location
-        if event_data.meeting_url is not None:
-            event.meeting_url = event_data.meeting_url
-        if event_data.max_attendees is not None:
-            event.max_attendees = event_data.max_attendees
-        if event_data.start_time is not None:
-            event.start_time = event_data.start_time
-        if event_data.end_time is not None:
-            event.end_time = event_data.end_time
-        if event_data.timezone is not None:
-            event.timezone = event_data.timezone
-        if event_data.status is not None:
-            event.status = event_data.status
+        # Apply only explicit changes; optional fields can intentionally be
+        # cleared while untouched fields retain their canonical value.
+        required_event_fields = {
+            "title",
+            "event_type",
+            "is_online",
+            "start_time",
+            "end_time",
+            "timezone",
+            "status",
+        }
+        for field, value in event_data.model_dump(exclude_unset=True).items():
+            if field in required_event_fields and value is None:
+                raise ValueError(f"{field} cannot be null")
+            setattr(event, field, value)
         
         event.updated_at = datetime.utcnow()
         
@@ -1020,6 +1029,7 @@ class CommunityService:
                     "event_type": event.event_type,
                     "status": event.status,
                     "location": event.location,
+                    "is_online": event.is_online,
                     "meeting_url": event.meeting_url,
                     "max_attendees": event.max_attendees,
                     "start_time": event.start_time,
@@ -2344,6 +2354,9 @@ class CommunityService:
             location=lesson_data.location,
             latitude=lesson_data.latitude,
             longitude=lesson_data.longitude,
+            is_online=lesson_data.is_online,
+            meeting_url=lesson_data.meeting_url,
+            image_url=lesson_data.image_url,
             instructor_id=instructor_id,
         )
         db.add(lesson)
@@ -2615,4 +2628,3 @@ class CommunityService:
             "review_count": total,
             "rating_distribution": distribution
         }
-
