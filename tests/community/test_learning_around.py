@@ -8,6 +8,8 @@ from fastapi import FastAPI, Header
 from httpx import ASGITransport, AsyncClient
 
 from lyo_app.auth.routes import get_current_user
+from lyo_app.community.learning_around import LearningAroundService
+from lyo_app.community.models import EventType
 from lyo_app.community.routes import router as community_router
 from lyo_app.core.database import get_db
 
@@ -109,6 +111,44 @@ async def test_nearby_returns_geolocated_user_learning_nodes(community_clients):
     assert nodes["AI Beginners Workshop"]["is_attending"] is True
     assert nodes["AI Beginners Workshop"]["distance_km"] < 1
     assert nodes["Biology Tutor Available"]["category"] == "tutor"
+
+
+def test_nearby_normalizes_legacy_rows_instead_of_returning_500():
+    """Pre-contract data must not make the cross-platform map all-or-nothing."""
+    start = datetime.utcnow() + timedelta(days=1)
+    legacy_event = SimpleNamespace(
+        id=42,
+        title="Legacy capacity workshop",
+        description="x" * 3501,
+        event_type=EventType.WORKSHOP,
+        location="Online",
+        is_online=True,
+        meeting_url=None,
+        latitude=999,
+        longitude=-999,
+        start_time=start,
+        end_time=start + timedelta(hours=1),
+        timezone="UTC",
+        max_attendees=0,
+        organizer=None,
+        attendances=[],
+        course_id=None,
+        lesson_id=None,
+        study_group_id=None,
+        image_url=None,
+    )
+    node = LearningAroundService()._event_node(
+        legacy_event,
+        latitude=40.75,
+        longitude=-73.99,
+        saved_keys=set(),
+        attending_ids=set(),
+    )
+
+    assert len(node.description) == 3000
+    assert node.capacity is None
+    assert node.latitude is None
+    assert node.longitude is None
 
 
 async def test_saved_nodes_and_memberships_follow_account_not_device(

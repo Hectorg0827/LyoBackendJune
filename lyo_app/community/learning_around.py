@@ -11,8 +11,8 @@ import logging
 import math
 import os
 import time
-from datetime import datetime
-from typing import Optional, Set
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Optional, Set, TypeVar
 
 import httpx
 from sqlalchemy import and_, or_, select
@@ -46,13 +46,64 @@ from lyo_app.community.schemas import (
 from lyo_app.feeds.models import UserFollow
 
 logger = logging.getLogger(__name__)
+ReadResult = TypeVar("ReadResult")
+
+
+def _clean_text(value: Any, max_length: int) -> Optional[str]:
+    """Return provider/legacy text that is safe for the public map contract."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:max_length] or None
+
+
+def _clean_coordinates(
+    latitude: Any,
+    longitude: Any,
+) -> tuple[Optional[float], Optional[float]]:
+    """Treat corrupt or partial coordinates as unavailable, not a map outage."""
+    try:
+        point_latitude = float(latitude)
+        point_longitude = float(longitude)
+    except (TypeError, ValueError, OverflowError):
+        return None, None
+    if (
+        not math.isfinite(point_latitude)
+        or not math.isfinite(point_longitude)
+        or not -90 <= point_latitude <= 90
+        or not -180 <= point_longitude <= 180
+    ):
+        return None, None
+    return point_latitude, point_longitude
+
+
+def _positive_capacity(value: Any) -> Optional[int]:
+    """Normalize pre-contract zero/negative capacities to unlimited."""
+    try:
+        capacity = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return capacity if capacity >= 1 else None
+
+
+def _start_sort_value(value: Optional[datetime]) -> float:
+    """Sort aware and naive legacy datetimes without comparing them directly."""
+    if value is None:
+        return float("inf")
+    try:
+        normalized = value
+        if value.tzinfo is None or value.utcoffset() is None:
+            normalized = value.replace(tzinfo=timezone.utc)
+        return normalized.timestamp()
+    except (AttributeError, OSError, OverflowError, ValueError):
+        return float("inf")
 
 
 def _display_name(user: Optional[User]) -> str:
     if user is None:
         return ""
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-    return full_name or user.username
+    return full_name or user.username or "Lyo learner"
 
 
 def _preview(user: Optional[User]) -> Optional[UserPreview]:
@@ -71,6 +122,9 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
         math.sin(delta_phi / 2) ** 2
         + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lng / 2) ** 2
     )
+    # Floating point rounding can push an antipodal distance just outside
+    # [0, 1], which otherwise raises while building the whole map response.
+    value = min(1.0, max(0.0, value))
     return radius * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
 
 
@@ -118,9 +172,27 @@ class LearningAroundService:
         search = query_text.strip().lower() if query_text else None
         south, north, west, east = _bounds(latitude, longitude, radius_km)
 
-        saved_keys = await self._saved_keys(db, user_id)
-        joined_group_ids = await self._joined_group_ids(db, user_id)
-        attending_event_ids = await self._attending_event_ids(db, user_id)
+        # Account state and map sources are intentionally failure-isolated. A
+        # drifted legacy table or one temporarily unavailable source must not
+        # turn every other source (including public institutions) into a 500.
+        saved_keys = await self._read_or_default(
+            db,
+            "saved nodes",
+            lambda: self._saved_keys(db, user_id),
+            set(),
+        )
+        joined_group_ids = await self._read_or_default(
+            db,
+            "group memberships",
+            lambda: self._joined_group_ids(db, user_id),
+            set(),
+        )
+        attending_event_ids = await self._read_or_default(
+            db,
+            "event attendance",
+            lambda: self._attending_event_ids(db, user_id),
+            set(),
+        )
 
         items: list[LearningNode] = []
 
@@ -136,7 +208,7 @@ class LearningAroundService:
             )
             if include_online:
                 event_location = or_(event_location, CommunityEvent.is_online.is_(True))
-            result = await db.execute(
+            event_statement = (
                 select(CommunityEvent)
                 .options(
                     selectinload(CommunityEvent.organizer),
@@ -150,19 +222,32 @@ class LearningAroundService:
                 .order_by(CommunityEvent.start_time)
                 .limit(max(limit * 2, 100))
             )
-            for event in result.scalars().all():
-                category = _event_category(event.event_type)
-                if category not in categories:
-                    continue
-                node = self._event_node(
-                    event,
-                    latitude,
-                    longitude,
-                    saved_keys,
-                    attending_event_ids,
-                )
-                if self._within_scope(node, radius_km, include_online, search):
-                    items.append(node)
+            events = await self._read_or_default(
+                db,
+                "events",
+                lambda: self._scalar_rows(db, event_statement),
+                [],
+            )
+            for event in events:
+                try:
+                    category = _event_category(event.event_type)
+                    if category not in categories:
+                        continue
+                    node = self._event_node(
+                        event,
+                        latitude,
+                        longitude,
+                        saved_keys,
+                        attending_event_ids,
+                    )
+                    if self._within_scope(node, radius_km, include_online, search):
+                        items.append(node)
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping invalid Community event %s: %s",
+                        getattr(event, "id", "unknown"),
+                        exc,
+                    )
 
         if LearningNodeCategory.STUDY_GROUP in categories:
             group_location = and_(
@@ -171,7 +256,7 @@ class LearningAroundService:
             )
             if include_online:
                 group_location = or_(group_location, StudyGroup.is_online.is_(True))
-            result = await db.execute(
+            group_statement = (
                 select(StudyGroup)
                 .options(
                     selectinload(StudyGroup.creator),
@@ -188,18 +273,33 @@ class LearningAroundService:
                 .order_by(StudyGroup.updated_at.desc())
                 .limit(max(limit * 2, 100))
             )
-            for group in result.scalars().all():
-                member_count = sum(1 for membership in group.memberships if membership.is_approved)
-                node = self._group_node(
-                    group,
-                    latitude,
-                    longitude,
-                    saved_keys,
-                    joined_group_ids,
-                    member_count,
-                )
-                if self._within_scope(node, radius_km, include_online, search):
-                    items.append(node)
+            groups = await self._read_or_default(
+                db,
+                "study groups",
+                lambda: self._scalar_rows(db, group_statement),
+                [],
+            )
+            for group in groups:
+                try:
+                    member_count = sum(
+                        1 for membership in group.memberships if membership.is_approved
+                    )
+                    node = self._group_node(
+                        group,
+                        latitude,
+                        longitude,
+                        saved_keys,
+                        joined_group_ids,
+                        member_count,
+                    )
+                    if self._within_scope(node, radius_km, include_online, search):
+                        items.append(node)
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping invalid Community study group %s: %s",
+                        getattr(group, "id", "unknown"),
+                        exc,
+                    )
 
         if LearningNodeCategory.TUTOR in categories:
             lesson_location = and_(
@@ -208,22 +308,35 @@ class LearningAroundService:
             )
             if include_online:
                 lesson_location = or_(lesson_location, PrivateLesson.is_online.is_(True))
-            result = await db.execute(
+            lesson_statement = (
                 select(PrivateLesson)
                 .options(selectinload(PrivateLesson.instructor))
                 .where(PrivateLesson.is_active.is_(True), lesson_location)
                 .order_by(PrivateLesson.updated_at.desc())
                 .limit(max(limit * 2, 100))
             )
-            for lesson in result.scalars().all():
-                node = self._lesson_node(
-                    lesson,
-                    latitude,
-                    longitude,
-                    saved_keys,
-                )
-                if self._within_scope(node, radius_km, include_online, search):
-                    items.append(node)
+            lessons = await self._read_or_default(
+                db,
+                "private lessons",
+                lambda: self._scalar_rows(db, lesson_statement),
+                [],
+            )
+            for lesson in lessons:
+                try:
+                    node = self._lesson_node(
+                        lesson,
+                        latitude,
+                        longitude,
+                        saved_keys,
+                    )
+                    if self._within_scope(node, radius_km, include_online, search):
+                        items.append(node)
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping invalid Community private lesson %s: %s",
+                        getattr(lesson, "id", "unknown"),
+                        exc,
+                    )
 
         institution_categories = {
             LearningNodeCategory.LIBRARY,
@@ -243,7 +356,7 @@ class LearningAroundService:
             key=lambda item: (
                 item.distance_km is None,
                 item.distance_km if item.distance_km is not None else float("inf"),
-                item.starts_at or datetime.max,
+                _start_sort_value(item.starts_at),
                 item.title.lower(),
             )
         )
@@ -421,6 +534,36 @@ class LearningAroundService:
             return None
         return round(_haversine_km(latitude, longitude, node_latitude, node_longitude), 2)
 
+    @staticmethod
+    async def _scalar_rows(db: AsyncSession, statement: Any) -> list[Any]:
+        result = await db.execute(statement)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def _read_or_default(
+        db: AsyncSession,
+        source: str,
+        operation: Callable[[], Awaitable[ReadResult]],
+        default: ReadResult,
+    ) -> ReadResult:
+        try:
+            return await operation()
+        except Exception as exc:
+            logger.error(
+                "Community nearby %s read failed; returning a partial map: %s",
+                source,
+                exc,
+                exc_info=True,
+            )
+            try:
+                await db.rollback()
+            except Exception as rollback_exc:
+                logger.error(
+                    "Could not recover Community read transaction: %s",
+                    rollback_exc,
+                )
+            return default
+
     def _event_node(
         self,
         event: CommunityEvent,
@@ -431,22 +574,35 @@ class LearningAroundService:
     ) -> LearningNode:
         node_id = str(event.id)
         key = f"{LearningNodeKind.EVENT.value}:{node_id}"
+        node_latitude, node_longitude = _clean_coordinates(
+            event.latitude,
+            event.longitude,
+        )
         return LearningNode(
             key=key,
             kind=LearningNodeKind.EVENT,
             category=_event_category(event.event_type),
             id=node_id,
-            title=event.title,
-            description=event.description,
-            latitude=event.latitude,
-            longitude=event.longitude,
-            distance_km=self._distance(latitude, longitude, event.latitude, event.longitude),
-            location_name=event.location,
+            title=_clean_text(event.title, 300),
+            description=_clean_text(event.description, 3000),
+            latitude=node_latitude,
+            longitude=node_longitude,
+            distance_km=self._distance(
+                latitude,
+                longitude,
+                node_latitude,
+                node_longitude,
+            ),
+            location_name=_clean_text(event.location, 500),
             is_online=event.is_online,
-            meeting_url=event.meeting_url if event.id in attending_ids else None,
+            meeting_url=(
+                _clean_text(event.meeting_url, 1000)
+                if event.id in attending_ids
+                else None
+            ),
             starts_at=event.start_time,
             ends_at=event.end_time,
-            timezone=event.timezone,
+            timezone=_clean_text(event.timezone, 50),
             host=_preview(event.organizer),
             attendee_count=(
                 sum(
@@ -462,13 +618,13 @@ class LearningAroundService:
                 if "attendances" in event.__dict__
                 else None
             ),
-            capacity=event.max_attendees,
+            capacity=_positive_capacity(event.max_attendees),
             is_attending=event.id in attending_ids,
             is_saved=key in saved_keys,
             course_id=event.course_id,
             lesson_id=event.lesson_id,
             study_group_id=event.study_group_id,
-            image_url=event.image_url,
+            image_url=_clean_text(event.image_url, 1000),
         )
 
     def _group_node(
@@ -482,27 +638,40 @@ class LearningAroundService:
     ) -> LearningNode:
         node_id = str(group.id)
         key = f"{LearningNodeKind.STUDY_GROUP.value}:{node_id}"
+        node_latitude, node_longitude = _clean_coordinates(
+            group.latitude,
+            group.longitude,
+        )
         return LearningNode(
             key=key,
             kind=LearningNodeKind.STUDY_GROUP,
             category=LearningNodeCategory.STUDY_GROUP,
             id=node_id,
-            title=group.name,
-            description=group.description,
-            latitude=group.latitude,
-            longitude=group.longitude,
-            distance_km=self._distance(latitude, longitude, group.latitude, group.longitude),
-            location_name=group.location,
+            title=_clean_text(group.name, 300),
+            description=_clean_text(group.description, 3000),
+            latitude=node_latitude,
+            longitude=node_longitude,
+            distance_km=self._distance(
+                latitude,
+                longitude,
+                node_latitude,
+                node_longitude,
+            ),
+            location_name=_clean_text(group.location, 500),
             is_online=group.is_online,
-            meeting_url=group.meeting_url if group.id in joined_ids else None,
+            meeting_url=(
+                _clean_text(group.meeting_url, 1000)
+                if group.id in joined_ids
+                else None
+            ),
             host=_preview(group.creator),
             member_count=member_count,
-            capacity=group.max_members,
+            capacity=_positive_capacity(group.max_members),
             is_joined=group.id in joined_ids,
             is_saved=key in saved_keys,
             course_id=group.course_id,
             study_group_id=group.id,
-            image_url=group.image_url,
+            image_url=_clean_text(group.image_url, 1000),
         )
 
     def _lesson_node(
@@ -514,26 +683,46 @@ class LearningAroundService:
     ) -> LearningNode:
         node_id = str(lesson.id)
         key = f"{LearningNodeKind.PRIVATE_LESSON.value}:{node_id}"
-        price = f"{lesson.currency} {lesson.price_per_hour:g}/hour"
-        description = " · ".join(value for value in [lesson.subject, price, lesson.description] if value)
+        node_latitude, node_longitude = _clean_coordinates(
+            lesson.latitude,
+            lesson.longitude,
+        )
+        price = None
+        if lesson.price_per_hour is not None:
+            try:
+                amount = f"{lesson.price_per_hour:g}"
+            except (TypeError, ValueError):
+                amount = str(lesson.price_per_hour)
+            currency = _clean_text(lesson.currency, 20)
+            price = f"{currency} {amount}/hour" if currency else f"{amount}/hour"
+        description = " · ".join(
+            str(value)
+            for value in [lesson.subject, price, lesson.description]
+            if value
+        )
         return LearningNode(
             key=key,
             kind=LearningNodeKind.PRIVATE_LESSON,
             category=LearningNodeCategory.TUTOR,
             id=node_id,
-            title=lesson.title,
-            description=description,
-            latitude=lesson.latitude,
-            longitude=lesson.longitude,
-            distance_km=self._distance(latitude, longitude, lesson.latitude, lesson.longitude),
-            location_name=lesson.location,
+            title=_clean_text(lesson.title, 300),
+            description=_clean_text(description, 3000),
+            latitude=node_latitude,
+            longitude=node_longitude,
+            distance_km=self._distance(
+                latitude,
+                longitude,
+                node_latitude,
+                node_longitude,
+            ),
+            location_name=_clean_text(lesson.location, 500),
             is_online=lesson.is_online,
             # The public map advertises the lesson; the private meeting link is
             # released through the booking flow, never through discovery.
             meeting_url=None,
             host=_preview(lesson.instructor),
             is_saved=key in saved_keys,
-            image_url=lesson.image_url,
+            image_url=_clean_text(lesson.image_url, 1000),
         )
 
     async def _saved_keys(self, db: AsyncSession, user_id: int) -> Set[str]:
@@ -605,41 +794,59 @@ class LearningAroundService:
 
         nodes: list[LearningNode] = []
         for element in elements:
-            tags = element.get("tags") or {}
-            center = element.get("center") or {}
-            point_lat = element["lat"] if "lat" in element else center.get("lat")
-            point_lng = element["lon"] if "lon" in element else center.get("lon")
-            if point_lat is None or point_lng is None:
-                continue
-            category = self._place_category(tags)
-            name = tags.get("name") or tags.get("operator")
-            if category is None or not name:
-                continue
-            node_id = f"osm:{element.get('type', 'node')}:{element.get('id')}"
-            address = self._place_address(tags)
-            description = tags.get("description") or tags.get("operator")
-            nodes.append(
-                LearningNode(
-                    key=f"{LearningNodeKind.INSTITUTION.value}:{node_id}",
-                    kind=LearningNodeKind.INSTITUTION,
-                    category=category,
-                    id=node_id,
-                    title=name,
-                    description=description,
-                    latitude=float(point_lat),
-                    longitude=float(point_lng),
-                    distance_km=round(
-                        _haversine_km(latitude, longitude, float(point_lat), float(point_lng)),
-                        2,
-                    ),
-                    location_name=address,
-                    source="openstreetmap",
-                    source_url=(
-                        f"https://www.openstreetmap.org/{element.get('type', 'node')}/"
-                        f"{element.get('id')}"
-                    ),
+            try:
+                if not isinstance(element, dict):
+                    continue
+                tags = element.get("tags") or {}
+                center = element.get("center") or {}
+                if not isinstance(tags, dict) or not isinstance(center, dict):
+                    continue
+                point_lat = element["lat"] if "lat" in element else center.get("lat")
+                point_lng = element["lon"] if "lon" in element else center.get("lon")
+                point_lat, point_lng = _clean_coordinates(point_lat, point_lng)
+                if point_lat is None or point_lng is None:
+                    continue
+                category = self._place_category(tags)
+                name = _clean_text(tags.get("name") or tags.get("operator"), 300)
+                if category is None or not name:
+                    continue
+                element_type = _clean_text(element.get("type"), 20) or "node"
+                element_id = _clean_text(element.get("id"), 220)
+                if not element_id:
+                    continue
+                node_id = f"osm:{element_type}:{element_id}"
+                address = self._place_address(tags)
+                description = _clean_text(
+                    tags.get("description") or tags.get("operator"),
+                    3000,
                 )
-            )
+                nodes.append(
+                    LearningNode(
+                        key=f"{LearningNodeKind.INSTITUTION.value}:{node_id}",
+                        kind=LearningNodeKind.INSTITUTION,
+                        category=category,
+                        id=node_id,
+                        title=name,
+                        description=description,
+                        latitude=point_lat,
+                        longitude=point_lng,
+                        distance_km=round(
+                            _haversine_km(latitude, longitude, point_lat, point_lng),
+                            2,
+                        ),
+                        location_name=address,
+                        source="openstreetmap",
+                        source_url=(
+                            f"https://www.openstreetmap.org/{element_type}/{element_id}"
+                        ),
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Skipping invalid educational place %s: %s",
+                    element.get("id", "unknown") if isinstance(element, dict) else "unknown",
+                    exc,
+                )
 
         # Overpass may return the same feature through overlapping tag clauses.
         deduplicated = list({node.key: node for node in nodes}.values())
@@ -668,11 +875,13 @@ class LearningAroundService:
     @staticmethod
     def _place_address(tags: dict) -> Optional[str]:
         street = " ".join(
-            value for value in [tags.get("addr:housenumber"), tags.get("addr:street")] if value
+            str(value)
+            for value in [tags.get("addr:housenumber"), tags.get("addr:street")]
+            if value
         )
         locality = tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:suburb")
-        values = [value for value in [street, locality] if value]
-        return ", ".join(values) or None
+        values = [str(value) for value in [street, locality] if value]
+        return _clean_text(", ".join(values), 500)
 
 
 learning_around_service = LearningAroundService()
