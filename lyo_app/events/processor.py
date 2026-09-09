@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import LearningEvent, EventType
 from .schemas import LearningEventCreate
+from .evidence import normalize_evidence_kind
+from .mastery_projection import project_event_to_mastery_state
 
 # Assume we eventually inject dependencies for XP Service, Goals Service, and DKT Service
 from lyo_app.evolution.goals_service import get_user_goals, record_progress_snapshot
@@ -26,7 +28,17 @@ async def log_learning_event(db: AsyncSession, event_in: LearningEventCreate) ->
         event_type=event_in.event_type,
         skill_ids_json=event_in.skill_ids_json,
         metadata_json=event_in.metadata_json,
-        measurable_outcome=event_in.measurable_outcome
+        measurable_outcome=event_in.measurable_outcome,
+        concept_id=event_in.concept_id,
+        # Normalized on the way in, so the wire's "retrieval" is stored as the
+        # ladder's "retention" and every reader sees one vocabulary. An
+        # unrecognised type is stored as NULL rather than guessed at, which
+        # keeps it out of mastery entirely.
+        evidence_type=normalize_evidence_kind(event_in.evidence_type),
+        evidence_confidence=event_in.evidence_confidence,
+        hints_used=event_in.hints_used or 0,
+        misconception=event_in.misconception,
+        source_surface=event_in.source_surface,
     )
     db.add(db_event)
     await db.commit()
@@ -67,6 +79,16 @@ async def _process_evolution_loop(db: AsyncSession, event: LearningEvent):
                     hints_used=0
                 )
         
+        # 1b. Project the same evidence into the classroom's MasteryState.
+        #
+        # This is the link that was missing. The DKT update above feeds
+        # personalization.LearnerMastery, which chat reads; the classroom's
+        # scene engine reads ai_classroom.MasteryState instead, and nothing on
+        # the live path was writing it. Projecting here means a concept
+        # demonstrated in Chat is visible to the Classroom, and vice versa,
+        # without migrating either table.
+        await project_event_to_mastery_state(db, event)
+
         # 2. Update Gamification (XP)
         # Example: await gamification_service.award_xp_for_event(event)
 
