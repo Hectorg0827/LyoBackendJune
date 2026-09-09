@@ -2883,6 +2883,88 @@ class SceneLifecycleEngine:
 
         return await self.process_trigger(trigger)
 
+    async def _log_classroom_evidence(
+        self,
+        *,
+        user_id: str,
+        concept_id: Optional[str],
+        correct: bool,
+        hints_used: int,
+        evidence_type: Optional[str] = None,
+        misconception: Optional[str] = None,
+    ) -> None:
+        """Record what the learner just demonstrated on the shared event stream.
+
+        Chat already logs its checks here, and the event processor projects
+        that evidence into `ai_classroom.MasteryState` — the table this engine
+        reads before choosing how to teach. Until now the Classroom only read
+        it. So a learner could prove a concept in the Classroom and arrive at
+        Chat as a stranger, and the Classroom's own next lesson could not see
+        what its own last question had shown. Logging here closes the loop in
+        the other direction: both surfaces write one record of one learner.
+
+        Three things this deliberately does not do:
+
+        * It does not pass `skill_ids_json`. That field is what asks the
+          processor to run a DKT update, and both callers have already run one
+          directly for this same answer. Passing it would count a single
+          answer against the learner's mastery twice.
+        * It does not decide correctness. `correct` is the server's verdict,
+          reached from the authored scene, and is only read here.
+        * It never raises. The learner's verdict and next scene are already
+          decided; evidence logging is what makes the *next* lesson better,
+          not what makes this answer right.
+
+        Guests have no learner record to write to, so their evidence is
+        dropped rather than faked.
+        """
+        if not concept_id:
+            return
+
+        try:
+            learner_id = int(user_id)
+        except (TypeError, ValueError):
+            logger.debug("Guest classroom evidence is not persisted")
+            return
+
+        try:
+            from lyo_app.events.evidence import evidence_from_graded_answer
+            from lyo_app.events.models import EventType
+            from lyo_app.events.processor import log_learning_event
+            from lyo_app.events.schemas import LearningEventCreate
+
+            evidence = evidence_from_graded_answer(
+                correct=correct,
+                misconception=misconception,
+                hints_used=hints_used,
+                evidence_type=evidence_type,
+            )
+            if evidence is None:
+                return
+
+            await log_learning_event(
+                self.db,
+                LearningEventCreate(
+                    user_id=learner_id,
+                    event_type=EventType.CLASSROOM_DEMONSTRATION,
+                    measurable_outcome=1.0 if correct else 0.0,
+                    concept_id=concept_id,
+                    evidence_type=evidence["kind"],
+                    evidence_confidence=evidence["confidence"],
+                    hints_used=hints_used,
+                    misconception=misconception,
+                    source_surface="classroom",
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not log classroom evidence for %s: %s", concept_id, exc
+            )
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
     async def handle_quiz_submission(
         self,
         user_id: str,
@@ -2959,6 +3041,18 @@ class SceneLifecycleEngine:
             except Exception:
                 pass
 
+        # A multiple-choice pick is recognition, not application — the ladder's
+        # weakest positive rung. `evidence_from_graded_answer` defaults to that
+        # when no rung is declared, and quiz components declare none, so the
+        # default is the honest answer rather than a missing value.
+        await self._log_classroom_evidence(
+            user_id=user_id,
+            concept_id=validated_skill_id,
+            correct=validated_correct,
+            hints_used=hints_used,
+            misconception=misconception_tag,
+        )
+
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
             user_id=user_id,
@@ -2998,6 +3092,7 @@ class SceneLifecycleEngine:
             else "current_concept"
         )
         expected_keywords: List[str] = []
+        declared_evidence_type = "transfer"
         min_words = 6
         min_score = 0.25
 
@@ -3015,6 +3110,7 @@ class SceneLifecycleEngine:
                 if isinstance(comp, InputField) and comp.component_id == input_component_id:
                     skill_id = comp.concept_id or skill_id
                     expected_keywords = list(comp.expected_keywords)
+                    declared_evidence_type = comp.evidence_type
                     min_words = comp.min_words
                     min_score = comp.min_score
                     validated_correct, coverage, missing = score_transfer_response(
@@ -3059,6 +3155,23 @@ class SceneLifecycleEngine:
                 await self.db.rollback()
             except Exception:
                 pass
+
+        # The input component declares which rung it is asking for, so a
+        # transfer prompt is recorded as transfer and an explanation prompt as
+        # explanation. `log_learning_event` normalizes the wire's "retrieval"
+        # to the ladder's "retention".
+        #
+        # No misconception is passed. The only per-response diagnosis this
+        # rubric produces is `missing` — the expected keywords the learner did
+        # not use — and those are hidden grading internals. Writing them into
+        # the learner model would put them one render away from the screen.
+        await self._log_classroom_evidence(
+            user_id=user_id,
+            concept_id=skill_id,
+            correct=validated_correct,
+            hints_used=hints_used,
+            evidence_type=declared_evidence_type,
+        )
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
