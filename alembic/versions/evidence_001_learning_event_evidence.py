@@ -127,9 +127,44 @@ def _widen_mastery_objective_id() -> None:
         return
 
 
+def _unique_index_for_slug_mastery() -> None:
+    """Make (user_id, objective_id) actually unique for slug-identified rows.
+
+    `uq_user_concept_mastery` covers (user_id, concept_id), which cannot
+    police slug rows: they leave concept_id NULL, and SQL treats NULLs as
+    distinct, so (user, NULL) never conflicts with (user, NULL). The
+    projection's IntegrityError retry therefore never fires on the chat path,
+    two concurrent checks insert two rows for one learner and slug, and the
+    next lookup raises MultipleResultsFound — after which every projection for
+    that concept fails.
+
+    Partial, so rows identified by concept_id keep using the constraint above
+    rather than being forced to carry a non-null objective_id.
+
+    Safe to add: this projection has never run, so no duplicate slug rows
+    exist yet for the index to choke on.
+    """
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    if not insp.has_table("mastery_states"):
+        return
+    if any(i["name"] == "uq_mastery_user_objective" for i in insp.get_indexes("mastery_states")):
+        return
+
+    op.create_index(
+        "uq_mastery_user_objective",
+        "mastery_states",
+        ["user_id", "objective_id"],
+        unique=True,
+        postgresql_where=sa.text("objective_id IS NOT NULL"),
+        sqlite_where=sa.text("objective_id IS NOT NULL"),
+    )
+
+
 def upgrade() -> None:
     _add_enum_value_if_postgres()
     _widen_mastery_objective_id()
+    _unique_index_for_slug_mastery()
 
     insp = _inspector()
     # A database built without the events module at all has nothing to alter;
@@ -162,6 +197,12 @@ def downgrade() -> None:
     for index_name, _column in INDEXES:
         if index_name in present_indexes:
             op.drop_index(index_name, table_name=TABLE)
+
+    mastery_indexes = {
+        i["name"] for i in sa.inspect(op.get_bind()).get_indexes("mastery_states")
+    } if insp.has_table("mastery_states") else set()
+    if "uq_mastery_user_objective" in mastery_indexes:
+        op.drop_index("uq_mastery_user_objective", table_name="mastery_states")
 
     present = _existing_columns()
     for name, _type, _kwargs in COLUMNS:

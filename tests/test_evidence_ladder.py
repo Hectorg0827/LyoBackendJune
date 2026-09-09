@@ -512,3 +512,42 @@ def test_columns_are_wide_enough_for_the_slugs_that_exist():
     upgrade_body = migration[migration.index("def upgrade()") :]
     upgrade_body = upgrade_body[: upgrade_body.index("\ndef ")]
     assert "_widen_mastery_objective_id()" in upgrade_body
+
+
+# ─── Slug rows need their own uniqueness ─────────────────────────────────────
+#
+# Consequence of routing slugs to objective_id: uq_user_concept_mastery covers
+# (user_id, concept_id), and slug rows leave concept_id NULL. SQL treats NULLs
+# as distinct, so (user, NULL) never conflicts with (user, NULL) — the
+# projection's IntegrityError retry never fires on the chat path, two
+# concurrent checks insert two rows for one learner and slug, and the next
+# lookup raises MultipleResultsFound. Every projection for that concept fails
+# from then on, silently, exactly like the bug this routing replaced.
+
+def test_slug_identified_mastery_rows_are_unique_per_learner():
+    models = _source("lyo_app/ai_classroom/models.py")
+
+    assert "'uq_mastery_user_objective'" in models
+    # Partial: rows identified by concept_id keep using the existing
+    # constraint rather than being forced to carry a non-null objective_id.
+    assert "postgresql_where=text('objective_id IS NOT NULL')" in models
+    assert "unique=True" in models
+
+
+def test_the_migration_creates_the_slug_uniqueness_index():
+    # The model alone only covers databases built by create_all; a deployed
+    # one reaches this through alembic.
+    migration = _source("alembic/versions/evidence_001_learning_event_evidence.py")
+    assert "_unique_index_for_slug_mastery()" in migration
+
+    upgrade_body = migration[migration.index("def upgrade()") :]
+    upgrade_body = upgrade_body[: upgrade_body.index("\ndef ")]
+    assert "_unique_index_for_slug_mastery()" in upgrade_body
+
+
+def test_the_projection_still_retries_on_conflict():
+    # The index above is only useful because the retry consumes it. Losing the
+    # retry turns a race from "resolve to the winner's row" into a failed
+    # projection.
+    projection = _source("lyo_app/events/mastery_projection.py")
+    assert "except IntegrityError:" in projection

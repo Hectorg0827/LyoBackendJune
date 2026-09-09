@@ -22,7 +22,7 @@ import uuid
 
 from sqlalchemy import (
     Column, String, Text, Integer, Boolean, DateTime, JSON,
-    ForeignKey, Index, Float, Enum as SQLEnum, UniqueConstraint
+    ForeignKey, Index, Float, Enum as SQLEnum, UniqueConstraint, text
 )
 
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -412,6 +412,22 @@ class MasteryState(Base):
         Index('ix_mastery_user_concept', 'user_id', 'concept_id'),
         Index('ix_mastery_user_objective', 'user_id', 'objective_id'),
         UniqueConstraint('user_id', 'concept_id', name='uq_user_concept_mastery'),
+        # Slug-identified concepts live in objective_id with concept_id NULL,
+        # and the constraint above cannot police them: SQL treats NULLs as
+        # distinct, so (user, NULL) never conflicts with (user, NULL). Without
+        # this, two concurrent chat checks insert two rows for the same
+        # learner and slug, and the next lookup raises MultipleResultsFound —
+        # after which every projection for that concept fails.
+        #
+        # Partial, so rows identified by concept_id are left to the constraint
+        # above rather than being forced to carry a non-null objective_id.
+        Index(
+            'uq_mastery_user_objective',
+            'user_id', 'objective_id',
+            unique=True,
+            postgresql_where=text('objective_id IS NOT NULL'),
+            sqlite_where=text('objective_id IS NOT NULL'),
+        ),
     )
 
 
