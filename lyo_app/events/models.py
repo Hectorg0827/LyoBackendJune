@@ -61,7 +61,12 @@ class LearningEvent(Base):
     # `concept_id` is the single concept this evidence is *about*, which is
     # what the classroom's mastery lookup keys on.
 
-    concept_id = Column(String(64), nullable=True, index=True)
+    # 80 to match slugify_skill's own cap. At String(64) an unusually long
+    # topic slug would fail the insert, and the check endpoint swallows that
+    # error — so the learner's answer would never reach the evidence stream at
+    # all. Truncating instead risks two distinct topics colliding onto one
+    # concept, which silently merges two learners' records.
+    concept_id = Column(String(80), nullable=True, index=True)
 
     #: A rung of the ladder — exposure | recognition | explanation |
     #: application | transfer | retention. Stored normalized, so the wire's

@@ -441,3 +441,74 @@ def test_projection_flushes_inside_its_own_guard():
     guarded = projection[projection.index("async with db.begin_nested():\n            mastery") :]
     guarded = guarded[: guarded.index("return ProjectionOutcome.PROJECTED")]
     assert "await db.flush()" in guarded
+
+
+# ─── Chat slugs are not concept-graph ids ────────────────────────────────────
+#
+# The bug these exist for: MasteryState.concept_id is String(36) with a
+# foreign key to concepts.id (UUIDs), but chat identifies concepts by slug via
+# slugify_skill. Writing a slug there fails the constraint — and because the
+# projection is defensive, it would have failed *silently* on every chat check,
+# so the Classroom would never have seen any chat evidence at all. The feature
+# would have looked implemented and done nothing.
+#
+# None of the earlier tests caught it: they were pure-logic or source-text, and
+# this lives in the schema.
+
+def test_a_chat_slug_is_not_mistaken_for_a_concept_graph_id():
+    from lyo_app.events.mastery_projection import is_concept_graph_id
+
+    # What slugify_skill actually produces.
+    assert not is_concept_graph_id("quadratic_functions")
+    assert not is_concept_graph_id("general")
+    assert not is_concept_graph_id("photosynthesis_light_dependent_reactions")
+
+
+def test_a_concept_graph_uuid_is_recognised():
+    from lyo_app.events.mastery_projection import is_concept_graph_id
+
+    assert is_concept_graph_id("3f2504e0-4f89-11d3-9a0c-0305e82c3301")
+    assert is_concept_graph_id(str(__import__("uuid").uuid4()))
+
+
+def test_identity_check_survives_junk():
+    from lyo_app.events.mastery_projection import is_concept_graph_id
+
+    assert not is_concept_graph_id(None)
+    assert not is_concept_graph_id("")
+    assert not is_concept_graph_id(12345)
+
+
+def test_slugs_are_written_to_the_column_without_a_foreign_key():
+    # concept_id is FK'd to concepts.id; objective_id is not, and is already
+    # indexed as ix_mastery_user_objective. The classroom reads
+    # `concept_id or objective_id`, so it sees both with no change.
+    projection = _source("lyo_app/events/mastery_projection.py")
+    assert '{"concept_id": concept_id} if graph_id else {"objective_id": concept_id}' in projection
+    # And the lookup has to use the same column it wrote to, or it creates a
+    # duplicate row on every single event.
+    assert "MasteryState.concept_id if graph_id else MasteryState.objective_id" in projection
+
+
+def test_columns_are_wide_enough_for_the_slugs_that_exist():
+    """slugify_skill caps at 80; the columns that receive it must reach 80.
+
+    A narrower column fails the insert, and both call sites swallow that
+    error — so the learner's answer would vanish rather than raise.
+    """
+    composer = _source("lyo_app/ai/lesson_composer.py")
+    assert "return slug[:80]" in composer, "slug cap moved; the columns below track it"
+
+    assert "concept_id = Column(String(80)" in _source("lyo_app/events/models.py")
+    assert (
+        "objective_id: Mapped[Optional[str]] = mapped_column(String(80)"
+        in _source("lyo_app/ai_classroom/models.py")
+    )
+
+    # And the migration has to actually widen the existing column, or a
+    # deployed database keeps the old 36 and the model lies about it.
+    migration = _source("alembic/versions/evidence_001_learning_event_evidence.py")
+    assert "_widen_mastery_objective_id()" in migration
+    upgrade_body = migration[migration.index("def upgrade()") :]
+    upgrade_body = upgrade_body[: upgrade_body.index("\ndef ")]
+    assert "_widen_mastery_objective_id()" in upgrade_body

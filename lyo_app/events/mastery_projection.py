@@ -37,6 +37,7 @@ corrupt the caller's transaction. Two mechanisms:
 from __future__ import annotations
 
 import logging
+import uuid as uuid_module
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
@@ -69,6 +70,32 @@ class ProjectionOutcome(str, Enum):
     FAILED = "failed"
 
 
+def is_concept_graph_id(value: str) -> bool:
+    """Is this a row in the `concepts` table, or a free-form slug?
+
+    `MasteryState.concept_id` is `String(36)` with a foreign key to
+    `concepts.id`, which holds UUIDs. Chat identifies concepts by slug instead
+    — `slugify_skill` turns "Quadratic Functions" into "quadratic_functions",
+    up to 80 characters — and those slugs have no row in `concepts`.
+
+    Writing a slug into the foreign-keyed column fails the constraint. Because
+    the projection is defensive, that failure would be swallowed and the event
+    marked PROCESSED_PENDING_PROJECTION, so every chat check would silently
+    never reach the Classroom — the precise thing this whole module exists to
+    fix, failing quietly.
+
+    So: UUIDs go to `concept_id` (the graph), slugs go to `objective_id`
+    (String, no foreign key, and already indexed as
+    `ix_mastery_user_objective`). The classroom reads
+    `r.concept_id or r.objective_id`, so it sees both without any change.
+    """
+    try:
+        uuid_module.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 async def _load_or_create(db: AsyncSession, user_id: str, concept_id: str):
     """Fetch this learner's row for the concept, creating it if absent.
 
@@ -83,9 +110,15 @@ async def _load_or_create(db: AsyncSession, user_id: str, concept_id: str):
     """
     from lyo_app.ai_classroom.models import MasteryState
 
+    graph_id = is_concept_graph_id(concept_id)
+    identity = (
+        {"concept_id": concept_id} if graph_id else {"objective_id": concept_id}
+    )
+
     stmt = select(MasteryState).where(
         MasteryState.user_id == user_id,
-        MasteryState.concept_id == concept_id,
+        (MasteryState.concept_id if graph_id else MasteryState.objective_id)
+        == concept_id,
     )
 
     existing = (await db.execute(stmt)).scalar_one_or_none()
@@ -96,9 +129,9 @@ async def _load_or_create(db: AsyncSession, user_id: str, concept_id: str):
         async with db.begin_nested():
             created = MasteryState(
                 user_id=user_id,
-                concept_id=concept_id,
                 mastery_score=0.0,
                 confidence=0.5,
+                **identity,
             )
             db.add(created)
             await db.flush()

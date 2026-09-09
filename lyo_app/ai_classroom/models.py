@@ -373,7 +373,12 @@ class MasteryState(Base):
     concept_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("concepts.id"), nullable=True
     )
-    objective_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    # Carries slug-identified concepts (chat's `slugify_skill` output, up to
+    # 80 chars) as well as authored objective ids. Unlike `concept_id` above
+    # it has no foreign key, which is what lets an identifier that is not a
+    # row in `concepts` be recorded at all. See
+    # lyo_app/events/mastery_projection.is_concept_graph_id.
+    objective_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     
     # Mastery Metrics
     mastery_score: Mapped[float] = mapped_column(Float, default=0.0)  # 0.0 to 1.0

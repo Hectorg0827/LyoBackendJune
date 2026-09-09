@@ -33,7 +33,7 @@ TABLE = "learning_events"
 # (name, type, extra kwargs) — kept in one place so upgrade and downgrade
 # cannot drift apart.
 COLUMNS = (
-    ("concept_id", sa.String(length=64), {"nullable": True}),
+    ("concept_id", sa.String(length=80), {"nullable": True}),
     ("evidence_type", sa.String(length=32), {"nullable": True}),
     ("evidence_confidence", sa.Float(), {"nullable": True}),
     ("hints_used", sa.Integer(), {"nullable": False, "server_default": "0"}),
@@ -91,8 +91,45 @@ def _add_enum_value_if_postgres() -> None:
         )
 
 
+def _widen_mastery_objective_id() -> None:
+    """Let `mastery_states.objective_id` hold a slug.
+
+    The projection records slug-identified concepts here rather than in
+    `concept_id`, which is foreign-keyed to `concepts.id` and so can only hold
+    UUIDs. Chat's `slugify_skill` produces up to 80 characters, and the column
+    was `String(36)`.
+
+    Widening a varchar is not a table rewrite on PostgreSQL, so this is cheap
+    even on a large table. Skipped when the column is already wide enough, and
+    on SQLite, which does not enforce varchar length and has no ALTER for it.
+    """
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        return
+
+    insp = sa.inspect(bind)
+    if not insp.has_table("mastery_states"):
+        return
+
+    for column in insp.get_columns("mastery_states"):
+        if column["name"] != "objective_id":
+            continue
+        length = getattr(column["type"], "length", None)
+        if length is not None and length >= 80:
+            return
+        op.alter_column(
+            "mastery_states",
+            "objective_id",
+            existing_type=sa.String(length=length or 36),
+            type_=sa.String(length=80),
+            existing_nullable=True,
+        )
+        return
+
+
 def upgrade() -> None:
     _add_enum_value_if_postgres()
+    _widen_mastery_objective_id()
 
     insp = _inspector()
     # A database built without the events module at all has nothing to alter;
