@@ -558,6 +558,54 @@ async def check_lyo2_answer(
         # The learner still gets an honest verdict even if bookkeeping fails.
         logger.error(f"Failed to record check result for {skill_id}: {e}", exc_info=True)
 
+    # Log the same answer as evidence on the shared event stream.
+    #
+    # This is what lets the Classroom see what Chat taught: the event
+    # processor projects evidence into ai_classroom.MasteryState, which the
+    # classroom's scene engine reads and which nothing on the live path was
+    # writing. Without this the two surfaces keep separate records of the same
+    # learner.
+    #
+    # `skill_ids_json` is deliberately omitted. It is what asks the processor
+    # to run a DKT update, and `trace_knowledge` above has already done that
+    # for this answer — passing it here would apply the learner's single
+    # answer to their mastery twice. `concept_id` carries the evidence, and
+    # the projection keys on that. See test_chat_check_emits_evidence_once.
+    try:
+        from lyo_app.events.evidence import evidence_from_graded_answer
+        from lyo_app.events.models import EventType
+        from lyo_app.events.processor import log_learning_event
+        from lyo_app.events.schemas import LearningEventCreate
+
+        evidence = evidence_from_graded_answer(
+            correct=correct,
+            bailed_out=bailed_out,
+            misconception=misconception,
+            hints_used=1 if request.hint_used else 0,
+        )
+        if evidence is not None:
+            await log_learning_event(
+                db,
+                LearningEventCreate(
+                    user_id=int(authenticated_user_id),
+                    event_type=EventType.QUIZ_ANSWER,
+                    measurable_outcome=1.0 if correct else 0.0,
+                    concept_id=skill_id,
+                    evidence_type=evidence["kind"],
+                    evidence_confidence=evidence["confidence"],
+                    hints_used=1 if request.hint_used else 0,
+                    misconception=misconception,
+                    source_surface="chat",
+                ),
+            )
+    except Exception as e:
+        # Same posture as the mastery bookkeeping above: the learner's verdict
+        # is already decided and returned. Evidence logging is what makes the
+        # next lesson better, not what makes this answer correct.
+        logger.error(
+            f"Failed to log check evidence for {skill_id}: {e}", exc_info=True
+        )
+
     return response
 
 

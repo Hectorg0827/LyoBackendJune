@@ -197,3 +197,56 @@ def test_projection_never_fails_the_learners_turn():
     projection = _source("lyo_app/events/mastery_projection.py")
     assert "except Exception:" in projection
     assert "return False" in projection
+
+
+# ─── Chat emits evidence, exactly once ───────────────────────────────────────
+
+def test_chat_check_emits_evidence():
+    # The whole point of the shared event stream: a concept demonstrated in
+    # Chat has to become visible to the Classroom.
+    source = _source("lyo_app/api/v1/stream_lyo2.py")
+    assert "log_learning_event(" in source
+    assert 'source_surface="chat"' in source
+    assert "evidence_from_graded_answer(" in source
+
+
+def test_chat_check_emits_evidence_once():
+    """The chat check must not apply one answer to mastery twice.
+
+    `trace_knowledge` already runs the DKT update for this answer.
+    `skill_ids_json` is what asks the event processor to run *another* one, so
+    passing it from here would double-count the learner's single answer —
+    inflating their mastery on every check they take.
+
+    The evidence still reaches the classroom's table, because the projection
+    keys on `concept_id`, not on `skill_ids_json`.
+    """
+    source = _source("lyo_app/api/v1/stream_lyo2.py")
+
+    check_body = source[source.index("async def check_lyo2_answer") :]
+    if "\nasync def " in check_body[1:]:
+        check_body = check_body[: check_body.index("\nasync def ", 1)]
+
+    assert "concept_id=skill_id" in check_body, "evidence must name the concept"
+    # Assert on the keyword argument, not the bare name: the code comment
+    # explaining this rule necessarily mentions `skill_ids_json` in prose, and
+    # a substring check would trip on the very explanation it is enforcing.
+    assert "skill_ids_json=" not in check_body, (
+        "passing skill_ids_json from the chat check double-applies the DKT "
+        "update that trace_knowledge already performed"
+    )
+
+
+def test_processor_only_runs_dkt_when_asked():
+    # The guard that makes the above safe. If this becomes unconditional,
+    # every chat check silently counts twice.
+    processor = _source("lyo_app/events/processor.py")
+    assert "if event.skill_ids_json:" in processor
+
+
+def test_a_bailed_out_check_logs_no_evidence():
+    # Opting out is not evidence about what the learner knows. The endpoint
+    # returns before the mastery block, and the ladder refuses it too.
+    assert evidence_from_graded_answer(correct=False, bailed_out=True) is None
+    source = _source("lyo_app/api/v1/stream_lyo2.py")
+    assert "if bailed_out or not skill_id:" in source
