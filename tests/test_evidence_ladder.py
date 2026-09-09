@@ -340,3 +340,104 @@ def test_projection_outcomes_distinguish_nothing_to_do_from_failure():
 
     assert ProjectionOutcome.NOTHING_TO_PROJECT != ProjectionOutcome.FAILED
     assert ProjectionOutcome.PROJECTED != ProjectionOutcome.FAILED
+
+
+# ─── Being taught must never make a learner look worse ───────────────────────
+#
+# The ladder's `exposure` rung means "instruction was delivered". A graded
+# wrong answer lands there too — a learner who missed it has still met the
+# idea. Those are different events and the projection has to tell them apart,
+# or teaching someone a concept degrades their record of it.
+#
+# These exercise the fold against a stand-in row, so they check what the code
+# does rather than what it says.
+
+class _FakeMastery:
+    """Just the columns _fold_evidence touches."""
+
+    def __init__(self, mastery_score=0.5, confidence=0.5, trend="stable"):
+        self.mastery_score = mastery_score
+        self.confidence = confidence
+        self.trend = trend
+        self.attempts = 0
+        self.correct_count = 0
+        self.incorrect_count = 0
+        self.last_seen = None
+        self.last_correct = None
+        self.error_pattern = None
+        self.misconception_tags = None
+
+
+def _fold(**kwargs):
+    from lyo_app.events.mastery_projection import _fold_evidence
+
+    row = kwargs.pop("row", None) or _FakeMastery()
+    _fold_evidence(
+        row,
+        kwargs.pop("kind", "exposure"),
+        kwargs.pop("confidence", 0.0),
+        kwargs.pop("misconception", None),
+        attempted=kwargs.pop("attempted", False),
+    )
+    assert not kwargs, f"unexpected kwargs {kwargs}"
+    return row
+
+
+def test_instruction_only_exposure_does_not_count_as_a_wrong_answer():
+    row = _fold(kind="exposure", attempted=False)
+
+    assert row.incorrect_count == 0, "being taught is not getting it wrong"
+    assert row.attempts == 0, "being taught is not an attempt"
+    assert row.mastery_score == 0.5, "being taught must not move the score"
+    assert row.trend == "stable", "being taught must not read as declining"
+    # It did happen, though — the learner has now met this concept.
+    assert row.last_seen is not None
+
+
+def test_a_graded_wrong_answer_still_counts_against_the_learner():
+    row = _fold(kind="exposure", confidence=0.0, attempted=True)
+
+    assert row.attempts == 1
+    assert row.incorrect_count == 1
+    assert row.mastery_score < 0.5
+    assert row.trend == "declining"
+
+
+def test_a_correct_demonstration_moves_the_score_up():
+    row = _fold(kind="transfer", confidence=1.0, attempted=True)
+
+    assert row.correct_count == 1
+    assert row.incorrect_count == 0
+    assert row.mastery_score > 0.5
+    assert row.trend == "improving"
+    assert row.last_correct is not None
+
+
+def test_a_stronger_rung_moves_the_score_further():
+    weak = _fold(kind="recognition", confidence=1.0, attempted=True)
+    strong = _fold(kind="transfer", confidence=1.0, attempted=True)
+
+    # The ladder is only meaningful if it changes the outcome.
+    assert strong.mastery_score > weak.mastery_score
+
+
+def test_projection_derives_attempted_from_the_graded_outcome():
+    # measurable_outcome is None when the learner was never asked, which is
+    # what separates instruction from a failed attempt.
+    projection = _source("lyo_app/events/mastery_projection.py")
+    assert 'getattr(event, "measurable_outcome", None) is not None' in projection
+
+    # Slice to the call's own closing paren at its indentation, not the first
+    # ")" — that one belongs to a nested getattr().
+    call = projection[projection.index("_fold_evidence(\n                mastery") :]
+    call = call[: call.index("\n            )")]
+    assert "attempted=attempted" in call
+
+
+def test_projection_flushes_inside_its_own_guard():
+    # Otherwise a constraint violation surfaces at the processor's later
+    # commit — outside this handler, on the session it exists to protect.
+    projection = _source("lyo_app/events/mastery_projection.py")
+    guarded = projection[projection.index("async with db.begin_nested():\n            mastery") :]
+    guarded = guarded[: guarded.index("return ProjectionOutcome.PROJECTED")]
+    assert "await db.flush()" in guarded

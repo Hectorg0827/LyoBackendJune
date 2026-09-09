@@ -114,27 +114,53 @@ async def _load_or_create(db: AsyncSession, user_id: str, concept_id: str):
         return (await db.execute(stmt)).scalar_one()
 
 
-def _fold_evidence(mastery, kind: str, confidence: float, misconception: Optional[str]) -> None:
-    """Fold one piece of evidence into a MasteryState row, in place."""
-    is_positive = kind != "exposure" and confidence > 0.0
+def _fold_evidence(
+    mastery,
+    kind: str,
+    confidence: float,
+    misconception: Optional[str],
+    attempted: bool,
+) -> None:
+    """Fold one piece of evidence into a MasteryState row, in place.
 
-    mastery.attempts = (mastery.attempts or 0) + 1
-    if is_positive:
-        mastery.correct_count = (mastery.correct_count or 0) + 1
-    else:
-        mastery.incorrect_count = (mastery.incorrect_count or 0) + 1
+    `kind` says what sort of proof this is. `attempted` says whether the
+    learner was actually asked to demonstrate anything — these are different
+    questions and conflating them inverts the model.
 
+    The ladder defines ``exposure`` as "instruction was delivered — proof of
+    nothing on its own", while a graded wrong answer also lands on that rung
+    (a learner who missed it has still been exposed to the idea). Treating
+    every non-positive rung as a failed attempt would mean that *teaching*
+    someone a concept increments their incorrect count, drags their score
+    toward zero and marks them as declining. Being taught something must
+    never make a learner look worse at it.
+
+    So instruction-only evidence records that the learner has now seen the
+    concept, and nothing else.
+    """
     now = datetime.now(timezone.utc)
     mastery.last_seen = now
-    if is_positive:
+
+    if not attempted:
+        # Delivered, not demonstrated. Nothing is proven either way, so no
+        # counts move, the score is untouched, and the trend is unchanged.
+        return
+
+    succeeded = kind != "exposure" and confidence > 0.0
+
+    mastery.attempts = (mastery.attempts or 0) + 1
+    if succeeded:
+        mastery.correct_count = (mastery.correct_count or 0) + 1
         mastery.last_correct = now
+    else:
+        mastery.incorrect_count = (mastery.incorrect_count or 0) + 1
 
     # The score moves toward the evidence rather than being overwritten by it:
     # one strong demonstration is not the whole story, and one slip does not
     # erase a history. Stronger rungs pull harder, so a transfer moves the
     # needle more than a recognition — which is the point of having a ladder.
     rung_weight = (evidence_rank(kind) + 1) / len(EVIDENCE_KINDS)
-    target = confidence if is_positive else 0.0
+    target = confidence if succeeded else 0.0
     learning_rate = 0.35 * rung_weight
     previous = float(mastery.mastery_score or 0.0)
     mastery.mastery_score = max(0.0, min(1.0, previous + learning_rate * (target - previous)))
@@ -152,9 +178,9 @@ def _fold_evidence(mastery, kind: str, confidence: float, misconception: Optiona
         # recent errors are the ones remediation acts on.
         mastery.misconception_tags = tags[-10:]
 
-    if is_positive and confidence >= MASTERY_CONFIDENCE_FLOOR:
+    if succeeded and confidence >= MASTERY_CONFIDENCE_FLOOR:
         mastery.trend = "improving"
-    elif not is_positive:
+    elif not succeeded:
         mastery.trend = "declining"
 
 
@@ -176,6 +202,11 @@ async def project_event_to_mastery_state(db: AsyncSession, event) -> ProjectionO
     except (TypeError, ValueError):
         confidence = 0.0
 
+    # `measurable_outcome` is the graded result: 1.0 correct, 0.0 wrong, and
+    # None when the learner was never asked. It is what separates "got this
+    # wrong" from "was shown this", both of which sit on the exposure rung.
+    attempted = getattr(event, "measurable_outcome", None) is not None
+
     try:
         # One savepoint around the whole projection, so that any failure —
         # a bad import, a constraint, a disconnect — unwinds only this work
@@ -187,7 +218,13 @@ async def project_event_to_mastery_state(db: AsyncSession, event) -> ProjectionO
                 kind,
                 confidence,
                 getattr(event, "misconception", None),
+                attempted=attempted,
             )
+            # Flush inside the guard so a constraint or foreign-key violation
+            # surfaces here, where it is caught and contained, rather than at
+            # the processor's later commit — outside this handler, on a
+            # session this function was supposed to protect.
+            await db.flush()
         return ProjectionOutcome.PROJECTED
 
     except Exception:
