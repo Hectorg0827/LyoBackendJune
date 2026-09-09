@@ -13,7 +13,11 @@ pass just as happily if nothing ever called it.
 """
 
 import unittest
+import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from lyo_app.ai.lesson_composer import slugify_skill
 
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     _SESSION_PROGRESS,
@@ -213,6 +217,89 @@ class ClassroomQuizEvidenceTests(unittest.IsolatedAsyncioTestCase):
         # The next scene was still produced.
         engine.process_trigger.assert_awaited_once()
 
+    async def test_a_question_the_server_could_not_grade_records_nothing(self):
+        """A lookup failure is not a wrong answer.
+
+        When the scene or the selected option cannot be found, correctness
+        stays at its `False` default. Logging that would mark the learner down
+        for a question the server failed to look up — the same shape as
+        counting a skipped question wrong.
+        """
+        engine = _engine()
+        engine.active_scenes = {}  # the scene is gone
+        # A real session objective is present, so the concept is perfectly
+        # nameable. Only the fact that nothing was graded should stop the
+        # write — without this the test would pass on the missing concept
+        # instead, and would go on passing with the guard removed.
+        engine.session_contexts = {
+            SESSION: SimpleNamespace(
+                learning_objective="Compare fractions", lesson_index=0
+            )
+        }
+
+        capture = await self._submit(engine)
+
+        self.assertEqual(capture.events, [])
+
+
+class ClassroomConceptIdentityTests(unittest.IsolatedAsyncioTestCase):
+    """The two surfaces have to name a concept the same way.
+
+    Chat keys mastery on `slugify_skill(topic)`. The Classroom carries human
+    text — a learning objective or lesson title. Logged raw, "Compare
+    fractions" and "compare_fractions" are two concepts to the projection, and
+    the surfaces go on keeping separate records of one idea.
+    """
+
+    def setUp(self):
+        _SESSION_PROGRESS.pop(SESSION, None)
+
+    def tearDown(self):
+        _SESSION_PROGRESS.pop(SESSION, None)
+
+    async def _submit(self, concept_id):
+        engine = _engine()
+        engine.active_scenes = {"s1": _quiz_scene(concept_id=concept_id)}
+        capture = _Capture()
+        personalization, log = _patches(capture)
+        with personalization, log:
+            await engine.handle_quiz_submission(
+                user_id="42",
+                session_id=SESSION,
+                quiz_component_id="quiz-1",
+                selected_option_id="a",
+                response_time_ms=4000,
+            )
+        return capture
+
+    async def test_a_human_readable_objective_is_recorded_as_chat_would_key_it(self):
+        event = (await self._submit("Compare Fractions!")).only
+
+        self.assertEqual(event.concept_id, slugify_skill("Compare Fractions!"))
+        self.assertEqual(event.concept_id, "compare_fractions")
+
+    async def test_a_graph_concept_id_is_left_alone(self):
+        """Slugifying a UUID would turn a valid graph id into one matching
+        nothing, and would send it to the wrong column in the projection."""
+        graph_id = str(uuid.uuid4())
+
+        event = (await self._submit(graph_id)).only
+
+        self.assertEqual(event.concept_id, graph_id)
+
+    async def test_a_title_too_long_for_the_column_is_not_dropped_silently(self):
+        event = (await self._submit("Understanding " + "very " * 40 + "long topic")).only
+
+        # The column is String(80); an overflow would fail the write and be
+        # swallowed by the catch-and-log path.
+        self.assertLessEqual(len(event.concept_id), 80)
+
+    async def test_the_placeholder_is_never_recorded_as_a_concept(self):
+        """`current_concept` is what the callers fall back to when they could
+        not determine one. Recording against it pools unrelated work into a
+        single fake row."""
+        self.assertEqual((await self._submit("current_concept")).events, [])
+
 
 class ClassroomTransferEvidenceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -275,6 +362,21 @@ class ClassroomTransferEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(event.misconception)
         for keyword in ("denominator", "equal", "parts"):
             self.assertNotIn(keyword, str(event.model_dump()))
+
+    async def test_a_response_with_no_rubric_to_score_it_records_nothing(self):
+        engine = _engine()
+        engine.active_scenes = {}  # no InputField to score against
+        # As above: the concept is nameable from the session, so only the
+        # absence of a rubric can be what stops the write.
+        engine.session_contexts = {
+            SESSION: SimpleNamespace(
+                learning_objective="Compare fractions", lesson_index=0
+            )
+        }
+
+        capture = await self._submit(engine, "a thoughtful answer")
+
+        self.assertEqual(capture.events, [])
 
     async def test_an_unsuccessful_transfer_is_exposure_not_a_failed_transfer(self):
         engine = _engine()

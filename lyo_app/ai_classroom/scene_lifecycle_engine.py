@@ -2883,6 +2883,44 @@ class SceneLifecycleEngine:
 
         return await self.process_trigger(trigger)
 
+    @staticmethod
+    def _canonical_concept_id(concept_id: Optional[str]) -> Optional[str]:
+        """Name a concept the way every other surface names it.
+
+        Chat keys mastery on `slugify_skill(topic)` — lowercased, underscored,
+        capped at 80 characters — so "Square Roots!" and "square roots" reach
+        one row. The Classroom carries human-facing text instead: a learning
+        objective, a lesson title, or whatever an authored component put in
+        `concept_id`.
+
+        Logged raw, "Compare fractions" and "compare_fractions" are two
+        different concepts to the projection, and the two surfaces would go on
+        keeping separate records of the same idea — the exact split this whole
+        change exists to end. Long titles would also overflow the 80-character
+        column and be dropped by the catch-and-log path, silently.
+
+        UUIDs are left alone: those identify a row in `concepts`, the
+        projection routes them to the foreign-keyed column, and slugifying one
+        would turn a valid graph id into a string that matches nothing.
+
+        The placeholder `current_concept` is not a concept. It is what the
+        callers fall back to when they could not determine one, and recording
+        evidence against it would pool unrelated work into a single fake row.
+        """
+        from lyo_app.ai.lesson_composer import slugify_skill
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+
+        if not concept_id:
+            return None
+        if is_concept_graph_id(concept_id):
+            return concept_id
+        slug = slugify_skill(concept_id)
+        # `slugify_skill` returns "general" for input with nothing to slugify,
+        # which is no more a concept than the placeholder is.
+        if slug in ("current_concept", "general"):
+            return None
+        return slug
+
     async def _log_classroom_evidence(
         self,
         *,
@@ -2918,6 +2956,7 @@ class SceneLifecycleEngine:
         Guests have no learner record to write to, so their evidence is
         dropped rather than faked.
         """
+        concept_id = self._canonical_concept_id(concept_id)
         if not concept_id:
             return
 
@@ -2975,6 +3014,12 @@ class SceneLifecycleEngine:
     ) -> Scene:
         """Validate a quiz server-side and preserve distractor diagnosis."""
         validated_correct = False
+        # Whether an authored option was actually found and graded. Without
+        # this, a submission whose scene or option cannot be located falls
+        # through with `validated_correct` still False and gets recorded as a
+        # wrong answer — the learner marked down for a question the server
+        # failed to look up.
+        scored = False
         validated_skill_id = (
             self.session_contexts.get(session_id).learning_objective
             if self.session_contexts.get(session_id)
@@ -3000,6 +3045,7 @@ class SceneLifecycleEngine:
                     for option in comp.options:
                         if option.id == selected_option_id:
                             validated_correct = option.is_correct
+                            scored = True
                             selected_feedback = (
                                 option.feedback_correct
                                 if validated_correct
@@ -3045,13 +3091,14 @@ class SceneLifecycleEngine:
         # weakest positive rung. `evidence_from_graded_answer` defaults to that
         # when no rung is declared, and quiz components declare none, so the
         # default is the honest answer rather than a missing value.
-        await self._log_classroom_evidence(
-            user_id=user_id,
-            concept_id=validated_skill_id,
-            correct=validated_correct,
-            hints_used=hints_used,
-            misconception=misconception_tag,
-        )
+        if scored:
+            await self._log_classroom_evidence(
+                user_id=user_id,
+                concept_id=validated_skill_id,
+                correct=validated_correct,
+                hints_used=hints_used,
+                misconception=misconception_tag,
+            )
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
@@ -3083,6 +3130,9 @@ class SceneLifecycleEngine:
     ) -> Scene:
         """Score explanation/application evidence from the active server rubric."""
         validated_correct = False
+        # See `handle_quiz_submission`: False means "did not meet the rubric",
+        # and only means that once a rubric was actually found to apply.
+        scored = False
         coverage = 0.0
         missing: List[str] = []
         hesitant = detect_hesitation(response)
@@ -3119,6 +3169,7 @@ class SceneLifecycleEngine:
                         min_words=min_words,
                         min_score=min_score,
                     )
+                    scored = True
                     break
 
         # Tutor-facing feedback: never quote the Evaluator's raw `missing`
@@ -3165,13 +3216,14 @@ class SceneLifecycleEngine:
         # rubric produces is `missing` — the expected keywords the learner did
         # not use — and those are hidden grading internals. Writing them into
         # the learner model would put them one render away from the screen.
-        await self._log_classroom_evidence(
-            user_id=user_id,
-            concept_id=skill_id,
-            correct=validated_correct,
-            hints_used=hints_used,
-            evidence_type=declared_evidence_type,
-        )
+        if scored:
+            await self._log_classroom_evidence(
+                user_id=user_id,
+                concept_id=skill_id,
+                correct=validated_correct,
+                hints_used=hints_used,
+                evidence_type=declared_evidence_type,
+            )
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
