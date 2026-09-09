@@ -19,23 +19,34 @@ the same evidence here, so the table the Classroom reads finally reflects what
 the learner actually did. Both tables become views of one event stream rather
 than two disagreeing sources of truth.
 
-Deliberately defensive: a projection failure must never fail the learner's
-turn. The evidence is already durably logged on the event, so a failed
-projection can be replayed later — losing the learner's answer because a
-secondary table was unavailable would be a far worse outcome than a stale
-mastery row.
+FAILURE POSTURE
+
+A projection failure must never fail the learner's turn, and must never
+corrupt the caller's transaction. Two mechanisms:
+
+* Everything runs inside a SAVEPOINT. If any part raises, only the savepoint
+  unwinds; the surrounding session stays usable, so the processor can still
+  record how the event was handled. Without this a failed flush would poison
+  the AsyncSession and take the processor's own commit down with it.
+* The outcome is returned rather than raised, and the processor records it
+  distinctly (see `ProjectionOutcome`). An event whose projection failed is
+  marked as such so it can be found and replayed later — this module does not
+  claim recoverability it has not provided a marker for.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .evidence import (
+    EVIDENCE_KINDS,
     MASTERY_CONFIDENCE_FLOOR,
     evidence_rank,
     normalize_evidence_kind,
@@ -44,99 +55,146 @@ from .evidence import (
 logger = logging.getLogger(__name__)
 
 
-async def project_event_to_mastery_state(db: AsyncSession, event) -> bool:
-    """Fold one event's evidence into the classroom's MasteryState row.
+class ProjectionOutcome(str, Enum):
+    """What happened, so the caller can record it honestly."""
 
-    Returns True when a row was written, False when the event carried nothing
-    to project (which is the normal case for reflections, voice turns and any
-    event predating the evidence columns).
+    #: Evidence was folded into MasteryState.
+    PROJECTED = "projected"
+    #: The event carried nothing to project — no concept, or no recognised
+    #: rung. The normal case for reflections, voice turns, and any event
+    #: predating the evidence columns. Not a failure.
+    NOTHING_TO_PROJECT = "nothing_to_project"
+    #: The projection was attempted and failed. The event is durable and the
+    #: caller should mark it for replay rather than treating it as done.
+    FAILED = "failed"
 
-    Never raises: see the module docstring.
+
+async def _load_or_create(db: AsyncSession, user_id: str, concept_id: str):
+    """Fetch this learner's row for the concept, creating it if absent.
+
+    `MasteryState` carries `uq_user_concept_mastery` on (user_id, concept_id),
+    so two events for the same learner and concept processed concurrently can
+    both see no row and both try to insert. The loser of that race gets an
+    IntegrityError.
+
+    The insert is therefore attempted inside its own SAVEPOINT: on conflict
+    only that savepoint unwinds and we re-read the row the winner committed,
+    which is the row we wanted anyway.
     """
-    concept_id = getattr(event, "concept_id", None)
-    kind = normalize_evidence_kind(getattr(event, "evidence_type", None))
+    from lyo_app.ai_classroom.models import MasteryState
 
-    # No concept or no recognised rung means there is nothing to say about
-    # this learner's grasp of anything in particular. Log-only.
-    if not concept_id or not kind:
-        return False
+    stmt = select(MasteryState).where(
+        MasteryState.user_id == user_id,
+        MasteryState.concept_id == concept_id,
+    )
+
+    existing = (await db.execute(stmt)).scalar_one_or_none()
+    if existing is not None:
+        return existing
 
     try:
-        from lyo_app.ai_classroom.models import MasteryState
-
-        confidence = float(getattr(event, "evidence_confidence", None) or 0.0)
-        is_positive = kind != "exposure" and confidence > 0.0
-
-        result = await db.execute(
-            select(MasteryState).where(
-                MasteryState.user_id == str(event.user_id),
-                MasteryState.concept_id == concept_id,
-            )
-        )
-        mastery: Optional[object] = result.scalar_one_or_none()
-
-        if mastery is None:
-            mastery = MasteryState(
-                user_id=str(event.user_id),
+        async with db.begin_nested():
+            created = MasteryState(
+                user_id=user_id,
                 concept_id=concept_id,
                 mastery_score=0.0,
                 confidence=0.5,
             )
-            db.add(mastery)
-
-        mastery.attempts = (mastery.attempts or 0) + 1
-        if is_positive:
-            mastery.correct_count = (mastery.correct_count or 0) + 1
-        else:
-            mastery.incorrect_count = (mastery.incorrect_count or 0) + 1
-
-        now = datetime.now(timezone.utc)
-        mastery.last_seen = now
-        if is_positive:
-            mastery.last_correct = now
-
-        # The score moves toward the evidence rather than being overwritten by
-        # it: one strong demonstration is not the whole story, and one slip
-        # does not erase a history. Stronger rungs pull harder, so a transfer
-        # moves the needle more than a recognition — which is the whole point
-        # of having a ladder.
-        rung_weight = (evidence_rank(kind) + 1) / len(
-            ("exposure", "recognition", "explanation", "application", "transfer", "retention")
+            db.add(created)
+            await db.flush()
+            return created
+    except IntegrityError:
+        # Someone else created it between our select and our insert. Their row
+        # is as good as ours would have been.
+        logger.debug(
+            "MasteryState insert raced for user %s concept %s; using the existing row",
+            user_id,
+            concept_id,
         )
-        target = confidence if is_positive else 0.0
-        learning_rate = 0.35 * rung_weight
-        previous = float(mastery.mastery_score or 0.0)
-        mastery.mastery_score = max(0.0, min(1.0, previous + learning_rate * (target - previous)))
+        return (await db.execute(stmt)).scalar_one()
 
-        # Confidence in our *estimate* grows with evidence regardless of
-        # whether the learner got it right — a wrong answer is still
-        # information about them.
-        mastery.confidence = max(0.0, min(1.0, float(mastery.confidence or 0.5) + 0.05))
 
-        misconception = getattr(event, "misconception", None)
-        if misconception:
-            mastery.error_pattern = misconception[:200]
-            tags = list(mastery.misconception_tags or [])
-            if misconception not in tags:
-                tags.append(misconception)
-            # Bounded: a learner's live record should not grow without limit,
-            # and the most recent errors are the ones remediation acts on.
-            mastery.misconception_tags = tags[-10:]
+def _fold_evidence(mastery, kind: str, confidence: float, misconception: Optional[str]) -> None:
+    """Fold one piece of evidence into a MasteryState row, in place."""
+    is_positive = kind != "exposure" and confidence > 0.0
 
-        if is_positive and confidence >= MASTERY_CONFIDENCE_FLOOR:
-            mastery.trend = "improving"
-        elif not is_positive:
-            mastery.trend = "declining"
+    mastery.attempts = (mastery.attempts or 0) + 1
+    if is_positive:
+        mastery.correct_count = (mastery.correct_count or 0) + 1
+    else:
+        mastery.incorrect_count = (mastery.incorrect_count or 0) + 1
 
-        return True
+    now = datetime.now(timezone.utc)
+    mastery.last_seen = now
+    if is_positive:
+        mastery.last_correct = now
+
+    # The score moves toward the evidence rather than being overwritten by it:
+    # one strong demonstration is not the whole story, and one slip does not
+    # erase a history. Stronger rungs pull harder, so a transfer moves the
+    # needle more than a recognition — which is the point of having a ladder.
+    rung_weight = (evidence_rank(kind) + 1) / len(EVIDENCE_KINDS)
+    target = confidence if is_positive else 0.0
+    learning_rate = 0.35 * rung_weight
+    previous = float(mastery.mastery_score or 0.0)
+    mastery.mastery_score = max(0.0, min(1.0, previous + learning_rate * (target - previous)))
+
+    # Confidence in our *estimate* grows with evidence whether or not the
+    # learner got it right — a wrong answer is still information about them.
+    mastery.confidence = max(0.0, min(1.0, float(mastery.confidence or 0.5) + 0.05))
+
+    if misconception:
+        mastery.error_pattern = misconception[:200]
+        tags = list(mastery.misconception_tags or [])
+        if misconception not in tags:
+            tags.append(misconception)
+        # Bounded: a live record should not grow without limit, and the most
+        # recent errors are the ones remediation acts on.
+        mastery.misconception_tags = tags[-10:]
+
+    if is_positive and confidence >= MASTERY_CONFIDENCE_FLOOR:
+        mastery.trend = "improving"
+    elif not is_positive:
+        mastery.trend = "declining"
+
+
+async def project_event_to_mastery_state(db: AsyncSession, event) -> ProjectionOutcome:
+    """Fold one event's evidence into the classroom's MasteryState row.
+
+    Never raises. See the module's failure posture.
+    """
+    concept_id = getattr(event, "concept_id", None)
+    kind = normalize_evidence_kind(getattr(event, "evidence_type", None))
+
+    # No concept, or no recognised rung, means this event says nothing about
+    # the learner's grasp of anything in particular. Log-only, not a failure.
+    if not concept_id or not kind:
+        return ProjectionOutcome.NOTHING_TO_PROJECT
+
+    try:
+        confidence = float(getattr(event, "evidence_confidence", None) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    try:
+        # One savepoint around the whole projection, so that any failure —
+        # a bad import, a constraint, a disconnect — unwinds only this work
+        # and leaves the caller's transaction intact.
+        async with db.begin_nested():
+            mastery = await _load_or_create(db, str(event.user_id), concept_id)
+            _fold_evidence(
+                mastery,
+                kind,
+                confidence,
+                getattr(event, "misconception", None),
+            )
+        return ProjectionOutcome.PROJECTED
 
     except Exception:
-        # Swallowed by design. The evidence is already on the event row, so
-        # this is recoverable by replay; failing the learner's turn is not.
         logger.exception(
             "MasteryState projection failed for event %s (user %s, concept %s)",
             getattr(event, "id", "?"),
             getattr(event, "user_id", "?"),
             concept_id,
         )
-        return False
+        return ProjectionOutcome.FAILED

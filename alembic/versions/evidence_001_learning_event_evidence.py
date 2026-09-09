@@ -65,7 +65,35 @@ def _existing_indexes() -> set:
     return {i["name"] for i in insp.get_indexes(TABLE)}
 
 
+def _add_enum_value_if_postgres() -> None:
+    """Teach the database enum about CLASSROOM_DEMONSTRATION.
+
+    `LearningEvent.event_type` is a SQLAlchemy `Enum`, which on PostgreSQL is
+    a native `eventtype` type. Adding a member to the Python enum does not
+    add it to the database type, so the first insert carrying the new value
+    fails with `invalid input value for enum eventtype`. That would not
+    surface until the classroom starts emitting demonstrations — in
+    production, on a learner's turn.
+
+    SQLite and other backends store the value as text and need nothing.
+
+    `ALTER TYPE ... ADD VALUE` cannot run inside the transaction that later
+    uses the new value, so it goes in an autocommit block. `IF NOT EXISTS`
+    keeps the migration re-runnable.
+    """
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+
+    with op.get_context().autocommit_block():
+        op.execute(
+            "ALTER TYPE eventtype ADD VALUE IF NOT EXISTS 'CLASSROOM_DEMONSTRATION'"
+        )
+
+
 def upgrade() -> None:
+    _add_enum_value_if_postgres()
+
     insp = _inspector()
     # A database built without the events module at all has nothing to alter;
     # create_all will build the table complete when it first appears.
@@ -85,6 +113,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The enum value is deliberately not removed. PostgreSQL has no
+    # `ALTER TYPE ... DROP VALUE`, and rebuilding the type would require
+    # rewriting every row that references it. An unused extra enum member is
+    # harmless; a destructive downgrade is not.
     insp = _inspector()
     if not insp.has_table(TABLE):
         return

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .models import LearningEvent, EventType
 from .schemas import LearningEventCreate
 from .evidence import normalize_evidence_kind
-from .mastery_projection import project_event_to_mastery_state
+from .mastery_projection import ProjectionOutcome, project_event_to_mastery_state
 
 # Assume we eventually inject dependencies for XP Service, Goals Service, and DKT Service
 from lyo_app.evolution.goals_service import get_user_goals, record_progress_snapshot
@@ -17,6 +17,14 @@ from lyo_app.personalization.models import LearnerMastery
 from lyo_app.services.memory_synthesis import MemorySynthesisService, MemoryInsight
 
 logger = logging.getLogger(__name__)
+
+# `LearningEvent.processed_for_mastery` codes. The column predates this and
+# already used 0/1/-1; PROCESSED_PENDING_PROJECTION is added so an event whose
+# evidence never reached the classroom's mastery table stays findable.
+PENDING = 0
+PROCESSED = 1
+ERRORED = -1
+PROCESSED_PENDING_PROJECTION = 2
 
 async def log_learning_event(db: AsyncSession, event_in: LearningEventCreate) -> LearningEvent:
     """
@@ -87,7 +95,7 @@ async def _process_evolution_loop(db: AsyncSession, event: LearningEvent):
         # the live path was writing it. Projecting here means a concept
         # demonstrated in Chat is visible to the Classroom, and vice versa,
         # without migrating either table.
-        await project_event_to_mastery_state(db, event)
+        projection = await project_event_to_mastery_state(db, event)
 
         # 2. Update Gamification (XP)
         # Example: await gamification_service.award_xp_for_event(event)
@@ -128,8 +136,18 @@ async def _process_evolution_loop(db: AsyncSession, event: LearningEvent):
         if event.event_type == EventType.VOICE_INTERACTION:
             await _process_voice_interaction(db, event)
 
-        # Mark as processed
-        event.processed_for_mastery = 1
+        # Record how this event was handled.
+        #
+        # PROCESSED_PENDING_PROJECTION is not success. The DKT update landed,
+        # but the classroom's MasteryState did not, so the two surfaces are
+        # out of step for this concept until the event is replayed. Marking it
+        # 1 here would hide that: the row would read as fully processed and
+        # nothing could find it again. A replay worker selects on this status.
+        event.processed_for_mastery = (
+            PROCESSED_PENDING_PROJECTION
+            if projection is ProjectionOutcome.FAILED
+            else PROCESSED
+        )
         await db.commit()
         
     except Exception as e:

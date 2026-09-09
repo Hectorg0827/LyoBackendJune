@@ -196,7 +196,9 @@ def test_projection_never_fails_the_learners_turn():
     # unavailable would be the worse outcome.
     projection = _source("lyo_app/events/mastery_projection.py")
     assert "except Exception:" in projection
-    assert "return False" in projection
+    # Reported, not raised: the caller decides what to do about it.
+    assert "return ProjectionOutcome.FAILED" in projection
+    assert "raise" not in projection.split("except Exception:")[1]
 
 
 # ─── Chat emits evidence, exactly once ───────────────────────────────────────
@@ -250,3 +252,91 @@ def test_a_bailed_out_check_logs_no_evidence():
     assert evidence_from_graded_answer(correct=False, bailed_out=True) is None
     source = _source("lyo_app/api/v1/stream_lyo2.py")
     assert "if bailed_out or not skill_id:" in source
+
+
+# ─── Failure modes found in review ───────────────────────────────────────────
+#
+# Three bug_risk findings, each confirmed against the code rather than taken on
+# trust. They share a shape: the projection is a secondary write on a live
+# request path, so every way it can fail has to leave the primary path intact
+# and the failure findable.
+
+def test_new_enum_value_is_added_to_the_postgres_type():
+    """EventType gained CLASSROOM_DEMONSTRATION; the database type must too.
+
+    event_type is a SQLAlchemy Enum, which on PostgreSQL is a native
+    `eventtype` type. Adding a Python member does not add it to the database
+    type, so the first insert carrying it fails with `invalid input value for
+    enum eventtype` — which would not surface until the classroom starts
+    emitting demonstrations, in production, on a learner's turn.
+    """
+    migration = _source("alembic/versions/evidence_001_learning_event_evidence.py")
+    assert "ADD VALUE IF NOT EXISTS 'CLASSROOM_DEMONSTRATION'" in migration
+    # ALTER TYPE ... ADD VALUE cannot run in the transaction that later uses
+    # the value.
+    assert "autocommit_block()" in migration
+    # Other backends store the value as text and need nothing.
+    assert 'dialect.name != "postgresql"' in migration
+
+    # And it must actually run. Asserting only that the helper exists would
+    # pass just as happily with the call deleted from upgrade().
+    upgrade_body = migration[migration.index("def upgrade()") :]
+    upgrade_body = upgrade_body[: upgrade_body.index("\ndef ")]
+    assert "_add_enum_value_if_postgres()" in upgrade_body
+
+
+def test_projection_survives_the_insert_race():
+    """MasteryState carries uq_user_concept_mastery on (user_id, concept_id).
+
+    Two events for the same learner and concept can both see no row and both
+    insert; the loser gets an IntegrityError. Caught and re-read, so the race
+    resolves to the winner's row instead of failing.
+    """
+    projection = _source("lyo_app/events/mastery_projection.py")
+    assert "IntegrityError" in projection
+    assert "uq_user_concept_mastery" in projection, (
+        "the constraint that makes this a real race should be named, so the "
+        "handling is not mistaken for defensive noise"
+    )
+
+
+def test_projection_cannot_poison_the_callers_transaction():
+    """A failed flush would otherwise leave the AsyncSession unusable.
+
+    The processor commits its own status straight after this runs, so a
+    poisoned session would take that commit down too — and then the error
+    handler's commit as well.
+    """
+    projection = _source("lyo_app/events/mastery_projection.py")
+    assert "db.begin_nested()" in projection
+
+
+def test_a_failed_projection_is_not_recorded_as_processed():
+    """Marking it processed would hide the failure permanently.
+
+    The DKT update lands but the classroom's mastery does not, so the two
+    surfaces disagree for that concept until the event is replayed. A distinct
+    status is what lets a replay worker find it; without one the row reads as
+    done and nothing can identify it again.
+    """
+    processor = _source("lyo_app/events/processor.py")
+
+    # Look at the assignment itself. Checking that the constant appears
+    # anywhere in the file would pass even with the assignment changed back to
+    # PROCESSED, because the constant is still defined at the top.
+    assignment = processor[processor.index("event.processed_for_mastery = (") :]
+    assignment = assignment[: assignment.index("await db.commit()")]
+
+    assert "PROCESSED_PENDING_PROJECTION" in assignment, (
+        "a failed projection must not be recorded as fully processed"
+    )
+    assert "ProjectionOutcome.FAILED" in assignment
+
+
+def test_projection_outcomes_distinguish_nothing_to_do_from_failure():
+    # An event with no concept is not a failed projection, and must not be
+    # marked for replay — most events carry no evidence at all.
+    from lyo_app.events.mastery_projection import ProjectionOutcome
+
+    assert ProjectionOutcome.NOTHING_TO_PROJECT != ProjectionOutcome.FAILED
+    assert ProjectionOutcome.PROJECTED != ProjectionOutcome.FAILED
