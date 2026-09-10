@@ -356,6 +356,111 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         else:
             print(f"  skip conversation reload (status {history.status_code})")
 
+        print("\n7. The study plan sees the same learner")
+        # Phase E: a plan used to keep its own opinion of a learner, averaged
+        # from scores their own device had reported. It should now be reading
+        # the record the rest of this walk just filled in.
+        from lyo_app.study_plans.models import StudyPlan, StudySession, TestProfile
+
+        profile = TestProfile(
+            user_id=learner.id,
+            subject="Maths",
+            test_date=(datetime.utcnow() + timedelta(days=14)).date(),
+            topics=[
+                {"name": "Compare fractions", "weight": 3},
+                {"name": "Long division", "weight": 1},
+            ],
+        )
+        session.add(profile)
+        await session.flush()
+        plan = StudyPlan(test_profile_id=profile.id, user_id=learner.id)
+        session.add(plan)
+        await session.flush()
+        study_session = StudySession(
+            study_plan_id=plan.id,
+            user_id=learner.id,
+            scheduled_at=datetime.utcnow() - timedelta(minutes=10),
+            duration_minutes=45,
+            topic="Compare fractions",
+            session_type="practice",
+        )
+        session.add(study_session)
+        await session.commit()
+
+        readiness = await client.get(
+            f"/api/v1/me/study_plans/plans/{plan.id}/readiness", headers=headers
+        )
+        check("readiness answers", readiness.status_code == 200,
+              f"status {readiness.status_code}: {readiness.text[:200]}")
+        if readiness.status_code == 200:
+            body = readiness.json()
+            check("it counts both topics of the test", body.get("topics_total") == 2, str(body))
+            check(
+                "only the topic they worked on has been assessed",
+                body.get("topics_assessed") == 1,
+                str(body),
+            )
+            check(
+                "readiness is somewhere between nothing and everything",
+                isinstance(body.get("readiness"), float)
+                and 0.0 < body["readiness"] < 1.0,
+                str(body.get("readiness")),
+            )
+            check("it knows how long they have", body.get("days_remaining") == 14, str(body))
+            untouched = [t for t in body.get("topics", []) if t["mastery"] is None]
+            check(
+                "the untouched topic reports no mastery rather than zero",
+                len(untouched) == 1 and untouched[0]["topic"] == "Long division",
+                str(body.get("topics")),
+            )
+            check(
+                "it sends them to the topic they have not opened",
+                body.get("focus_next", [None])[0] == "Long division",
+                str(body.get("focus_next")),
+            )
+
+        completed = await client.post(
+            f"/api/v1/me/study_plans/sessions/{study_session.id}/complete"
+            "?performance_score=1.0",
+            headers=headers,
+        )
+        check("completing a session answers", completed.status_code == 200,
+              f"status {completed.status_code}: {completed.text[:200]}")
+        if completed.status_code == 200:
+            body = completed.json()
+            check(
+                "the score came from the graded answer, not the query string",
+                body.get("graded", 0) >= 1,
+                str(body),
+            )
+            # The request above declared 1.0. The learner answered one
+            # multiple-choice question correctly, which the ladder scores as
+            # recognition — worth something, but not full marks.
+            check(
+                "the client's declared 1.0 was not stored",
+                body.get("performance_score") is not None
+                and body["performance_score"] < 1.0,
+                str(body),
+            )
+
+        stats = await client.get(
+            f"/api/v1/me/study_plans/plans/{plan.id}/stats", headers=headers
+        )
+        check("plan stats answer", stats.status_code == 200,
+              f"status {stats.status_code}: {stats.text[:200]}")
+        if stats.status_code == 200:
+            by_topic = stats.json().get("mastery_by_topic", {})
+            check(
+                "the plan reports the concept from the learner's record",
+                "Compare fractions" in by_topic,
+                str(by_topic),
+            )
+            check(
+                "and says nothing about the topic they never opened",
+                "Long division" not in by_topic,
+                str(by_topic),
+            )
+
     print(f"\n{len(CHECKS) - len(FAILURES)}/{len(CHECKS)} checks passed")
     if FAILURES:
         print("FAILED:")
