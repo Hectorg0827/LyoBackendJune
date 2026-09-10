@@ -147,13 +147,18 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
 
 import re as _re
 
-def _lesson_to_smart_blocks(lesson: "ChatLesson") -> List[Dict[str, Any]]:
+def _lesson_to_smart_blocks(
+    lesson: "ChatLesson", source_surface: str = "chat"
+) -> List[Dict[str, Any]]:
     """Render a composed lesson into the block vocabulary clients consume.
 
     Each lesson beat becomes its own block so the client can style it
     distinctly — that separation is what makes a lesson scannable instead of a
     wall of prose. The check block carries the skill id in metadata so grading
-    knows which mastery row to update.
+    knows which mastery row to update, and the surface that asked so the
+    learner's record can say where the evidence came from. Grading happens on
+    a later request that only has the stored block to go on, so anything the
+    verdict needs has to be written down here.
     """
     blocks: List[Dict[str, Any]] = []
 
@@ -188,7 +193,11 @@ def _lesson_to_smart_blocks(lesson: "ChatLesson") -> List[Dict[str, Any]]:
             hint=check.hint,
             bailout_index=check.bailout_index,
         )
-        block.metadata = {"skill_id": lesson.skill_id, "is_probe": lesson.is_probe}
+        block.metadata = {
+            "skill_id": lesson.skill_id,
+            "is_probe": lesson.is_probe,
+            "source_surface": source_surface,
+        }
         blocks.append(block.model_dump())
 
     return blocks
@@ -227,12 +236,22 @@ async def _has_prior_mastery(
 
 
 async def _try_compose_lesson(
-    db: AsyncSession, user_id: Optional[str], user_text: str
+    db: AsyncSession,
+    user_id: Optional[str],
+    user_text: str,
+    topic: Optional[str] = None,
+    source_surface: str = "chat",
 ) -> Tuple[List[Dict[str, Any]], Optional[ChatLesson]]:
-    """Compose a structured lesson, or ([], None) to fall back to prose."""
+    """Compose a structured lesson, or ([], None) to fall back to prose.
+
+    `topic` skips the regex extraction for callers that already know the
+    subject. Test Prep does: its agent pulls subject and topics out of the
+    conversation as structured fields, and re-deriving them by pattern-matching
+    the raw sentence would only lose what was already parsed properly.
+    """
     from lyo_app.ai.lesson_composer import slugify_skill
 
-    topic = _extract_course_topic(user_text or "")
+    topic = (topic or "").strip() or _extract_course_topic(user_text or "")
     if not topic:
         return [], None
 
@@ -240,7 +259,7 @@ async def _try_compose_lesson(
     lesson = await compose_lesson(topic, db=db, user_id=user_id, mode=mode)
     if lesson is None:
         return [], None
-    return _lesson_to_smart_blocks(lesson), lesson
+    return _lesson_to_smart_blocks(lesson, source_surface=source_surface), lesson
 
 
 def _to_smart_blocks(
@@ -403,6 +422,100 @@ def _locate_check_block(
             metadata = block.get("metadata") or {}
             return block, metadata.get("skill_id"), message
     return None, None, None
+
+
+def _surface_of(block: Optional[Dict[str, Any]]) -> str:
+    """Which surface asked this question.
+
+    Grading runs on a later request than the one that produced the block, so
+    the surface has to come from what was written down at composition time.
+    A block from before this field existed, or carrying a value the ladder
+    does not recognise, reads as "chat" — the surface that composed every
+    lesson block until Test Prep started composing its own.
+
+    This is provenance, not scoring: it changes what a learner's history can
+    tell them about *where* they proved something, never whether they did.
+    """
+    from lyo_app.events.evidence import SOURCE_SURFACES
+
+    surface = ((block or {}).get("metadata") or {}).get("source_surface")
+    return surface if surface in SOURCE_SURFACES else "chat"
+
+
+def _preferred_prep_topic(
+    subject: Optional[str], topics: Optional[List[str]]
+) -> str:
+    """What to teach first for an upcoming test.
+
+    The first named topic beats the subject heading above it: "cellular
+    respiration" is something a lesson can actually teach and check, where
+    "Biology" is a shelf. Falls back to the subject when no topic was named,
+    and to "" when neither was — the caller then leaves Test Prep on the prose
+    path rather than composing a lesson about nothing.
+    """
+    for topic in topics or []:
+        if (topic or "").strip():
+            return topic.strip()
+    return (subject or "").strip()
+
+
+async def _emit_composed_lesson(
+    db: AsyncSession,
+    lesson: "ChatLesson",
+    lesson_blocks: List[Dict[str, Any]],
+    collected_bricks: List[Dict[str, Any]],
+    persistent_conversation: Any,
+    assistant_client_message_id: Optional[str],
+    mode_used: str,
+):
+    """Stream one composed lesson to the client and persist it.
+
+    Shared by every intent that teaches a lesson with a server-gradeable
+    check, so a second surface cannot drift into emitting a slightly
+    different shape — in particular one whose blocks are not persisted, which
+    would leave its check ungradeable on the next request.
+    """
+    # Clients that do not render blocks yet (iOS, Android) read this
+    # plain-text event, so the lesson degrades instead of disappearing.
+    lesson_text = lesson.to_plain_text()
+    answer_brick = {
+        "type": "answer",
+        "block": {
+            "type": "TutorMessageBlock",
+            "content": {"text": lesson_text},
+            "priority": 0,
+        },
+    }
+    collected_bricks.append(answer_brick)
+    yield yield_safe_sse_event("answer", answer_brick)
+    yield yield_safe_sse_event(
+        "smart_blocks", {"type": "smart_blocks", "blocks": lesson_blocks}
+    )
+
+    if lesson.next_directions:
+        actions_brick = {
+            "type": "actions",
+            "blocks": [{
+                "type": "CTARow",
+                "content": {"actions": lesson.next_directions},
+                "priority": 0,
+            }],
+        }
+        collected_bricks.append(actions_brick)
+        yield yield_safe_sse_event("actions", actions_brick)
+
+    if persistent_conversation:
+        # Blocks are persisted so the check stays gradeable and the lesson
+        # survives a reload.
+        await conversation_store.add_message(
+            db,
+            persistent_conversation.id,
+            role="assistant",
+            content=lesson_text,
+            mode_used=mode_used,
+            client_message_id=assistant_client_message_id,
+            blocks=lesson_blocks,
+        )
 
 
 def _grade_check_block(
@@ -595,7 +708,7 @@ async def check_lyo2_answer(
                     evidence_confidence=evidence["confidence"],
                     hints_used=1 if request.hint_used else 0,
                     misconception=misconception,
-                    source_surface="chat",
+                    source_surface=_surface_of(block),
                 ),
             )
     except Exception as e:
@@ -1029,6 +1142,57 @@ async def stream_lyo2_chat(
                     # Optionally attach extracted data back to the request for the planner
                     request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
 
+                    # Teach and check, rather than only planning.
+                    #
+                    # Until now Test Prep gathered subject, topics and date and
+                    # then handed off to the prose planner, which produces no
+                    # server-gradeable question. So a learner could work through
+                    # a whole test-prep session and the learner model would
+                    # record nothing: not because logging was missing, but
+                    # because nothing was ever graded. The Classroom could not
+                    # see what they were shaky on, and neither could they.
+                    #
+                    # The topic comes from the agent's structured extraction
+                    # rather than from re-reading the sentence: it already
+                    # parsed this out properly, and the first named topic is
+                    # more useful to teach than the subject heading above it —
+                    # "cellular respiration" beats "Biology".
+                    prep_topic = _preferred_prep_topic(data.subject, data.topics)
+                    if prep_topic:
+                        prep_blocks, prep_lesson = await _try_compose_lesson(
+                            db,
+                            authenticated_user_id,
+                            request.text,
+                            topic=prep_topic,
+                            source_surface="test_prep",
+                        )
+                        if prep_lesson is not None:
+                            async for event in _emit_composed_lesson(
+                                db,
+                                prep_lesson,
+                                prep_blocks,
+                                collected_bricks,
+                                persistent_conversation,
+                                assistant_client_message_id,
+                                ChatMode.TEST_PREP.value,
+                            ):
+                                yield event
+
+                            yield "data: [DONE]\n\n"
+                            logger.info(
+                                f"📚 [STREAM][{trace_id}] Served test-prep lesson "
+                                f"(topic={prep_topic}, skill={prep_lesson.skill_id}, "
+                                f"probe={prep_lesson.is_probe}) in "
+                                f"{time.time()-start_time:.2f}s"
+                            )
+                            return
+                        # Composition unavailable: fall through to the planner
+                        # rather than dead-ending the learner's request.
+                        logger.info(
+                            f"📋 [STREAM][{trace_id}] Test-prep lesson unavailable "
+                            f"for {prep_topic!r}; falling back to prose path"
+                        )
+
             # 2c. Structured teaching path.
             # A self-contained "explain X" is taught right here as a lesson
             # with a server-gradeable check. Multi-session topics stay on the
@@ -1038,48 +1202,16 @@ async def stream_lyo2_chat(
                     db, authenticated_user_id, request.text
                 )
                 if lesson is not None:
-                    # Clients that do not render blocks yet (iOS, Android) read
-                    # this plain-text event, so the lesson degrades instead of
-                    # disappearing.
-                    lesson_text = lesson.to_plain_text()
-                    answer_brick = {
-                        "type": "answer",
-                        "block": {
-                            "type": "TutorMessageBlock",
-                            "content": {"text": lesson_text},
-                            "priority": 0,
-                        },
-                    }
-                    collected_bricks.append(answer_brick)
-                    yield yield_safe_sse_event("answer", answer_brick)
-                    yield yield_safe_sse_event(
-                        "smart_blocks", {"type": "smart_blocks", "blocks": lesson_blocks}
-                    )
-
-                    if lesson.next_directions:
-                        actions_brick = {
-                            "type": "actions",
-                            "blocks": [{
-                                "type": "CTARow",
-                                "content": {"actions": lesson.next_directions},
-                                "priority": 0,
-                            }],
-                        }
-                        collected_bricks.append(actions_brick)
-                        yield yield_safe_sse_event("actions", actions_brick)
-
-                    if persistent_conversation:
-                        # Blocks are persisted so the check stays gradeable and
-                        # the lesson survives a reload.
-                        await conversation_store.add_message(
-                            db,
-                            persistent_conversation.id,
-                            role="assistant",
-                            content=lesson_text,
-                            mode_used=ChatMode.GENERAL.value,
-                            client_message_id=assistant_client_message_id,
-                            blocks=lesson_blocks,
-                        )
+                    async for event in _emit_composed_lesson(
+                        db,
+                        lesson,
+                        lesson_blocks,
+                        collected_bricks,
+                        persistent_conversation,
+                        assistant_client_message_id,
+                        ChatMode.GENERAL.value,
+                    ):
+                        yield event
 
                     yield "data: [DONE]\n\n"
                     logger.info(

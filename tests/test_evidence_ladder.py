@@ -208,8 +208,12 @@ def test_chat_check_emits_evidence():
     # Chat has to become visible to the Classroom.
     source = _source("lyo_app/api/v1/stream_lyo2.py")
     assert "log_learning_event(" in source
-    assert 'source_surface="chat"' in source
     assert "evidence_from_graded_answer(" in source
+    # The surface used to be the literal "chat", because chat composed every
+    # lesson block there was. Test Prep now composes its own, so the label is
+    # read back off the block that posed the question — see `_surface_of`,
+    # which still answers "chat" for a block that names no surface.
+    assert "source_surface=_surface_of(block)" in source
 
 
 def test_chat_check_emits_evidence_once():
