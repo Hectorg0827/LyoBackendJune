@@ -30,11 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.events.evidence import normalize_evidence_kind
 from lyo_app.events.models import LearningEvent
 
-#: How far before "now" evidence may still count toward this session.
+#: How far before completion evidence may still count toward this session.
 #: A session left open for a week must not sweep up the whole week's work on
 #: that topic and report it as one sitting, so the window is the session's own
-#: length with generous slack for overrun — never earlier than the session was
-#: scheduled to begin.
+#: length with generous slack for overrun. See `window_start` for why it is
+#: measured back from completion rather than anchored to the scheduled slot.
 WINDOW_SLACK = 4
 MINIMUM_WINDOW = timedelta(hours=2)
 
@@ -70,19 +70,39 @@ class SessionOutcome:
         return self.score is not None
 
 
-def window_start(
-    scheduled_at: datetime, duration_minutes: Optional[int], now: datetime
-) -> datetime:
+def window_start(duration_minutes: Optional[int], now: datetime) -> datetime:
     """The earliest moment whose evidence belongs to this session.
 
-    Bounded on both sides: never earlier than the session was scheduled (work
-    done before it began is not this session's), and never reaching further
-    back than the session could plausibly have run.
+    Measured back from completion, and **not** anchored to `scheduled_at`.
+    An earlier version floored the window at the scheduled slot, on the
+    reasoning that work done before a session began is not that session's.
+    Both ordinary cases break under it:
+
+    * A learner who studies *ahead* of schedule — the session is at 4pm, they
+      finish at 2pm — gets a window of `[4pm, 2pm]`. That is inverted, matches
+      nothing by construction, and records someone who just demonstrated the
+      topic as unmeasured.
+    * A learner who does the work at 9am and only taps "done" that evening
+      gets a window sitting entirely after the work, so the very evidence this
+      endpoint exists to record is the evidence it cannot see.
+
+    The slot bought nothing the cap does not already give. What the floor is
+    actually for is stopping a session left open for a week from reporting the
+    whole week as one sitting, and a span measured back from `now` does that
+    on its own.
+
+    The remaining imprecision is honest: recent work on this topic counts as
+    this session's, because from the server's side that is what it is. Tap
+    "done" long enough after the fact and the window finds nothing, and the
+    session is recorded as unmeasured — which is true, rather than wrong.
     """
-    minutes = max(int(duration_minutes or 0), 0)
+    # No clamp on `minutes`: the floor below already swallows every negative
+    # or absent duration, so clamping first only looked like it was guarding
+    # something. A missing, zero or nonsensical duration all land on
+    # MINIMUM_WINDOW, which is the answer in each case.
+    minutes = int(duration_minutes or 0)
     span = max(timedelta(minutes=minutes * WINDOW_SLACK), MINIMUM_WINDOW)
-    earliest = now - span
-    return max(scheduled_at, earliest) if scheduled_at else earliest
+    return now - span
 
 
 def outcome_from_evidence(rows: Sequence[tuple]) -> SessionOutcome:
@@ -125,7 +145,6 @@ async def derive_session_outcome(
     db: AsyncSession,
     user_id: int,
     concept_id: str,
-    scheduled_at: datetime,
     duration_minutes: Optional[int],
     now: Optional[datetime] = None,
 ) -> SessionOutcome:
@@ -134,7 +153,7 @@ async def derive_session_outcome(
     if not concept_id:
         return SessionOutcome(score=None, graded=0, seen=0)
 
-    since = window_start(scheduled_at, duration_minutes, now)
+    since = window_start(duration_minutes, now)
     result = await db.execute(
         select(
             LearningEvent.evidence_type,

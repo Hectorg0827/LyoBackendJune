@@ -250,32 +250,43 @@ def test_nothing_graded_means_no_score_not_a_zero():
 
 # ─── The window a session's evidence comes from ─────────────────────────────
 
-def test_evidence_from_before_the_session_began_is_not_this_session():
-    now = datetime(2026, 5, 10, 12, 0)
-    scheduled = datetime(2026, 5, 10, 11, 30)
-    assert window_start(scheduled, 30, now) == scheduled
+def test_the_window_always_ends_at_completion_and_starts_before_it():
+    # It once floored the window at `scheduled_at`, so a learner who finished
+    # ahead of schedule got `[4pm, 2pm]` — inverted, matching nothing by
+    # construction, and reported as unmeasured seconds after they had proved
+    # the topic.
+    now = datetime(2026, 5, 10, 14, 0)
+    assert window_start(45, now) < now
 
 
 def test_a_session_left_open_for_days_does_not_sweep_up_the_week():
     now = datetime(2026, 5, 17, 12, 0)
-    scheduled = datetime(2026, 5, 10, 11, 30)  # a week earlier
-    started = window_start(scheduled, 30, now)
-    assert started > scheduled
-    assert now - started == MINIMUM_WINDOW
+    assert now - window_start(30, now) == MINIMUM_WINDOW
 
 
 def test_a_long_session_gets_a_window_longer_than_the_minimum():
     now = datetime(2026, 5, 17, 12, 0)
-    scheduled = datetime(2026, 5, 1, 0, 0)
     # 120 minutes with the overrun factor is 8 hours, well past the floor.
-    assert now - window_start(scheduled, 120, now) == timedelta(hours=8)
+    assert now - window_start(120, now) == timedelta(hours=8)
 
 
 def test_a_session_with_no_duration_still_has_a_window():
     now = datetime(2026, 5, 17, 12, 0)
-    scheduled = datetime(2026, 5, 1, 0, 0)
-    assert now - window_start(scheduled, None, now) == MINIMUM_WINDOW
-    assert now - window_start(scheduled, 0, now) == MINIMUM_WINDOW
+    assert now - window_start(None, now) == MINIMUM_WINDOW
+    assert now - window_start(0, now) == MINIMUM_WINDOW
+    assert now - window_start(-30, now) == MINIMUM_WINDOW
+
+
+def test_the_window_does_not_depend_on_when_the_session_was_scheduled():
+    # The scheduled slot is deliberately not an input. Passing it was the
+    # cause of both failures above, and taking it as a parameter at all
+    # invites the floor back.
+    import inspect
+
+    from lyo_app.study_plans.session_outcome import derive_session_outcome
+
+    assert "scheduled_at" not in inspect.signature(window_start).parameters
+    assert "scheduled_at" not in inspect.signature(derive_session_outcome).parameters
 
 
 # ─── The plan reports the record, not itself ────────────────────────────────

@@ -524,7 +524,6 @@ async def complete_session(
         db,
         user_id=current_user.id,
         concept_id=concept_id_for_topic(session.topic),
-        scheduled_at=session.scheduled_at,
         duration_minutes=session.duration_minutes,
         now=completed_at,
     )

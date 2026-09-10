@@ -379,7 +379,12 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         study_session = StudySession(
             study_plan_id=plan.id,
             user_id=learner.id,
-            scheduled_at=datetime.utcnow() - timedelta(minutes=10),
+            # Deliberately in the future: this learner did the work early and
+            # is ticking the session off ahead of its slot, which is an
+            # ordinary thing to do and which an earlier version of the window
+            # turned into `[slot, now]` — inverted, matching nothing, and
+            # reporting someone who had just proved the topic as unmeasured.
+            scheduled_at=datetime.utcnow() + timedelta(hours=2),
             duration_minutes=45,
             topic="Compare fractions",
             session_type="practice",
