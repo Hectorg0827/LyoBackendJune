@@ -283,3 +283,63 @@ async def test_early_mastery_is_not_pushed_out_by_later_work(db):
     assert after.mastered == 1, "the early mastery vanished"
     assert after.learned >= before.learned
     assert after.retained >= before.retained
+
+
+async def test_the_cap_never_cuts_through_a_concept(db):
+    """MASTERED needs three rungs of one concept.
+
+    Capping (concept, rung) pairs could keep some of a concept's rungs and
+    drop others, so a mastered concept would read as merely explained — and
+    with no stable ordering, which rungs survived could differ between two
+    loads a second apart. The cap counts concepts now.
+    """
+    # Sorts last, so any concept-ordered cap of 1 excludes it and a cap of 2
+    # includes it whole.
+    db.add_all([
+        _event(1, "aaa_first", "explanation", STRONG),
+        _event(1, "zzz_mastered", "application", STRONG),
+        _event(1, "zzz_mastered", "transfer", STRONG),
+        _event(1, "zzz_mastered", "retrieval", STRONG),
+    ])
+    await db.flush()
+
+    whole = await concept_summary_for_user(db, 1, limit=2)
+    assert whole.total == 2
+    assert whole.mastered == 1, "a capped read split the concept's rungs"
+
+    # And the cap still bites, on whole concepts.
+    capped = await concept_summary_for_user(db, 1, limit=1)
+    assert capped.total == 1
+
+
+async def test_two_reads_agree(db):
+    """Without a stable order, which concepts survive a cap is arbitrary.
+
+    This cannot fail on SQLite, which happens to return grouped rows in a
+    consistent order whether or not one is asked for — so it is paired with
+    the source assertion below rather than trusted on its own. On PostgreSQL,
+    a `GROUP BY` with no `ORDER BY` genuinely may return rows in a different
+    order between two identical queries.
+    """
+    db.add_all([
+        _event(1, f"concept_{i:03d}", "explanation", STRONG) for i in range(30)
+    ])
+    await db.flush()
+
+    first = await concept_summary_for_user(db, 1, limit=10)
+    second = await concept_summary_for_user(db, 1, limit=10)
+    assert first == second
+
+
+def test_the_capped_concepts_are_ordered():
+    """The guarantee the test above cannot reach on this engine."""
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "lyo_app" / "events" / "concept_summary.py"
+    ).read_text()
+    subquery = source[source.index("capped_concepts = ("):]
+    subquery = subquery[: subquery.index(")\n\n")]
+    assert ".order_by(LearningEvent.concept_id)" in subquery
+    assert ".limit(limit)" in subquery

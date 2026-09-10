@@ -49,7 +49,7 @@ from .evidence import (
 
 logger = logging.getLogger(__name__)
 
-#: Safety valve on the number of (concept, rung) pairs read, not on events.
+#: Safety valve on the number of *concepts* read.
 #:
 #: The first version of this capped the most recent 2,000 *events*, which was
 #: wrong in a way that mattered: a concept mastered early dropped out of the
@@ -61,7 +61,13 @@ logger = logging.getLogger(__name__)
 #: the database does the folding this module used to do in Python, and the
 #: result is bounded by how many distinct things the learner has worked on
 #: rather than by how busy they have been.
-PAIR_CAP = 5000
+#:
+#: The cap counts concepts, not (concept, rung) pairs, and the concepts are
+#: chosen in a stable order. Capping pairs could keep *some* of a concept's
+#: rungs and drop others — MASTERED needs three — so a mastered concept could
+#: read as merely explained, and which rungs survived could differ between two
+#: loads a second apart.
+CONCEPT_CAP = 2000
 
 #: Reaching this rung is what "learned" means here.
 LEARNED_FLOOR = "EXPLAINED"
@@ -141,7 +147,7 @@ def summarize_concepts(
 
 
 async def concept_summary_for_user(
-    db: AsyncSession, user_id: Any, limit: int = PAIR_CAP
+    db: AsyncSession, user_id: Any, limit: int = CONCEPT_CAP
 ) -> ConceptSummary:
     """Count what this learner knows, from their own evidence.
 
@@ -161,19 +167,31 @@ async def concept_summary_for_user(
         # is all `summarize_concepts` keeps anyway. Grouping in SQL means no
         # event ever falls out of a window, so a concept mastered a year ago
         # still counts today.
+        has_evidence = (
+            LearningEvent.user_id == learner_id,
+            LearningEvent.concept_id.isnot(None),
+            LearningEvent.evidence_type.isnot(None),
+        )
+
+        # Pick the concepts first, in a stable order, so the cap can only ever
+        # cut between concepts and never through the middle of one.
+        capped_concepts = (
+            select(LearningEvent.concept_id)
+            .where(*has_evidence)
+            .group_by(LearningEvent.concept_id)
+            .order_by(LearningEvent.concept_id)
+            .limit(limit)
+            .scalar_subquery()
+        )
+
         result = await db.execute(
             select(
                 LearningEvent.concept_id,
                 LearningEvent.evidence_type,
                 func.max(LearningEvent.evidence_confidence),
             )
-            .where(
-                LearningEvent.user_id == learner_id,
-                LearningEvent.concept_id.isnot(None),
-                LearningEvent.evidence_type.isnot(None),
-            )
+            .where(*has_evidence, LearningEvent.concept_id.in_(capped_concepts))
             .group_by(LearningEvent.concept_id, LearningEvent.evidence_type)
-            .limit(limit)
         )
         return summarize_concepts(result.all())
     except Exception:
