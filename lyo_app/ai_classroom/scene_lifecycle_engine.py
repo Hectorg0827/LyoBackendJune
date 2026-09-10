@@ -2467,6 +2467,12 @@ class SceneLifecycleEngine:
                 "attempt_history": list(progress.get("attempt_history", []))[-100:],
                 "review_queue": list(progress.get("review_queue", []))[-50:],
                 "hint_counts": dict(progress.get("hint_counts", {})),
+                # The rung, not just the tally. Persisting only the count
+                # meant that after a worker restart or a reconnect grading
+                # could see that help was taken but not which kind — so a full
+                # worked example scored like a nudge again, which is the exact
+                # gap the rung was added to close.
+                "hint_levels": dict(progress.get("hint_levels", {})),
                 "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
                 "difficulty": progress.get("difficulty"),
@@ -3257,8 +3263,18 @@ class SceneLifecycleEngine:
         # Two names for one concept means two `LearnerMastery` rows for one
         # learner, and neither surface can see what the other taught.
         dkt_skill_id = self._canonical_concept_id(validated_skill_id) or "current_concept"
+        # Behind `scored`, exactly like the evidence write below.
+        #
+        # `validated_correct` starts False and is only set while grading an
+        # authored option, so a vanished scene or an unmatched option reaches
+        # here still False. That used to dirty a leftover human-text key
+        # nothing read; now that both surfaces share one key, it would lower
+        # the mastery they both teach from — a lookup failure recorded as the
+        # learner getting it wrong.
         try:
-            user_id_int = int(user_id)
+            user_id_int = int(user_id) if scored else None
+            if user_id_int is None:
+                raise ValueError("nothing was graded")
             from lyo_app.personalization.schemas import KnowledgeTraceRequest
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().trace_knowledge(
@@ -3385,8 +3401,12 @@ class SceneLifecycleEngine:
         hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
         # See `handle_quiz_submission`: one key per concept across surfaces.
         dkt_skill_id = self._canonical_concept_id(skill_id) or "current_concept"
+        # See `handle_quiz_submission`: an unscored submission is a lookup
+        # failure, not a wrong answer, and must not reach shared mastery.
         try:
-            user_id_int = int(user_id)
+            user_id_int = int(user_id) if scored else None
+            if user_id_int is None:
+                raise ValueError("nothing was graded")
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().dkt.update_mastery(
                 self.db,

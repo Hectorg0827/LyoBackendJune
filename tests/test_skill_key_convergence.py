@@ -92,6 +92,7 @@ def _mastery(**overrides):
         "misconceptions": ["flipped_the_fraction"],
         "first_attempt": datetime(2026, 1, 1),
         "last_seen": datetime(2026, 2, 1),
+        "mastery_achieved": None,
     }
     fields.update(overrides)
     return LearnerMastery(**fields)
@@ -283,3 +284,64 @@ async def test_unrelated_skills_are_not_collapsed_together(db):
     db.expire_all()
 
     assert {r.skill_id for r in await _rows(db)} == {"compare_fractions", "add_fractions"}
+
+
+class GraphIdsAreNotSlugifiedTests(unittest.TestCase):
+    """A UUID is already the canonical key.
+
+    The live path leaves graph ids alone — slugifying one turns its hyphens
+    into underscores and produces a key nothing matches. The migration
+    slugified everything, so historical graph-keyed rows were rewritten onto a
+    key no future write would ever use: splitting exactly the mastery it
+    exists to merge.
+    """
+
+    def test_a_uuid_is_left_exactly_as_it_is(self):
+        graph_id = "8ec42eab-fa05-4455-afb8-56240ba48c91"
+        self.assertEqual(skillkey._canonical_key(graph_id), graph_id)
+
+    def test_human_text_is_still_slugified(self):
+        self.assertEqual(skillkey._canonical_key("Compare Fractions"), "compare_fractions")
+
+    def test_the_migration_agrees_with_the_live_path(self):
+        for value in (
+            "8ec42eab-fa05-4455-afb8-56240ba48c91",
+            "Compare Fractions",
+            "photosynthesis",
+        ):
+            self.assertEqual(
+                skillkey._canonical_key(value),
+                SceneLifecycleEngine._canonical_concept_id(value),
+            )
+
+
+async def test_a_graph_keyed_row_is_not_rewritten(db):
+    graph_id = "8ec42eab-fa05-4455-afb8-56240ba48c91"
+    db.add(_mastery(skill_id=graph_id, attempts=9))
+    await db.commit()
+
+    await _run_migration(db)
+    db.expire_all()
+
+    rows = await _rows(db)
+    assert len(rows) == 1
+    assert rows[0].skill_id == graph_id
+    assert rows[0].attempts == 9
+
+
+async def test_a_merged_mastery_date_is_written_not_just_computed(db):
+    """`_merge` picked the earliest `mastery_achieved` and the UPDATE never
+    carried it, so a learner whose only mastery record was on the discarded
+    row lost the fact that they had ever mastered the skill."""
+    db.add_all([
+        _mastery(skill_id="compare_fractions", attempts=2, mastery_achieved=None),
+        _mastery(skill_id="Compare fractions", attempts=1,
+                 mastery_achieved=datetime(2026, 1, 15)),
+    ])
+    await db.commit()
+
+    await _run_migration(db)
+    db.expire_all()
+
+    merged = (await _rows(db))[0]
+    assert merged.mastery_achieved == datetime(2026, 1, 15)

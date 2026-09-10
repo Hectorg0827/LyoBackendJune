@@ -50,7 +50,7 @@ from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
 from lyo_app.chat.models import ChatMode
-from lyo_app.ai.schemas.block_redaction import redact_blocks
+from lyo_app.ai.schemas.block_redaction import redact_blocks, redact_content
 from lyo_app.chat.stores import conversation_store
 
 # Simple response builder to fix missing import
@@ -1358,8 +1358,14 @@ async def stream_lyo2_chat(
                 }
                 agent_tag = agent_tag_map.get(artifact_type, "content")
                 
-                # Tag the artifact content with agent marker
-                tagged_content = dict(artifact.content) if artifact.content else {}
+                # Tag the artifact content with agent marker.
+                #
+                # Redacted like every other way out. This legacy event carries
+                # the same quiz the `smart_blocks` event below does, and
+                # redacting only that one left the answer key, the explanation
+                # and the option misconception tags streaming out here — an
+                # earlier change closed three doors and missed this fourth.
+                tagged_content = redact_content(dict(artifact.content) if artifact.content else {})
                 tagged_content["_agent"] = agent_tag
                 
                 tagged_artifact = UIBlock(

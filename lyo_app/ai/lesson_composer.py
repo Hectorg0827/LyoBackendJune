@@ -294,6 +294,30 @@ Then:
 Return ONLY the JSON object."""
 
 
+def _drop_unusable_explorables(raw: Dict[str, Any]) -> None:
+    """Remove any explorable that would fail validation, in place.
+
+    Checked here rather than relied on at the nested level, because a raise
+    inside `Explorable` aborts the whole `ChatLesson`. The lesson is the point;
+    the explorable is a second way to see it.
+    """
+    for section in raw.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        explorable = section.get("explorable")
+        if explorable is None:
+            continue
+        try:
+            Explorable.model_validate(explorable)
+        except Exception as e:
+            logger.warning(
+                "Dropping unusable explorable from %s section: %s",
+                section.get("kind"),
+                e,
+            )
+            section.pop("explorable", None)
+
+
 async def _build_learner_context(
     db: Optional[AsyncSession], user_id: Optional[str], skill_id: str
 ) -> str:
@@ -415,6 +439,15 @@ async def compose(
     raw["topic"] = topic
     raw["skill_id"] = skill_id
     raw["is_probe"] = mode == "probe"
+
+    # An unusable explorable costs the explorable, not the lesson.
+    #
+    # `Explorable` refuses points that cannot be placed, and the intent was
+    # that the lesson still ships without it. But validation is nested inside
+    # `ChatLesson`, so the raise propagated and the whole structured lesson —
+    # including its gradeable check — was discarded in favour of prose. The
+    # decoration was taking the teaching down with it.
+    _drop_unusable_explorables(raw)
 
     try:
         lesson = ChatLesson.model_validate(raw)

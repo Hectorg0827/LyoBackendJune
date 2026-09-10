@@ -161,3 +161,60 @@ class EveryExitIsCoveredTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThePlannerPathIsClosedTooTests(unittest.TestCase):
+    """There was a fourth door.
+
+    An earlier change closed the streamed lesson, the streamed planner blocks
+    and the conversation reload, and said so. But the planner also yields the
+    same quiz as a legacy `artifact` event carrying `artifact.content`
+    directly, so the answer key kept travelling on that path — redacting only
+    the block-shaped exits was not enough.
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "lyo_app" / "api" / "v1" / "stream_lyo2.py").read_text()
+
+    def test_the_artifact_event_is_redacted(self):
+        self.assertIn("redact_content(dict(artifact.content)", self.source)
+
+    def test_no_raw_artifact_content_is_tagged_and_sent(self):
+        self.assertNotIn(
+            "tagged_content = dict(artifact.content) if artifact.content else {}",
+            self.source,
+        )
+
+
+class ContentLevelRedactionTests(unittest.TestCase):
+    """`redact_content` is what makes the non-block exits coverable."""
+
+    def test_it_strips_the_same_fields(self):
+        from lyo_app.ai.schemas.block_redaction import redact_content
+
+        clean = redact_content(_check_block()["content"])
+        self.assertNotIn("correct_index", clean)
+        self.assertNotIn("explanation", clean)
+        for option in clean["options"]:
+            self.assertNotIn("reveals", option)
+
+    def test_it_keeps_what_the_learner_needs(self):
+        from lyo_app.ai.schemas.block_redaction import redact_content
+
+        clean = redact_content(_check_block()["content"])
+        self.assertEqual(clean["question"], "Which fraction is larger?")
+        self.assertIn("hint", clean)
+        self.assertEqual(clean["bailout_index"], 2)
+
+    def test_it_does_not_mutate_its_input(self):
+        from lyo_app.ai.schemas.block_redaction import redact_content
+
+        content = _check_block()["content"]
+        redact_content(content)
+        self.assertEqual(content["correct_index"], 1)
+
+    def test_content_with_nothing_to_hide_passes_through(self):
+        from lyo_app.ai.schemas.block_redaction import redact_content
+
+        plan = {"plan": "study more"}
+        self.assertIs(redact_content(plan), plan)

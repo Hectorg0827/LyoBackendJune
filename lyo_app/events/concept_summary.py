@@ -37,7 +37,7 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .evidence import (
@@ -49,10 +49,19 @@ from .evidence import (
 
 logger = logging.getLogger(__name__)
 
-#: Most recent events considered. A learner's whole history is not needed to
-#: say what they know now, and an unbounded read on the front page is how a
-#: home screen becomes the slowest request in the product.
-EVENT_CAP = 2000
+#: Safety valve on the number of (concept, rung) pairs read, not on events.
+#:
+#: The first version of this capped the most recent 2,000 *events*, which was
+#: wrong in a way that mattered: a concept mastered early dropped out of the
+#: window as later answers on other topics filled it, so Home's numbers moved
+#: backwards while the learner kept working. That is precisely the failure the
+#: funnel was shaped to avoid.
+#:
+#: Reading one row per concept per rung instead is both correct and cheaper —
+#: the database does the folding this module used to do in Python, and the
+#: result is bounded by how many distinct things the learner has worked on
+#: rather than by how busy they have been.
+PAIR_CAP = 5000
 
 #: Reaching this rung is what "learned" means here.
 LEARNED_FLOOR = "EXPLAINED"
@@ -132,7 +141,7 @@ def summarize_concepts(
 
 
 async def concept_summary_for_user(
-    db: AsyncSession, user_id: Any, limit: int = EVENT_CAP
+    db: AsyncSession, user_id: Any, limit: int = PAIR_CAP
 ) -> ConceptSummary:
     """Count what this learner knows, from their own evidence.
 
@@ -148,18 +157,22 @@ async def concept_summary_for_user(
         return ConceptSummary()
 
     try:
+        # The learner's best demonstration of each rung of each concept, which
+        # is all `summarize_concepts` keeps anyway. Grouping in SQL means no
+        # event ever falls out of a window, so a concept mastered a year ago
+        # still counts today.
         result = await db.execute(
             select(
                 LearningEvent.concept_id,
                 LearningEvent.evidence_type,
-                LearningEvent.evidence_confidence,
+                func.max(LearningEvent.evidence_confidence),
             )
             .where(
                 LearningEvent.user_id == learner_id,
                 LearningEvent.concept_id.isnot(None),
                 LearningEvent.evidence_type.isnot(None),
             )
-            .order_by(LearningEvent.id.desc())
+            .group_by(LearningEvent.concept_id, LearningEvent.evidence_type)
             .limit(limit)
         )
         return summarize_concepts(result.all())

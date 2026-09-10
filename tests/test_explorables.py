@@ -182,3 +182,78 @@ class EvidenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnUnusableExplorableCostsOnlyItselfTests(unittest.TestCase):
+    """The decoration must not take the teaching down with it.
+
+    `Explorable` refuses points that cannot be placed, and the intent was that
+    the lesson still ships without it. But the validation is nested inside
+    `ChatLesson`, so the raise propagated and `compose` discarded the entire
+    structured lesson — including its gradeable check — in favour of prose.
+    """
+
+    def test_a_bad_explorable_is_dropped_and_the_lesson_survives(self):
+        from lyo_app.ai.lesson_composer import _drop_unusable_explorables
+
+        raw = {
+            "sections": [
+                {
+                    "kind": "representation",
+                    "text": "A fraction is a position.",
+                    # No `value`: nowhere to place it.
+                    "explorable": {
+                        "kind": "number_line",
+                        "prompt": "Place it",
+                        "points": [{"label": "a"}, {"label": "b", "value": 1}],
+                    },
+                }
+            ],
+            "check": {"question": "kept"},
+        }
+        _drop_unusable_explorables(raw)
+
+        self.assertNotIn("explorable", raw["sections"][0])
+        self.assertEqual(raw["sections"][0]["text"], "A fraction is a position.")
+        self.assertEqual(raw["check"], {"question": "kept"})
+
+    def test_a_good_explorable_is_left_alone(self):
+        from lyo_app.ai.lesson_composer import _drop_unusable_explorables
+
+        raw = {
+            "sections": [
+                {
+                    "kind": "representation",
+                    "text": "x",
+                    "explorable": {
+                        "kind": "timeline",
+                        "prompt": "Notice the order",
+                        "points": [
+                            {"label": "a", "year": 1789},
+                            {"label": "b", "year": 1799},
+                        ],
+                    },
+                }
+            ]
+        }
+        _drop_unusable_explorables(raw)
+        self.assertIn("explorable", raw["sections"][0])
+
+    def test_it_runs_before_the_lesson_is_validated(self):
+        """Checking after validation would be checking after the raise."""
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1] / "lyo_app" / "ai" / "lesson_composer.py"
+        ).read_text()
+        self.assertLess(
+            source.index("_drop_unusable_explorables(raw)"),
+            source.index("lesson = ChatLesson.model_validate(raw)"),
+        )
+
+    def test_odd_shapes_do_not_raise(self):
+        from lyo_app.ai.lesson_composer import _drop_unusable_explorables
+
+        for raw in ({}, {"sections": None}, {"sections": ["not a dict"]},
+                    {"sections": [{"kind": "core", "text": "x"}]}):
+            _drop_unusable_explorables(raw)

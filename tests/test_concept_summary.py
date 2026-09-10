@@ -250,10 +250,36 @@ async def test_only_evidence_bearing_rows_are_read(db):
 
 
 async def test_the_read_is_bounded(db):
-    """An unbounded read on the front page is how a home screen becomes the
-    slowest request in the product."""
+    """Still bounded — but by distinct concept-and-rung pairs, not by events,
+    so a busy learner cannot push their own earlier work out of the count."""
     db.add_all([_event(1, f"concept_{i}", "explanation", STRONG) for i in range(20)])
     await db.flush()
 
     summary = await concept_summary_for_user(db, 1, limit=5)
     assert summary.total == 5
+
+
+async def test_early_mastery_is_not_pushed_out_by_later_work(db):
+    """Home's numbers must never move backwards while a learner keeps
+    working. The first version of this read the most recent N events, so a
+    concept mastered early dropped out as later answers on other topics
+    filled the window."""
+    db.add_all([
+        _event(1, "fractions", "application", STRONG),
+        _event(1, "fractions", "transfer", STRONG),
+        _event(1, "fractions", "retrieval", STRONG),
+    ])
+    await db.flush()
+    before = await concept_summary_for_user(db, 1)
+    assert before.mastered == 1
+
+    # A great deal of later work on entirely different concepts.
+    db.add_all([
+        _event(1, f"other_{i}", "recognition", STRONG) for i in range(200)
+    ])
+    await db.flush()
+
+    after = await concept_summary_for_user(db, 1)
+    assert after.mastered == 1, "the early mastery vanished"
+    assert after.learned >= before.learned
+    assert after.retained >= before.retained

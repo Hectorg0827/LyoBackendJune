@@ -275,3 +275,34 @@ class TheRungOutlivesTheRequestTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheRungSurvivesARestartTests(unittest.TestCase):
+    """In-memory is not where a rung can live alone.
+
+    `_persist_session_progress` writes the durable snapshot that
+    `assemble_context` rehydrates after a worker restart or a reconnect. It
+    carried `hint_counts` and not `hint_levels`, so after a hydrate grading
+    could see that help was taken but not which kind — and a full worked
+    example scored like a nudge again, which is the whole gap this closes.
+    """
+
+    def setUp(self):
+        from pathlib import Path
+
+        self.source = (
+            Path(__file__).resolve().parents[1]
+            / "lyo_app" / "ai_classroom" / "scene_lifecycle_engine.py"
+        ).read_text()
+
+    def test_the_durable_snapshot_carries_the_rung(self):
+        start = self.source.index('"hint_counts": dict(progress.get("hint_counts", {})),')
+        window = self.source[start : start + 700]
+        self.assertIn('"hint_levels": dict(progress.get("hint_levels", {}))', window)
+
+    def test_it_is_written_beside_the_count_it_qualifies(self):
+        """Separating them is how they drift: one persisted, one not."""
+        self.assertEqual(
+            self.source.count('"hint_counts": dict(progress.get("hint_counts", {})),'),
+            self.source.count('"hint_levels": dict(progress.get("hint_levels", {})),'),
+        )

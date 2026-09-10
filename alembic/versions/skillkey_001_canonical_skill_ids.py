@@ -28,6 +28,7 @@ Create Date: 2026-09-10
 """
 import json
 import re
+import uuid
 
 import sqlalchemy as sa
 from alembic import op
@@ -50,6 +51,27 @@ def _slugify(topic: str) -> str:
     """
     slug = re.sub(r"[^a-z0-9]+", "_", (topic or "").strip().lower()).strip("_")
     return slug[:80] or "general"
+
+
+def _is_graph_uuid(value: str) -> bool:
+    """Is this already a concept-graph id rather than free text?
+
+    The live path leaves UUIDs alone — `_canonical_concept_id` slugifies human
+    labels and passes graph ids through, because a slugified UUID has its
+    hyphens turned into underscores and matches nothing. This migration has to
+    make the same distinction, or it rewrites historical graph-keyed rows onto
+    a key no new write will ever use, splitting exactly the mastery it is
+    supposed to be merging.
+    """
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _canonical_key(skill_id: str) -> str:
+    return skill_id if _is_graph_uuid(skill_id) else _slugify(skill_id)
 
 
 def _loads(value):
@@ -117,7 +139,7 @@ def upgrade() -> None:
         skill_id = row.get("skill_id")
         if not skill_id:
             continue
-        key = (row.get("user_id"), _slugify(skill_id))
+        key = (row.get("user_id"), _canonical_key(skill_id))
         canonical.setdefault(key, []).append(row)
 
     for (user_id, slug), group in canonical.items():
@@ -150,6 +172,10 @@ def upgrade() -> None:
             "misconceptions": merged.get("misconceptions"),
             "first_attempt": merged.get("first_attempt"),
             "last_seen": merged.get("last_seen"),
+            # `_merge` picks the earliest of these and the UPDATE has to carry
+            # it, or a learner whose only mastery record was on the discarded
+            # row loses the fact that they had ever mastered the skill.
+            "mastery_achieved": merged.get("mastery_achieved"),
         }
         sets = ", ".join(f'"{k}" = :{k}' for k in assignments)
         bind.execute(

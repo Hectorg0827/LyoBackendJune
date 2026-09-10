@@ -390,3 +390,92 @@ class ClassroomTransferEvidenceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UngradedSubmissionsReachNothingTests(unittest.IsolatedAsyncioTestCase):
+    """A lookup failure is not a wrong answer — for mastery either.
+
+    `validated_correct` starts False and is only set while grading an authored
+    option. When the scene or the option cannot be found, that False survives.
+    The evidence write was guarded against it; the DKT write was not. While the
+    classroom keyed mastery by its own human-readable text that dirtied a row
+    nothing read. Now that both surfaces share one key, it would lower the
+    mastery they both teach from.
+    """
+
+    def setUp(self):
+        _SESSION_PROGRESS.pop(SESSION, None)
+
+    def tearDown(self):
+        _SESSION_PROGRESS.pop(SESSION, None)
+
+    async def _submit_without_a_scene(self):
+        engine = _engine()
+        engine.active_scenes = {}
+        engine.session_contexts = {
+            SESSION: SimpleNamespace(learning_objective="Compare fractions", lesson_index=0)
+        }
+        traced = MagicMock()
+        traced.return_value.trace_knowledge = AsyncMock(return_value={})
+        traced.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        capture = _Capture()
+        with patch("lyo_app.personalization.service.PersonalizationEngine", traced), patch(
+            "lyo_app.events.processor.log_learning_event", capture.log
+        ):
+            await engine.handle_quiz_submission(
+                user_id="42",
+                session_id=SESSION,
+                quiz_component_id="quiz-1",
+                selected_option_id="a",
+                response_time_ms=4000,
+            )
+        return traced, capture
+
+    async def test_an_ungraded_quiz_does_not_touch_dkt(self):
+        traced, capture = await self._submit_without_a_scene()
+        traced.return_value.trace_knowledge.assert_not_awaited()
+        self.assertEqual(capture.events, [])
+
+    async def test_an_ungraded_transfer_does_not_touch_dkt(self):
+        engine = _engine()
+        engine.active_scenes = {}
+        engine.session_contexts = {
+            SESSION: SimpleNamespace(learning_objective="Compare fractions", lesson_index=0)
+        }
+        traced = MagicMock()
+        traced.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        traced.return_value.trace_knowledge = AsyncMock(return_value={})
+        capture = _Capture()
+        with patch("lyo_app.personalization.service.PersonalizationEngine", traced), patch(
+            "lyo_app.events.processor.log_learning_event", capture.log
+        ):
+            await engine.handle_transfer_submission(
+                user_id="42",
+                session_id=SESSION,
+                input_component_id="input-1",
+                response="a thoughtful answer",
+                response_time_ms=9000,
+            )
+        traced.return_value.dkt.update_mastery.assert_not_awaited()
+        self.assertEqual(capture.events, [])
+
+    async def test_a_graded_quiz_still_reaches_dkt(self):
+        """The guard must not silence the normal path."""
+        engine = _engine()
+        engine.active_scenes = {"s1": _quiz_scene()}
+        traced = MagicMock()
+        traced.return_value.trace_knowledge = AsyncMock(return_value={})
+        traced.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        capture = _Capture()
+        with patch("lyo_app.personalization.service.PersonalizationEngine", traced), patch(
+            "lyo_app.events.processor.log_learning_event", capture.log
+        ):
+            await engine.handle_quiz_submission(
+                user_id="42",
+                session_id=SESSION,
+                quiz_component_id="quiz-1",
+                selected_option_id="a",
+                response_time_ms=4000,
+            )
+        traced.return_value.trace_knowledge.assert_awaited_once()
+        self.assertEqual(len(capture.events), 1)

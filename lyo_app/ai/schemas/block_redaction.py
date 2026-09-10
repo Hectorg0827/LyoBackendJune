@@ -39,6 +39,40 @@ REDACTED_CONTENT_FIELDS = ("correct_index", "explanation")
 REDACTED_OPTION_FIELDS = ("reveals",)
 
 
+def redact_content(content: Any) -> Any:
+    """Strip grading internals from one block's content payload.
+
+    Separate from `redact_block` because not every way out of the server
+    wraps content in a block. The legacy `artifact` event on the planner path
+    streams `artifact.content` directly, and redacting only the block-shaped
+    exits left the answer key travelling on that one.
+    """
+    if not isinstance(content, dict):
+        return content
+
+    if not any(field in content for field in REDACTED_CONTENT_FIELDS) and not _has_option_secrets(
+        content
+    ):
+        return content
+
+    clean: Dict[str, Any] = {
+        key: value
+        for key, value in content.items()
+        if key not in REDACTED_CONTENT_FIELDS
+    }
+
+    options = content.get("options")
+    if isinstance(options, list):
+        clean["options"] = [
+            {k: v for k, v in option.items() if k not in REDACTED_OPTION_FIELDS}
+            if isinstance(option, dict)
+            else option
+            for option in options
+        ]
+
+    return clean
+
+
 def redact_block(block: Any) -> Any:
     """Return a copy of one block with grading internals removed.
 
@@ -53,25 +87,9 @@ def redact_block(block: Any) -> Any:
     if not isinstance(content, dict):
         return block
 
-    if not any(field in content for field in REDACTED_CONTENT_FIELDS) and not _has_option_secrets(
-        content
-    ):
+    clean_content = redact_content(content)
+    if clean_content is content:
         return block
-
-    clean_content: Dict[str, Any] = {
-        key: value
-        for key, value in content.items()
-        if key not in REDACTED_CONTENT_FIELDS
-    }
-
-    options = content.get("options")
-    if isinstance(options, list):
-        clean_content["options"] = [
-            {k: v for k, v in option.items() if k not in REDACTED_OPTION_FIELDS}
-            if isinstance(option, dict)
-            else option
-            for option in options
-        ]
 
     return {**block, "content": clean_content}
 
