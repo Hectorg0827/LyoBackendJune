@@ -83,6 +83,35 @@ async def main() -> int:
     previous_override = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = _override_db
 
+    # Everything from here is inside the guard. The first version of this
+    # started the `try` only at the walk itself, so an exception while
+    # building the learner, the lesson or the conversation still leaked the
+    # override — the same suite poisoning it was written to stop, just moved
+    # a few lines earlier.
+    try:
+        return await _prepare_and_walk(app, session)
+    finally:
+        if previous_override is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous_override
+        await session.close()
+        await engine.dispose()
+
+
+async def _prepare_and_walk(app, session):
+    """Build the fixtures and walk the loop, with the override already guarded."""
+    import uuid
+
+    from lyo_app.ai.lesson_composer import (
+        ChatLesson,
+        CheckItem,
+        CheckOption,
+        LessonSection,
+        SectionKind,
+    )
+    from lyo_app.api.v1.stream_lyo2 import _lesson_to_smart_blocks
+
     # ── a real learner ───────────────────────────────────────────────────────
     from lyo_app.models.enhanced import User
 
@@ -146,21 +175,15 @@ async def main() -> int:
     session.add(message)
     await session.commit()
 
-    try:
-        return await _walk_the_loop(app, session, learner, conversation, check_block, lesson)
-    finally:
-        if previous_override is None:
-            app.dependency_overrides.pop(get_db, None)
-        else:
-            app.dependency_overrides[get_db] = previous_override
-        await session.close()
-        await engine.dispose()
+    return await _walk_the_loop(app, session, learner, conversation, check_block, lesson)
 
 
 async def _walk_the_loop(app, session, learner, conversation, check_block, lesson):
     """The journey itself, so the caller can guarantee cleanup around it."""
     import os
     import uuid
+
+    from datetime import datetime, timedelta
 
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy import select
@@ -281,6 +304,26 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
                 str(body),
             )
 
+        # Answering a check schedules the concept for tomorrow, so a
+        # recommendation list read right now is legitimately empty — and
+        # `all([])` is True, so the original version of this check passed
+        # whether or not recommendations worked at all. Backdate the schedule
+        # to put the learner in the state the endpoint exists to serve.
+        from lyo_app.personalization.models import SpacedRepetitionSchedule
+
+        schedules = (
+            await session.execute(
+                select(SpacedRepetitionSchedule).where(
+                    SpacedRepetitionSchedule.user_id == learner.id
+                )
+            )
+        ).scalars().all()
+        check("answering the check scheduled a review", len(schedules) >= 1,
+              f"found {len(schedules)}")
+        for schedule in schedules:
+            schedule.next_review = datetime.utcnow() - timedelta(days=2)
+        await session.commit()
+
         recommendations = await client.get(
             "/api/v1/personalization/recommendations", headers=headers
         )
@@ -288,9 +331,15 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
               f"status {recommendations.status_code}: {recommendations.text[:200]}")
         if recommendations.status_code == 200:
             items = recommendations.json().get("items", [])
+            check("the overdue concept is recommended back", len(items) >= 1, str(items))
             check(
                 "every recommendation says why it is there",
-                all(item.get("detail") for item in items),
+                items and all(item.get("detail") for item in items),
+                str(items),
+            )
+            check(
+                "it is the concept they actually worked on",
+                any(item.get("concept_id") == "compare_fractions" for item in items),
                 str(items),
             )
 

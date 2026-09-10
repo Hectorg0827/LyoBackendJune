@@ -40,17 +40,24 @@ def test_a_learner_can_go_round_the_loop():
     before = dict(app.dependency_overrides)
 
     module = _load()
-    exit_code = asyncio.run(module.main())
+    try:
+        exit_code = asyncio.run(module.main())
+    finally:
+        # The leak assertion below has to run even when the walk raises —
+        # a crash mid-setup is exactly when an override is most likely to be
+        # left behind, and without this the check would be skipped on the one
+        # path that needs it.
+        assert app.dependency_overrides == before, (
+            "the e2e run leaked a dependency override onto the shared app"
+        )
 
     assert exit_code == 0, f"failed checks: {module.FAILURES}"
     # Guard against the script silently degrading into asserting nothing.
-    assert len(module.CHECKS) >= 15, f"only {len(module.CHECKS)} checks ran"
+    assert len(module.CHECKS) >= 18, f"only {len(module.CHECKS)} checks ran"
 
     # `app` is a module-level singleton. The first version of this script left
     # its database override in place, handing every later test a session that
     # was already closed — four unrelated auth tests failed and the cause was
-    # nowhere near them. Cheap to assert, miserable to debug.
-    assert app.dependency_overrides == before, (
-        "the e2e run leaked a dependency override onto the shared app"
-    )
+    # nowhere near them. Cheap to assert, miserable to debug. Asserted in the
+    # `finally` above so a raised exception cannot skip it.
     assert get_db not in app.dependency_overrides or before.get(get_db) is not None
