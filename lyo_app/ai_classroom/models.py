@@ -437,8 +437,18 @@ class MasteryState(Base):
 
 class ReviewSchedule(Base):
     """
-    Spaced repetition scheduler.
-    Tracks when content should be reviewed for optimal retention.
+    Spaced repetition scheduler. MIGRATION_ONLY — do not write new rows.
+
+    `personalization.SpacedRepetitionSchedule` is the canonical schedule: it
+    is written whenever a learner answers a check, and both Chat's due-review
+    nudge and the classroom's `/review/today` now read it.
+
+    This table's only writers — `spaced_repetition_service` and
+    `interaction_service` — have no callers, so nothing on any live path has
+    ever filled it. It is kept because rows may exist in environments that ran
+    those services directly, and because dropping a table is not something to
+    do in the same change that stops using it. See
+    `lyo_app/personalization/spaced_repetition.py`.
     """
     __tablename__ = "review_schedules"
     

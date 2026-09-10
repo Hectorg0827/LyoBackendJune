@@ -421,54 +421,48 @@ async def get_review_queue(
     limit: int = Query(default=20, ge=1, le=50),
     db: AsyncSession = Depends(get_db)
 ) -> ReviewQueueResponse:
+    """Today's review queue, from the learner's actual schedule.
+
+    This used to read `ai_classroom.ReviewSchedule`, whose only two writers
+    (`spaced_repetition_service` and `interaction_service`) have no callers.
+    So it returned an empty queue to every learner, forever, while the same
+    learner had items genuinely due in `SpacedRepetitionSchedule` — the table
+    Chat's due-review nudge reads. One surface said "nothing to review", the
+    other offered five things.
+
+    It now reads the same schedule Chat does, so the two agree.
     """
-    Get today's review queue based on spaced repetition.
-    
-    Returns items due for review, prioritized by urgency.
-    """
-    from sqlalchemy import select, and_
-    from sqlalchemy.orm import selectinload
-    
+    from lyo_app.personalization.service import personalization_engine
+
     user_id = str(current_user.id)
-    now = datetime.utcnow()
-    
-    result = await db.execute(
-        select(ReviewSchedule)
-        .where(
-            and_(
-                ReviewSchedule.user_id == user_id,
-                ReviewSchedule.is_active == True,
-                ReviewSchedule.next_review_at <= now
-            )
-        )
-        .order_by(ReviewSchedule.next_review_at)
-        .limit(limit)
+    due = await personalization_engine.get_due_reviews(
+        db, int(current_user.id), limit=limit
     )
-    schedules = result.scalars().all()
-    
-    items = []
-    total_seconds = 0
-    
-    for sched in schedules:
-        # Calculate priority (overdue = higher priority)
-        days_overdue = (now - sched.next_review_at).days
-        priority = 1.0 + (days_overdue * 0.1)
-        
-        items.append(ReviewItem(
-            node_id=sched.node_id or "",
-            concept_name=sched.concept_id or "Unknown",  # Would look up in production
-            last_reviewed_at=sched.last_reviewed_at,
-            interval_days=sched.interval_days,
-            streak=sched.streak,
-            priority=priority
-        ))
-        total_seconds += 30  # Estimate 30 seconds per review
-    
+
+    items = [
+        ReviewItem(
+            # The check block this schedule was created from, when there is
+            # one. Empty rather than invented for schedules that name no item.
+            node_id=str(entry.get("item_id") or ""),
+            # The skill's own id. This was previously a fixed placeholder
+            # string for every row, with a comment saying a real lookup would
+            # happen in production.
+            concept_name=str(entry.get("skill_id") or ""),
+            last_reviewed_at=entry.get("last_review"),
+            interval_days=int(entry.get("interval_days") or 1),
+            # SM-2's repetition count *is* the streak: consecutive successful
+            # recalls, reset to zero by a failure.
+            streak=int(entry.get("repetitions") or 0),
+            priority=1.0 + (int(entry.get("days_overdue") or 0) * 0.1),
+        )
+        for entry in due
+    ]
+
     return ReviewQueueResponse(
         user_id=user_id,
         total_items=len(items),
-        estimated_minutes=max(1, total_seconds // 60),
-        items=items
+        estimated_minutes=max(1, (len(items) * 30) // 60),
+        items=items,
     )
 
 
@@ -478,75 +472,49 @@ async def submit_review(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> ReviewSubmitResponse:
+    """Record a graded recall and reschedule.
+
+    Like the queue above, this used to read a table nothing filled, so it
+    answered 404 for every learner who had ever reviewed anything. It now
+    writes the live schedule through the one SM-2 the product has — see
+    `lyo_app/personalization/spaced_repetition.py`.
+
+    `request.node_id` carries the scheduled item's id, which is what the queue
+    hands back as `node_id`.
     """
-    Submit a review response and update the spaced repetition schedule.
-    
-    Uses SM-2 algorithm to calculate next review date.
-    """
+    from lyo_app.personalization.models import SpacedRepetitionSchedule
+    from lyo_app.personalization.service import personalization_engine
     from sqlalchemy import select, and_
-    
-    user_id = str(current_user.id)
-    
-    # Find the review schedule
-    result = await db.execute(
-        select(ReviewSchedule)
-        .where(
-            and_(
-                ReviewSchedule.user_id == user_id,
-                ReviewSchedule.node_id == request.node_id
+
+    learner_id = int(current_user.id)
+
+    existing = (
+        await db.execute(
+            select(SpacedRepetitionSchedule).where(
+                and_(
+                    SpacedRepetitionSchedule.user_id == learner_id,
+                    SpacedRepetitionSchedule.item_id == request.node_id,
+                )
             )
         )
-    )
-    schedule = result.scalar_one_or_none()
-    
-    if not schedule:
+    ).scalar_one_or_none()
+
+    if existing is None:
         raise HTTPException(status_code=404, detail="Review schedule not found")
-    
-    # SM-2 algorithm
-    q = request.quality
-    ef = schedule.easiness_factor
-    
-    # Update easiness factor
-    new_ef = ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))
-    new_ef = max(1.3, new_ef)  # Minimum EF
-    
-    # Calculate new interval
-    if q < 3:
-        # Failed recall - reset
-        new_interval = 1
-        new_rep = 0
-        new_streak = 0
-    else:
-        new_streak = schedule.streak + 1
-        new_rep = schedule.repetition_number + 1
-        
-        if new_rep == 1:
-            new_interval = 1
-        elif new_rep == 2:
-            new_interval = 6
-        else:
-            new_interval = int(schedule.interval_days * new_ef)
-    
-    # Update schedule
-    from datetime import timedelta
-    schedule.easiness_factor = new_ef
-    schedule.interval_days = new_interval
-    schedule.repetition_number = new_rep
-    schedule.last_reviewed_at = datetime.utcnow()
-    schedule.next_review_at = datetime.utcnow() + timedelta(days=new_interval)
-    schedule.last_quality = q
-    schedule.streak = new_streak
-    
-    await db.commit()
-    
-    # Check for celebration
-    show_celebration = q >= 4 and new_streak >= 3
-    
+
+    schedule = await personalization_engine.record_review(
+        db,
+        learner_id,
+        existing.skill_id,
+        request.node_id,
+        request.quality,
+    )
+
     return ReviewSubmitResponse(
-        next_review_date=schedule.next_review_at,
-        new_interval_days=new_interval,
-        streak=new_streak,
-        show_celebration=show_celebration
+        next_review_date=schedule.next_review,
+        new_interval_days=schedule.interval,
+        streak=schedule.repetitions,
+        show_celebration=request.quality >= 4 and schedule.repetitions >= 3,
     )
 
 
