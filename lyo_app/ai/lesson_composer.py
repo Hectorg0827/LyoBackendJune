@@ -30,9 +30,9 @@ import json
 import logging
 import re
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,60 @@ class SectionKind(str, Enum):
     reference = "reference"            # compact lookup table
 
 
+class ExplorablePoint(BaseModel):
+    """One labelled thing on an explorable — a value, or a moment."""
+
+    label: str = Field(..., max_length=60)
+    #: Position on a number line. Required for `number_line`.
+    value: Optional[float] = None
+    #: Year for a timeline. Negative for BCE. Required for `timeline`.
+    year: Optional[int] = None
+
+
+class Explorable(BaseModel):
+    """A representation the learner can manipulate rather than only read.
+
+    Every subject currently gets the same treatment: prose, then a multiple
+    choice question. A number line for fractions and a timeline for a
+    sequence of events are not decoration — they are how those two subjects
+    are actually thought about, and reading about a fraction is a different
+    cognitive act from placing one.
+
+    The points come from the lesson the model is already writing, so this adds
+    no second generation call and cannot invent facts the lesson does not
+    contain.
+
+    Manipulating one is *exposure*, and only exposure. It proves the learner
+    met the idea; it does not prove they can use it. The check below the
+    explorable is still where a demonstration happens.
+    """
+
+    kind: Literal["number_line", "timeline"]
+    #: What to do with it. "Drag to place 3/4", "Notice what happens after 1789".
+    prompt: str = Field(..., max_length=140)
+    points: List[ExplorablePoint] = Field(..., min_items=2, max_items=8)
+
+    @model_validator(mode="after")
+    def _points_match_the_kind(self):
+        """A number line needs values; a timeline needs years.
+
+        Rejected rather than repaired. A half-populated explorable renders as
+        an empty or nonsensical widget in the middle of a lesson, and the
+        lesson reads perfectly well without one — so the honest failure is to
+        drop the explorable, which is what raising here causes the composer to
+        do.
+        """
+        field = "value" if self.kind == "number_line" else "year"
+        missing = [p.label for p in self.points if getattr(p, field) is None]
+        if missing:
+            raise ValueError(
+                f"{self.kind} points need a {field}: missing on {missing!r}"
+            )
+        if len({getattr(p, field) for p in self.points}) < 2:
+            raise ValueError(f"{self.kind} needs at least two distinct {field}s")
+        return self
+
+
 class LessonSection(BaseModel):
     kind: SectionKind
     text: str
@@ -69,6 +123,9 @@ class LessonSection(BaseModel):
     latex: Optional[str] = None
     # Set on `reference` only: a GitHub-flavored markdown table.
     table_markdown: Optional[str] = None
+    # Set on `representation` when the idea has a shape the learner can move
+    # through. Omitted for topics that genuinely have neither.
+    explorable: Optional[Explorable] = None
 
 
 class CheckOption(BaseModel):
@@ -210,6 +267,15 @@ genuinely does not apply to this topic):
 2. kind "core" — the idea itself, ONE sentence.
 3. kind "representation" — the same idea shown a different way (geometric,
    visual, or physical). Use the "latex" field if a formula helps.
+   Add an "explorable" ONLY when this topic genuinely has one of these shapes,
+   and never as decoration:
+     - "number_line": quantities that sit on a scale — fractions, decimals,
+       integers, magnitudes. Each point needs "label" and "value".
+     - "timeline": things that happen in an order — historical events, process
+       stages, a sequence of discoveries. Each point needs "label" and "year"
+       (negative for BCE).
+   Give it a "prompt" saying what to do with it, and 2-8 points taken from
+   THIS lesson. Omit "explorable" entirely for topics with neither shape.
 4. kind "example" — one worked instance, with "latex" if useful.
 5. kind "trap" — the mistakes learners actually make here. Be specific.
 6. kind "method" — how the learner does this themselves, as ordered steps.

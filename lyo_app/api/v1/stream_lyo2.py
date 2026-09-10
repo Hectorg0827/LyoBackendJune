@@ -180,6 +180,19 @@ def _lesson_to_smart_blocks(
                 blocks.append(
                     SmartBlock.data_viz(section.latex, fmt="math").model_dump()
                 )
+            # A representation the learner can move through, when the topic
+            # genuinely has that shape. The composer omits it otherwise rather
+            # than decorating every lesson with a widget.
+            explorable = getattr(section, "explorable", None)
+            if explorable is not None:
+                blocks.append(
+                    SmartBlock.explorable(
+                        kind=explorable.kind,
+                        prompt=explorable.prompt,
+                        points=[p.model_dump(exclude_none=True) for p in explorable.points],
+                        concept_id=lesson.skill_id,
+                    ).model_dump()
+                )
 
     if lesson.check:
         check = lesson.check
