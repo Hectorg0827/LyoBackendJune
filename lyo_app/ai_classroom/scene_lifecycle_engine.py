@@ -3252,6 +3252,11 @@ class SceneLifecycleEngine:
         )
         hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
 
+        # Keyed the way Chat keys it. The Classroom carries human-facing text
+        # — "Compare fractions" — while Chat writes `slugify_skill` output.
+        # Two names for one concept means two `LearnerMastery` rows for one
+        # learner, and neither surface can see what the other taught.
+        dkt_skill_id = self._canonical_concept_id(validated_skill_id) or "current_concept"
         try:
             user_id_int = int(user_id)
             from lyo_app.personalization.schemas import KnowledgeTraceRequest
@@ -3260,8 +3265,8 @@ class SceneLifecycleEngine:
                 self.db,
                 KnowledgeTraceRequest(
                     learner_id=str(user_id_int),
-                    skill_id=validated_skill_id or "current_concept",
-                    item_id=validated_skill_id or "current_concept",
+                    skill_id=dkt_skill_id,
+                    item_id=dkt_skill_id,
                     correct=validated_correct,
                     time_taken_seconds=max(response_time_ms / 1000.0, 1.0),
                     hints_used=hints_used,
@@ -3378,13 +3383,15 @@ class SceneLifecycleEngine:
         lesson_index = session_context.lesson_index if session_context else 0
         hints_used = int(progress.get("hint_counts", {}).get(str(lesson_index), 0))
         hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
+        # See `handle_quiz_submission`: one key per concept across surfaces.
+        dkt_skill_id = self._canonical_concept_id(skill_id) or "current_concept"
         try:
             user_id_int = int(user_id)
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().dkt.update_mastery(
                 self.db,
                 user_id_int,
-                skill_id or "current_concept",
+                dkt_skill_id,
                 validated_correct,
                 max(response_time_ms / 1000.0, 1.0),
                 hints_used,
