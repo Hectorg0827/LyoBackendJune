@@ -50,6 +50,7 @@ from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
 from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
 from lyo_app.chat.models import ChatMode
+from lyo_app.ai.schemas.block_redaction import redact_blocks
 from lyo_app.chat.stores import conversation_store
 
 # Simple response builder to fix missing import
@@ -488,8 +489,11 @@ async def _emit_composed_lesson(
     }
     collected_bricks.append(answer_brick)
     yield yield_safe_sse_event("answer", answer_brick)
+    # Redacted on the way out only. The persisted copy keeps the answer key,
+    # because grading happens on a later request against what was stored.
     yield yield_safe_sse_event(
-        "smart_blocks", {"type": "smart_blocks", "blocks": lesson_blocks}
+        "smart_blocks",
+        {"type": "smart_blocks", "blocks": redact_blocks(lesson_blocks)},
     )
 
     if lesson.next_directions:
@@ -1363,7 +1367,8 @@ async def stream_lyo2_chat(
             )
             if smart_blocks:
                 yield yield_safe_sse_event(
-                    "smart_blocks", {"type": "smart_blocks", "blocks": smart_blocks}
+                    "smart_blocks",
+                    {"type": "smart_blocks", "blocks": redact_blocks(smart_blocks)},
                 )
 
             # Send open_classroom payload (course creation trigger)
