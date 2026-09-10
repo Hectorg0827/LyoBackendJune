@@ -36,6 +36,8 @@ from lyo_app.ai_classroom.sdui_models import (
     AudioMood, ActionIntent, ClassroomMode, HintLevel, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
+# Pure vocabulary module — no app imports — so this is safe at module scope.
+from lyo_app.events.evidence import strongest_hint_level
 
 logger = logging.getLogger(__name__)
 
@@ -537,6 +539,15 @@ class ContextAssembler:
                 hint_counts = progress.setdefault("hint_counts", {})
                 lesson_key = str(context.lesson_index)
                 hint_counts[lesson_key] = int(hint_counts.get(lesson_key, 0)) + 1
+                # `context` is rebuilt on every action, so by the time the
+                # learner submits an answer `context.hint_level` is whatever
+                # that submission carried — nothing. The rung has to outlive
+                # the request that asked for it, or grading can only ever see
+                # a count and a full worked example scores like a nudge.
+                hint_levels = progress.setdefault("hint_levels", {})
+                hint_levels[lesson_key] = strongest_hint_level(
+                    hint_levels.get(lesson_key), context.hint_level.value
+                )
             except ValueError:
                 context.hint_level = HintLevel.NUDGE
 
@@ -3098,6 +3109,7 @@ class SceneLifecycleEngine:
         concept_id: Optional[str],
         correct: bool,
         hints_used: int,
+        hint_level: Optional[str] = None,
         evidence_type: Optional[str] = None,
         misconception: Optional[str] = None,
     ) -> None:
@@ -3123,6 +3135,11 @@ class SceneLifecycleEngine:
           decided; evidence logging is what makes the *next* lesson better,
           not what makes this answer right.
 
+        Asking for help never demotes the rung the learner reached — a
+        transfer done with a nudge is still a transfer. It lowers the
+        confidence attached to it, because the demonstration proves less about
+        what they can do unaided.
+
         Guests have no learner record to write to, so their evidence is
         dropped rather than faked.
         """
@@ -3146,6 +3163,7 @@ class SceneLifecycleEngine:
                 correct=correct,
                 misconception=misconception,
                 hints_used=hints_used,
+                hint_level=hint_level,
                 evidence_type=evidence_type,
             )
             if evidence is None:
@@ -3232,6 +3250,7 @@ class SceneLifecycleEngine:
         hints_used = int(
             progress.get("hint_counts", {}).get(str(lesson_index), 0)
         )
+        hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
 
         try:
             user_id_int = int(user_id)
@@ -3267,6 +3286,7 @@ class SceneLifecycleEngine:
                 concept_id=validated_skill_id,
                 correct=validated_correct,
                 hints_used=hints_used,
+                hint_level=hint_level,
                 misconception=misconception_tag,
             )
 
@@ -3357,6 +3377,7 @@ class SceneLifecycleEngine:
         session_context = self.session_contexts.get(session_id)
         lesson_index = session_context.lesson_index if session_context else 0
         hints_used = int(progress.get("hint_counts", {}).get(str(lesson_index), 0))
+        hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
         try:
             user_id_int = int(user_id)
             from lyo_app.personalization.service import PersonalizationEngine
@@ -3392,6 +3413,7 @@ class SceneLifecycleEngine:
                 concept_id=skill_id,
                 correct=validated_correct,
                 hints_used=hints_used,
+                hint_level=hint_level,
                 evidence_type=declared_evidence_type,
             )
 

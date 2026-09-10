@@ -148,6 +148,26 @@ HINT_DAMPING: Dict[str, float] = {
 }
 
 
+def strongest_hint_level(*levels: Optional[str]) -> Optional[str]:
+    """The most help among these, or None if none is recognised.
+
+    "Most help" is the lowest damping factor, not the last one asked for. A
+    learner who took a nudge and then a full worked example was walked through
+    it; scoring that demonstration as if the nudge were the whole story would
+    overstate what they showed unaided.
+
+    Unknown names are ignored rather than ranked, so a new client-side rung
+    cannot silently register as the weakest kind of help.
+    """
+    best: Optional[str] = None
+    for level in levels:
+        if level not in HINT_DAMPING:
+            continue
+        if best is None or HINT_DAMPING[level] < HINT_DAMPING[best]:
+            best = level
+    return best
+
+
 def confidence_after_hints(
     base_confidence: float,
     hint_level: Optional[str] = None,
@@ -222,6 +242,7 @@ def evidence_from_graded_answer(
     bailed_out: bool = False,
     misconception: Optional[str] = None,
     hints_used: int = 0,
+    hint_level: Optional[str] = None,
     evidence_type: Optional[str] = None,
 ) -> Optional[Dict]:
     """Turn a server-graded answer into one piece of evidence.
@@ -236,6 +257,11 @@ def evidence_from_graded_answer(
     * A wrong answer still produced exposure and still carries its
       misconception forward, so remediation can target the actual error rather
       than just re-teaching.
+
+    `hint_level` names the rung of help the learner took, and takes precedence
+    over the bare `hints_used` count: one full worked example proves far less
+    about unaided ability than three nudges do, and counting alone cannot tell
+    them apart. Surfaces that only count hints keep passing `hints_used`.
     """
     if bailed_out:
         return None
@@ -254,6 +280,8 @@ def evidence_from_graded_answer(
     kind = normalize_evidence_kind(evidence_type) or "recognition"
     return {
         "kind": kind,
-        "confidence": confidence_after_hints(1.0, hints_used=hints_used),
+        "confidence": confidence_after_hints(
+            1.0, hint_level=hint_level, hints_used=hints_used
+        ),
         "misconception": misconception,
     }
