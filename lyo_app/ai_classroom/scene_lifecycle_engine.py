@@ -2827,33 +2827,203 @@ class SceneLifecycleEngine:
 
         await self.websocket_manager.stream_scene_to_session(session_id, scene)
 
+    #: How much of the lesson to re-present when teaching from the fallback.
+    #: Long enough to be a real re-teach, short enough not to dump a whole
+    #: lesson into one bubble.
+    _FALLBACK_TEACHING_CHARS = 700
+
+    @staticmethod
+    def _excerpt_for_reteaching(content: Optional[str], limit: int) -> Optional[str]:
+        """Take the opening of the lesson, cut at a sentence boundary.
+
+        Returns None when there is nothing usable, so the caller can choose a
+        different fallback rather than showing an empty or truncated bubble.
+
+        This only ever re-presents text the course already provided. The
+        fallback runs when generation failed, which is precisely the moment
+        not to invent teaching material.
+        """
+        text = (content or "").strip()
+        if len(text) < 40:
+            return None
+        if len(text) <= limit:
+            return text
+
+        window = text[:limit]
+        # Prefer the last sentence end; fall back to the last paragraph or
+        # word break so the excerpt never stops mid-word.
+        cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+        if cut > limit // 3:
+            return window[: cut + 1].strip()
+        cut = max(window.rfind("\n\n"), window.rfind(" "))
+        if cut > limit // 3:
+            return window[:cut].strip() + "…"
+        return window.strip() + "…"
+
     async def _create_fallback_scene(self, trigger: Trigger) -> Scene:
-        """Create safe fallback scene when errors occur"""
+        """Teach something safe when the lifecycle fails.
+
+        WHY THIS IS NOT A "SORRY" SCREEN
+
+        This runs when the Director or the compiler raised — the learner is
+        mid-lesson and the next scene could not be produced. What they used to
+        get here was "Let's continue with one idea at a time when you're
+        ready." and a Continue button: a polite dead end that teaches nothing
+        and hands them no way forward except to press the same button again.
+
+        That dead end is what iOS's on-device teaching engine existed to paper
+        over — its own header said the screen "went dead" when the backend
+        stopped streaming scenes. That engine has been removed, correctly,
+        because a client-side teaching loop makes iOS a pedagogically
+        different product from web and Android. Removing the workaround means
+        the weakness underneath it has to be fixed where every client
+        benefits: here.
+
+        THE RULE
+
+        Never leave the learner with nothing, and never invent teaching
+        material to avoid that. Those pull in opposite directions only if you
+        assume the fallback has to produce new content. It does not — the
+        lesson the learner is already in is sitting in session context. So:
+
+        * If we still hold the lesson, re-teach from it and offer a concrete
+          next move. The learner keeps learning; they never see the failure.
+        * If we hold only a title or objective, name what they are working on
+          and offer to show a worked example, which is a real request the
+          engine can serve on the next turn.
+        * If we hold nothing at all, ask what they want to work on. That is a
+          genuine move that leads somewhere, unlike Continue with nothing
+          behind it.
+
+        Every branch is built from values already in context, so nothing here
+        can raise on a missing field. That matters: this is the error path,
+        and a fallback that throws leaves the learner with the dead screen
+        this exists to prevent.
+        """
+        context = self.session_contexts.get(trigger.session_id)
         language_code = str(
             _SESSION_PROGRESS.get(trigger.session_id, {}).get(
-                "language_code", "en-US"
+                "language_code",
+                getattr(context, "language_code", None) or "en-US",
             )
         )
         is_spanish = language_code.lower().startswith("es")
-        return Scene(
-            scene_type=SceneType.INSTRUCTION,
-            components=[
+
+        lesson_title = (getattr(context, "lesson_title", None) or "").strip()
+        objective = (getattr(context, "learning_objective", None) or "").strip()
+        # Course-provided provenance only. The compiler carries these through
+        # on normal scenes and the fallback must not drop them just because
+        # generation failed.
+        attributions = list(getattr(context, "source_attributions", None) or [])[:5]
+
+        excerpt = self._excerpt_for_reteaching(
+            getattr(context, "lesson_content", None), self._FALLBACK_TEACHING_CHARS
+        )
+
+        components: List[Component] = []
+
+        if excerpt:
+            subject = lesson_title or objective
+            lead = (
+                (f"Retomemos {subject}." if subject else "Retomemos la idea principal.")
+                if is_spanish
+                else (
+                    f"Let's pick {subject} back up."
+                    if subject
+                    else "Let's pick the main idea back up."
+                )
+            )
+            components.append(
                 TeacherMessage(
-                    text=(
-                        "Retomemos una idea a la vez cuando estés listo."
-                        if is_spanish
-                        else "Let's continue with one idea at a time when you're ready."
-                    ),
+                    text=f"{lead}\n\n{excerpt}",
                     emotion="encouraging",
                     audio_mood=AudioMood.CALM,
                     language_code=language_code,
-                ),
+                    source_attributions=attributions,
+                )
+            )
+            components.append(
+                CTAButton(
+                    label="Muéstrame un ejemplo" if is_spanish else "Show me an example",
+                    action_intent=ActionIntent.REQUEST_EXAMPLE,
+                    button_style="secondary",
+                    language_code=language_code,
+                )
+            )
+            components.append(
                 CTAButton(
                     label="Continuar" if is_spanish else "Continue",
                     action_intent=ActionIntent.CONTINUE,
                     language_code=language_code,
-                ),
-            ]
+                )
+            )
+
+        elif lesson_title or objective:
+            subject = lesson_title or objective
+            components.append(
+                TeacherMessage(
+                    text=(
+                        f"Seguimos con {subject}. ¿Quieres ver un ejemplo trabajado "
+                        "o continuar?"
+                        if is_spanish
+                        else f"We're still on {subject}. Want a worked example, "
+                        "or shall we carry on?"
+                    ),
+                    emotion="encouraging",
+                    audio_mood=AudioMood.CALM,
+                    language_code=language_code,
+                    source_attributions=attributions,
+                )
+            )
+            components.append(
+                CTAButton(
+                    label="Muéstrame un ejemplo" if is_spanish else "Show me an example",
+                    action_intent=ActionIntent.REQUEST_EXAMPLE,
+                    button_style="secondary",
+                    language_code=language_code,
+                )
+            )
+            components.append(
+                CTAButton(
+                    label="Continuar" if is_spanish else "Continue",
+                    action_intent=ActionIntent.CONTINUE,
+                    language_code=language_code,
+                )
+            )
+
+        else:
+            # Nothing to re-teach from. Asking is a real move; Continue with
+            # nothing behind it is not.
+            components.append(
+                TeacherMessage(
+                    text=(
+                        "¿Qué te gustaría trabajar ahora?"
+                        if is_spanish
+                        else "What would you like to work on?"
+                    ),
+                    emotion="encouraging",
+                    audio_mood=AudioMood.CALM,
+                    language_code=language_code,
+                )
+            )
+            components.append(
+                InputField(
+                    placeholder=(
+                        "Escribe un tema" if is_spanish else "Type a topic"
+                    ),
+                    question=(
+                        "Dime qué quieres aprender y empezamos por ahí."
+                        if is_spanish
+                        else "Tell me what you want to learn and we'll start there."
+                    ),
+                    action_intent=ActionIntent.ASK_QUESTION,
+                    language_code=language_code,
+                )
+            )
+
+        return Scene(
+            scene_type=SceneType.INSTRUCTION,
+            components=components,
         )
 
     # ═══════════════════════════════════════════════════════════════════════════════
