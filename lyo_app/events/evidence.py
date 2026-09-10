@@ -285,3 +285,37 @@ def evidence_from_graded_answer(
         ),
         "misconception": misconception,
     }
+
+
+# ─── What a client is allowed to assert ──────────────────────────────────────
+
+def sanitize_client_event(event):
+    """Strip anything a learner's device must not be trusted to decide.
+
+    `POST /api/v1/evolution/events` accepts a `LearningEventCreate` straight
+    from an authenticated client. That schema carries `evidence_type`,
+    `evidence_confidence`, `measurable_outcome` and `skill_ids_json` — so a
+    client could post itself a transfer demonstration at full confidence, or
+    ask the processor to run a DKT update on a skill it names, and the learner
+    model would believe it. Correctness is the server's to decide; that is the
+    whole reason the check endpoint grades from a stored block rather than
+    from what the client says happened.
+
+    A client may still say *what it did*. It may not say *what that proved*.
+    So an event from a client is recorded as `exposure` with no graded
+    outcome, which the projection treats as instruction: the learner has met
+    this concept, no counts move, no score changes, nothing is claimed. A
+    surface that wants a demonstration to count has to be graded by the
+    server, which every real one already is.
+
+    `hints_used` and `misconception` are left alone. Neither can flatter a
+    learner — one only ever damps confidence, and the other is a note about an
+    error.
+    """
+    event.evidence_type = "exposure" if event.concept_id else None
+    event.evidence_confidence = 0.0 if event.concept_id else None
+    event.measurable_outcome = None
+    event.skill_ids_json = None
+    if event.source_surface not in SOURCE_SURFACES:
+        event.source_surface = None
+    return event

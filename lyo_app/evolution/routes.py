@@ -166,10 +166,18 @@ async def log_event(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Log an explicit learning event (quiz answer, lesson completion, etc.)."""
+    """Log an explicit learning event (quiz answer, lesson completion, etc.).
+
+    The body arrives from a learner's device, so what it is allowed to assert
+    is narrowed first: a client may say what it did, never what that proved.
+    See `sanitize_client_event`. Anything that should count as a
+    demonstration goes through a server-graded path instead.
+    """
+    from lyo_app.events.evidence import sanitize_client_event
+
     # Override user_id with authenticated user
     event.user_id = user.id
-    result = await log_learning_event(db, event)
+    result = await log_learning_event(db, sanitize_client_event(event))
     return result
 
 
