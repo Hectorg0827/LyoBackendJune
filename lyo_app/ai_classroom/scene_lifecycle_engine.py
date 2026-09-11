@@ -3198,6 +3198,35 @@ class SceneLifecycleEngine:
             except Exception:
                 pass
 
+    @staticmethod
+    def _session_concept(context: Optional["ContextSnapshot"]) -> Optional[str]:
+        """Which concept this session's demonstrations belong to.
+
+        Identity fields only: the lesson actually being taught, else the
+        session's topic. Never `learning_objective`.
+
+        `learning_objective` is prose written for the Director to teach from —
+        "Practise and apply Quadratic equations" — and `entry-contract.mjs`
+        sends exactly that from Home and Test Prep. Slugified, it becomes
+        `practise_and_apply_quadratic_equations`, while every surface that
+        reads a learner's record names the same idea `quadratic_equations`:
+        Chat writes that, `topic_standing.concept_id_for_topic` looks it up,
+        spaced repetition schedules it.
+
+        So the evidence was durable, projected, and filed under a key nothing
+        would ever ask about. A learner could work through every session their
+        study plan scheduled and still read "you haven't started yet".
+
+        The same instinct is already recorded a few hundred lines up, where
+        `learning_objective` stopped being frozen to the course-creation prompt
+        because it produced junk pseudo-concepts like "learn"/"basic". This is
+        that lesson applied to the thing it matters most for: a sentence is not
+        an identity, and must never be used as one.
+        """
+        if context is None:
+            return None
+        return getattr(context, "lesson_title", None) or getattr(context, "topic", None)
+
     async def handle_quiz_submission(
         self,
         user_id: str,
@@ -3214,10 +3243,8 @@ class SceneLifecycleEngine:
         # wrong answer — the learner marked down for a question the server
         # failed to look up.
         scored = False
-        validated_skill_id = (
-            self.session_contexts.get(session_id).learning_objective
-            if self.session_contexts.get(session_id)
-            else None
+        validated_skill_id = self._session_concept(
+            self.session_contexts.get(session_id)
         )
         selected_feedback = None
         misconception_tag = None
@@ -3348,9 +3375,8 @@ class SceneLifecycleEngine:
         missing: List[str] = []
         hesitant = detect_hesitation(response)
         skill_id = (
-            self.session_contexts.get(session_id).learning_objective
-            if self.session_contexts.get(session_id)
-            else "current_concept"
+            self._session_concept(self.session_contexts.get(session_id))
+            or "current_concept"
         )
         expected_keywords: List[str] = []
         declared_evidence_type = "transfer"

@@ -466,6 +466,124 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
                 str(by_topic),
             )
 
+        print("\n8. A Classroom session on a planned topic reaches that plan")
+        # The link Test Prep exists to make: tap a scheduled session, get
+        # taught, and have the plan know. Section 7 proved a *Chat* answer
+        # reaches readiness; this is the Classroom's own grading, which took a
+        # different route to the learner's record and, until this change, a
+        # different name for the concept once it got there.
+        #
+        # "Long division" is deliberately the topic section 7 just asserted was
+        # untouched, so the only thing that can make it assessed is this.
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from lyo_app.ai_classroom.scene_lifecycle_engine import (
+            ContextSnapshot,
+            SceneLifecycleEngine,
+        )
+        from lyo_app.ai_classroom.sdui_models import (
+            QuizCard,
+            QuizOption,
+            Scene,
+            SceneType,
+        )
+
+        planned_topic = "Long division"
+        engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+        engine.db = session
+        engine.websocket_manager = None
+        engine.process_trigger = AsyncMock(return_value=MagicMock(scene_id="next"))
+        engine.session_contexts = {
+            "e2e-classroom": ContextSnapshot(
+                user_id=str(learner.id),
+                session_id="e2e-classroom",
+                topic=planned_topic,
+                # Exactly what entry-contract.mjs puts in the `objective` query
+                # parameter when the web opens the Classroom on a weak topic.
+                # Slugified it reads `practise_and_apply_long_division`, which
+                # is the pseudo-concept this walk exists to keep out of the
+                # learner's record.
+                learning_objective=f"Practise and apply {planned_topic}",
+            )
+        }
+        # A Director-generated quiz names no concept of its own, which is the
+        # ordinary case for a session with no authored course behind it — and
+        # the case that falls back to the session's own naming.
+        engine.active_scenes = {
+            "s1": Scene(
+                scene_id="s1",
+                scene_type=SceneType.CHALLENGE,
+                components=[
+                    QuizCard(
+                        component_id="quiz-1",
+                        question="What is 144 divided by 12?",
+                        options=[
+                            QuizOption(id="a", label="12", is_correct=True,
+                                       feedback_correct="Yes."),
+                            QuizOption(id="b", label="14", is_correct=False,
+                                       feedback_incorrect="Not quite."),
+                        ],
+                    )
+                ],
+            )
+        }
+
+        personalization = MagicMock()
+        personalization.return_value.trace_knowledge = AsyncMock(return_value={})
+        personalization.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        with patch("lyo_app.personalization.service.PersonalizationEngine", personalization):
+            await engine.handle_quiz_submission(
+                user_id=str(learner.id),
+                session_id="e2e-classroom",
+                quiz_component_id="quiz-1",
+                selected_option_id="a",
+                response_time_ms=5000,
+            )
+        await session.commit()
+
+        after = await client.get(
+            f"/api/v1/me/study_plans/plans/{plan.id}/readiness", headers=headers
+        )
+        check("readiness still answers after a classroom session",
+              after.status_code == 200,
+              f"status {after.status_code}: {after.text[:200]}")
+        if after.status_code == 200:
+            body = after.json()
+            check(
+                "the classroom's work reached the plan",
+                body.get("topics_assessed") == 2,
+                str(body),
+            )
+            taught = [t for t in body.get("topics", []) if t["topic"] == planned_topic]
+            check(
+                "the topic they were just taught now reports mastery",
+                len(taught) == 1 and taught[0]["mastery"] is not None,
+                str(body.get("topics")),
+            )
+            check(
+                "and it is filed under the concept the plan names",
+                len(taught) == 1 and taught[0]["concept_id"] == "long_division",
+                str(taught),
+            )
+            check(
+                "one right multiple-choice pick does not retire the topic",
+                # `focus_next` is "what is most worth your next hour", not
+                # "what you have not touched" — so a topic stays on it while
+                # the learner is still weak at it. This walk first asserted
+                # the opposite, which would have had the plan declare someone
+                # done with long division on the strength of one recognition
+                # answer. That is the fabrication this whole effort is against,
+                # pointed the other way.
+                planned_topic in body.get("focus_next", []),
+                str(body.get("focus_next")),
+            )
+            check(
+                "recognition moved mastery without claiming mastery",
+                len(taught) == 1
+                and 0.0 < (taught[0]["mastery"] or 0.0) < 0.75,
+                str(taught),
+            )
+
     print(f"\n{len(CHECKS) - len(FAILURES)}/{len(CHECKS)} checks passed")
     if FAILURES:
         print("FAILED:")
