@@ -36,6 +36,8 @@ from lyo_app.ai_classroom.sdui_models import (
     AudioMood, ActionIntent, ClassroomMode, HintLevel, WebSocketPayload, SceneStreamPayload,
     UserActionPayload, SystemStatePayload, SceneMetadata
 )
+# Pure vocabulary module — no app imports — so this is safe at module scope.
+from lyo_app.events.evidence import strongest_hint_level
 
 logger = logging.getLogger(__name__)
 
@@ -537,6 +539,15 @@ class ContextAssembler:
                 hint_counts = progress.setdefault("hint_counts", {})
                 lesson_key = str(context.lesson_index)
                 hint_counts[lesson_key] = int(hint_counts.get(lesson_key, 0)) + 1
+                # `context` is rebuilt on every action, so by the time the
+                # learner submits an answer `context.hint_level` is whatever
+                # that submission carried — nothing. The rung has to outlive
+                # the request that asked for it, or grading can only ever see
+                # a count and a full worked example scores like a nudge.
+                hint_levels = progress.setdefault("hint_levels", {})
+                hint_levels[lesson_key] = strongest_hint_level(
+                    hint_levels.get(lesson_key), context.hint_level.value
+                )
             except ValueError:
                 context.hint_level = HintLevel.NUDGE
 
@@ -2456,6 +2467,12 @@ class SceneLifecycleEngine:
                 "attempt_history": list(progress.get("attempt_history", []))[-100:],
                 "review_queue": list(progress.get("review_queue", []))[-50:],
                 "hint_counts": dict(progress.get("hint_counts", {})),
+                # The rung, not just the tally. Persisting only the count
+                # meant that after a worker restart or a reconnect grading
+                # could see that help was taken but not which kind — so a full
+                # worked example scored like a nudge again, which is the exact
+                # gap the rung was added to close.
+                "hint_levels": dict(progress.get("hint_levels", {})),
                 "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
                 "difficulty": progress.get("difficulty"),
@@ -2827,33 +2844,203 @@ class SceneLifecycleEngine:
 
         await self.websocket_manager.stream_scene_to_session(session_id, scene)
 
+    #: How much of the lesson to re-present when teaching from the fallback.
+    #: Long enough to be a real re-teach, short enough not to dump a whole
+    #: lesson into one bubble.
+    _FALLBACK_TEACHING_CHARS = 700
+
+    @staticmethod
+    def _excerpt_for_reteaching(content: Optional[str], limit: int) -> Optional[str]:
+        """Take the opening of the lesson, cut at a sentence boundary.
+
+        Returns None when there is nothing usable, so the caller can choose a
+        different fallback rather than showing an empty or truncated bubble.
+
+        This only ever re-presents text the course already provided. The
+        fallback runs when generation failed, which is precisely the moment
+        not to invent teaching material.
+        """
+        text = (content or "").strip()
+        if len(text) < 40:
+            return None
+        if len(text) <= limit:
+            return text
+
+        window = text[:limit]
+        # Prefer the last sentence end; fall back to the last paragraph or
+        # word break so the excerpt never stops mid-word.
+        cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+        if cut > limit // 3:
+            return window[: cut + 1].strip()
+        cut = max(window.rfind("\n\n"), window.rfind(" "))
+        if cut > limit // 3:
+            return window[:cut].strip() + "…"
+        return window.strip() + "…"
+
     async def _create_fallback_scene(self, trigger: Trigger) -> Scene:
-        """Create safe fallback scene when errors occur"""
+        """Teach something safe when the lifecycle fails.
+
+        WHY THIS IS NOT A "SORRY" SCREEN
+
+        This runs when the Director or the compiler raised — the learner is
+        mid-lesson and the next scene could not be produced. What they used to
+        get here was "Let's continue with one idea at a time when you're
+        ready." and a Continue button: a polite dead end that teaches nothing
+        and hands them no way forward except to press the same button again.
+
+        That dead end is what iOS's on-device teaching engine existed to paper
+        over — its own header said the screen "went dead" when the backend
+        stopped streaming scenes. That engine has been removed, correctly,
+        because a client-side teaching loop makes iOS a pedagogically
+        different product from web and Android. Removing the workaround means
+        the weakness underneath it has to be fixed where every client
+        benefits: here.
+
+        THE RULE
+
+        Never leave the learner with nothing, and never invent teaching
+        material to avoid that. Those pull in opposite directions only if you
+        assume the fallback has to produce new content. It does not — the
+        lesson the learner is already in is sitting in session context. So:
+
+        * If we still hold the lesson, re-teach from it and offer a concrete
+          next move. The learner keeps learning; they never see the failure.
+        * If we hold only a title or objective, name what they are working on
+          and offer to show a worked example, which is a real request the
+          engine can serve on the next turn.
+        * If we hold nothing at all, ask what they want to work on. That is a
+          genuine move that leads somewhere, unlike Continue with nothing
+          behind it.
+
+        Every branch is built from values already in context, so nothing here
+        can raise on a missing field. That matters: this is the error path,
+        and a fallback that throws leaves the learner with the dead screen
+        this exists to prevent.
+        """
+        context = self.session_contexts.get(trigger.session_id)
         language_code = str(
             _SESSION_PROGRESS.get(trigger.session_id, {}).get(
-                "language_code", "en-US"
+                "language_code",
+                getattr(context, "language_code", None) or "en-US",
             )
         )
         is_spanish = language_code.lower().startswith("es")
-        return Scene(
-            scene_type=SceneType.INSTRUCTION,
-            components=[
+
+        lesson_title = (getattr(context, "lesson_title", None) or "").strip()
+        objective = (getattr(context, "learning_objective", None) or "").strip()
+        # Course-provided provenance only. The compiler carries these through
+        # on normal scenes and the fallback must not drop them just because
+        # generation failed.
+        attributions = list(getattr(context, "source_attributions", None) or [])[:5]
+
+        excerpt = self._excerpt_for_reteaching(
+            getattr(context, "lesson_content", None), self._FALLBACK_TEACHING_CHARS
+        )
+
+        components: List[Component] = []
+
+        if excerpt:
+            subject = lesson_title or objective
+            lead = (
+                (f"Retomemos {subject}." if subject else "Retomemos la idea principal.")
+                if is_spanish
+                else (
+                    f"Let's pick {subject} back up."
+                    if subject
+                    else "Let's pick the main idea back up."
+                )
+            )
+            components.append(
                 TeacherMessage(
-                    text=(
-                        "Retomemos una idea a la vez cuando estés listo."
-                        if is_spanish
-                        else "Let's continue with one idea at a time when you're ready."
-                    ),
+                    text=f"{lead}\n\n{excerpt}",
                     emotion="encouraging",
                     audio_mood=AudioMood.CALM,
                     language_code=language_code,
-                ),
+                    source_attributions=attributions,
+                )
+            )
+            components.append(
+                CTAButton(
+                    label="Muéstrame un ejemplo" if is_spanish else "Show me an example",
+                    action_intent=ActionIntent.REQUEST_EXAMPLE,
+                    button_style="secondary",
+                    language_code=language_code,
+                )
+            )
+            components.append(
                 CTAButton(
                     label="Continuar" if is_spanish else "Continue",
                     action_intent=ActionIntent.CONTINUE,
                     language_code=language_code,
-                ),
-            ]
+                )
+            )
+
+        elif lesson_title or objective:
+            subject = lesson_title or objective
+            components.append(
+                TeacherMessage(
+                    text=(
+                        f"Seguimos con {subject}. ¿Quieres ver un ejemplo trabajado "
+                        "o continuar?"
+                        if is_spanish
+                        else f"We're still on {subject}. Want a worked example, "
+                        "or shall we carry on?"
+                    ),
+                    emotion="encouraging",
+                    audio_mood=AudioMood.CALM,
+                    language_code=language_code,
+                    source_attributions=attributions,
+                )
+            )
+            components.append(
+                CTAButton(
+                    label="Muéstrame un ejemplo" if is_spanish else "Show me an example",
+                    action_intent=ActionIntent.REQUEST_EXAMPLE,
+                    button_style="secondary",
+                    language_code=language_code,
+                )
+            )
+            components.append(
+                CTAButton(
+                    label="Continuar" if is_spanish else "Continue",
+                    action_intent=ActionIntent.CONTINUE,
+                    language_code=language_code,
+                )
+            )
+
+        else:
+            # Nothing to re-teach from. Asking is a real move; Continue with
+            # nothing behind it is not.
+            components.append(
+                TeacherMessage(
+                    text=(
+                        "¿Qué te gustaría trabajar ahora?"
+                        if is_spanish
+                        else "What would you like to work on?"
+                    ),
+                    emotion="encouraging",
+                    audio_mood=AudioMood.CALM,
+                    language_code=language_code,
+                )
+            )
+            components.append(
+                InputField(
+                    placeholder=(
+                        "Escribe un tema" if is_spanish else "Type a topic"
+                    ),
+                    question=(
+                        "Dime qué quieres aprender y empezamos por ahí."
+                        if is_spanish
+                        else "Tell me what you want to learn and we'll start there."
+                    ),
+                    action_intent=ActionIntent.ASK_QUESTION,
+                    language_code=language_code,
+                )
+            )
+
+        return Scene(
+            scene_type=SceneType.INSTRUCTION,
+            components=components,
         )
 
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -2883,6 +3070,134 @@ class SceneLifecycleEngine:
 
         return await self.process_trigger(trigger)
 
+    @staticmethod
+    def _canonical_concept_id(concept_id: Optional[str]) -> Optional[str]:
+        """Name a concept the way every other surface names it.
+
+        Chat keys mastery on `slugify_skill(topic)` — lowercased, underscored,
+        capped at 80 characters — so "Square Roots!" and "square roots" reach
+        one row. The Classroom carries human-facing text instead: a learning
+        objective, a lesson title, or whatever an authored component put in
+        `concept_id`.
+
+        Logged raw, "Compare fractions" and "compare_fractions" are two
+        different concepts to the projection, and the two surfaces would go on
+        keeping separate records of the same idea — the exact split this whole
+        change exists to end. Long titles would also overflow the 80-character
+        column and be dropped by the catch-and-log path, silently.
+
+        UUIDs are left alone: those identify a row in `concepts`, the
+        projection routes them to the foreign-keyed column, and slugifying one
+        would turn a valid graph id into a string that matches nothing.
+
+        The placeholder `current_concept` is not a concept. It is what the
+        callers fall back to when they could not determine one, and recording
+        evidence against it would pool unrelated work into a single fake row.
+        """
+        from lyo_app.ai.lesson_composer import slugify_skill
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+
+        if not concept_id:
+            return None
+        if is_concept_graph_id(concept_id):
+            return concept_id
+        slug = slugify_skill(concept_id)
+        # `slugify_skill` returns "general" for input with nothing to slugify,
+        # which is no more a concept than the placeholder is.
+        if slug in ("current_concept", "general"):
+            return None
+        return slug
+
+    async def _log_classroom_evidence(
+        self,
+        *,
+        user_id: str,
+        concept_id: Optional[str],
+        correct: bool,
+        hints_used: int,
+        hint_level: Optional[str] = None,
+        evidence_type: Optional[str] = None,
+        misconception: Optional[str] = None,
+    ) -> None:
+        """Record what the learner just demonstrated on the shared event stream.
+
+        Chat already logs its checks here, and the event processor projects
+        that evidence into `ai_classroom.MasteryState` — the table this engine
+        reads before choosing how to teach. Until now the Classroom only read
+        it. So a learner could prove a concept in the Classroom and arrive at
+        Chat as a stranger, and the Classroom's own next lesson could not see
+        what its own last question had shown. Logging here closes the loop in
+        the other direction: both surfaces write one record of one learner.
+
+        Three things this deliberately does not do:
+
+        * It does not pass `skill_ids_json`. That field is what asks the
+          processor to run a DKT update, and both callers have already run one
+          directly for this same answer. Passing it would count a single
+          answer against the learner's mastery twice.
+        * It does not decide correctness. `correct` is the server's verdict,
+          reached from the authored scene, and is only read here.
+        * It never raises. The learner's verdict and next scene are already
+          decided; evidence logging is what makes the *next* lesson better,
+          not what makes this answer right.
+
+        Asking for help never demotes the rung the learner reached — a
+        transfer done with a nudge is still a transfer. It lowers the
+        confidence attached to it, because the demonstration proves less about
+        what they can do unaided.
+
+        Guests have no learner record to write to, so their evidence is
+        dropped rather than faked.
+        """
+        concept_id = self._canonical_concept_id(concept_id)
+        if not concept_id:
+            return
+
+        try:
+            learner_id = int(user_id)
+        except (TypeError, ValueError):
+            logger.debug("Guest classroom evidence is not persisted")
+            return
+
+        try:
+            from lyo_app.events.evidence import evidence_from_graded_answer
+            from lyo_app.events.models import EventType
+            from lyo_app.events.processor import log_learning_event
+            from lyo_app.events.schemas import LearningEventCreate
+
+            evidence = evidence_from_graded_answer(
+                correct=correct,
+                misconception=misconception,
+                hints_used=hints_used,
+                hint_level=hint_level,
+                evidence_type=evidence_type,
+            )
+            if evidence is None:
+                return
+
+            await log_learning_event(
+                self.db,
+                LearningEventCreate(
+                    user_id=learner_id,
+                    event_type=EventType.CLASSROOM_DEMONSTRATION,
+                    measurable_outcome=1.0 if correct else 0.0,
+                    concept_id=concept_id,
+                    evidence_type=evidence["kind"],
+                    evidence_confidence=evidence["confidence"],
+                    hints_used=hints_used,
+                    misconception=misconception,
+                    source_surface="classroom",
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not log classroom evidence for %s: %s", concept_id, exc
+            )
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
     async def handle_quiz_submission(
         self,
         user_id: str,
@@ -2893,6 +3208,12 @@ class SceneLifecycleEngine:
     ) -> Scene:
         """Validate a quiz server-side and preserve distractor diagnosis."""
         validated_correct = False
+        # Whether an authored option was actually found and graded. Without
+        # this, a submission whose scene or option cannot be located falls
+        # through with `validated_correct` still False and gets recorded as a
+        # wrong answer — the learner marked down for a question the server
+        # failed to look up.
+        scored = False
         validated_skill_id = (
             self.session_contexts.get(session_id).learning_objective
             if self.session_contexts.get(session_id)
@@ -2918,6 +3239,7 @@ class SceneLifecycleEngine:
                     for option in comp.options:
                         if option.id == selected_option_id:
                             validated_correct = option.is_correct
+                            scored = True
                             selected_feedback = (
                                 option.feedback_correct
                                 if validated_correct
@@ -2934,17 +3256,33 @@ class SceneLifecycleEngine:
         hints_used = int(
             progress.get("hint_counts", {}).get(str(lesson_index), 0)
         )
+        hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
 
+        # Keyed the way Chat keys it. The Classroom carries human-facing text
+        # — "Compare fractions" — while Chat writes `slugify_skill` output.
+        # Two names for one concept means two `LearnerMastery` rows for one
+        # learner, and neither surface can see what the other taught.
+        dkt_skill_id = self._canonical_concept_id(validated_skill_id) or "current_concept"
+        # Behind `scored`, exactly like the evidence write below.
+        #
+        # `validated_correct` starts False and is only set while grading an
+        # authored option, so a vanished scene or an unmatched option reaches
+        # here still False. That used to dirty a leftover human-text key
+        # nothing read; now that both surfaces share one key, it would lower
+        # the mastery they both teach from — a lookup failure recorded as the
+        # learner getting it wrong.
         try:
-            user_id_int = int(user_id)
+            user_id_int = int(user_id) if scored else None
+            if user_id_int is None:
+                raise ValueError("nothing was graded")
             from lyo_app.personalization.schemas import KnowledgeTraceRequest
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().trace_knowledge(
                 self.db,
                 KnowledgeTraceRequest(
                     learner_id=str(user_id_int),
-                    skill_id=validated_skill_id or "current_concept",
-                    item_id=validated_skill_id or "current_concept",
+                    skill_id=dkt_skill_id,
+                    item_id=dkt_skill_id,
                     correct=validated_correct,
                     time_taken_seconds=max(response_time_ms / 1000.0, 1.0),
                     hints_used=hints_used,
@@ -2958,6 +3296,20 @@ class SceneLifecycleEngine:
                 await self.db.rollback()
             except Exception:
                 pass
+
+        # A multiple-choice pick is recognition, not application — the ladder's
+        # weakest positive rung. `evidence_from_graded_answer` defaults to that
+        # when no rung is declared, and quiz components declare none, so the
+        # default is the honest answer rather than a missing value.
+        if scored:
+            await self._log_classroom_evidence(
+                user_id=user_id,
+                concept_id=validated_skill_id,
+                correct=validated_correct,
+                hints_used=hints_used,
+                hint_level=hint_level,
+                misconception=misconception_tag,
+            )
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,
@@ -2989,6 +3341,9 @@ class SceneLifecycleEngine:
     ) -> Scene:
         """Score explanation/application evidence from the active server rubric."""
         validated_correct = False
+        # See `handle_quiz_submission`: False means "did not meet the rubric",
+        # and only means that once a rubric was actually found to apply.
+        scored = False
         coverage = 0.0
         missing: List[str] = []
         hesitant = detect_hesitation(response)
@@ -2998,6 +3353,7 @@ class SceneLifecycleEngine:
             else "current_concept"
         )
         expected_keywords: List[str] = []
+        declared_evidence_type = "transfer"
         min_words = 6
         min_score = 0.25
 
@@ -3015,6 +3371,7 @@ class SceneLifecycleEngine:
                 if isinstance(comp, InputField) and comp.component_id == input_component_id:
                     skill_id = comp.concept_id or skill_id
                     expected_keywords = list(comp.expected_keywords)
+                    declared_evidence_type = comp.evidence_type
                     min_words = comp.min_words
                     min_score = comp.min_score
                     validated_correct, coverage, missing = score_transfer_response(
@@ -3023,6 +3380,7 @@ class SceneLifecycleEngine:
                         min_words=min_words,
                         min_score=min_score,
                     )
+                    scored = True
                     break
 
         # Tutor-facing feedback: never quote the Evaluator's raw `missing`
@@ -3040,13 +3398,20 @@ class SceneLifecycleEngine:
         session_context = self.session_contexts.get(session_id)
         lesson_index = session_context.lesson_index if session_context else 0
         hints_used = int(progress.get("hint_counts", {}).get(str(lesson_index), 0))
+        hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
+        # See `handle_quiz_submission`: one key per concept across surfaces.
+        dkt_skill_id = self._canonical_concept_id(skill_id) or "current_concept"
+        # See `handle_quiz_submission`: an unscored submission is a lookup
+        # failure, not a wrong answer, and must not reach shared mastery.
         try:
-            user_id_int = int(user_id)
+            user_id_int = int(user_id) if scored else None
+            if user_id_int is None:
+                raise ValueError("nothing was graded")
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().dkt.update_mastery(
                 self.db,
                 user_id_int,
-                skill_id or "current_concept",
+                dkt_skill_id,
                 validated_correct,
                 max(response_time_ms / 1000.0, 1.0),
                 hints_used,
@@ -3059,6 +3424,25 @@ class SceneLifecycleEngine:
                 await self.db.rollback()
             except Exception:
                 pass
+
+        # The input component declares which rung it is asking for, so a
+        # transfer prompt is recorded as transfer and an explanation prompt as
+        # explanation. `log_learning_event` normalizes the wire's "retrieval"
+        # to the ladder's "retention".
+        #
+        # No misconception is passed. The only per-response diagnosis this
+        # rubric produces is `missing` — the expected keywords the learner did
+        # not use — and those are hidden grading internals. Writing them into
+        # the learner model would put them one render away from the screen.
+        if scored:
+            await self._log_classroom_evidence(
+                user_id=user_id,
+                concept_id=skill_id,
+                correct=validated_correct,
+                hints_used=hints_used,
+                hint_level=hint_level,
+                evidence_type=declared_evidence_type,
+            )
 
         trigger = Trigger(
             trigger_type=TriggerType.USER_ACTION,

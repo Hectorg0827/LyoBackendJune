@@ -22,7 +22,7 @@ import uuid
 
 from sqlalchemy import (
     Column, String, Text, Integer, Boolean, DateTime, JSON,
-    ForeignKey, Index, Float, Enum as SQLEnum, UniqueConstraint
+    ForeignKey, Index, Float, Enum as SQLEnum, UniqueConstraint, text
 )
 
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -373,7 +373,12 @@ class MasteryState(Base):
     concept_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("concepts.id"), nullable=True
     )
-    objective_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    # Carries slug-identified concepts (chat's `slugify_skill` output, up to
+    # 80 chars) as well as authored objective ids. Unlike `concept_id` above
+    # it has no foreign key, which is what lets an identifier that is not a
+    # row in `concepts` be recorded at all. See
+    # lyo_app/events/mastery_projection.is_concept_graph_id.
+    objective_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     
     # Mastery Metrics
     mastery_score: Mapped[float] = mapped_column(Float, default=0.0)  # 0.0 to 1.0
@@ -407,6 +412,22 @@ class MasteryState(Base):
         Index('ix_mastery_user_concept', 'user_id', 'concept_id'),
         Index('ix_mastery_user_objective', 'user_id', 'objective_id'),
         UniqueConstraint('user_id', 'concept_id', name='uq_user_concept_mastery'),
+        # Slug-identified concepts live in objective_id with concept_id NULL,
+        # and the constraint above cannot police them: SQL treats NULLs as
+        # distinct, so (user, NULL) never conflicts with (user, NULL). Without
+        # this, two concurrent chat checks insert two rows for the same
+        # learner and slug, and the next lookup raises MultipleResultsFound —
+        # after which every projection for that concept fails.
+        #
+        # Partial, so rows identified by concept_id are left to the constraint
+        # above rather than being forced to carry a non-null objective_id.
+        Index(
+            'uq_mastery_user_objective',
+            'user_id', 'objective_id',
+            unique=True,
+            postgresql_where=text('objective_id IS NOT NULL'),
+            sqlite_where=text('objective_id IS NOT NULL'),
+        ),
     )
 
 
@@ -416,8 +437,18 @@ class MasteryState(Base):
 
 class ReviewSchedule(Base):
     """
-    Spaced repetition scheduler.
-    Tracks when content should be reviewed for optimal retention.
+    Spaced repetition scheduler. MIGRATION_ONLY — do not write new rows.
+
+    `personalization.SpacedRepetitionSchedule` is the canonical schedule: it
+    is written whenever a learner answers a check, and both Chat's due-review
+    nudge and the classroom's `/review/today` now read it.
+
+    This table's only writers — `spaced_repetition_service` and
+    `interaction_service` — have no callers, so nothing on any live path has
+    ever filled it. It is kept because rows may exist in environments that ran
+    those services directly, and because dropping a table is not something to
+    do in the same change that stops using it. See
+    `lyo_app/personalization/spaced_repetition.py`.
     """
     __tablename__ = "review_schedules"
     

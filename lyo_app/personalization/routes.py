@@ -20,6 +20,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from lyo_app.events.concept_summary import (
+    ConceptSummary,
+    concept_summary_for_user,
+)
+from lyo_app.personalization.recommendations import (
+    RecommendationList,
+    recommendations_for_user,
+)
+
 router = APIRouter(prefix="/api/v1/personalization", tags=["Personalization"])
 
 @router.patch("/state")
@@ -95,6 +104,39 @@ async def get_next_action(
     except Exception as e:
         logger.error(f"Error getting next action: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/recommendations", response_model=RecommendationList)
+async def get_recommendations(
+    limit: int = 4,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RecommendationList:
+    """What this learner should do next, with the reason attached.
+
+    Drawn from their own review schedule and mastery profile. Returns an empty
+    list when there is no basis for a recommendation — Home has an honest
+    empty state for that, and filling it with the catalogue is what this
+    endpoint exists to replace.
+    """
+    return await recommendations_for_user(db, current_user.id, limit=max(1, min(limit, 10)))
+
+
+@router.get("/concepts/summary", response_model=ConceptSummary)
+async def get_concept_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ConceptSummary:
+    """How many concepts this learner is exploring, has learned, retained and mastered.
+
+    Counted from the learner's own evidence rather than from a score, so the
+    numbers on the front page mean what they say. See
+    `lyo_app/events/concept_summary.py` for what each word is earned by.
+
+    Never raises: this feeds Home, and a learner should not lose their front
+    page because a summary query failed.
+    """
+    return await concept_summary_for_user(db, current_user.id)
+
 
 @router.get("/mastery", response_model=MasteryProfile)
 async def get_mastery_profile(

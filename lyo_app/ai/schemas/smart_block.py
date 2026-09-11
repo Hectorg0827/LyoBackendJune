@@ -137,6 +137,34 @@ class SmartBlock(BaseModel):
         return cls(type=SmartBlockType.flashcard, subtype="single", content=FlashcardBlockContent(front=front, back=back, **kwargs).model_dump())
 
     @classmethod
+    def explorable(
+        cls,
+        kind: str,
+        prompt: str,
+        points: List[Dict[str, Any]],
+        concept_id: Optional[str] = None,
+        **kwargs,
+    ) -> "SmartBlock":
+        """A representation the learner can manipulate.
+
+        Rides on the existing `interactive` block type as a new subtype rather
+        than becoming a tenth top-level type: clients that do not know the
+        subtype fall back to the generic interactive renderer instead of
+        showing nothing.
+
+        `concept_id` travels with it so that engaging with the explorable can
+        be recorded against the right concept. What it records is exposure —
+        the learner met this idea — and never more than that. Moving a slider
+        is not a demonstration.
+        """
+        return cls(
+            type=SmartBlockType.interactive,
+            subtype="explorable",
+            content={"kind": kind, "prompt": prompt, "points": points},
+            metadata={"concept_id": concept_id} if concept_id else None,
+        )
+
+    @classmethod
     def data_viz(cls, source: str, fmt: str = "mermaid", **kwargs) -> "SmartBlock":
         return cls(type=SmartBlockType.data_viz, subtype="diagram", content=DataVizBlockContent(format=fmt, source=source, **kwargs).model_dump())
 

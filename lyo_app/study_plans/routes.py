@@ -20,7 +20,17 @@ from lyo_app.study_plans.schemas import (
     StudySessionRead,
     StudySessionUpdate,
     ProgressDashboardStats,
-    PlanEventRead
+    PlanEventRead,
+    TopicStandingRead,
+    ReadinessRead,
+)
+from lyo_app.study_plans.session_outcome import derive_session_outcome
+from lyo_app.study_plans.topic_standing import (
+    concept_id_for_topic,
+    days_until,
+    readiness_fraction,
+    standings_for_profile,
+    weakest_topics,
 )
 
 logger = logging.getLogger(__name__)
@@ -482,11 +492,25 @@ async def get_today_sessions(
 )
 async def complete_session(
     session_id: str,
-    performance_score: float = Query(..., ge=0.0, le=1.0),
     user_notes: Optional[str] = Query(""),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
+    """Close a session and record what the server actually measured.
+
+    `performance_score` used to arrive here as a required query parameter —
+    the device declaring how well its owner had done — and the progress
+    dashboard averaged those numbers into the learner's "mastery". A client
+    may say what it did; it may never say what that proved. The score is now
+    read back out of the evidence this server recorded while the session was
+    open, and a session in which nothing was graded is completed with no score
+    at all rather than an invented one.
+
+    The parameter is removed rather than accepted-and-ignored. A caller that
+    still sends it behaves exactly as one that does not, since unknown query
+    parameters are dropped, and nobody is left believing a number they
+    submitted was stored.
+    """
     stmt = select(StudySession).where(
         and_(StudySession.id == session_id, StudySession.user_id == current_user.id)
     )
@@ -494,28 +518,93 @@ async def complete_session(
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Study session not found")
-        
+
+    completed_at = datetime.utcnow()
+    outcome = await derive_session_outcome(
+        db,
+        user_id=current_user.id,
+        concept_id=concept_id_for_topic(session.topic),
+        duration_minutes=session.duration_minutes,
+        now=completed_at,
+    )
+
     session.status = "completed"
-    session.completed_at = datetime.utcnow()
-    session.performance_score = performance_score
+    session.completed_at = completed_at
+    session.performance_score = outcome.score
     session.user_notes = user_notes
-    
-    # Audit log of the event
+
+    # The audit line records that nothing was graded just as explicitly as it
+    # records a score: "we did not measure this session" is the interesting
+    # case, and an absent field reads as a bug rather than as a fact.
+    if outcome.measured:
+        reasoning = (
+            f"Session on {session.topic} completed; {outcome.graded} graded "
+            f"demonstration(s), score {outcome.score:.2f}"
+        )
+    else:
+        reasoning = (
+            f"Session on {session.topic} completed; nothing was graded, "
+            f"{outcome.seen} exposure(s) recorded"
+        )
     event = PlanEvent(
         study_plan_id=session.study_plan_id,
         user_id=current_user.id,
         event_type="session_completed",
-        reasoning=f"Session on {session.topic} completed with score {performance_score}",
-        payload={"session_id": session_id, "performance_score": performance_score}
+        reasoning=reasoning[:500],
+        payload={
+            "session_id": session_id,
+            "performance_score": outcome.score,
+            "graded": outcome.graded,
+            "seen": outcome.seen,
+        },
     )
     db.add(event)
-    
+
     await db.commit()
-    return {"ok": True}
+    return {
+        "ok": True,
+        "performance_score": outcome.score,
+        "graded": outcome.graded,
+        "seen": outcome.seen,
+    }
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 📈 PROGRESS DASHBOARD STATS
 # ═══════════════════════════════════════════════════════════════════════════════════
+
+
+async def _load_profile(db: AsyncSession, plan_id: str, user_id: int) -> Optional[TestProfile]:
+    """The test a plan is for, or None if the plan is not this learner's.
+
+    Scoped by user on both hops. Reading the plan's profile without checking
+    who owns the plan would let any learner name someone else's plan id and
+    read the subject, date and topic list of their exam.
+    """
+    plan = (
+        await db.execute(
+            select(StudyPlan).where(
+                and_(StudyPlan.id == plan_id, StudyPlan.user_id == user_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if plan is None:
+        return None
+    return (
+        await db.execute(
+            select(TestProfile).where(
+                and_(
+                    TestProfile.id == plan.test_profile_id,
+                    TestProfile.user_id == user_id,
+                )
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _plan_topics_of(db: AsyncSession, plan_id: str, user_id: int) -> List[Any]:
+    """The topic list behind a plan; empty when the plan or profile is gone."""
+    profile = await _load_profile(db, plan_id, user_id)
+    return list(profile.topics or []) if profile else []
 
 @router.get(
     "/plans/{plan_id}/stats",
@@ -541,17 +630,24 @@ async def get_plan_stats(
     result_e = await db.execute(stmt_events)
     events = result_e.scalars().all()
     
-    # 3. Compute topic mastery (average performance score)
-    by_topic = {}
-    for s in sessions:
-        if s.status != "completed":
-            continue
-        score = float(s.performance_score) if s.performance_score is not None else 0.0
-        by_topic.setdefault(s.topic, []).append(score)
-        
-    mastery = {topic: sum(scores)/len(scores) for topic, scores in by_topic.items()}
+    # 3. Topic mastery, from the learner's record rather than from this plan.
+    #
+    # This used to average the `performance_score` of completed sessions and
+    # call the result mastery. Those scores were supplied by the client, so
+    # the figure was self-report; and even once the server derives them, a
+    # plan that scored its own sessions would still be a second opinion about
+    # a learner who already has a record. `MasteryState` is what the Classroom
+    # teaches from, so it is what the plan reports.
+    #
+    # A topic the learner has never been assessed on is omitted rather than
+    # sent as 0.0: absent means "nothing shown yet", zero means "measured and
+    # nothing demonstrated", and a heatmap cannot distinguish them if the API
+    # does not.
+    topics = await _plan_topics_of(db, plan_id, current_user.id)
+    standings = await standings_for_profile(db, current_user.id, topics)
+    mastery = {s.topic: s.mastery for s in standings if s.assessed}
     completed_count = sum(1 for s in sessions if s.status == "completed")
-    
+
     return ProgressDashboardStats(
         mastery_by_topic=mastery,
         sessions_completed=completed_count,
@@ -700,3 +796,59 @@ async def coach_study_plan(
         "reasoning": reasoning,
         "nudge_message": decision.get("nudge_message", "")
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# 🎯 READINESS
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/plans/{plan_id}/readiness",
+    response_model=ReadinessRead,
+    summary="How much of this test the learner has actually demonstrated.",
+)
+async def get_plan_readiness(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReadinessRead:
+    """Readiness for one test, from the learner's own record.
+
+    The phase plan named readiness and nothing computed it, so a learner with
+    a plan could see how many sessions they had ticked off but never whether
+    that had made them ready — which is the only question the product exists
+    to answer for them.
+
+    It is a weighted coverage figure: each topic's canonical mastery, weighted
+    by how much of the exam that topic is. A topic never assessed contributes
+    nothing, because a topic you have shown nothing on is one you are not
+    ready for — but it is *reported* separately from a topic measured at zero,
+    so a dashboard can say "not started" instead of claiming a result.
+    """
+    profile = await _load_profile(db, plan_id, current_user.id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Study plan not found")
+
+    standings = await standings_for_profile(db, current_user.id, profile.topics)
+    assessed = [s for s in standings if s.assessed]
+
+    return ReadinessRead(
+        plan_id=plan_id,
+        subject=profile.subject,
+        test_date=profile.test_date,
+        days_remaining=days_until(profile.test_date, date.today()),
+        readiness=readiness_fraction(standings),
+        topics_total=len(standings),
+        topics_assessed=len(assessed),
+        topics=[
+            TopicStandingRead(
+                topic=s.topic,
+                concept_id=s.concept_id,
+                weight=s.weight,
+                mastery=s.mastery,
+                attempts=s.attempts,
+            )
+            for s in standings
+        ],
+        focus_next=[s.topic for s in weakest_topics(standings)],
+    )

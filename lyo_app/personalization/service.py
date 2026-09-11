@@ -718,15 +718,28 @@ class PersonalizationEngine:
         
         return recs
     
-    async def _update_repetition_schedule(
+    async def record_review(
         self,
         db: AsyncSession,
         user_id: int,
         skill_id: str,
         item_id: str,
-        correct: bool
-    ):
-        """Update spaced repetition schedule"""
+        quality,
+    ) -> SpacedRepetitionSchedule:
+        """Apply one graded recall to this learner's schedule.
+
+        The single write path for spaced repetition. Chat's check reaches it
+        through `_update_repetition_schedule` with a pass/fail grade; the
+        classroom's review endpoint reaches it with the learner's actual 0..5
+        rating. Both land in one table, so a concept cannot be due on one
+        surface and not the other — which is exactly what happened while the
+        classroom kept its own schedule that nothing on a live path wrote.
+
+        The arithmetic lives in `spaced_repetition.py` so there is one SM-2 in
+        the product rather than one per surface.
+        """
+        from .spaced_repetition import Schedule, clamp_quality, next_schedule
+
         result = await db.execute(
             select(SpacedRepetitionSchedule).where(
                 and_(
@@ -736,7 +749,7 @@ class PersonalizationEngine:
             )
         )
         schedule = result.scalar_one_or_none()
-        
+
         if not schedule:
             # Explicit initial values: column defaults only apply at INSERT
             # flush, and the SM-2 math below reads these immediately.
@@ -749,28 +762,44 @@ class PersonalizationEngine:
                 repetitions=0,
             )
             db.add(schedule)
-        
-        # SM-2 algorithm
-        if correct:
-            if schedule.repetitions == 0:
-                schedule.interval = 1
-            elif schedule.repetitions == 1:
-                schedule.interval = 6
-            else:
-                schedule.interval = int(schedule.interval * schedule.easiness_factor)
-            
-            schedule.repetitions += 1
-            schedule.easiness_factor = max(1.3, schedule.easiness_factor + 0.1)
-        else:
-            schedule.repetitions = 0
-            schedule.interval = 1
-            schedule.easiness_factor = max(1.3, schedule.easiness_factor - 0.2)
-        
+
+        updated = next_schedule(
+            Schedule(
+                easiness_factor=schedule.easiness_factor,
+                interval_days=schedule.interval,
+                repetitions=schedule.repetitions,
+            ),
+            quality,
+        )
+
+        schedule.easiness_factor = updated.easiness_factor
+        schedule.interval = updated.interval_days
+        schedule.repetitions = updated.repetitions
         schedule.last_review = datetime.utcnow()
-        schedule.next_review = datetime.utcnow() + timedelta(days=schedule.interval)
-        schedule.last_grade = 5 if correct else 2
-        
+        schedule.next_review = datetime.utcnow() + timedelta(days=updated.interval_days)
+        schedule.last_grade = clamp_quality(quality)
+
         await db.commit()
+        return schedule
+
+    async def _update_repetition_schedule(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        skill_id: str,
+        item_id: str,
+        correct: bool
+    ):
+        """Update spaced repetition schedule from a pass/fail check."""
+        from .spaced_repetition import QUALITY_FOR_CORRECT, QUALITY_FOR_INCORRECT
+
+        await self.record_review(
+            db,
+            user_id,
+            skill_id,
+            item_id,
+            QUALITY_FOR_CORRECT if correct else QUALITY_FOR_INCORRECT,
+        )
     
     async def _get_due_repetitions(
         self,
@@ -861,6 +890,12 @@ class PersonalizationEngine:
                 "days_overdue": max(0, (now - schedule.next_review).days) if schedule.next_review else 0,
                 "mastery_level": mastery.mastery_level if mastery else None,
                 "last_misconception": misconceptions[-1] if misconceptions else None,
+                # The classroom's review queue renders these. They are added
+                # here rather than queried again there, so both surfaces agree
+                # on what is due from one read of one table.
+                "interval_days": schedule.interval or 1,
+                "repetitions": schedule.repetitions or 0,
+                "last_review": schedule.last_review,
             })
 
         return due

@@ -29,6 +29,7 @@ from lyo_app.core.database import get_db
 from lyo_app.auth.jwt_auth import get_current_user, get_optional_current_user
 from lyo_app.models.enhanced import User
 from lyo_app.chat.models import ChatMode, ChatMessage, ChatConversation
+from lyo_app.ai.schemas.block_redaction import redact_blocks
 from lyo_app.chat.schemas import (
     ChatRequest, ChatResponse, ConversationHistoryItem,
     QuickExplainerRequest, QuickExplainerResponse,
@@ -82,7 +83,17 @@ def _conversation_title(conversation: ChatConversation) -> str:
 
 
 def _message_read(message: ChatMessage) -> ConversationMessageRead:
-    return ConversationMessageRead.model_validate(message)
+    """Serialise one stored message for a client.
+
+    The single funnel for message reads, which is why the block redaction goes
+    here: a check's answer key must not travel with the question, and a
+    reloaded conversation is just as much a way out of the server as the
+    stream is. The stored row keeps the key, because grading a later
+    submission reads it back.
+    """
+    read = ConversationMessageRead.model_validate(message)
+    read.blocks = redact_blocks(read.blocks)
+    return read
 
 
 async def _conversation_summary(

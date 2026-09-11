@@ -1,7 +1,7 @@
 """Pydantic schemas for the Test Prep & Study Plans API."""
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 # Common status literals
 PlanStatus = Literal["active", "paused", "completed", "archived", "abandoned"]
@@ -110,9 +110,26 @@ class StudySessionRead(BaseModel):
     module_id: Optional[str]
     status: SessionStatus
     completed_at: Optional[datetime]
+    #: Server-derived. Null means the session was completed but nothing was
+    #: graded during it, which is different from a measured zero.
     performance_score: Optional[float]
     user_notes: Optional[str]
     agent_notes: Optional[str]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def concept_id(self) -> str:
+        """How the learner's record names this session's topic.
+
+        A session carried a human topic string and nothing that could reach
+        the Classroom, so "study quadratics at 4pm" could not become a lesson
+        on quadratics. Deriving the slug here — once, on the server — keeps
+        every client naming the concept the same way the evidence does,
+        instead of each re-implementing `slugify_skill` and drifting.
+        """
+        from lyo_app.study_plans.topic_standing import concept_id_for_topic
+
+        return concept_id_for_topic(self.topic)
 
     class Config:
         from_attributes = True
@@ -162,3 +179,37 @@ class ProgressDashboardStats(BaseModel):
     sessions_completed: int
     sessions_total: int
     recent_events: List[PlanEventRead]
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# 🎯 READINESS SCHEMAS
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+class TopicStandingRead(BaseModel):
+    """One topic of a test and what the learner has shown on it."""
+    topic: str
+    #: How the learner's record names this topic, so a client can route into
+    #: the Classroom on it rather than re-deriving the slug and diverging.
+    concept_id: str
+    weight: float
+    #: null means never assessed — a different claim from 0.0, which means
+    #: measured and nothing demonstrated. A client must not render them alike.
+    mastery: Optional[float] = None
+    attempts: int = 0
+
+class ReadinessRead(BaseModel):
+    """How ready this learner is for one specific test."""
+    plan_id: str
+    subject: str
+    test_date: date
+    #: Negative once the date has passed; null when the profile has no date.
+    days_remaining: Optional[int] = None
+    #: Weighted 0..1 across the topics. null only when the profile lists no
+    #: usable topics, so there is no test to be ready for.
+    readiness: Optional[float] = None
+    topics_total: int
+    #: Lets a client say "you haven't started yet" rather than "0% ready",
+    #: which is the same number but a different and crueller claim.
+    topics_assessed: int
+    topics: List[TopicStandingRead] = Field(default_factory=list)
+    #: Unopened topics first, then the weakest, heaviest-weighted first.
+    focus_next: List[str] = Field(default_factory=list)
