@@ -326,5 +326,100 @@ class GeneratedComponentConceptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session_concept(None))
 
 
+class IdentitylessSessionTests(unittest.IsolatedAsyncioTestCase):
+    """A session with nothing to name records nothing, on every path.
+
+    `_canonical_concept_id` rejects the `current_concept` placeholder for a
+    stated reason: recording against it pools unrelated work into a single fake
+    row. `_log_classroom_evidence` honours that and drops the write.
+
+    The DKT trace did not. It was gated on `scored` alone and fell back to the
+    placeholder, so every identity-less graded session in the product — across
+    unrelated learners and unrelated subjects — accumulated into one shared
+    `current_concept` mastery record. One of the two systems dropped the work
+    and the other pooled it, which is worse than either choice made twice.
+    """
+
+    def setUp(self):
+        _SESSION_PROGRESS.pop(SESSION, None)
+
+    def tearDown(self):
+        _SESSION_PROGRESS.pop(SESSION, None)
+
+    async def _submit_quiz(self, context):
+        engine = _engine(context)
+        engine.active_scenes = {"s1": _unauthored_quiz()}
+        capture = _Capture()
+        personalization = MagicMock()
+        personalization.return_value.trace_knowledge = AsyncMock(return_value={})
+        personalization.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        with patch("lyo_app.personalization.service.PersonalizationEngine", personalization), \
+             patch("lyo_app.events.processor.log_learning_event", capture.log):
+            await engine.handle_quiz_submission(
+                user_id="42",
+                session_id=SESSION,
+                quiz_component_id="quiz-1",
+                selected_option_id="a",
+                response_time_ms=4000,
+            )
+        return personalization, capture
+
+    async def _submit_transfer(self, context):
+        engine = _engine(context)
+        engine.active_scenes = {"s2": _unauthored_transfer()}
+        capture = _Capture()
+        personalization = MagicMock()
+        personalization.return_value.trace_knowledge = AsyncMock(return_value={})
+        personalization.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        with patch("lyo_app.personalization.service.PersonalizationEngine", personalization), \
+             patch("lyo_app.events.processor.log_learning_event", capture.log):
+            await engine.handle_transfer_submission(
+                user_id="42",
+                session_id=SESSION,
+                input_component_id="input-1",
+                response="A parabola crosses the axis at its roots.",
+                response_time_ms=9000,
+            )
+        return personalization, capture
+
+    async def test_an_identityless_quiz_is_not_traced_against_a_placeholder(self):
+        nameless = _context(topic=None, lesson_title=None)
+
+        personalization, capture = await self._submit_quiz(nameless)
+
+        personalization.return_value.trace_knowledge.assert_not_awaited()
+        self.assertEqual(capture.events, [], "evidence already declined to record this")
+
+    async def test_an_identityless_transfer_is_not_traced_either(self):
+        # The transfer path persists through `dkt.update_mastery`, not
+        # `trace_knowledge`. Asserting the quiz path's method here passed
+        # trivially in the first draft of this test — green, and proving
+        # nothing about the path it named.
+        nameless = _context(topic=None, lesson_title=None)
+
+        personalization, capture = await self._submit_transfer(nameless)
+
+        personalization.return_value.dkt.update_mastery.assert_not_awaited()
+        self.assertEqual(capture.events, [])
+
+    async def test_a_named_session_is_still_traced(self):
+        # The guard must not cost the ordinary case its mastery update.
+        personalization, capture = await self._submit_quiz(_context())
+
+        personalization.return_value.trace_knowledge.assert_awaited()
+        request = personalization.return_value.trace_knowledge.await_args.args[1]
+        self.assertEqual(request.skill_id, PLAN_CONCEPT)
+        self.assertEqual(capture.only.concept_id, PLAN_CONCEPT)
+
+    async def test_a_named_transfer_is_still_traced(self):
+        personalization, capture = await self._submit_transfer(_context())
+
+        personalization.return_value.dkt.update_mastery.assert_awaited()
+        # (db, user_id, skill_id, correct, seconds, hints)
+        skill_id = personalization.return_value.dkt.update_mastery.await_args.args[2]
+        self.assertEqual(skill_id, PLAN_CONCEPT)
+        self.assertEqual(capture.only.concept_id, PLAN_CONCEPT)
+
+
 if __name__ == "__main__":
     unittest.main()
