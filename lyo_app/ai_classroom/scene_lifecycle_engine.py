@@ -1489,6 +1489,42 @@ class ClassroomDirector:
 # 🎨 PHASE 4: SDUI COMPILER (Act)
 # ═══════════════════════════════════════════════════════════════════════════════════
 
+def session_concept(context: Optional["ContextSnapshot"]) -> Optional[str]:
+    """Which concept a session's demonstrations belong to.
+
+    Identity fields only: the lesson actually being taught, else the session's
+    topic. Never `learning_objective`.
+
+    `learning_objective` is prose written for the Director to teach from —
+    "Practise and apply Quadratic equations" — and `entry-contract.mjs` sends
+    exactly that from Home and Test Prep. Slugified it becomes
+    `practise_and_apply_quadratic_equations`, while every surface that reads a
+    learner's record names the same idea `quadratic_equations`: Chat writes
+    that, `topic_standing.concept_id_for_topic` looks it up, spaced repetition
+    schedules it.
+
+    So the evidence was durable, projected, and filed under a key nothing would
+    ever ask about. A learner could work through every session their study plan
+    scheduled and still read "you haven't started yet".
+
+    At module scope because both halves need the same answer. `SceneCompiler`
+    stamps the concept onto the components it generates; `SceneLifecycleEngine`
+    falls back to it when a component carries none. Fixing only the second was
+    the first attempt at this, and it did nothing: the compiler was writing the
+    prose objective into `component.concept_id`, so there was never a fallback
+    to reach.
+
+    The same instinct is already recorded in `_assemble_context`, where
+    `learning_objective` stopped being frozen to the course-creation prompt
+    because it produced junk pseudo-concepts like "learn"/"basic". This is that
+    lesson applied to the thing it matters most for: a sentence is not an
+    identity, and must never be used as one.
+    """
+    if context is None:
+        return None
+    return getattr(context, "lesson_title", None) or getattr(context, "topic", None)
+
+
 class SceneCompiler:
     """Compiles Director decisions into concrete SDUI scenes"""
 
@@ -1774,7 +1810,7 @@ class SceneCompiler:
                     else "Explain and apply the idea…"
                 ),
                 action_intent=ActionIntent.SUBMIT_TRANSFER,
-                concept_id=objective,
+                concept_id=session_concept(context) or objective,
                 evidence_type="retrieval" if context.classroom_mode == ClassroomMode.REVIEW else "transfer",
                 expected_keywords=keywords,
                 min_words=6,
@@ -2294,7 +2330,7 @@ Rules:
                 question=data["question"],
                 options=options,
                 allow_multiple_attempts=True,
-                concept_id=context.learning_objective or context.topic or "current_concept",
+                concept_id=session_concept(context) or "current_concept",
                 language_code=context.language_code,
             )
 
@@ -2375,7 +2411,7 @@ Rules:
             question=option_copy["question"],
             options=options,
             allow_multiple_attempts=True,
-            concept_id=context.learning_objective or context.topic or "current_concept",
+            concept_id=session_concept(context) or "current_concept",
             language_code=context.language_code,
         )
 
@@ -3198,35 +3234,6 @@ class SceneLifecycleEngine:
             except Exception:
                 pass
 
-    @staticmethod
-    def _session_concept(context: Optional["ContextSnapshot"]) -> Optional[str]:
-        """Which concept this session's demonstrations belong to.
-
-        Identity fields only: the lesson actually being taught, else the
-        session's topic. Never `learning_objective`.
-
-        `learning_objective` is prose written for the Director to teach from —
-        "Practise and apply Quadratic equations" — and `entry-contract.mjs`
-        sends exactly that from Home and Test Prep. Slugified, it becomes
-        `practise_and_apply_quadratic_equations`, while every surface that
-        reads a learner's record names the same idea `quadratic_equations`:
-        Chat writes that, `topic_standing.concept_id_for_topic` looks it up,
-        spaced repetition schedules it.
-
-        So the evidence was durable, projected, and filed under a key nothing
-        would ever ask about. A learner could work through every session their
-        study plan scheduled and still read "you haven't started yet".
-
-        The same instinct is already recorded a few hundred lines up, where
-        `learning_objective` stopped being frozen to the course-creation prompt
-        because it produced junk pseudo-concepts like "learn"/"basic". This is
-        that lesson applied to the thing it matters most for: a sentence is not
-        an identity, and must never be used as one.
-        """
-        if context is None:
-            return None
-        return getattr(context, "lesson_title", None) or getattr(context, "topic", None)
-
     async def handle_quiz_submission(
         self,
         user_id: str,
@@ -3243,7 +3250,7 @@ class SceneLifecycleEngine:
         # wrong answer — the learner marked down for a question the server
         # failed to look up.
         scored = False
-        validated_skill_id = self._session_concept(
+        validated_skill_id = session_concept(
             self.session_contexts.get(session_id)
         )
         selected_feedback = None
@@ -3375,7 +3382,7 @@ class SceneLifecycleEngine:
         missing: List[str] = []
         hesitant = detect_hesitation(response)
         skill_id = (
-            self._session_concept(self.session_contexts.get(session_id))
+            session_concept(self.session_contexts.get(session_id))
             or "current_concept"
         )
         expected_keywords: List[str] = []
