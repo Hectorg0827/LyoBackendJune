@@ -1489,6 +1489,42 @@ class ClassroomDirector:
 # 🎨 PHASE 4: SDUI COMPILER (Act)
 # ═══════════════════════════════════════════════════════════════════════════════════
 
+def session_concept(context: Optional["ContextSnapshot"]) -> Optional[str]:
+    """Which concept a session's demonstrations belong to.
+
+    Identity fields only: the lesson actually being taught, else the session's
+    topic. Never `learning_objective`.
+
+    `learning_objective` is prose written for the Director to teach from —
+    "Practise and apply Quadratic equations" — and `entry-contract.mjs` sends
+    exactly that from Home and Test Prep. Slugified it becomes
+    `practise_and_apply_quadratic_equations`, while every surface that reads a
+    learner's record names the same idea `quadratic_equations`: Chat writes
+    that, `topic_standing.concept_id_for_topic` looks it up, spaced repetition
+    schedules it.
+
+    So the evidence was durable, projected, and filed under a key nothing would
+    ever ask about. A learner could work through every session their study plan
+    scheduled and still read "you haven't started yet".
+
+    At module scope because both halves need the same answer. `SceneCompiler`
+    stamps the concept onto the components it generates; `SceneLifecycleEngine`
+    falls back to it when a component carries none. Fixing only the second was
+    the first attempt at this, and it did nothing: the compiler was writing the
+    prose objective into `component.concept_id`, so there was never a fallback
+    to reach.
+
+    The same instinct is already recorded in `_assemble_context`, where
+    `learning_objective` stopped being frozen to the course-creation prompt
+    because it produced junk pseudo-concepts like "learn"/"basic". This is that
+    lesson applied to the thing it matters most for: a sentence is not an
+    identity, and must never be used as one.
+    """
+    if context is None:
+        return None
+    return getattr(context, "lesson_title", None) or getattr(context, "topic", None)
+
+
 class SceneCompiler:
     """Compiles Director decisions into concrete SDUI scenes"""
 
@@ -1774,7 +1810,7 @@ class SceneCompiler:
                     else "Explain and apply the idea…"
                 ),
                 action_intent=ActionIntent.SUBMIT_TRANSFER,
-                concept_id=objective,
+                concept_id=session_concept(context) or objective,
                 evidence_type="retrieval" if context.classroom_mode == ClassroomMode.REVIEW else "transfer",
                 expected_keywords=keywords,
                 min_words=6,
@@ -2294,7 +2330,7 @@ Rules:
                 question=data["question"],
                 options=options,
                 allow_multiple_attempts=True,
-                concept_id=context.learning_objective or context.topic or "current_concept",
+                concept_id=session_concept(context) or "current_concept",
                 language_code=context.language_code,
             )
 
@@ -2375,7 +2411,7 @@ Rules:
             question=option_copy["question"],
             options=options,
             allow_multiple_attempts=True,
-            concept_id=context.learning_objective or context.topic or "current_concept",
+            concept_id=session_concept(context) or "current_concept",
             language_code=context.language_code,
         )
 
@@ -3214,10 +3250,8 @@ class SceneLifecycleEngine:
         # wrong answer — the learner marked down for a question the server
         # failed to look up.
         scored = False
-        validated_skill_id = (
-            self.session_contexts.get(session_id).learning_objective
-            if self.session_contexts.get(session_id)
-            else None
+        validated_skill_id = session_concept(
+            self.session_contexts.get(session_id)
         )
         selected_feedback = None
         misconception_tag = None
@@ -3262,7 +3296,14 @@ class SceneLifecycleEngine:
         # — "Compare fractions" — while Chat writes `slugify_skill` output.
         # Two names for one concept means two `LearnerMastery` rows for one
         # learner, and neither surface can see what the other taught.
-        dkt_skill_id = self._canonical_concept_id(validated_skill_id) or "current_concept"
+        # No placeholder fallback. `_canonical_concept_id` returns None for a
+        # session with nothing to name, and the evidence write below already
+        # declines those. Falling back to `current_concept` here persisted them
+        # anyway, so every identity-less graded session in the product — across
+        # unrelated learners and unrelated subjects — accumulated into one
+        # shared mastery row. That is the fake row the guard exists to prevent;
+        # it was simply not applied to this path.
+        dkt_skill_id = self._canonical_concept_id(validated_skill_id)
         # Behind `scored`, exactly like the evidence write below.
         #
         # `validated_correct` starts False and is only set while grading an
@@ -3272,9 +3313,9 @@ class SceneLifecycleEngine:
         # the mastery they both teach from — a lookup failure recorded as the
         # learner getting it wrong.
         try:
-            user_id_int = int(user_id) if scored else None
+            user_id_int = int(user_id) if scored and dkt_skill_id else None
             if user_id_int is None:
-                raise ValueError("nothing was graded")
+                raise ValueError("nothing was graded, or no concept to record against")
             from lyo_app.personalization.schemas import KnowledgeTraceRequest
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().trace_knowledge(
@@ -3289,7 +3330,7 @@ class SceneLifecycleEngine:
                 ),
             )
         except (ValueError, TypeError):
-            logger.debug("Guest quiz result is not persisted")
+            logger.debug("Quiz result not persisted: guest, ungraded, or unnamed concept")
         except Exception as exc:
             logger.warning("Could not persist classroom recognition evidence: %s", exc)
             try:
@@ -3348,9 +3389,8 @@ class SceneLifecycleEngine:
         missing: List[str] = []
         hesitant = detect_hesitation(response)
         skill_id = (
-            self.session_contexts.get(session_id).learning_objective
-            if self.session_contexts.get(session_id)
-            else "current_concept"
+            session_concept(self.session_contexts.get(session_id))
+            or "current_concept"
         )
         expected_keywords: List[str] = []
         declared_evidence_type = "transfer"
@@ -3399,14 +3439,15 @@ class SceneLifecycleEngine:
         lesson_index = session_context.lesson_index if session_context else 0
         hints_used = int(progress.get("hint_counts", {}).get(str(lesson_index), 0))
         hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
-        # See `handle_quiz_submission`: one key per concept across surfaces.
-        dkt_skill_id = self._canonical_concept_id(skill_id) or "current_concept"
+        # See `handle_quiz_submission`: one key per concept across surfaces,
+        # and no placeholder for a session with nothing to name.
+        dkt_skill_id = self._canonical_concept_id(skill_id)
         # See `handle_quiz_submission`: an unscored submission is a lookup
         # failure, not a wrong answer, and must not reach shared mastery.
         try:
-            user_id_int = int(user_id) if scored else None
+            user_id_int = int(user_id) if scored and dkt_skill_id else None
             if user_id_int is None:
-                raise ValueError("nothing was graded")
+                raise ValueError("nothing was graded, or no concept to record against")
             from lyo_app.personalization.service import PersonalizationEngine
             await PersonalizationEngine().dkt.update_mastery(
                 self.db,
@@ -3417,7 +3458,7 @@ class SceneLifecycleEngine:
                 hints_used,
             )
         except (ValueError, TypeError):
-            logger.debug("Guest transfer evidence is not persisted")
+            logger.debug("Transfer not persisted: guest, ungraded, or unnamed concept")
         except Exception as exc:
             logger.warning("Could not persist classroom transfer evidence: %s", exc)
             try:
