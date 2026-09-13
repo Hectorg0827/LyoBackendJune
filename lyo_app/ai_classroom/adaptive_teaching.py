@@ -53,7 +53,18 @@ class TaskOption(StrictModel):
 
 class LearningTask(StrictModel):
     # Private authoring object, never serialized directly to a client.
+    # `kind` is what the question DEMANDS of the learner; `response_format` is
+    # only how the answer is collected. Keeping them apart is the point: a
+    # genuine application problem may be answered by choosing between prepared
+    # candidates, and a shallow recall question is no deeper for being typed.
+    # Welding the two together — as this model used to, where the only
+    # multiple-choice kind was "choose" and only "apply" could close a unit —
+    # meant every unit ended in a typing task, taxing handwriting and phone
+    # keyboards for evidence the choice could already have supplied.
     kind: Literal["predict", "choose", "apply", "diagnose", "explain"]
+    # Left unset, the format follows the kind, which is how every existing
+    # caller and every previously authored task behaves.
+    response_format: Literal["choice", "short_answer"] | None = None
     scenario: str = Field(min_length=15, max_length=350)
     question: str = Field(min_length=10, max_length=230)
     response_hint: str = Field(min_length=5, max_length=100)
@@ -71,7 +82,11 @@ class LearningTask(StrictModel):
         )
         if vague.search(self.question):
             raise ValueError("Specify the actual situation and requested decision")
-        if self.kind == "choose":
+        if self.response_format is None:
+            self.response_format = "choice" if self.kind == "choose" else "short_answer"
+        if self.kind == "choose" and self.response_format != "choice":
+            raise ValueError("A recognition task cannot be answered by typing")
+        if self.response_format == "choice":
             if len(self.scenario + "\n\n" + self.question) > 500:
                 raise ValueError("Choice prompt exceeds the client contract")
             if not 2 <= len(self.options) <= 4:
@@ -80,6 +95,10 @@ class LearningTask(StrictModel):
                 raise ValueError("Choice tasks need exactly one correct option")
             if len({option.id for option in self.options}) != len(self.options):
                 raise ValueError("Option identifiers must be unique")
+            # Candidates a learner picks between must be real alternatives, or
+            # the "choice" is a single plausible answer beside obvious filler.
+            if len({option.label.casefold() for option in self.options}) != len(self.options):
+                raise ValueError("Choice options must be genuinely different")
         elif self.options:
             raise ValueError("Open tasks cannot carry choice options")
         return self
@@ -311,6 +330,13 @@ class AdaptiveTeacher:
                     "not enforce length. Write criteria about MEANING, not keywords, only for "
                     "what question explicitly asks. example_answer is private. Alternate among "
                     "predict, choose, diagnose, explain and apply as appropriate to this skill. "
+                    "Pick kind by what the skill demands, then pick response_format separately "
+                    "by what is fair to answer on a phone: use response_format=choice with 2–4 "
+                    "genuinely competing options (each wrong one a real misconception, not "
+                    "filler) whenever the thinking happens before the answer is written — a "
+                    "result to select, an error to spot, a prediction to commit to. Reserve "
+                    "short_answer for what only the learner's own words can show. A demanding "
+                    "question is not made easier by being multiple choice. "
                     "For move=independent use kind=apply with a fresh concrete problem; do not "
                     "give its solution in speech/board. For move=reteach show a DIFFERENT worked "
                     "example then a smaller guided task. For move=help give one useful hint or "

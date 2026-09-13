@@ -97,7 +97,12 @@ class AdaptiveSession:
                 return self.save(progress, state, self.current_or_retry(context, state))
             if retry_evaluation:
                 response = pending.retry_response
-            elif pending.task.kind == "choose":
+            elif pending.task.response_format == "choice":
+                # Read the answer the way the checkpoint asked for it. Keying
+                # this on kind instead would strand a learner on any demanding
+                # task offered as choice: the scene renders a QuizCard, the
+                # client submits a selection, and the open-answer branch below
+                # would reject it for not being typed.
                 option = next((o for o in pending.task.options
                                if o.id == answer.get("selected_option_id")), None)
                 if intent != ActionIntent.SUBMIT_ANSWER or option is None:
@@ -110,7 +115,9 @@ class AdaptiveSession:
             if not response:
                 return self.save(progress, state, self.current_or_retry(context, state))
 
-            if pending.task.kind == "choose":
+            if pending.task.response_format == "choice":
+                # Prepared options are graded from the server's own option
+                # table; the client sends an id, never a verdict.
                 result = Evaluation(
                     verdict="correct" if option.correct else "incorrect", confidence=1,
                     misconception=option.misconception if not option.correct else None,
@@ -284,7 +291,9 @@ class AdaptiveSession:
         prompt = task.scenario + "\n\n" + (
             pending.follow_up if follow_up else task.question
         )
-        if task.kind == "choose":
+        # How the answer is collected follows response_format; what the answer
+        # is worth as evidence follows task.kind, below. They are separate.
+        if task.response_format == "choice":
             components.append(QuizCard(
                 component_id=pending.id, question=prompt,
                 options=[QuizOption(id=o.id, label=o.label, is_correct=o.correct,
