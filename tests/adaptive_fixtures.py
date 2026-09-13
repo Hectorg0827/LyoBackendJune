@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from lyo_app.ai_classroom.adaptive_teaching import (
-    Evaluation, GuidedState, LearningPlan, LearningTask, LearningTurn, LearningUnit, PendingTask, TaskOption, unit_count,
+    Evaluation, GuidedState, LearningPlan, LearningTask, LearningTurn, LearningUnit, PendingTask, TaskOption, TeachingBeat, unit_count,
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     ContextSnapshot, SceneLifecycleEngine, Trigger, TriggerType,
@@ -13,7 +13,7 @@ from lyo_app.ai_classroom.sdui_models import ActionIntent
 
 def context(**overrides):
     fields = dict(user_id="42", session_id="fractions", topic="Fractions",
-                  learning_objective="Compare and use fractions", language_code="en-US")
+                  learning_objective="Compare and use fractions", language_code="en-US", target_duration_minutes=24)
     fields.update(overrides)
     return ContextSnapshot(**fields)
 
@@ -55,13 +55,35 @@ class ScriptedTeacher:
 
     def _turn(self, context, state, move, learner_input=""):
         self.number += 1
-        kind = "choose" if move == "teach" else "apply" if move == "independent" else "diagnose"
+        teaching = move not in ("guided", "faded", "independent")
+        kind = "choose" if move == "guided" else "apply" if move == "independent" else "diagnose"
+        checkpoint = None if teaching else task(kind, self.number).model_copy(update={
+            "target_index": state.target_index,
+            "response_format": "choice" if kind == "choose" else "completion" if move == "faded" else "short_answer",
+        })
+        beats = [TeachingBeat(speech=speech, board_title="One example, step by step", board_content=board)
+                 for speech, board in [
+                     ("First compare two identical pizzas. Cut the first into two equal pieces.", "Same-sized pizzas. First pizza: 2 equal pieces. Each is 1/2."),
+                     ("Cut the second into three equal pieces. Each third is smaller than a half because there are more equal pieces.", "Same whole: 1/2 > 1/3. More equal cuts make smaller pieces."),
+                 ]] if move in ("orient", "reteach", "prerequisite") else []
         return LearningTurn(
             speech="Equal pieces are comparable when they come from the same whole. More cuts make each piece smaller.",
             board_title="Equal-sized wholes",
             board_content="One bar cut into 4 equal pieces has larger pieces than an identical bar cut into 8.",
-            task=task(kind, self.number),
+            task=checkpoint, demonstration=beats,
         )
+
+
+async def advance_to_task(runner, progress, ctx):
+    while progress["guided_state"].get("presentation"):
+        await runner.run(ctx, progress, action(component_id=progress["guided_state"]["step_id"]))
+
+
+async def advance_engine(instance):
+    from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
+    progress = _SESSION_PROGRESS[session_progress_key("42", "fractions")]
+    while progress["guided_state"].get("presentation"):
+        await instance.process_trigger(action(component_id=progress["guided_state"]["step_id"]))
 
 
 def action(intent=ActionIntent.CONTINUE, component_id=None, **data):

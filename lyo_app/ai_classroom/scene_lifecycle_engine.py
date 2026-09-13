@@ -2619,7 +2619,10 @@ class SceneLifecycleEngine:
                 self.db = original_db
                 self.context_assembler.db = original_assembler_db
             self.active_scenes[scene.scene_id] = scene
-            if self.websocket_manager:
+            if self.websocket_manager and (
+                (trigger.action_data or {}).get("action_intent") != ActionIntent.UPDATE_ACTIVITY
+                or _SESSION_PROGRESS.get(key, {}).get("_unsynced")
+            ):
                 await self.websocket_manager.stream_scene_to_session(
                     trigger.session_id, scene, user_id=trigger.user_id
                 )
@@ -2634,7 +2637,9 @@ class SceneLifecycleEngine:
         data = trigger.action_data or {}
         intent = data.get("action_intent")
         raw_state = progress.get("guided_state")
-        record_interaction = not raw_state or trigger.component_id not in raw_state.get("handled", [])
+        record_interaction = intent != ActionIntent.UPDATE_ACTIVITY and (
+            not raw_state or trigger.component_id not in raw_state.get("handled", [])
+        )
         if raw_state:
             state = GuidedState.model_validate(raw_state)
             if state.course_id != context.course_id or state.lesson_id != context.lesson_id:
@@ -2657,6 +2662,7 @@ class SceneLifecycleEngine:
                 state = GuidedState.model_validate(raw_state) if raw_state else None
             # The next authored lesson begins only on explicit Continue.
             if (state and state.path_done and intent == ActionIntent.CONTINUE
+                    and AdaptiveSession.current_continue(state, trigger)
                     and context.lesson_index + 1 < context.total_lessons):
                 resolved = await self.context_assembler._resolve_current_lesson(
                     context.course_id, context.lesson_index + 1

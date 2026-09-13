@@ -15,7 +15,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
 from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField, QuizCard, Scene, TeacherMessage
-from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task
+from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task, advance_to_task, advance_engine
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +32,7 @@ async def start():
     teacher = ScriptedTeacher()
     runner, progress, ctx = AdaptiveSession(teacher), {}, context()
     scene = await runner.run(ctx, progress, action(welcome=True))
+    await advance_to_task(runner, progress, ctx)
     return teacher, runner, progress, ctx, scene
 
 
@@ -41,7 +42,7 @@ def state(progress):
 
 async def answer(runner, progress, ctx, response="One half: fewer cuts make larger pieces.", option="a"):
     pending = state(progress).pending
-    intent = ActionIntent.SUBMIT_ANSWER if pending.task.kind == "choose" else ActionIntent.SUBMIT_TRANSFER
+    intent = ActionIntent.SUBMIT_ANSWER if pending.task.response_format == "choice" else ActionIntent.SUBMIT_TRANSFER
     return await runner.run(ctx, progress, action(intent, pending.id,
         answer_data={"selected_option_id": option, "response": response}))
 
@@ -52,6 +53,9 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
     assert len(state(progress).plan.units) == 3
     assert ctx.total_lessons == 0
     await answer(runner, progress, ctx)
+    await answer(runner, progress, ctx)
+    assert state(progress).completed == []
+    assert state(progress).phase == "independent"
     await answer(runner, progress, ctx)
     current = state(progress)
     assert current.completed == [0]
@@ -65,6 +69,8 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
 async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
     _, runner, progress, ctx, _ = await start()
     for index in range(3):
+        await advance_to_task(runner, progress, ctx)
+        await answer(runner, progress, ctx)
         await answer(runner, progress, ctx)
         scene = await answer(runner, progress, ctx)
         if index < 2:
@@ -72,7 +78,7 @@ async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
     assert state(progress).completed == [0, 1, 2]
     assert state(progress).path_done
     assert any(getattr(c, "action_intent", None) == ActionIntent.REQUEST_REVIEW for c in scene.components)
-    assert "not a mastery claim" in " ".join(c.text for c in scene.components if isinstance(c, TeacherMessage))
+    assert "later session" in " ".join(c.text for c in scene.components if isinstance(c, TeacherMessage))
 
 
 @pytest.mark.asyncio
@@ -93,7 +99,7 @@ async def test_partial_answer_gets_one_targeted_follow_up_and_keeps_previous_rea
     await answer(runner, progress, ctx, "Fewer cuts make bigger pieces")
     assert teacher.evaluate.await_args.args[1].answers == ["One half", "Fewer cuts make bigger pieces"]
     assert not state(progress).unit_done  # Supported success still needs an independent check.
-    assert teacher.turn.await_args.args[2] == "independent"
+    assert teacher.turn.await_args.args[2] == "faded"
 
 
 @pytest.mark.asyncio
@@ -102,11 +108,14 @@ async def test_incorrect_answer_gets_different_example_then_a_fresh_check():
     original = state(progress).pending.id
     scene = await answer(runner, progress, ctx, option="b")
     assert teacher.turn.await_args.args[2] == "reteach"
-    assert state(progress).pending.id != original
+    assert state(progress).pending is None
+    assert state(progress).presentation is not None
     assert state(progress).outbox[0]["correct"] is False
+    assert not any(isinstance(c, (QuizCard, InputField)) for c in scene.components)
+    await advance_to_task(runner, progress, ctx)
+    assert state(progress).pending.id != original
     assert state(progress).pending.assisted
-    assert state(progress).pending.hint_level == "full_example"
-    assert not any(isinstance(c, QuizCard) for c in scene.components)
+    assert state(progress).pending.task.response_format == "choice"
 
 
 @pytest.mark.asyncio
@@ -115,13 +124,13 @@ async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
     await runner.run(ctx, progress, action(ActionIntent.REQUEST_HINT, state(progress).pending.id))
     assert not state(progress).outbox
     for _ in range(3):
+        await advance_to_task(runner, progress, ctx)
         await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, state(progress).pending.id))
         if not state(progress).path_done:
             await runner.run(ctx, progress, action())
     assert state(progress).completed == [] and state(progress).skipped == [0, 1, 2]
     await runner.run(ctx, progress, action(ActionIntent.REQUEST_REVIEW))
     assert state(progress).unit_index == 0 and not state(progress).path_done
-    await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).skipped == [1, 2]
 
@@ -177,11 +186,11 @@ async def test_generation_outage_after_grading_never_regrades_the_answer():
     teacher, runner, progress, ctx, _ = await start()
     teacher.turn.side_effect = TeachingUnavailable("offline")
     await answer(runner, progress, ctx)
-    assert state(progress).next_move == "independent"
+    assert state(progress).next_move == "faded"
     assert len(state(progress).outbox) == 1
     teacher.turn.side_effect = teacher._turn
     await runner.run(ctx, progress, action(ActionIntent.RETRY))
-    assert teacher.turn.await_args.args[2] == "independent"
+    assert teacher.turn.await_args.args[2] == "faded"
     assert len(state(progress).outbox) == 1
 
 
@@ -206,7 +215,7 @@ async def test_questions_keep_existing_client_types_and_allow_short_answers():
     assert Scene.model_validate_json(wire).scene_id == scene.scene_id
 
 
-@pytest.mark.parametrize("minutes,authored,expected", [(3,0,3),(10,0,3),(20,0,4),(60,0,6),(10,5,2),(60,1,4)])
+@pytest.mark.parametrize("minutes,authored,expected", [(3,0,1),(10,0,1),(20,0,2),(60,0,6),(10,5,1),(60,1,4)])
 def test_time_budget_shapes_scope_not_forced_pacing(minutes, authored, expected):
     assert unit_count(minutes, authored) == expected
 
@@ -282,13 +291,13 @@ def test_broad_explain_the_concept_templates_are_rejected(vague):
 
 @pytest.mark.asyncio
 async def test_planner_uses_authored_material_time_goal_level_and_language():
-    generate = AsyncMock(return_value=plan(2))
+    generate = AsyncMock(return_value=plan(1))
     ctx = context(total_lessons=4, lesson_title="Fracciones", lesson_content="Dos mitades forman una unidad.",
                   language_code="es-ES", target_duration_minutes=20)
     await AdaptiveTeacher(generate).plan(ctx)
     payload = generate.await_args.args[1]
     assert payload["material"] == ctx.lesson_content
-    assert payload["language"] == "es-ES" and payload["unit_count"] == 2
+    assert payload["language"] == "es-ES" and payload["unit_count"] == 1
     assert payload["target_minutes"] == 20
 
 
@@ -306,6 +315,7 @@ async def test_engine_serializes_duplicate_submissions_and_saves_before_evidence
     instance._persist_session_progress.side_effect = persisted
     instance._record_adaptive_evidence = AsyncMock(side_effect=recorded)
     await instance.process_trigger(action(welcome=True))
+    await advance_engine(instance)
     pending_id = state(_SESSION_PROGRESS[session_progress_key("42", "fractions")]).pending.id
     await asyncio.gather(*[instance.handle_quiz_submission("42", "fractions", pending_id, "a") for _ in range(2)])
     instance._record_adaptive_evidence.assert_awaited_once()
@@ -316,6 +326,7 @@ async def test_save_failure_never_emits_evidence_or_promises_resume():
     instance = engine()
     instance._record_adaptive_evidence = AsyncMock(return_value=True)
     await instance.process_trigger(action(welcome=True))
+    await advance_engine(instance)
     pending_id = state(_SESSION_PROGRESS[session_progress_key("42", "fractions")]).pending.id
     instance._persist_session_progress.return_value = False
     scene = await instance.handle_quiz_submission("42", "fractions", pending_id, "a")
@@ -335,7 +346,7 @@ async def test_same_topic_is_isolated_by_authenticated_learner():
     other = action(welcome=True).model_copy(update={"user_id": "43"})
     await second.process_trigger(other)
     key1, key2 = session_progress_key("42", "fractions"), session_progress_key("43", "fractions")
-    assert state(_SESSION_PROGRESS[key1]).pending.id != state(_SESSION_PROGRESS[key2]).pending.id
+    assert state(_SESSION_PROGRESS[key1]).step_id != state(_SESSION_PROGRESS[key2]).step_id
     assert first.get_session_context("fractions", "43") is None
 
 
@@ -359,6 +370,7 @@ async def test_learner_questions_from_each_client_reach_the_teacher(field):
 @pytest.mark.asyncio
 async def test_a_finished_step_still_answers_the_learners_question():
     teacher, runner, progress, ctx, _ = await start()
+    await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).unit_done
