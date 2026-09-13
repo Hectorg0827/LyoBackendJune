@@ -29,10 +29,12 @@ from lyo_app.ai_classroom.scene_lifecycle_engine import (
     SceneLifecycleEngine,
     Trigger,
     TriggerType,
+    session_progress_key,
 )
 from lyo_app.ai_classroom.sdui_models import ActionIntent, ComponentType
 
-SESSION = "fallback-session"
+RAW_SESSION = "fallback-session"
+SESSION = session_progress_key("42", RAW_SESSION)
 
 LESSON = (
     "A common denominator lets you compare fractions directly. "
@@ -70,7 +72,7 @@ def _trigger():
     return Trigger(
         trigger_type=TriggerType.USER_ACTION,
         user_id="42",
-        session_id=SESSION,
+        session_id=RAW_SESSION,
         action_data={"action_intent": ActionIntent.CONTINUE},
     )
 
@@ -210,30 +212,18 @@ class ExcerptTests(unittest.TestCase):
 
 
 class FallbackIsWiredToTheFailurePathTests(unittest.IsolatedAsyncioTestCase):
-    """Asserting the fallback exists proves nothing if the failure path does
-    not reach it, so this drives `process_trigger` with a Director that
-    raises — the real shape of the failure."""
-
-    def tearDown(self):
-        _SESSION_PROGRESS.pop(SESSION, None)
-
-    async def test_a_director_failure_still_teaches_the_learner(self):
-        engine = _engine(_context())
-        engine.context_assembler = MagicMock()
-        engine.context_assembler.assemble_context = AsyncMock(
-            return_value=_context(session_id=SESSION, course_complete=False)
-        )
-        engine.director = MagicMock()
-        engine.director.decide_scene = AsyncMock(
-            side_effect=RuntimeError("the model is down")
-        )
-        engine.compiler = MagicMock()
-        engine._persist_session_progress = AsyncMock()
-
-        scene = await engine.process_trigger(_trigger())
-        body = "\n".join(_texts(scene))
-
-        self.assertIn("common denominator", body)
+    async def test_a_generation_failure_keeps_the_course_example_and_a_real_retry(self):
+        from tests.adaptive_fixtures import context, engine, action
+        from lyo_app.ai_classroom.adaptive_teaching import TeachingUnavailable
+        _SESSION_PROGRESS.clear()
+        ctx = context(lesson_content=LESSON)
+        instance = engine(ctx)
+        instance.adaptive_teacher.plan.side_effect = TeachingUnavailable("model unavailable")
+        scene = await instance.process_trigger(action(welcome=True))
+        examples = " ".join(getattr(c, "content", "") for c in scene.components)
+        self.assertIn("common denominator", examples)
+        self.assertIn(ActionIntent.RETRY, _intents(scene))
+        self.assertNotIn(ActionIntent.SUBMIT_ANSWER, _intents(scene))
 
 
 if __name__ == "__main__":

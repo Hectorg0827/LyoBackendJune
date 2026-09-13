@@ -269,8 +269,8 @@ async def _register_lifecycle_handlers(
 
                     # The active server scene owns correctness.
                     scene = await engine.handle_quiz_submission(
-                        user_id=payload.user_id or connection.user_id,
-                        session_id=payload.session_id,
+                        user_id=connection.user_id,
+                        session_id=connection.session_id,
                         quiz_component_id=payload.component_id or "",
                         selected_option_id=str(selected_option_id),
                         response_time_ms=payload.response_time_ms or 0,
@@ -280,16 +280,16 @@ async def _register_lifecycle_handlers(
                     if not response:
                         raise ValueError("Transfer submission requires a response")
                     scene = await engine.handle_transfer_submission(
-                        user_id=payload.user_id or connection.user_id,
-                        session_id=payload.session_id,
+                        user_id=connection.user_id,
+                        session_id=connection.session_id,
                         input_component_id=payload.component_id or "",
                         response=response,
                         response_time_ms=payload.response_time_ms or 0,
                     )
                 else:
                     scene = await engine.handle_user_action(
-                        user_id=payload.user_id or connection.user_id,
-                        session_id=payload.session_id,
+                        user_id=connection.user_id,
+                        session_id=connection.session_id,
                         action_intent=action_intent,
                         action_data=action_data,
                         component_id=payload.component_id,
@@ -646,7 +646,7 @@ async def get_session_context(
         lifecycle_engine = SceneLifecycleEngine(db, ws_manager)
 
         # Get context
-        context = lifecycle_engine.get_session_context(session_id)
+        context = lifecycle_engine.get_session_context(session_id, str(current_user.id))
 
         if not context:
             raise HTTPException(status_code=404, detail=f"No context found for session {session_id}")

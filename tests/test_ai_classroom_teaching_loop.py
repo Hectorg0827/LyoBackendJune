@@ -418,84 +418,35 @@ class LearnerGatedTeachingBeatTests(unittest.IsolatedAsyncioTestCase):
 
 class DurableSkipTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.session_id = "skip-contract-course"
-        _SESSION_PROGRESS.pop(self.session_id, None)
-        self.context = ContextSnapshot(
-            user_id="42",
-            session_id=self.session_id,
-            topic="Fractions",
-            course_id="7",
-            lesson_index=0,
-            lesson_title="Compare fractions",
-            lesson_content="Use a common denominator.",
-            total_lessons=2,
-            learning_objective="Compare fractions",
-            language_code="en-US",
-        )
-        self.engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
-        self.engine.context_assembler = MagicMock()
-        self.engine.context_assembler.assemble_context = AsyncMock(
-            return_value=self.context
-        )
-        self.engine.context_assembler._resolve_current_lesson = AsyncMock(
-            return_value=("lesson-2", 1, "Add fractions", "Add equal parts.", 2)
-        )
-        self.engine.director = ClassroomDirector()
-        self.engine.compiler = SceneCompiler(ai_service=None)
-        self.engine.session_contexts = {}
-        self.engine.session_lesson_indices = {}
-        self.engine.active_scenes = {}
-        self.engine.websocket_manager = None
-        self.engine._persist_session_progress = AsyncMock()
+        from tests.adaptive_fixtures import context, engine, seed
+        from lyo_app.ai_classroom.scene_lifecycle_engine import session_progress_key
+        _SESSION_PROGRESS.clear()
+        self.context = context()
+        self.engine = engine(self.context)
+        self.component_id = seed(self.engine, self.context)
+        self.key = session_progress_key("42", "fractions")
 
     async def asyncTearDown(self):
-        _SESSION_PROGRESS.pop(self.session_id, None)
+        _SESSION_PROGRESS.clear()
 
     async def test_skip_is_persisted_without_correctness_and_enters_review_queue(self):
-        trigger = Trigger(
-            trigger_type=TriggerType.USER_ACTION,
-            user_id="42",
-            session_id=self.session_id,
-            component_id="quiz-1",
-            action_data={"action_intent": ActionIntent.SKIP_QUESTION},
-        )
-
-        await self.engine.process_trigger(trigger)
-
-        progress = _SESSION_PROGRESS[self.session_id]
-        self.assertEqual(progress["evidence"]["0"]["status"], "skipped")
-        self.assertFalse(progress["evidence"]["0"]["recognition"])
-        self.assertFalse(progress["evidence"]["0"]["transfer"])
-        self.assertEqual(progress["skipped_lessons"], [0])
-        self.assertEqual(progress["review_queue"][0]["lesson_index"], 0)
-        self.assertIsNone(progress["attempt_history"][-1]["is_correct"])
+        from tests.adaptive_fixtures import action
+        await self.engine.process_trigger(action(ActionIntent.SKIP_QUESTION, self.component_id))
+        state = _SESSION_PROGRESS[self.key]["guided_state"]
+        self.assertEqual(state["skipped"], [0])
+        self.assertEqual(state["completed"], [])
+        self.assertEqual(state["outbox"], [])
+        self.assertTrue(state["unit_done"])
         self.engine._persist_session_progress.assert_awaited_once()
 
     async def test_explicit_continue_advances_after_skip_without_marking_mastery(self):
-        _SESSION_PROGRESS[self.session_id] = {
-            "scene": 0,
-            "covered": [],
-            "mastered_lessons": [],
-            "skipped_lessons": [0],
-            "review_queue": [{
-                "lesson_index": 0,
-                "lesson_title": "Compare fractions",
-                "objective": "Compare fractions",
-            }],
-        }
-        trigger = Trigger(
-            trigger_type=TriggerType.USER_ACTION,
-            user_id="42",
-            session_id=self.session_id,
-            action_data={"action_intent": ActionIntent.CONTINUE},
-        )
-
-        scene = await self.engine.process_trigger(trigger)
-
-        progress = _SESSION_PROGRESS[self.session_id]
-        self.assertEqual(progress["current_lesson_index"], 1)
-        self.assertEqual(progress["mastered_lessons"], [])
-        self.assertEqual(scene.scene_type, SceneType.INSTRUCTION)
+        from tests.adaptive_fixtures import action
+        await self.engine.process_trigger(action(ActionIntent.SKIP_QUESTION, self.component_id))
+        await self.engine.process_trigger(action())
+        state = _SESSION_PROGRESS[self.key]["guided_state"]
+        self.assertEqual(state["unit_index"], 1)
+        self.assertEqual(state["completed"], [])
+        self.assertEqual(state["skipped"], [0])
 
 
 class ClassroomPersistenceContractTests(unittest.IsolatedAsyncioTestCase):

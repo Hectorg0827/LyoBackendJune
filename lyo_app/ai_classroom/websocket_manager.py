@@ -675,14 +675,16 @@ class WebSocketManager:
     # SCENE STREAMING API
     # ═══════════════════════════════════════════════════════════════════════════════
 
-    async def stream_scene_to_session(self, session_id: str, scene: Scene, mode: StreamingMode = StreamingMode.ADAPTIVE):
-        """Stream scene to all connections in a session"""
+    async def stream_scene_to_session(self, session_id: str, scene: Scene, mode: StreamingMode = StreamingMode.ADAPTIVE, *, user_id: Optional[str] = None):
+        """Stream a guided scene only to its owner, including their other devices."""
         if session_id not in self.rooms:
             logger.warning(f"⚠️ No room found for session: {session_id}")
             return
 
         room = self.rooms[session_id]
         active_connections = room.get_active_connections()
+        if user_id is not None:
+            active_connections = [c for c in active_connections if str(c.user_id) == str(user_id)]
 
         logger.info(f"🎬 Streaming scene {scene.scene_id} to {len(active_connections)} connections")
 

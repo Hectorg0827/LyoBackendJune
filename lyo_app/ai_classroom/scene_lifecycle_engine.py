@@ -2,15 +2,9 @@
 Lyo AI Classroom - Scene Lifecycle Engine
 ========================================
 
-The brain of the "Living Classroom" that controls turn-based micro-scenes.
-Implements the four-phase closed-loop interaction model:
-
-1. TRIGGER (Listen) - Event-driven activation from user or system
-2. CONTEXT (Think) - Assemble user state snapshot
-3. DIRECTOR (Decide) - Central agent selects optimal scene type
-4. COMPILATION (Act) - Map to SDUI components and stream to client
-
-Architecture: Event → Context → Decision → Scene → WebSocket Stream → iOS Renderer
+The live path assembles context, restores the learner's guided state, and runs
+one adaptive teaching turn before persisting and streaming existing SDUI types.
+Legacy director/compiler helpers remain importable for older integrations.
 """
 
 import asyncio
@@ -22,8 +16,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Any, Callable, Union
 from uuid import uuid4
-
-from lyo_app.ai_agents.multi_agent_v2.agents.tutor_agent import get_tutor_agent, UserContext as AgentUserContext
+from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func as sa_func, and_, desc
@@ -44,6 +37,11 @@ logger = logging.getLogger(__name__)
 # Per-session teaching progression: scene counter + rolling summaries of what
 # was already taught, so the director never replays the opening scene.
 _SESSION_PROGRESS: Dict[str, Dict[str, Any]] = {}
+_TURN_LOCKS = WeakValueDictionary()
+
+
+def session_progress_key(user_id: str, session_id: str) -> str:
+    return json.dumps([str(user_id), str(session_id)], ensure_ascii=False)
 
 _TRANSFER_STOPWORDS = {
     "about", "after", "again", "apply", "because", "before", "being", "compare",
@@ -363,7 +361,7 @@ class ContextAssembler:
         # Hydrate guided-classroom position from the existing ClassroomSession
         # JSON context. This survives worker restarts without a schema migration.
         progress = _SESSION_PROGRESS.setdefault(
-            trigger.session_id, {"scene": 0, "covered": [], "mastered_lessons": []}
+            session_progress_key(trigger.user_id, trigger.session_id), {"scene": 0, "covered": [], "mastered_lessons": []}
         )
         if not progress.get("_hydrated"):
             persisted = await self._load_persisted_session_progress(trigger)
@@ -629,8 +627,8 @@ class ContextAssembler:
         except (ValueError, TypeError):
             return {}
         except Exception as e:
-            logger.debug(f"ℹ️ Could not hydrate classroom progress: {e}")
-            return {}
+            from lyo_app.ai_classroom.adaptive_teaching import TeachingUnavailable
+            raise TeachingUnavailable("Saved classroom state could not be loaded") from e
 
     async def _resolve_topic(
         self, trigger: Trigger
@@ -655,7 +653,7 @@ class ContextAssembler:
                 from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
                 cm = get_conversation_manager()
                 conv_session = cm.get_session(trigger.session_id)
-                if conv_session:
+                if conv_session and str(conv_session.user_id) == str(trigger.user_id):
                     topic = conv_session.current_topic
                     if topic and isinstance(topic, str):
                         topic = topic.replace("**", "").strip()
@@ -1593,7 +1591,7 @@ class SceneCompiler:
 
         # Make advancement visible. A checkpoint counts only after the server
         # has validated it and placed it in mastered_lessons.
-        progress = _SESSION_PROGRESS.get(context.session_id, {})
+        progress = _SESSION_PROGRESS.get(session_progress_key(context.user_id, context.session_id), {})
         total = max(context.total_lessons, 1)
         mastered_count = min(
             total,
@@ -1926,7 +1924,7 @@ class SceneCompiler:
 
     async def _create_celebration_components(self, context: ContextSnapshot) -> List[Component]:
         """Close with evidence, a useful summary, and the next retrieval step."""
-        progress = _SESSION_PROGRESS.get(context.session_id, {})
+        progress = _SESSION_PROGRESS.get(session_progress_key(context.user_id, context.session_id), {})
         covered = list(progress.get("covered", []))[-3:]
         objective = context.learning_objective or context.lesson_title or context.topic or "this idea"
         is_spanish = context.language_code.lower().startswith("es")
@@ -2077,7 +2075,7 @@ class SceneCompiler:
                 else "beginner"
             )
             progress = _SESSION_PROGRESS.setdefault(
-                context.session_id,
+                session_progress_key(context.user_id, context.session_id),
                 {"scene": 0, "covered": [], "mastered_lessons": []},
             )
             progress["scene"] = int(progress.get("scene", 0)) + 1
@@ -2253,7 +2251,7 @@ Rules:
         lesson_content = context.lesson_content or ""
 
         try:
-            covered = _SESSION_PROGRESS.get(context.session_id, {}).get("covered", [])
+            covered = _SESSION_PROGRESS.get(session_progress_key(context.user_id, context.session_id), {}).get("covered", [])
             taught_context = "\n".join(covered[-4:]) if covered else ""
             prompt = (
                 f"Generate a single multiple-choice quiz question about the following lesson: '{context.lesson_title or topic}'.\n"
@@ -2421,7 +2419,7 @@ Rules:
 # ═══════════════════════════════════════════════════════════════════════════════════
 
 class SceneLifecycleEngine:
-    """Master orchestrator of the four-phase scene lifecycle"""
+    """Orchestrate the shared adaptive teaching pathway and durable learner state."""
 
     # Class-level state tracking to persist across transient instances
     _active_scenes: Dict[str, Scene] = {}
@@ -2432,17 +2430,6 @@ class SceneLifecycleEngine:
         # Phase components
         self.trigger_listener = TriggerListener()
         self.context_assembler = ContextAssembler(db)
-        self.director = ClassroomDirector()
-
-        # Initialize compiler with TutorAgent so it can generate real AI content
-        try:
-            tutor_agent = get_tutor_agent()
-            self.compiler = SceneCompiler(ai_service=tutor_agent)
-            logger.info("✅ SceneCompiler initialized with TutorAgent")
-        except Exception as e:
-            logger.warning(f"⚠️ TutorAgent unavailable, compiler will use templates: {e}")
-            self.compiler = SceneCompiler()
-
         # Infrastructure
         self.db = db
         self.websocket_manager = websocket_manager
@@ -2460,7 +2447,8 @@ class SceneLifecycleEngine:
         trigger: Trigger,
         context: ContextSnapshot,
         progress: Dict[str, Any],
-    ) -> None:
+        *, record_interaction: bool = True,
+    ) -> bool:
         """Persist guided classroom position in ClassroomSession.context."""
         try:
             user_id = int(trigger.user_id)
@@ -2491,6 +2479,8 @@ class SceneLifecycleEngine:
 
             durable_context = dict(session.context or {})
             durable_context.update({
+                "guided_state": progress.get("guided_state"),
+                "guided_history": progress.get("guided_history", []),
                 "current_lesson_index": progress.get(
                     "current_lesson_index", context.lesson_index
                 ),
@@ -2521,7 +2511,9 @@ class SceneLifecycleEngine:
             })
             session.context = durable_context
             session.subject = context.topic or session.subject
-            has_pending_review = bool(progress.get("review_queue"))
+            has_pending_review = bool(progress.get("review_queue")) or bool(
+                (progress.get("guided_state") or {}).get("skipped")
+            ) or any(snapshot.get("skipped") for snapshot in progress.get("guided_history", []))
             session.is_active = not context.course_complete or has_pending_review
             session.updated_at = datetime.utcnow()
             if context.course_complete and not has_pending_review:
@@ -2544,7 +2536,7 @@ class SceneLifecycleEngine:
                 ActionIntent.REQUEST_HINT,
                 ActionIntent.RETRY,
             }
-            if action_intent in recordable_intents:
+            if record_interaction and action_intent in recordable_intents:
                 answer_data = action_data.get("answer_data", {})
                 response = str(
                     answer_data.get("response")
@@ -2563,9 +2555,9 @@ class SceneLifecycleEngine:
                     )
                 except (TypeError, ValueError):
                     duration_seconds = None
-                is_correct = answer_data.get("is_correct")
-                if not isinstance(is_correct, bool):
-                    is_correct = None
+                # Client-supplied is_correct is never analytics evidence.
+                # Canonical graded events are emitted from the durable outbox.
+                is_correct = None
                 self.db.add(ClassroomInteraction(
                     session_id=session.id,
                     event_type=action_intent.value,
@@ -2576,14 +2568,16 @@ class SceneLifecycleEngine:
                     word_count=len(response.split()) if response else None,
                 ))
             await self.db.commit()
+            return True
         except (ValueError, TypeError):
-            return
+            return False
         except Exception as e:
             logger.warning(f"⚠️ Could not persist classroom progress: {e}")
             try:
                 await self.db.rollback()
             except Exception:
                 pass
+            return False
 
     def _register_handlers(self):
         """Register default trigger handlers"""
@@ -2597,265 +2591,172 @@ class SceneLifecycleEngine:
         )
 
     async def process_trigger(self, trigger: Trigger) -> Scene:
-        """Execute complete four-phase lifecycle"""
-        logger.info(f"🎭 LIFECYCLE START: {trigger.trigger_type} for session {trigger.session_id}")
-        start_time = time.time()
+        """Run one learner-paced turn against the latest durable state."""
+        from lyo_app.ai_classroom.adaptive_persistence import learner_session
+        from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 
-        try:
-            # PHASE 1: Already have trigger (Listen)
-            logger.debug(f"Phase 1 (Trigger): {trigger.trigger_type}")
-
-            # PHASE 2: Context Assembly (Think)
-            context = await self.context_assembler.assemble_context(trigger)
-            # Inject cached lesson_index from previous CONTINUE advances
-            if (
-                context.classroom_mode != ClassroomMode.REVIEW
-                and trigger.session_id in self.session_lesson_indices
-            ):
-                context.lesson_index = self.session_lesson_indices[trigger.session_id]
-                # Re-resolve lesson data with updated index
-                (
-                    context.lesson_id,
-                    context.lesson_index,
-                    context.lesson_title,
-                    context.lesson_content,
-                    context.total_lessons,
-                ) = await self.context_assembler._resolve_current_lesson(
-                    context.course_id, context.lesson_index
+        key = session_progress_key(trigger.user_id, trigger.session_id)
+        lock = _TURN_LOCKS.setdefault(key, asyncio.Lock())
+        async with lock:
+            original_db = self.db
+            original_assembler_db = self.context_assembler.db
+            try:
+                async with learner_session(self.db, key) as db:
+                    self.db = self.context_assembler.db = db
+                    progress = _SESSION_PROGRESS.setdefault(key, {})
+                    # Re-read on every turn: another worker/device may have
+                    # accepted an answer since this worker last saw the session.
+                    if not progress.get("_unsynced"):
+                        progress["_hydrated"] = False
+                    scene = await self._process_adaptive_trigger(trigger, key)
+            except Exception as exc:
+                logger.exception("Guided classroom turn unavailable: %s", type(exc).__name__)
+                context = self.session_contexts.get(key) or ContextSnapshot(
+                    user_id=trigger.user_id, session_id=trigger.session_id
                 )
-                if context.lesson_title and not context.topic:
-                    context.topic = context.lesson_title
-            self.session_contexts[trigger.session_id] = context
-            logger.debug(f"Phase 2 (Context): {len(context.knowledge_states)} concepts analyzed")
-
-            # Guided mastery gate: recognition unlocks a transfer task; only
-            # recognition plus transfer marks a lesson as mastered.
-            action_data = trigger.action_data or {}
-            action_intent = action_data.get("action_intent")
-            answer_data = action_data.get("answer_data", {})
-            progress = _SESSION_PROGRESS.setdefault(
-                trigger.session_id, {"scene": 0, "covered": [], "mastered_lessons": []}
-            )
-            mastered_lessons = set(progress.get("mastered_lessons", []))
-            evidence = progress.setdefault("evidence", {})
-            lesson_key = str(context.lesson_index)
-            lesson_evidence = evidence.setdefault(
-                lesson_key,
-                {"recognition": False, "transfer": False, "status": "in_progress"},
-            )
-            attempts = progress.setdefault("attempt_history", [])
-            skipped_lessons = set(progress.get("skipped_lessons", []))
-            review_queue = list(progress.get("review_queue", []))
-
-            def record_attempt(
-                outcome: str,
-                is_correct: Optional[bool] = None,
-            ) -> None:
-                response = str(
-                    answer_data.get("response")
-                    or action_data.get("message")
-                    or ""
-                ).strip()
-                attempts.append({
-                    "event_id": str(uuid4()),
-                    "at": datetime.utcnow().isoformat(),
-                    "lesson_index": context.lesson_index,
-                    "lesson_id": context.lesson_id,
-                    "intent": (
-                        action_intent.value
-                        if isinstance(action_intent, ActionIntent)
-                        else str(action_intent or "unknown")
-                    ),
-                    "component_id": trigger.component_id,
-                    "outcome": outcome,
-                    "is_correct": is_correct,
-                    "response_time_ms": answer_data.get("response_time_ms"),
-                    "word_count": len(response.split()) if response else None,
-                })
-                del attempts[:-100]
-
-            if action_intent == ActionIntent.SUBMIT_ANSWER:
-                answer_is_correct = answer_data.get("is_correct") is True
-                context.learner_signal = (
-                    "correct_answer" if answer_is_correct else "incorrect_answer"
-                )
-                lesson_evidence["recognition"] = bool(
-                    lesson_evidence.get("recognition") or answer_is_correct
-                )
-                lesson_evidence["status"] = (
-                    "recognition_passed" if answer_is_correct else "needs_support"
-                )
-                record_attempt(
-                    "recognition_correct" if answer_is_correct else "recognition_incorrect",
-                    answer_is_correct,
-                )
-                if not answer_is_correct and answer_data.get("misconception_tag"):
-                    history = progress.setdefault("misconception_history", [])
-                    history.append({
-                        "lesson_index": context.lesson_index,
-                        "tag": answer_data.get("misconception_tag"),
-                        "at": datetime.utcnow().isoformat(),
-                    })
-
-            if action_intent == ActionIntent.SUBMIT_TRANSFER:
-                transfer_is_correct = answer_data.get("is_correct") is True
-                context.learner_signal = (
-                    "correct_transfer" if transfer_is_correct else "incorrect_transfer"
-                )
-                lesson_evidence["transfer"] = bool(
-                    lesson_evidence.get("transfer") or transfer_is_correct
-                )
-                lesson_evidence["status"] = (
-                    "mastered"
-                    if transfer_is_correct and lesson_evidence.get("recognition")
-                    else "needs_support"
-                )
-                record_attempt(
-                    "transfer_correct" if transfer_is_correct else "transfer_incorrect",
-                    transfer_is_correct,
-                )
-                if transfer_is_correct and lesson_evidence.get("recognition"):
-                    mastered_lessons.add(context.lesson_index)
-                    progress["mastered_lessons"] = sorted(mastered_lessons)
-                    skipped_lessons.discard(context.lesson_index)
-                    review_queue = [
-                        item for item in review_queue
-                        if str(item.get("lesson_index", "")) != str(context.lesson_index)
-                    ]
-                    progress["skipped_lessons"] = sorted(skipped_lessons)
-                    progress["review_queue"] = review_queue
-                    context.review_due_items = [
-                        item for item in context.review_due_items
-                        if item != (context.learning_objective or context.lesson_title)
-                    ]
-
-            if action_intent == ActionIntent.SKIP_QUESTION:
-                context.learner_signal = ActionIntent.SKIP_QUESTION.value
-                lesson_evidence["status"] = "skipped"
-                skipped_lessons.add(context.lesson_index)
-                progress["skipped_lessons"] = sorted(skipped_lessons)
-                if not any(
-                    str(item.get("lesson_index", "")) == str(context.lesson_index)
-                    for item in review_queue
-                ):
-                    review_queue.append({
-                        "lesson_index": context.lesson_index,
-                        "lesson_id": context.lesson_id,
-                        "lesson_title": context.lesson_title,
-                        "objective": (
-                            context.learning_objective
-                            or context.lesson_title
-                            or context.topic
-                        ),
-                        "queued_at": datetime.utcnow().isoformat(),
-                    })
-                progress["review_queue"] = review_queue
-                context.review_due_items = list(dict.fromkeys(
-                    item for item in [
-                        *context.review_due_items,
-                        context.learning_objective or context.lesson_title or context.topic,
-                    ] if item
-                ))
-                record_attempt("skipped", None)
-
-            if action_intent == ActionIntent.REQUEST_HINT:
-                lesson_evidence["status"] = "receiving_help"
-                record_attempt("hint_requested", None)
-
-            # A learner who signals uncertainty ("not sure", "idk", "help")
-            # gets shifted out of assessment entirely, regardless of how the
-            # Evaluator scored their response — a stuck learner needs a hint,
-            # not a rubric-based correction.
-            if answer_data.get("hesitant") or (
-                action_intent == ActionIntent.USER_MESSAGE
-                and detect_hesitation(action_data.get("message"))
-            ):
-                context.learner_signal = "hesitant"
-
-            can_advance = (
-                context.lesson_index in mastered_lessons
-                or context.lesson_index in skipped_lessons
-            )
-            if (
-                action_intent == ActionIntent.CONTINUE
-                and context.classroom_mode != ClassroomMode.REVIEW
-                and can_advance
-            ):
-                advanced_after_skip = (
-                    context.lesson_index in skipped_lessons
-                    and context.lesson_index not in mastered_lessons
-                )
-                next_index = context.lesson_index + 1
-                if context.total_lessons > 0 and next_index < context.total_lessons:
-                    context.lesson_index = next_index
-                    self.session_lesson_indices[trigger.session_id] = next_index
-                    action_data[
-                        "advanced_after_skip" if advanced_after_skip else "advanced_after_mastery"
-                    ] = True
-                    (
-                        context.lesson_id,
-                        context.lesson_index,
-                        context.lesson_title,
-                        context.lesson_content,
-                        context.total_lessons,
-                    ) = await self.context_assembler._resolve_current_lesson(
-                        context.course_id, next_index
-                    )
-                    progress["lesson_id"] = context.lesson_id
-                    context.learning_objective = context.lesson_title or context.topic
-                    context.source_attributions = [
-                        "Course material"
-                        + (f": {context.course_title}" if context.course_title else "")
-                        + (f" — {context.lesson_title}" if context.lesson_title else "")
-                    ]
-                    try:
-                        from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
-                        conv_session = get_conversation_manager().get_session(trigger.session_id)
-                        if conv_session:
-                            conv_session.current_lesson_index = next_index
-                    except Exception:
-                        pass
-                    logger.info(f"📖 Evidence gate advanced lesson to {next_index}")
-                else:
-                    context.course_complete = True
-                    action_data["course_complete"] = True
-                    action_data["advanced_after_skip"] = advanced_after_skip
-                    logger.info("🏁 Learner reached the end of the classroom path")
-
-            context.overall_progress = min(
-                1.0,
-                len(mastered_lessons) / max(context.total_lessons, 1),
-            )
-            if context.classroom_mode != ClassroomMode.REVIEW:
-                progress["current_lesson_index"] = context.lesson_index
-            else:
-                progress["active_review_lesson_index"] = context.lesson_index
-            progress["course_complete"] = context.course_complete
-            self.session_contexts[trigger.session_id] = context
-            await self._persist_session_progress(trigger, context, progress)
-
-            # PHASE 3: Director Decision (Decide)
-            decision = await self.director.decide_scene(trigger, context)
-            logger.debug(f"Phase 3 (Director): {decision.selected_scene_type} selected")
-
-            # PHASE 4: SDUI Compilation (Act)
-            scene = await self.compiler.compile_scene(decision, context, trigger)
+                scene = AdaptiveSession(None).unavailable(context, None)
+            finally:
+                self.db = original_db
+                self.context_assembler.db = original_assembler_db
             self.active_scenes[scene.scene_id] = scene
-            logger.debug(f"Phase 4 (Compiler): {len(scene.components)} components compiled")
-
-            # Stream to client
             if self.websocket_manager:
-                await self._stream_scene_to_client(scene, trigger.session_id)
-
-            total_time = (time.time() - start_time) * 1000
-            logger.info(f"✅ LIFECYCLE COMPLETE: {scene.scene_id} in {total_time:.0f}ms")
-
+                await self.websocket_manager.stream_scene_to_session(
+                    trigger.session_id, scene, user_id=trigger.user_id
+                )
             return scene
 
-        except Exception as e:
-            logger.error(f"❌ LIFECYCLE FAILED: {e}")
-            # Return fallback scene
-            return await self._create_fallback_scene(trigger)
+    async def _process_adaptive_trigger(self, trigger: Trigger, key: str) -> Scene:
+        from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState
+        from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+
+        context = await self.context_assembler.assemble_context(trigger)
+        progress = _SESSION_PROGRESS.setdefault(key, {})
+        data = trigger.action_data or {}
+        intent = data.get("action_intent")
+        raw_state = progress.get("guided_state")
+        record_interaction = not raw_state or trigger.component_id not in raw_state.get("handled", [])
+        if raw_state:
+            state = GuidedState.model_validate(raw_state)
+            if state.course_id != context.course_id or state.lesson_id != context.lesson_id:
+                # An explicit different lesson never inherits another lesson's
+                # active question or grading rubric. Keep its state for review.
+                history = progress.get("guided_history", [])
+                matching = next((s for s in reversed(history)
+                                 if s.get("course_id") == context.course_id
+                                 and s.get("lesson_id") == context.lesson_id), None)
+                progress["guided_history"] = [
+                    *[s for s in history if (s.get("course_id"), s.get("lesson_id"))
+                      not in ((state.course_id, state.lesson_id), (context.course_id, context.lesson_id))],
+                    state.model_dump(mode="json"),
+                ]
+                if matching:
+                    progress["guided_state"] = matching
+                else:
+                    progress.pop("guided_state", None)
+                raw_state = progress.get("guided_state")
+                state = GuidedState.model_validate(raw_state) if raw_state else None
+            # The next authored lesson begins only on explicit Continue.
+            if (state and state.path_done and intent == ActionIntent.CONTINUE
+                    and context.lesson_index + 1 < context.total_lessons):
+                resolved = await self.context_assembler._resolve_current_lesson(
+                    context.course_id, context.lesson_index + 1
+                )
+                context.lesson_id, context.lesson_index, context.lesson_title, context.lesson_content, context.total_lessons = resolved
+                context.learning_objective = context.lesson_title or context.topic
+                progress["guided_history"] = [
+                    *progress.get("guided_history", []), state.model_dump(mode="json"),
+                ]
+                progress.pop("guided_state", None)
+                progress["current_lesson_index"] = context.lesson_index
+                progress["lesson_id"] = context.lesson_id
+        runner = AdaptiveSession(getattr(self, "adaptive_teacher", None) or AdaptiveTeacher())
+        scene = await runner.run(context, progress, trigger)
+        state_data = progress.get("guided_state")
+        if state_data:
+            state = GuidedState.model_validate(state_data)
+            context.course_complete = (
+                state.path_done and not state.skipped
+                and not any(snapshot.get("skipped") for snapshot in progress.get("guided_history", []))
+                and not (context.lesson_index + 1 < context.total_lessons)
+            )
+            context.overall_progress = len(state.completed) / len(state.plan.units)
+        else:
+            context.course_complete = False
+        progress["course_complete"] = context.course_complete
+        progress["current_lesson_index"] = context.lesson_index
+        self.session_contexts[key] = context
+        saved = await self._persist_session_progress(
+            trigger, context, progress, record_interaction=record_interaction
+        )
+        progress["_unsynced"] = not saved
+        if not saved:
+            # Do not claim resumability or commit grading after a save failure.
+            # Retain the active state locally so Retry can save it later.
+            warning = runner.copy(context,
+                "This step has not synced. Keep this classroom open and retry before leaving; progress may not resume on another device.",
+                "Este paso no se ha sincronizado. Mantén esta aula abierta y reintenta antes de salir; podría no reanudarse en otro dispositivo.")
+            scene.components.insert(0, TeacherMessage(
+                text=warning,
+                language_code=context.language_code,
+            ))
+            scene.components.insert(1, ExampleBlock(
+                title=runner.copy(context, "Save this step before leaving", "Guarda este paso antes de salir"),
+                content=warning, language_code=context.language_code,
+            ))
+            if not any(getattr(c, "action_intent", None) == ActionIntent.RETRY for c in scene.components):
+                scene.components.append(CTAButton(
+                    label=runner.copy(context, "Retry saving", "Reintentar guardar"),
+                    action_intent=ActionIntent.RETRY, language_code=context.language_code,
+                ))
+            return scene
+        # A durable outbox closes the crash window between consuming a question
+        # and recording evidence. Replaying it is safe by checkpoint event ID.
+        outbox_states = [s for s in [state_data, *progress.get("guided_history", [])]
+                         if s and s.get("outbox")]
+        if outbox_states:
+            for snapshot in outbox_states:
+                remaining = []
+                for evidence in snapshot["outbox"]:
+                    if not await self._record_adaptive_evidence(**evidence):
+                        remaining.append(evidence)
+                snapshot["outbox"] = remaining
+            await self._persist_session_progress(trigger, context, progress, record_interaction=False)
+        return scene
+
+    async def _record_adaptive_evidence(self, **evidence) -> bool:
+        """Deduplicate evidence; only use measured response time for legacy DKT."""
+        event_id = evidence.pop("event_id")
+        response_time_ms = evidence.pop("response_time_ms", None)
+        try:
+            learner_id = int(evidence["user_id"])
+        except (TypeError, ValueError):
+            return True  # Guests have no durable learner record.
+        from lyo_app.events.models import EventType, LearningEvent
+        try:
+            prior = await self.db.execute(select(LearningEvent.id).where(
+                LearningEvent.user_id == learner_id,
+                LearningEvent.event_type == EventType.CLASSROOM_DEMONSTRATION,
+                LearningEvent.measurable_outcome.is_not(None),
+                LearningEvent.source_surface == "classroom",
+                LearningEvent.metadata_json["classroom_checkpoint_id"].as_string() == event_id,
+            ).limit(1))
+            if prior.scalar_one_or_none() is not None:
+                return True
+            if not await self._log_classroom_evidence(**evidence, event_id=event_id):
+                return False
+            concept_id = self._canonical_concept_id(evidence.get("concept_id"))
+            # Missing timing is unknown, not a fictional one-second answer.
+            if concept_id and isinstance(response_time_ms, (int, float)) and 0 < response_time_ms < 3600000:
+                from lyo_app.personalization.service import PersonalizationEngine
+                await PersonalizationEngine().dkt.update_mastery(
+                    self.db, learner_id, concept_id, evidence["correct"],
+                    response_time_ms / 1000.0, evidence.get("hints_used", 0),
+                )
+            return True
+        except Exception as exc:
+            logger.warning("Could not persist classroom evidence: %s", type(exc).__name__)
+            await self.db.rollback()
+            return False
 
     async def _handle_user_action_trigger(self, trigger: Trigger):
         """Handle user action triggers"""
@@ -2953,9 +2854,10 @@ class SceneLifecycleEngine:
         and a fallback that throws leaves the learner with the dead screen
         this exists to prevent.
         """
-        context = self.session_contexts.get(trigger.session_id)
+        key = session_progress_key(trigger.user_id, trigger.session_id)
+        context = self.session_contexts.get(key)
         language_code = str(
-            _SESSION_PROGRESS.get(trigger.session_id, {}).get(
+            _SESSION_PROGRESS.get(key, {}).get(
                 "language_code",
                 getattr(context, "language_code", None) or "en-US",
             )
@@ -3097,8 +2999,8 @@ class SceneLifecycleEngine:
             user_id=user_id,
             session_id=session_id,
             action_data={
+                **(action_data or {}),
                 "action_intent": action_intent,
-                **(action_data or {})
             },
             component_id=component_id,
             urgency=5  # User actions are medium priority
@@ -3154,7 +3056,8 @@ class SceneLifecycleEngine:
         hint_level: Optional[str] = None,
         evidence_type: Optional[str] = None,
         misconception: Optional[str] = None,
-    ) -> None:
+        event_id: Optional[str] = None,
+    ) -> bool:
         """Record what the learner just demonstrated on the shared event stream.
 
         Chat already logs its checks here, and the event processor projects
@@ -3187,13 +3090,13 @@ class SceneLifecycleEngine:
         """
         concept_id = self._canonical_concept_id(concept_id)
         if not concept_id:
-            return
+            return True
 
         try:
             learner_id = int(user_id)
         except (TypeError, ValueError):
             logger.debug("Guest classroom evidence is not persisted")
-            return
+            return True
 
         try:
             from lyo_app.events.evidence import evidence_from_graded_answer
@@ -3209,7 +3112,7 @@ class SceneLifecycleEngine:
                 evidence_type=evidence_type,
             )
             if evidence is None:
-                return
+                return True
 
             await log_learning_event(
                 self.db,
@@ -3223,8 +3126,10 @@ class SceneLifecycleEngine:
                     hints_used=hints_used,
                     misconception=misconception,
                     source_surface="classroom",
+                    metadata_json={"classroom_checkpoint_id": event_id} if event_id else None,
                 ),
             )
+            return True
         except Exception as exc:
             logger.warning(
                 "Could not log classroom evidence for %s: %s", concept_id, exc
@@ -3233,283 +3138,35 @@ class SceneLifecycleEngine:
                 await self.db.rollback()
             except Exception:
                 pass
+            return False
 
     async def handle_quiz_submission(
-        self,
-        user_id: str,
-        session_id: str,
-        quiz_component_id: str,
-        selected_option_id: str,
-        response_time_ms: int,
+        self, user_id: str, session_id: str, quiz_component_id: str,
+        selected_option_id: str, response_time_ms: int = 0,
     ) -> Scene:
-        """Validate a quiz server-side and preserve distractor diagnosis."""
-        validated_correct = False
-        # Whether an authored option was actually found and graded. Without
-        # this, a submission whose scene or option cannot be located falls
-        # through with `validated_correct` still False and gets recorded as a
-        # wrong answer — the learner marked down for a question the server
-        # failed to look up.
-        scored = False
-        validated_skill_id = session_concept(
-            self.session_contexts.get(session_id)
-        )
-        selected_feedback = None
-        misconception_tag = None
-        remediation_hint = None
-        active_scene = self.active_scenes.get(
-            next(
-                (
-                    sid for sid, scene in self.active_scenes.items()
-                    if any(c.component_id == quiz_component_id for c in scene.components)
-                ),
-                None,
-            )
-        ) if self.active_scenes else None
-
-        if active_scene:
-            for comp in active_scene.components:
-                if comp.component_id == quiz_component_id and hasattr(comp, "options"):
-                    validated_skill_id = getattr(comp, "concept_id", None) or validated_skill_id
-                    for option in comp.options:
-                        if option.id == selected_option_id:
-                            validated_correct = option.is_correct
-                            scored = True
-                            selected_feedback = (
-                                option.feedback_correct
-                                if validated_correct
-                                else option.feedback_incorrect
-                            )
-                            misconception_tag = option.misconception_tag
-                            remediation_hint = option.remediation_hint
-                            break
-                    break
-
-        progress = _SESSION_PROGRESS.get(session_id, {})
-        session_context = self.session_contexts.get(session_id)
-        lesson_index = session_context.lesson_index if session_context else 0
-        hints_used = int(
-            progress.get("hint_counts", {}).get(str(lesson_index), 0)
-        )
-        hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
-
-        # Keyed the way Chat keys it. The Classroom carries human-facing text
-        # — "Compare fractions" — while Chat writes `slugify_skill` output.
-        # Two names for one concept means two `LearnerMastery` rows for one
-        # learner, and neither surface can see what the other taught.
-        # No placeholder fallback. `_canonical_concept_id` returns None for a
-        # session with nothing to name, and the evidence write below already
-        # declines those. Falling back to `current_concept` here persisted them
-        # anyway, so every identity-less graded session in the product — across
-        # unrelated learners and unrelated subjects — accumulated into one
-        # shared mastery row. That is the fake row the guard exists to prevent;
-        # it was simply not applied to this path.
-        dkt_skill_id = self._canonical_concept_id(validated_skill_id)
-        # Behind `scored`, exactly like the evidence write below.
-        #
-        # `validated_correct` starts False and is only set while grading an
-        # authored option, so a vanished scene or an unmatched option reaches
-        # here still False. That used to dirty a leftover human-text key
-        # nothing read; now that both surfaces share one key, it would lower
-        # the mastery they both teach from — a lookup failure recorded as the
-        # learner getting it wrong.
-        try:
-            user_id_int = int(user_id) if scored and dkt_skill_id else None
-            if user_id_int is None:
-                raise ValueError("nothing was graded, or no concept to record against")
-            from lyo_app.personalization.schemas import KnowledgeTraceRequest
-            from lyo_app.personalization.service import PersonalizationEngine
-            await PersonalizationEngine().trace_knowledge(
-                self.db,
-                KnowledgeTraceRequest(
-                    learner_id=str(user_id_int),
-                    skill_id=dkt_skill_id,
-                    item_id=dkt_skill_id,
-                    correct=validated_correct,
-                    time_taken_seconds=max(response_time_ms / 1000.0, 1.0),
-                    hints_used=hints_used,
-                ),
-            )
-        except (ValueError, TypeError):
-            logger.debug("Quiz result not persisted: guest, ungraded, or unnamed concept")
-        except Exception as exc:
-            logger.warning("Could not persist classroom recognition evidence: %s", exc)
-            try:
-                await self.db.rollback()
-            except Exception:
-                pass
-
-        # A multiple-choice pick is recognition, not application — the ladder's
-        # weakest positive rung. `evidence_from_graded_answer` defaults to that
-        # when no rung is declared, and quiz components declare none, so the
-        # default is the honest answer rather than a missing value.
-        if scored:
-            await self._log_classroom_evidence(
-                user_id=user_id,
-                concept_id=validated_skill_id,
-                correct=validated_correct,
-                hints_used=hints_used,
-                hint_level=hint_level,
-                misconception=misconception_tag,
-            )
-
-        trigger = Trigger(
-            trigger_type=TriggerType.USER_ACTION,
-            user_id=user_id,
-            session_id=session_id,
-            action_data={
-                "action_intent": ActionIntent.SUBMIT_ANSWER,
-                "answer_data": {
-                    "selected_option_id": selected_option_id,
-                    "is_correct": validated_correct,
-                    "response_time_ms": response_time_ms,
-                    "feedback": selected_feedback,
-                    "misconception_tag": misconception_tag,
-                    "remediation_hint": remediation_hint,
-                },
-            },
-            component_id=quiz_component_id,
-            urgency=7 if not validated_correct else 3,
-        )
-        return await self.process_trigger(trigger)
+        # Correctness is resolved against the persisted active task, not a
+        # client flag or an unowned scene found in a global component search.
+        return await self.process_trigger(Trigger(
+            trigger_type=TriggerType.USER_ACTION, user_id=user_id,
+            session_id=session_id, component_id=quiz_component_id,
+            action_data={"action_intent": ActionIntent.SUBMIT_ANSWER,
+                         "answer_data": {"selected_option_id": selected_option_id},
+                         "response_time_ms": response_time_ms},
+        ))
 
     async def handle_transfer_submission(
-        self,
-        user_id: str,
-        session_id: str,
-        input_component_id: str,
-        response: str,
-        response_time_ms: int = 0,
+        self, user_id: str, session_id: str, input_component_id: str,
+        response: str, response_time_ms: int = 0,
     ) -> Scene:
-        """Score explanation/application evidence from the active server rubric."""
-        validated_correct = False
-        # See `handle_quiz_submission`: False means "did not meet the rubric",
-        # and only means that once a rubric was actually found to apply.
-        scored = False
-        coverage = 0.0
-        missing: List[str] = []
-        hesitant = detect_hesitation(response)
-        skill_id = (
-            session_concept(self.session_contexts.get(session_id))
-            or "current_concept"
-        )
-        expected_keywords: List[str] = []
-        declared_evidence_type = "transfer"
-        min_words = 6
-        min_score = 0.25
-
-        active_scene = self.active_scenes.get(
-            next(
-                (
-                    sid for sid, scene in self.active_scenes.items()
-                    if any(c.component_id == input_component_id for c in scene.components)
-                ),
-                None,
-            )
-        ) if self.active_scenes else None
-        if active_scene:
-            for comp in active_scene.components:
-                if isinstance(comp, InputField) and comp.component_id == input_component_id:
-                    skill_id = comp.concept_id or skill_id
-                    expected_keywords = list(comp.expected_keywords)
-                    declared_evidence_type = comp.evidence_type
-                    min_words = comp.min_words
-                    min_score = comp.min_score
-                    validated_correct, coverage, missing = score_transfer_response(
-                        response,
-                        expected_keywords,
-                        min_words=min_words,
-                        min_score=min_score,
-                    )
-                    scored = True
-                    break
-
-        # Tutor-facing feedback: never quote the Evaluator's raw `missing`
-        # keyword list here — that would hand the learner the exact words
-        # the rubric is scoring for. `describe_transfer_gap` turns the score
-        # into a plain-language hint about the *category* of gap instead.
-        if hesitant:
-            feedback = "No problem — let's break this into a smaller step."
-        elif validated_correct:
-            feedback = "Your explanation uses the lesson idea in a new situation."
-        else:
-            feedback = describe_transfer_gap(response, min_words, coverage, min_score)
-
-        progress = _SESSION_PROGRESS.get(session_id, {})
-        session_context = self.session_contexts.get(session_id)
-        lesson_index = session_context.lesson_index if session_context else 0
-        hints_used = int(progress.get("hint_counts", {}).get(str(lesson_index), 0))
-        hint_level = progress.get("hint_levels", {}).get(str(lesson_index))
-        # See `handle_quiz_submission`: one key per concept across surfaces,
-        # and no placeholder for a session with nothing to name.
-        dkt_skill_id = self._canonical_concept_id(skill_id)
-        # See `handle_quiz_submission`: an unscored submission is a lookup
-        # failure, not a wrong answer, and must not reach shared mastery.
-        try:
-            user_id_int = int(user_id) if scored and dkt_skill_id else None
-            if user_id_int is None:
-                raise ValueError("nothing was graded, or no concept to record against")
-            from lyo_app.personalization.service import PersonalizationEngine
-            await PersonalizationEngine().dkt.update_mastery(
-                self.db,
-                user_id_int,
-                dkt_skill_id,
-                validated_correct,
-                max(response_time_ms / 1000.0, 1.0),
-                hints_used,
-            )
-        except (ValueError, TypeError):
-            logger.debug("Transfer not persisted: guest, ungraded, or unnamed concept")
-        except Exception as exc:
-            logger.warning("Could not persist classroom transfer evidence: %s", exc)
-            try:
-                await self.db.rollback()
-            except Exception:
-                pass
-
-        # The input component declares which rung it is asking for, so a
-        # transfer prompt is recorded as transfer and an explanation prompt as
-        # explanation. `log_learning_event` normalizes the wire's "retrieval"
-        # to the ladder's "retention".
-        #
-        # No misconception is passed. The only per-response diagnosis this
-        # rubric produces is `missing` — the expected keywords the learner did
-        # not use — and those are hidden grading internals. Writing them into
-        # the learner model would put them one render away from the screen.
-        if scored:
-            await self._log_classroom_evidence(
-                user_id=user_id,
-                concept_id=skill_id,
-                correct=validated_correct,
-                hints_used=hints_used,
-                hint_level=hint_level,
-                evidence_type=declared_evidence_type,
-            )
-
-        trigger = Trigger(
-            trigger_type=TriggerType.USER_ACTION,
-            user_id=user_id,
-            session_id=session_id,
-            action_data={
-                "action_intent": ActionIntent.SUBMIT_TRANSFER,
-                "message": response,
-                "answer_data": {
-                    "is_correct": validated_correct,
-                    "coverage": coverage,
-                    # Internal telemetry only (mastery tracking / analytics) —
-                    # never rendered as chat text. Unlike quiz distractors,
-                    # transfer responses have no author-curated remediation
-                    # hint, so `remediation_hint` stays None here rather than
-                    # being built from the rubric's keyword list.
-                    "missing_keywords": missing,
-                    "feedback": feedback,
-                    "remediation_hint": None,
-                    "hesitant": hesitant,
-                },
-            },
-            component_id=input_component_id,
-            urgency=6 if not validated_correct else 3,
-        )
-        return await self.process_trigger(trigger)
+        # Semantic, question-specific evaluation lives in AdaptiveTeacher.
+        # Keyword scoring remains a legacy helper only, never the live grader.
+        return await self.process_trigger(Trigger(
+            trigger_type=TriggerType.USER_ACTION, user_id=user_id,
+            session_id=session_id, component_id=input_component_id,
+            action_data={"action_intent": ActionIntent.SUBMIT_TRANSFER,
+                         "answer_data": {"response": response[:2000]},
+                         "response_time_ms": response_time_ms},
+        ))
 
     async def trigger_celebration(
         self,
@@ -3532,9 +3189,9 @@ class SceneLifecycleEngine:
 
         return await self.process_trigger(trigger)
 
-    def get_session_context(self, session_id: str) -> Optional[ContextSnapshot]:
+    def get_session_context(self, session_id: str, user_id: str) -> Optional[ContextSnapshot]:
         """Get current context for a session"""
-        return self.session_contexts.get(session_id)
+        return self.session_contexts.get(session_progress_key(user_id, session_id))
 
     def get_active_scene(self, scene_id: str) -> Optional[Scene]:
         """Get currently active scene"""
