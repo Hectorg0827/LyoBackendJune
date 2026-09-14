@@ -159,10 +159,29 @@ async def test_a_worked_example_survives_reconnect_and_damps_the_next_answer():
     restored = engine(ctx)
     await restored.process_trigger(action(welcome=True))
     restored.adaptive_teacher.turn.assert_not_awaited()
+    # The worked example is a paced presentation and it returns the learner to
+    # the SAME checkpoint rather than swapping in a different question — so
+    # walk it to its end the way tapping Continue does, then answer the
+    # question that was actually asked. Typing prose at it, as this test used
+    # to, only graded back when asking for an example replaced the choice
+    # checkpoint with a written one.
+    for _ in range(len(_SESSION_PROGRESS[key]["guided_state"].get("presentation") or []) + 1):
+        if not _SESSION_PROGRESS[key]["guided_state"].get("presentation"):
+            break
+        await restored.process_trigger(action(ActionIntent.CONTINUE))
+    pending = _SESSION_PROGRESS[key]["guided_state"]["pending"]
+    assert pending["hint_level"] == "full_example", "the example is still counted after resuming"
     log = AsyncMock()
     with patch("lyo_app.events.processor.log_learning_event", log):
-        await restored.handle_transfer_submission("42", "fractions", saved["pending"]["id"],
-                                                  "Fewer equal cuts make larger pieces.")
+        await restored.process_trigger(action(ActionIntent.SUBMIT_ANSWER, pending["id"],
+                                              answer_data={"selected_option_id": "a"}))
     event = log.await_args.args[1]
+    # Compare against the unhelped answer, not only against the helper that
+    # computed this number: asserting solely that the value equals
+    # `confidence_after_hints(...)` is self-referential, and a damping function
+    # that quietly returned its input unchanged would satisfy it.
+    assert event.evidence_confidence < confidence_after_hints(1.0), (
+        "a full worked example has to cost confidence"
+    )
     assert event.evidence_confidence == confidence_after_hints(1.0, hint_level="full_example")
     assert event.hints_used == 1

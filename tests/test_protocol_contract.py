@@ -6,12 +6,16 @@ from pydantic import BaseModel
 # Add current directory to path so we can import lyo_app
 sys.path.insert(0, os.getcwd())
 
-try:
-    from lyo_app.routers.workflows import WorkflowStatusResponse
-except ImportError:
-    print("Could not import WorkflowStatusResponse. Check python path.")
-    # Mocking what it should be if import fails (just to show logic, but ideally we want real import)
-    sys.exit(1)
+import pytest
+
+# `workflows` imports temporalio, which is an optional deployment dependency.
+# Calling sys.exit here — as this file used to — turns a missing optional
+# package into a collection crash that takes down the entire suite, not just
+# this module. Skipping leaves every other test runnable.
+WorkflowStatusResponse = pytest.importorskip(
+    "lyo_app.routers.workflows",
+    reason="temporalio is not installed in this environment",
+).WorkflowStatusResponse
 
 def test_workflow_status_serialization():
     print("Testing WorkflowStatusResponse serialization...")

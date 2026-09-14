@@ -11,6 +11,7 @@ precisely the duplication being fixed. And abandoning the classroom-keyed
 rows would show a mid-course learner their progress resetting.
 """
 
+import ast
 import json
 import unittest
 from datetime import datetime, timedelta
@@ -54,12 +55,62 @@ class OneKeyTests(unittest.TestCase):
                       "  spaced   out  ", "Ünicode Things", "x" * 200):
             self.assertEqual(skillkey._slugify(topic), slugify_skill(topic))
 
-    def test_both_dkt_call_sites_canonicalise(self):
+    def test_every_classroom_dkt_call_names_the_skill_canonically(self):
+        """No DKT update on the classroom path may carry a raw concept id.
+
+        This used to count call sites and grep for one variable name, which
+        said nothing about the guarantee and broke the moment the quiz path
+        was refactored to go through the event processor — a change that left
+        the invariant intact and the test red. So ask the question directly:
+        find every `dkt.update_mastery` call in the scene engine and require
+        the skill it names to have come from `_canonical_concept_id`.
+        """
         source = (
             Path(__file__).resolve().parents[1]
             / "lyo_app" / "ai_classroom" / "scene_lifecycle_engine.py"
         ).read_text()
-        self.assertEqual(source.count("dkt_skill_id = self._canonical_concept_id("), 2)
+        tree = ast.parse(source)
+
+        def canonical_names(scope):
+            """Names bound to the output of _canonical_concept_id in `scope`."""
+            found = set()
+            for node in ast.walk(scope):
+                if not isinstance(node, ast.Assign):
+                    continue
+                call = node.value
+                if (isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "_canonical_concept_id"):
+                    found.update(t.id for t in node.targets if isinstance(t, ast.Name))
+            return found
+
+        calls = 0
+        for scope in ast.walk(tree):
+            if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            safe = canonical_names(scope)
+            for node in ast.walk(scope):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "update_mastery"):
+                    continue
+                calls += 1
+                named = next(
+                    (kw.value for kw in node.keywords if kw.arg == "skill_id"),
+                    node.args[2] if len(node.args) > 2 else None,
+                )
+                self.assertIsInstance(
+                    named, ast.Name,
+                    f"{scope.name} names a DKT skill with an expression, not a checked variable",
+                )
+                self.assertIn(
+                    named.id, safe,
+                    f"{scope.name} passes '{named.id}' to DKT without canonicalising it",
+                )
+
+        # A refactor that removes the last call site would otherwise pass this
+        # test vacuously, exactly as deleting the code would.
+        self.assertGreaterEqual(calls, 1, "The classroom no longer updates DKT at all")
         self.assertNotIn('skill_id=validated_skill_id or "current_concept"', source)
 
 

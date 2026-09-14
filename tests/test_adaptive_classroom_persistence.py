@@ -14,7 +14,39 @@ from lyo_app.ai_classroom.sdui_models import ActionIntent, Scene, SceneType, Tea
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager
 from lyo_app.ai_classroom.websocket_routes import _register_lifecycle_handlers
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
-from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation
+from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation, advance_to_task
+from tests.export_guided_fixtures import FixtureTeacher
+
+
+@pytest.mark.asyncio
+async def test_database_restores_an_explored_model_without_an_interaction_or_new_teacher_turn():
+    database = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with database.begin() as connection:
+            await connection.run_sync(ClassroomSession.__table__.create)
+            await connection.run_sync(ClassroomInteraction.__table__.create)
+        progress, ctx = {}, context(target_duration_minutes=8)
+        runner = AdaptiveSession(FixtureTeacher())
+        await runner.run(ctx, progress, action(welcome=True))
+        activity_id = "visual:" + progress["guided_state"]["step_id"]
+        change = action(ActionIntent.UPDATE_ACTIVITY, activity_id, answer_data={"value": 3})
+        expected = await runner.run(ctx, progress, change)
+        async with AsyncSession(database) as db:
+            instance = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+            instance.db = db
+            assert await instance._persist_session_progress(change, ctx, progress, record_interaction=False)
+        async with AsyncSession(database) as db:
+            restored = await ContextAssembler(db)._load_persisted_session_progress(action(welcome=True))
+            assert not (await db.execute(select(ClassroomInteraction))).scalars().all()
+        teacher = ScriptedTeacher()
+        actual = await AdaptiveSession(teacher).run(ctx, restored, action(welcome=True))
+        assert actual == expected
+        assert restored["guided_state"]["presentation"]["visual"]["value"] == 3
+        assert restored["guided_state"]["beat_index"] == -1
+        assert restored["guided_state"]["outbox"] == []
+        teacher.turn.assert_not_awaited()
+    finally:
+        await database.dispose()
 
 
 @pytest.mark.asyncio
@@ -27,6 +59,7 @@ async def test_database_restores_the_exact_partial_question_and_rejects_another_
         teacher, progress, ctx = ScriptedTeacher(), {}, context()
         runner = AdaptiveSession(teacher)
         await runner.run(ctx, progress, action(welcome=True))
+        await advance_to_task(runner, progress, ctx)
         pending = progress["guided_state"]["pending"]
         await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, pending["id"],
                                               answer_data={"selected_option_id": "a"}))

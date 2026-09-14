@@ -475,70 +475,100 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         #
         # "Long division" is deliberately the topic section 7 just asserted was
         # untouched, so the only thing that can make it assessed is this.
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, patch
 
+        from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+        from lyo_app.ai_classroom.adaptive_teaching import (
+            GuidedState, LearningPlan, LearningUnit, LearningTask, PendingTask,
+            TaskOption,
+        )
         from lyo_app.ai_classroom.scene_lifecycle_engine import (
             ContextSnapshot,
             SceneLifecycleEngine,
+            Trigger,
+            TriggerType,
+            _SESSION_PROGRESS,
+            session_progress_key,
         )
-        from lyo_app.ai_classroom.sdui_models import (
-            QuizCard,
-            QuizOption,
-            Scene,
-            SceneType,
-        )
+        from lyo_app.ai_classroom.sdui_models import ActionIntent
 
         planned_topic = "Long division"
-        engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
-        engine.db = session
-        engine.websocket_manager = None
-        engine.process_trigger = AsyncMock(return_value=MagicMock(scene_id="next"))
-        engine.session_contexts = {
-            "e2e-classroom": ContextSnapshot(
-                user_id=str(learner.id),
-                session_id="e2e-classroom",
-                topic=planned_topic,
-                # Exactly what entry-contract.mjs puts in the `objective` query
-                # parameter when the web opens the Classroom on a weak topic.
-                # Slugified it reads `practise_and_apply_long_division`, which
-                # is the pseudo-concept this walk exists to keep out of the
-                # learner's record.
-                learning_objective=f"Practise and apply {planned_topic}",
-            )
-        }
-        # A Director-generated quiz names no concept of its own, which is the
-        # ordinary case for a session with no authored course behind it — and
-        # the case that falls back to the session's own naming.
-        engine.active_scenes = {
-            "s1": Scene(
-                scene_id="s1",
-                scene_type=SceneType.CHALLENGE,
-                components=[
-                    QuizCard(
-                        component_id="quiz-1",
-                        question="What is 144 divided by 12?",
-                        options=[
-                            QuizOption(id="a", label="12", is_correct=True,
-                                       feedback_correct="Yes."),
-                            QuizOption(id="b", label="14", is_correct=False,
-                                       feedback_incorrect="Not quite."),
-                        ],
-                    )
-                ],
-            )
-        }
+        engine = SceneLifecycleEngine(session)
+        # The only stub in this step. Assembling a real context would need an
+        # authored course behind the session, which is not what this is about;
+        # everything downstream of here — grading, the evidence outbox, the
+        # projections and the readiness endpoint — runs for real.
+        #
+        # `topic` is what the adaptive session files evidence under, and it is
+        # deliberately not the objective: slugified, "Practise and apply Long
+        # division" reads `practise_and_apply_long_division`, the pseudo-concept
+        # this walk exists to keep out of the learner's record.
+        ctx = ContextSnapshot(
+            user_id=str(learner.id),
+            session_id="e2e-classroom",
+            topic=planned_topic,
+            learning_objective=f"Practise and apply {planned_topic}",
+        )
+        engine.context_assembler.assemble_context = AsyncMock(return_value=ctx)
 
-        personalization = MagicMock()
-        personalization.return_value.trace_knowledge = AsyncMock(return_value={})
-        personalization.return_value.dkt.update_mastery = AsyncMock(return_value={})
+        # Seed the checkpoint the learner is about to answer. Recognition —
+        # picking the right quotient from prepared candidates — is deliberately
+        # the weakest positive rung, so this also pins that the product records
+        # it as recognition rather than inflating it.
+        pending = PendingTask(
+            task=LearningTask(
+                kind="choose",
+                scenario="A baker splits 144 rolls evenly between 12 identical boxes.",
+                question="How many rolls go in each box?",
+                response_hint="Pick the number per box.",
+                criteria=["Divides 144 by 12 correctly"],
+                example_answer="12 rolls per box.",
+                options=[
+                    TaskOption(id="a", label="12 rolls", correct=True,
+                               feedback="144 split 12 ways leaves 12 in each box."),
+                    TaskOption(id="b", label="14 rolls", correct=False,
+                               misconception="Reads the digits rather than dividing.",
+                               feedback="That takes the digits of 144 rather than dividing it."),
+                ],
+            ),
+            speech="Splitting a total evenly is division.",
+            board_title="Sharing a total evenly",
+            board_content="144 rolls shared between 12 boxes is 144 \u00f7 12.",
+        )
+        seeded = GuidedState(
+            owner=ctx.user_id,
+            plan=LearningPlan(units=[
+                LearningUnit(title="Divide by a two-digit number",
+                             objective="Share a total evenly between equal groups.",
+                             material="Splitting 144 rolls between 12 boxes gives 12 rolls per box."),
+                LearningUnit(title="Interpret a remainder",
+                             objective="Say what is left over once equal groups are filled.",
+                             material="Sharing 145 rolls between 12 boxes fills each box and leaves one over."),
+            ]),
+            pending=pending,
+            remaining_units=[1],
+        )
+        key = session_progress_key(ctx.user_id, ctx.session_id)
+        progress = {}
+        AdaptiveSession(None).save(progress, seeded, AdaptiveSession(None).checkpoint(ctx, seeded))
+        _SESSION_PROGRESS[key] = progress
+
+        # DKT is the one collaborator held back: it is exercised by its own
+        # tests, and its absence must not be what makes this step pass.
+        personalization = AsyncMock()
         with patch("lyo_app.personalization.service.PersonalizationEngine", personalization):
-            await engine.handle_quiz_submission(
-                user_id=str(learner.id),
-                session_id="e2e-classroom",
-                quiz_component_id="quiz-1",
-                selected_option_id="a",
-                response_time_ms=5000,
-            )
+            await engine.process_trigger(Trigger(
+                trigger_type=TriggerType.USER_ACTION,
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                component_id=pending.id,
+                action_data={
+                    "action_intent": ActionIntent.SUBMIT_ANSWER,
+                    "answer_data": {"selected_option_id": "a"},
+                    "response_time_ms": 5000,
+                },
+            ))
+        _SESSION_PROGRESS.pop(key, None)
         await session.commit()
 
         after = await client.get(
