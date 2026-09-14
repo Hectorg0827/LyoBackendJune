@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
-from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState, LearningUnit, TeachingUnavailable
+from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState, LearningUnit, PendingTask, TeachingUnavailable
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
 from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, InputField, QuizCard
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
@@ -286,6 +286,80 @@ async def test_an_application_problem_may_be_answered_by_choosing():
     accepted = await AdaptiveTeacher(generate).turn(ctx, current, "independent")
     assert accepted.task.kind == "apply"
     assert accepted.task.response_format == "choice"
+
+
+@pytest.mark.asyncio
+async def test_the_closing_question_does_not_ship_its_own_answer():
+    """The one checkpoint that decides what the product believes a learner
+    can do must not arrive with the answer attached.
+
+    Clients colour a tap instantly from the option's own correctness instead
+    of waiting for the server, which is a fair trade during practice. It is
+    not a fair trade for the checkpoint whose correct answer banks
+    application evidence and closes a unit: anyone who opens the page can
+    read the answer, and the record stops meaning anything.
+
+    All three fields have to go together. Android reads a missing
+    `is_correct` as a neutral selection, but its feedback lookup falls back
+    to `feedback_incorrect`, so leaving the text behind would tell a correct
+    learner they were wrong.
+    """
+    teacher = ScriptedTeacher()
+    _, runner, progress, ctx, _ = await begin(teacher)
+    state_now = state(progress)
+    applied = teacher._turn(ctx, state_now, "independent").task
+    choice = teacher._turn(ctx, state_now, "guided").task
+    applied.response_format, applied.options = "choice", choice.options
+    assert applied.kind == "apply"
+
+    state_now.pending = PendingTask(task=applied, speech="Try this one yourself.",
+                                    board_title="Your turn", board_content="A fresh problem.")
+    scene = runner.checkpoint(ctx, state_now)
+    card = next(c for c in scene.components if isinstance(c, QuizCard))
+    assert card.options, "the learner still gets something to choose between"
+    for option in card.options:
+        assert option.is_correct is None, "the answer key rode along with the question"
+        assert option.feedback_correct is None and option.feedback_incorrect is None, (
+            "feedback text names the answer just as plainly as the flag does"
+        )
+
+
+def test_a_card_cannot_declare_the_key_for_only_some_of_its_options():
+    """Half a key is worse than either whole.
+
+    It leaves the client colouring some taps locally and not others, and on
+    the checkpoint that exists to be answered unaided it narrows the answer
+    by elimination. Proven load-bearing by deleting the check and watching a
+    half-declared card sail through.
+    """
+    from lyo_app.ai_classroom.sdui_models import QuizOption
+    with pytest.raises(ValidationError, match="all declare correctness or all withhold"):
+        QuizCard(component_id="q", question="Which piece is larger?", options=[
+            QuizOption(id="a", label="One half", is_correct=True),
+            QuizOption(id="b", label="One third", is_correct=None),
+        ])
+
+
+@pytest.mark.asyncio
+async def test_practice_questions_still_answer_instantly():
+    """Withholding the key is scoped to the checkpoint that closes a unit.
+
+    Recognition practice keeps its local colouring: the round-trip it saves
+    is worth more there than the answer is worth hiding, and a `choose` task
+    never banks application evidence however fluently it is answered.
+    """
+    teacher = ScriptedTeacher()
+    _, runner, progress, ctx, _ = await begin(teacher)
+    state_now = state(progress)
+    recognition = teacher._turn(ctx, state_now, "guided").task
+    assert recognition.response_format == "choice" and recognition.kind != "apply"
+
+    state_now.pending = PendingTask(task=recognition, speech="Which one is larger?",
+                                    board_title="Compare", board_content="Same whole, fewer cuts.")
+    scene = runner.checkpoint(ctx, state_now)
+    card = next(c for c in scene.components if isinstance(c, QuizCard))
+    assert any(o.is_correct for o in card.options), "practice still colours a tap locally"
+    assert any(o.feedback_correct or o.feedback_incorrect for o in card.options)
 
 
 @pytest.mark.asyncio

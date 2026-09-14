@@ -229,7 +229,11 @@ class QuizOption(BaseModel):
 
     id: str = Field(..., min_length=1, max_length=10)
     label: str = Field(..., min_length=1, max_length=300)
-    is_correct: bool = False
+    # `None` means the server is deliberately withholding the key for this
+    # question, not that the option is wrong. Clients that colour a tap
+    # locally must treat it as "unknown until the server says", which is
+    # what the iOS, web and Android decoders already do.
+    is_correct: Optional[bool] = False
 
     # Rich feedback system
     feedback_correct: Optional[str] = Field(None, max_length=200)
@@ -267,8 +271,23 @@ class QuizCard(ComponentBase):
     @field_validator('options')
     @classmethod
     def validate_quiz_options(cls, v):
-        """Ensure quiz has exactly one correct answer"""
-        correct_count = sum(1 for option in v if option.is_correct)
+        """Either the card carries its key, or it carries none of it.
+
+        A card that names one correct option is the ordinary case, and a
+        second correct option is still a bug. But the server withholds the
+        key on the checkpoint that closes a unit, so `is_correct=None` on
+        every option is deliberate rather than malformed.
+
+        A mix is neither: it would leave the client colouring some taps
+        locally and not others, and would narrow the answer by elimination
+        on the one question that exists to be answered unaided.
+        """
+        declared = [option.is_correct for option in v if option.is_correct is not None]
+        if not declared:
+            return v
+        if len(declared) != len(v):
+            raise ValueError("Quiz options must all declare correctness or all withhold it")
+        correct_count = sum(1 for is_correct in declared if is_correct)
         if correct_count != 1:
             raise ValueError(f"Quiz must have exactly 1 correct answer, found {correct_count}")
         return v

@@ -396,12 +396,35 @@ class AdaptiveSession:
             components.append(ExampleBlock(title=self.copy(context, "Your reasoning so far", "Tu razonamiento hasta ahora"),
                                             content="\n\n".join(pending.answers)[-1400:], language_code=context.language_code, priority=3))
         prompt = task.scenario + "\n\n" + (pending.follow_up if follow_up else task.question)
+        evidence_bearing = task.kind == "apply"
         if task.response_format == "choice":
             components.append(QuizCard(
                 component_id=pending.id, question=prompt,
-                options=[QuizOption(id=o.id, label=o.label, is_correct=o.correct,
-                                    feedback_correct=o.feedback if o.correct else None,
-                                    feedback_incorrect=o.feedback if not o.correct else None) for o in task.options],
+                # Clients colour a tap instantly from the option's own
+                # correctness rather than waiting for the server, which is
+                # worth the round-trip it saves on practice. It cannot be
+                # worth it here: an `apply` checkpoint is the one whose
+                # correct answer banks application evidence and closes a
+                # unit, and shipping its key puts the answer in the page
+                # for anyone who opens it. Sending a key the learner can
+                # read, for the one question that decides what the product
+                # believes they can do, buys a few hundred milliseconds and
+                # costs the record its meaning.
+                #
+                # This was harmless while `choose` was the only kind that
+                # could be answered by tapping — recognition never closed a
+                # unit. Letting the format vary per checkpoint is what
+                # brought a key to the question that counts.
+                #
+                # All three fields go together: Android reads a missing
+                # `is_correct` as a neutral selection, but its feedback
+                # lookup falls back to `feedback_incorrect`, so leaving the
+                # text behind would tell a correct learner they were wrong.
+                options=[QuizOption(id=o.id, label=o.label,
+                                    is_correct=None if evidence_bearing else o.correct,
+                                    feedback_correct=None if evidence_bearing or not o.correct else o.feedback,
+                                    feedback_incorrect=None if evidence_bearing or o.correct else o.feedback)
+                         for o in task.options],
                 concept_id=context.lesson_title or context.topic, language_code=context.language_code, priority=4,
             ))
         else:
