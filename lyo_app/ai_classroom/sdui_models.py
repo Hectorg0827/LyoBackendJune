@@ -56,7 +56,6 @@ class AudioMood(str, Enum):
 
 
 class ActionIntent(str, Enum):
-    UPDATE_ACTIVITY = "update_activity"  # Save manipulation without grading or advancing.
     """User action intents that trigger scene transitions.
 
     Canonical intents are shared by every client.  The legacy aliases remain
@@ -66,6 +65,8 @@ class ActionIntent(str, Enum):
     REQUEST_HINT = "request_hint"
     CONTINUE = "continue"
     RETRY = "retry"
+    # Save manipulation of a teaching visual without grading or advancing.
+    UPDATE_ACTIVITY = "update_activity"
     SUBMIT_ANSWER = "submit_answer"
     ASK_QUESTION = "ask_question"
     REQUEST_EXAMPLE = "request_example"
