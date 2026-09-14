@@ -382,11 +382,14 @@ class AdaptiveTeacher:
                     "For move=guided: demonstration=[], supply a choice task with 2–4 options; "
                     "model the setup and support ONE next decision. Use plausible, kind, "
                     "question-specific distractor feedback. Consecutive choices are welcome. "
-                    "For move=faded: demonstration=[], supply a completion or short_answer task "
+                    "Vary response_format from checkpoint to checkpoint so its shape is "
+                    "never predictable from the phase; pick whichever fits THIS question, "
+                    "and when you use choice make every distractor a real misconception. "
+                    "For move=faded: demonstration=[], supply a completion, choice or short_answer task "
                     "with most of a related worked example already completed. Ask for ONE missing "
                     "step or result; never a broad explanation. Only the final step is removed. "
-                    "For move=independent: demonstration=[], kind=apply, response_format=completion "
-                    "or short_answer. Ask one fresh problem closely aligned with practised work, "
+                    "For move=independent: demonstration=[], kind=apply, and any "
+                    "response_format. Ask one fresh problem closely aligned with practised work, "
                     "with a concise response; avoid an essay. Do not provide its solution. "
                     "For move=reteach or prerequisite: task=null, supply 1–3 demonstration beats. "
                     "Explicitly model the missing step with a DIFFERENT representation or example; "
@@ -432,10 +435,19 @@ class AdaptiveTeacher:
                         raise ValueError("Repeated checkpoint")
                     if turn.task.target_index != state.target_index:
                         raise ValueError("Practise the current component skill")
-                    if move == "guided" and turn.task.response_format != "choice":
-                        raise ValueError("Guided practice needs a supported choice")
-                    if move in ("faded", "independent") and turn.task.response_format == "choice":
-                        raise ValueError("Ask for a brief missing step or result")
+                    # Format is deliberately NOT pinned to the phase. Tying
+                    # "guided" to choice and "independent" to typing made the
+                    # shape of every checkpoint predictable from the phase
+                    # alone, and a learner who can see what is coming stops
+                    # reading the question. Let the format vary.
+                    #
+                    # What stays fixed is the demand: independent practice is
+                    # still a fresh application problem. Rigour lives in
+                    # `kind`, which is what the completion gate reads; the
+                    # format is only how the answer is collected, and a real
+                    # application problem is no easier for being answered from
+                    # prepared candidates — provided the distractors are
+                    # genuine misconceptions rather than filler.
                     if move == "independent" and turn.task.kind != "apply":
                         raise ValueError("Independent application required")
                 else:

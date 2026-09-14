@@ -103,14 +103,18 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     teacher.plan.return_value = curriculum
     _, runner, progress, ctx, _ = await begin(teacher)
     await advance_to_task(runner, progress, ctx)
-    observed = []
     for phase, target in [("guided", 0), ("faded", 0), ("guided", 1), ("faded", 1), ("independent", 1)]:
         pending = state(progress).pending
-        observed.append(pending.task.response_format)
         assert (pending.phase, pending.task.target_index) == (phase, target)
         assert state(progress).completed == []
         await respond(runner, progress, ctx)
-    assert observed == ["choice", "completion", "choice", "completion", "short_answer"]
+    # What this pins is the phase and target sequence, above. It used to also
+    # assert the exact response_format at each step — but format is no longer
+    # decided by the phase, so that list only ever reflected what the scripted
+    # teacher happened to return, not anything the production code enforced.
+    # The demand is still fixed where it matters: independent practice is an
+    # application problem, which `test_independent_practice_demands_application`
+    # holds separately.
     assert state(progress).completed == [0] and state(progress).path_done
     assert len(state(progress).practice_events) == 5
 
@@ -239,6 +243,49 @@ async def test_authored_orientation_cannot_sneak_in_a_question_or_skip_the_model
     with pytest.raises(TeachingUnavailable):
         await AdaptiveTeacher(generate).turn(ctx, current, "orient")
     assert generate.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weaker_kind", ["choose", "predict", "explain", "diagnose"])
+async def test_independent_practice_demands_application(weaker_kind):
+    """Independence is about what the question asks, not how it is answered.
+
+    The phase used to also fix the response format — choice while guided,
+    typed once faded — which made every checkpoint's shape guessable from the
+    phase alone. That is gone, so this is now the whole of what protects the
+    bar: whatever format it wears, the last checkpoint before a unit closes
+    has to be a fresh application problem, because `kind` is what the
+    completion gate reads.
+    """
+    teacher = ScriptedTeacher()
+    _, _, progress, ctx, _ = await begin(teacher)
+    current = state(progress)
+    turn = teacher._turn(ctx, current, "independent")
+    turn.task.kind = weaker_kind
+    if weaker_kind != "choose":
+        turn.task.options = []
+        turn.task.response_format = "short_answer"
+    generate = AsyncMock(return_value=turn)
+    with pytest.raises(TeachingUnavailable):
+        await AdaptiveTeacher(generate).turn(ctx, current, "independent")
+
+
+@pytest.mark.asyncio
+async def test_an_application_problem_may_be_answered_by_choosing():
+    """The format is free even at the bar: a real application problem answered
+    from genuine competing candidates is still application."""
+    teacher = ScriptedTeacher()
+    _, _, progress, ctx, _ = await begin(teacher)
+    current = state(progress)
+    turn = teacher._turn(ctx, current, "independent")
+    assert turn.task.kind == "apply"
+    choice = teacher._turn(ctx, current, "guided")
+    turn.task.response_format = "choice"
+    turn.task.options = choice.task.options
+    generate = AsyncMock(return_value=turn)
+    accepted = await AdaptiveTeacher(generate).turn(ctx, current, "independent")
+    assert accepted.task.kind == "apply"
+    assert accepted.task.response_format == "choice"
 
 
 @pytest.mark.asyncio
