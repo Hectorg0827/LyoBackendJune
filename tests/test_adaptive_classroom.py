@@ -131,6 +131,13 @@ async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
     assert state(progress).completed == [] and state(progress).skipped == [0, 1, 2]
     await runner.run(ctx, progress, action(ActionIntent.REQUEST_REVIEW))
     assert state(progress).unit_index == 0 and not state(progress).path_done
+    assert state(progress).phase == "orient"
+    await advance_to_task(runner, progress, ctx)
+    # Reviewing an unfinished skill restores teaching and support. A single
+    # recognised answer still cannot clear its need for independent practice.
+    await answer(runner, progress, ctx)
+    assert state(progress).skipped == [0, 1, 2]
+    await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).skipped == [1, 2]
 

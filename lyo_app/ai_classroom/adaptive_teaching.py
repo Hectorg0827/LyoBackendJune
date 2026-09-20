@@ -13,7 +13,7 @@ import re
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 
@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 
 class TeachingUnavailable(RuntimeError):
     """No validated teaching content is available; offer an honest retry."""
+
+
+def validation_summary(error: Exception) -> str:
+    """Useful diagnostics without logging learner answers or provider payloads."""
+    if isinstance(error, ValidationError):
+        return "; ".join(
+            f"{'.'.join(map(str, item['loc']))}: {item['type']}"
+            for item in error.errors(include_input=False, include_context=False, include_url=False)[:5]
+        )
+    return type(error).__name__
 
 
 class StrictModel(BaseModel):
@@ -216,6 +226,8 @@ class GuidedState(StrictModel):
     # A generation failure after an accepted answer is retried in the same
     # pedagogical phase, not by regrading the already accepted answer.
     next_move: str = "orient"
+    # Retain the learner's question across a failed generation and reconnect.
+    generation_input: str = ""
     outbox: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -392,9 +404,15 @@ class AdaptiveTeacher:
                     "response_format. Ask one fresh problem closely aligned with practised work, "
                     "with a concise response; avoid an essay. Do not provide its solution. "
                     "For move=reteach or prerequisite: task=null, supply 1–3 demonstration beats. "
+                    "Make the learner's previous answer part of the conversation: acknowledge any "
+                    "sound reasoning, name the specific mistaken step using previous_task, "
+                    "previous_answers and feedback, and explain WHY that step does not work. "
+                    "Do not invent a reason the learner has not given or merely announce 'wrong'. "
                     "Explicitly model the missing step with a DIFFERENT representation or example; "
                     "for prerequisite teach the particular prerequisite the learner is missing, "
-                    "then bridge back to the original goal. Do not keep asking Socratic questions "
+                    "then bridge back to the original goal. After repeated difficulty, this is a "
+                    "teaching conversation before moving on with the skill saved for review, "
+                    "not an exam the learner must pass to continue. Do not keep asking Socratic questions "
                     "when the learner needs an explanation. Never label the learner less capable. "
                     "For move=help or clarify: task=null; give a useful hint, worked step or clear "
                     "explanation of the existing question. For move=answer_question: task=null; "
@@ -459,7 +477,8 @@ class AdaptiveTeacher:
                         raise ValueError("Demonstrate the missing step before another attempt")
                 return turn
             except Exception as exc:
-                logger.warning("Classroom turn rejected (%s)", type(exc).__name__)
+                logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
+                               move, attempt + 1, validation_summary(exc))
                 payload["repair"] = str(exc)[:300] + ". Match the requested move and response format exactly."
         raise TeachingUnavailable("Could not author a clear checkpoint")
 

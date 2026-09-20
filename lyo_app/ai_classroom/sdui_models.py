@@ -236,8 +236,10 @@ class QuizOption(BaseModel):
     is_correct: Optional[bool] = False
 
     # Rich feedback system
-    feedback_correct: Optional[str] = Field(None, max_length=200)
-    feedback_incorrect: Optional[str] = Field(None, max_length=200)
+    # Match TaskOption's persisted authoring contract. A valid explanation
+    # must not crash scene construction at the first guided choice.
+    feedback_correct: Optional[str] = Field(None, max_length=250)
+    feedback_incorrect: Optional[str] = Field(None, max_length=250)
 
     # Misconception detection
     misconception_tag: Optional[str] = None

@@ -138,7 +138,7 @@ async def test_extra_help_keeps_question_but_requires_a_fresh_faded_attempt():
 
 
 @pytest.mark.asyncio
-async def test_struggle_reteaches_then_checks_a_prerequisite_without_a_peer_or_difficulty_jump():
+async def test_struggle_reteaches_then_models_a_prerequisite_without_a_pass_or_repeat_gate():
     teacher, runner, progress, ctx, _ = await begin()
     await advance_to_task(runner, progress, ctx)
     for move in ("reteach", "prerequisite"):
@@ -148,9 +148,14 @@ async def test_struggle_reteaches_then_checks_a_prerequisite_without_a_peer_or_d
         assert state(progress).pending is None
         assert not any(isinstance(c, (InputField, QuizCard)) for c in scene.components)
         await advance_to_task(runner, progress, ctx)
-        assert state(progress).pending.task.scenario != old_question
-        assert state(progress).phase == "guided"
+        if move == "reteach":
+            assert state(progress).pending.task.scenario != old_question
+            assert state(progress).phase == "guided"
+        else:
+            assert state(progress).pending is None
+            assert state(progress).skipped == [0] and state(progress).path_done
     assert state(progress).completed == []
+    assert all(not event["correct"] for event in state(progress).outbox)
     assert state(progress).unit.objective == "Compare equal parts of the same whole."
 
 
