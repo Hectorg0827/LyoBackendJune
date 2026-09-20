@@ -341,18 +341,19 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     envelope = ("\nReturn ONE JSON object with these root keys: " + root_keys +
                 ". Fill them with authored content. Do not echo the input context or return "
                 "the schema itself. Nested definitions belong only inside their named fields.\n")
-    providers = ["gpt-4o-mini", "gemini-2.5-flash"]
-    if payload.get("repair"):
-        # The normal provider fallback only sees transport errors. A valid
-        # HTTP response with the wrong teaching structure also merits trying
-        # the other configured provider within the same two-attempt budget.
-        providers.reverse()
+    configured_providers = ["gpt-4o-mini", "gemini-2.5-flash"]
+    rejected_provider = payload.get("_rejected_provider")
+    providers = [p for p in configured_providers if p != rejected_provider]
+    if rejected_provider in configured_providers:
+        providers.append(rejected_provider)
+    # Internal routing metadata never becomes part of learner/model context.
+    public_payload = {key: value for key, value in payload.items() if not key.startswith("_")}
     result = await asyncio.wait_for(
         ai_resilience_manager.chat_completion(
             messages=[
                 {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
                  + json.dumps(contract, ensure_ascii=False)},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
             ],
             provider_order=providers,
             max_tokens=4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000,
@@ -364,6 +365,12 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     )
     if result.get("is_fallback"):
         raise TeachingUnavailable("Providers unavailable")
+    responding_provider = result.get("model_used") or result.get("model")
+    if responding_provider in configured_providers:
+        # Validation happens below. If it rejects this response, the caller's
+        # next attempt sees which provider actually produced it—even when the
+        # resilience layer skipped/fell through earlier providers.
+        payload["_rejected_provider"] = responding_provider
     raw = (result.get("content") or "").strip()
     first, last = raw.find("{"), raw.rfind("}")
     if first < 0 or last <= first:

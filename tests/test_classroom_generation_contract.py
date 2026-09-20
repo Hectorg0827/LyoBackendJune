@@ -20,8 +20,8 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
     # Production returned input-context keys instead of authored teaching.
     invalid = {"goal": "private learner objective", "target_index": 0}
     completion = AsyncMock(side_effect=[
-        {"content": json.dumps(invalid)},
-        {"content": expected.model_dump_json()},
+        {"content": json.dumps(invalid), "model": "gpt-4o-mini"},
+        {"content": expected.model_dump_json(), "model_used": "gemini-2.5-flash"},
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     actual = await AdaptiveTeacher().turn(ctx, state, move)
@@ -46,6 +46,28 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
 
 
 @pytest.mark.asyncio
+async def test_repair_uses_the_provider_that_did_not_return_the_malformed_content(monkeypatch):
+    ctx = context(target_duration_minutes=8)
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    valid = ScriptedTeacher()._turn(ctx, state, "orient")
+    # The resilience layer may skip an unavailable first provider and return
+    # malformed content from the second. Routing must follow the actual result,
+    # not assume the first name in the requested order answered.
+    completion = AsyncMock(side_effect=[
+        {"content": '{"goal":"echoed input"}', "model_used": "gemini-2.5-flash"},
+        {"content": valid.model_dump_json(), "model": "gpt-4o-mini"},
+    ])
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    turn = await AdaptiveTeacher().turn(ctx, state, "orient")
+    assert turn.model_dump() == valid.model_dump()
+    initial, repair = [call.kwargs for call in completion.await_args_list]
+    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
+    assert repair["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
+    sent = json.loads(repair["messages"][1]["content"])
+    assert "_rejected_provider" not in sent
+
+
+@pytest.mark.asyncio
 async def test_empty_demonstration_is_repaired_before_the_turn_can_reach_the_student(monkeypatch):
     ctx = context(target_duration_minutes=8)
     state = GuidedState(owner=ctx.user_id, plan=plan(1))
@@ -53,7 +75,8 @@ async def test_empty_demonstration_is_repaired_before_the_turn_can_reach_the_stu
     missing_steps = valid.model_dump()
     missing_steps["demonstration"] = []
     completion = AsyncMock(side_effect=[
-        {"content": json.dumps(missing_steps)}, {"content": valid.model_dump_json()},
+        {"content": json.dumps(missing_steps), "model": "gpt-4o-mini"},
+        {"content": valid.model_dump_json(), "model_used": "gemini-2.5-flash"},
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     turn = await AdaptiveTeacher().turn(ctx, state, "orient")
