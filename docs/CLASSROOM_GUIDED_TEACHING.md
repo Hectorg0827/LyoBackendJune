@@ -68,6 +68,11 @@ If generation or screen validation fails, the saved example stays on the board w
 a complete, visible retry message. Retry preserves the intended phase and any learner
 question that interrupted teaching. An accepted answer and its evidence event remain
 saved even when preparing the next screen fails; retry does not grade that answer twice.
+New content uses phase-specific generation schemas: orientation requires 2–4 worked
+beats with no question, remediation requires a worked beat, and practice requires one
+task with no demonstration batch. Invalid model output receives field-level repair
+instructions and tries the alternate configured provider within the existing two-attempt
+budget. Persisted sessions retain the compatible base schema.
 Updated clients send actual CTA IDs; duplicate taps cannot skip teaching beats.
 Legacy static Continue IDs remain accepted for installed clients and cannot provide
 the same duplicate-tap guarantee. A version 1 pending question is restored verbatim;
