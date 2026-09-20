@@ -31,6 +31,18 @@ detours and returns to the original objective. A peer is never automatically sho
 as a substitute teacher. Learners can explicitly request a challenge or review.
 Skipping and asking for help are neutral; uncertain grading records no failure.
 
+Wrong answers are part of the teaching conversation. The board shows the learner's
+answer and specific feedback, including with sound off. The teacher receives the
+actual question, answer and feedback to acknowledge sound reasoning, explain why
+the mistaken step does not work, then model a clearer example before guided practice.
+It must not invent the learner's reasoning from an option they selected.
+
+After two consecutive unsuccessful attempts, the teacher models the prerequisite
+and offers **Continue learning**. Continuing keeps this skill in the review list and
+opens the next learning goal; it does not claim independent understanding. Reviewing
+skills needing support begins with teaching and a worked example. Learners can also
+choose to practise a question later at any point. There is no indefinite pass-or-repeat gate.
+
 ## Teaching activities
 
 `LessonBlock(block_type="teaching_visual")` carries a validated fraction bar,
@@ -52,6 +64,10 @@ existing learner-owned session context and evidence outbox remain the persistenc
 mechanism; no schema migration or parallel teaching backend is required.
 
 Re-entry restores the saved scene without generating content or grading again.
+If generation or screen validation fails, the saved example stays on the board with
+a complete, visible retry message. Retry preserves the intended phase and any learner
+question that interrupted teaching. An accepted answer and its evidence event remain
+saved even when preparing the next screen fails; retry does not grade that answer twice.
 Updated clients send actual CTA IDs; duplicate taps cannot skip teaching beats.
 Legacy static Continue IDs remain accepted for installed clients and cannot provide
 the same duplicate-tap guarantee. A version 1 pending question is restored verbatim;
@@ -67,7 +83,8 @@ fading support, migration and non-grading visual updates. Persistence tests exer
 real database round trips. `tests.export_guided_fixtures` exports deterministic
 production-runner payloads for all three client test suites.
 
-Practice events record phase, target, response format, support and verdict. Existing
+Practice events record phase, target, response format, support, verdict, the learner's
+response and its specific feedback/misconception in the learner-owned session. Existing
 evidence recording receives grading events with hint provenance, never visual movement.
 Software contracts establish behavior. Actual learning gains still require learner
 evaluation: guided success without extra help, fresh application, delayed retrieval,

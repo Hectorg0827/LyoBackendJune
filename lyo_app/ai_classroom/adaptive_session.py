@@ -1,17 +1,22 @@
 """One server-owned teaching sequence for audio, silent, web and native clients."""
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from lyo_app.ai_classroom.adaptive_teaching import (
     AdaptiveTeacher, Evaluation, GuidedState, LearningTurn, PendingTask, TeachingUnavailable,
-    normalize_text, requests_help,
+    normalize_text, requests_help, validation_summary,
 )
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
     QuizOption, Scene, SceneType, TeacherMessage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveSession:
@@ -51,8 +56,17 @@ class AdaptiveSession:
             return self.update_activity(context, progress, state, trigger)
         if trigger.component_id in state.handled and state.scene:
             return Scene.model_validate(state.scene)
+        retry_button = next((c for c in (state.scene or {}).get("components", [])
+                             if c.get("action_intent") == ActionIntent.RETRY), None)
+        recovering = intent == ActionIntent.RETRY and retry_button is not None
+        if recovering:
+            if trigger.component_id not in (None, retry_button["component_id"]):
+                return self.current_or_retry(context, state)
+            self.handled(state, retry_button["component_id"])
         state.mode = context.classroom_mode.value
         learner_input = str(data.get("message") or data.get("text") or data.get("question") or "")[:2000]
+        if recovering:
+            learner_input = state.generation_input
 
         if (state.unit_done or state.path_done) and intent in (
             ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE,
@@ -61,12 +75,13 @@ class AdaptiveSession:
             self.reset_unit(state)
             state.path_done = False
         if state.path_done and intent == ActionIntent.REQUEST_REVIEW:
+            needs_support = bool(state.skipped)
             itinerary = sorted(set(state.skipped)) or list(range(len(state.plan.units)))
             state.unit_index, state.remaining_units = itinerary[0], itinerary[1:]
             self.reset_unit(state)
             state.path_done = False
-            state.challenge_requested = True
-            state.phase = state.next_move = "independent"
+            state.challenge_requested = not needs_support
+            state.phase = state.next_move = "orient" if needs_support else "independent"
         elif state.path_done:
             return self.save(progress, state, self.summary(context, state))
         if state.unit_done:
@@ -103,10 +118,22 @@ class AdaptiveSession:
                 state.return_to_checkpoint = False
                 state.phase = state.pending.phase
                 return self.save(progress, state, self.checkpoint(context, state))
+            if state.next_move in ("reteach", "prerequisite") and state.support_attempts >= 2:
+                # Teaching continues after supported remediation. Record what
+                # needs another visit; do not turn repeated difficulty into a
+                # pass-or-repeat gate or award unearned completion evidence.
+                if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+                    state.skipped.append(state.unit_index)
+                self.event(state, "practise_later", phase=state.phase, reason="continued_after_support")
+                state.last_feedback = self.copy(context,
+                    "We've worked through the tricky step together. Let's keep learning and revisit this skill for more practice.",
+                    "Revisamos juntos el paso difícil. Sigamos aprendiendo y volvamos a esta habilidad para practicarla más.")
+                self.finish_unit(state)
+                return self.save(progress, state, self.summary(context, state))
             state.phase = state.next_move = "guided"
         elif state.presentation and intent in (
             ActionIntent.SUBMIT_ANSWER, ActionIntent.SUBMIT_TRANSFER, ActionIntent.RETRY,
-        ):
+        ) and not recovering:
             return self.save(progress, state, self.presentation_scene(context, state))
 
         pending = state.pending
@@ -154,7 +181,8 @@ class AdaptiveSession:
             pending.feedback = result.feedback
             self.event(state, "response", phase=pending.phase, target=pending.task.target_index,
                        verdict=result.verdict, extra_help=pending.extra_help_used,
-                       response_format=pending.task.response_format)
+                       response_format=pending.task.response_format, response=response,
+                       feedback=result.feedback, misconception=result.misconception)
             if result.verdict == "partial" and pending.attempts < 3:
                 pending.assisted = pending.extra_help_used = True
                 pending.hints_used += 1
@@ -228,16 +256,26 @@ class AdaptiveSession:
             if pending:
                 self.handled(state, pending.id)
             state.phase = move = "independent"
-        elif state.presentation:
+        elif state.presentation and not recovering:
             return self.save(progress, state, self.presentation_scene(context, state))
-        elif pending and pending.id not in state.handled:
+        elif pending and pending.id not in state.handled and not recovering:
             return self.save(progress, state, self.checkpoint(context, state))
 
         state.next_move = move
+        state.generation_input = learner_input
+        # Accepted answers and their outbox events belong to the learner even
+        # when composing the next screen fails. Only install a new question
+        # after it has successfully passed the actual rendering contract.
+        before_generation = state.model_copy(deep=True)
         try:
             turn = await self.teacher.turn(context, state, move, learner_input)
-        except TeachingUnavailable:
-            return self.save(progress, state, self.unavailable(context, state))
+            return self.accept_turn(context, progress, state, turn, move)
+        except (TeachingUnavailable, ValidationError) as exc:
+            logger.warning("Classroom step unavailable: move=%s cause=%s", move, validation_summary(exc))
+            return self.save(progress, before_generation, self.unavailable(context, before_generation))
+
+    def accept_turn(self, context, progress, state, turn, move):
+        state.generation_input = ""
         self.remember_beat(state, turn)
         if turn.task is None:
             if not state.return_to_checkpoint:
@@ -296,6 +334,7 @@ class AdaptiveSession:
         state.task_kinds = []
         state.pending = state.presentation = state.paused_presentation = None
         state.last_feedback = ""
+        state.generation_input = ""
         state.phase = state.next_move = "orient"
         state.guided_targets = []
         state.faded_targets = []
@@ -358,14 +397,24 @@ class AdaptiveSession:
         }[state.phase])
 
     def surface(self, context, state, speech, title, content, visual=None, activity_id=None):
+        title = self.stage(context, state) + " · " + title
+        if len(title) > 100:
+            title = title[:99].rstrip() + "…"
+        example_content = content + "\n\n" + visual.description if visual else content
+        separate_description = len(example_content) > 1500
         components = [
             ProgressBar(current=len(state.completed), total=len(state.plan.units), label=self.stage(context, state), priority=0),
             TeacherMessage(text=speech, language_code=context.language_code, concept_tags=[state.unit.title],
                            emotion="encouraging", priority=1, source_attributions=context.source_attributions[:5]),
-            ExampleBlock(title=self.stage(context, state) + " · " + title,
-                         content=(content + "\n\n" + visual.description) if visual else content,
+            ExampleBlock(title=title,
+                         content=content if separate_description else example_content,
                          language_code=context.language_code, priority=2),
         ]
+        if separate_description:
+            # Preserve both full explanations instead of truncating teaching
+            # to satisfy a limit on a single legacy component.
+            components.append(ExampleBlock(title=visual.title, content=visual.description,
+                                           language_code=context.language_code, priority=2))
         if visual:
             components.append(LessonBlock(component_id="visual:" + activity_id, block_type="teaching_visual",
                                           block=visual.model_dump(mode="json"), priority=3))
@@ -376,12 +425,23 @@ class AdaptiveSession:
         speech = " ".join(p for p in (state.last_feedback if state.beat_index < 0 else "", beat.speech) if p)
         components = self.surface(context, state, speech, beat.board_title, beat.board_content,
                                   beat.visual, state.step_id)
+        if state.next_move in ("reteach", "prerequisite") and state.beat_index < 0 and state.last_feedback:
+            response = next((e.get("response", "") for e in reversed(state.practice_events)
+                             if e.get("kind") == "response" and e.get("unit") == state.unit_index), "")
+            answer = response if len(response) <= 600 else response[:599].rstrip() + "…"
+            explanation = (self.copy(context, "Your answer: ", "Tu respuesta: ") + answer + "\n\n" if answer else "") + state.last_feedback
+            components.insert(2, ExampleBlock(
+                title=self.copy(context, "Let's work through your answer", "Revisemos tu respuesta"),
+                content=explanation, language_code=context.language_code, priority=2,
+            ))
         more = state.beat_index + 1 < len(state.presentation.demonstration)
         label = self.copy(context,
             "Show me the first step" if state.phase == "orient" else "Next step" if more else
-            "Back to our example" if state.paused_presentation else "Back to our question" if state.return_to_checkpoint else "Let's try together",
+            "Back to our example" if state.paused_presentation else "Back to our question" if state.return_to_checkpoint else
+            "Continue learning" if state.support_attempts >= 2 and state.next_move in ("reteach", "prerequisite") else "Let's try together",
             "Ver el primer paso" if state.phase == "orient" else "Siguiente paso" if more else
-            "Volver al ejemplo" if state.paused_presentation else "Volver a la pregunta" if state.return_to_checkpoint else "Practiquemos juntos")
+            "Volver al ejemplo" if state.paused_presentation else "Volver a la pregunta" if state.return_to_checkpoint else
+            "Seguir aprendiendo" if state.support_attempts >= 2 and state.next_move in ("reteach", "prerequisite") else "Practiquemos juntos")
         components.append(CTAButton(component_id=state.step_id, label=label, action_intent=ActionIntent.CONTINUE,
                                     language_code=context.language_code))
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
@@ -477,17 +537,39 @@ class AdaptiveSession:
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
 
     def unavailable(self, context, state):
-        text = self.copy(context, "I couldn't prepare the next step reliably. Nothing is marked wrong. Please retry, or pause here.",
-                        "No pude preparar el siguiente paso con confianza. No cuenta como error. Reintenta o pausa aquí.")
+        text = self.copy(context,
+            "I couldn't prepare the next step. This interruption doesn't count as a wrong answer. Your place is kept here; retry when you're ready.",
+            "No pude preparar el siguiente paso. Esta interrupción no cuenta como error. Conservamos tu lugar aquí; reintenta cuando quieras.")
         components = [TeacherMessage(text=text, language_code=context.language_code)]
+        # Keep the visible example, even after the final modelling beat has
+        # advanced and no question was successfully installed. Recovery notices
+        # are replaced, never accumulated across repeated failed attempts.
+        examples = [ExampleBlock.model_validate(c) for c in (state.scene or {}).get("components", [])
+                    if c.get("type") == "ExampleBlock" and not c.get("component_id", "").startswith("classroom-recovery/")] if state else []
+        components.extend(examples[:3])
+        if not examples:
+            material = ((state.pending.board_content if state.pending else "")
+                        or (state.taught_steps[-1] if state.taught_steps else "")
+                        or state.unit.material) if state else context.lesson_content or ""
+            for index in range(0, min(len(material), 4500), 1500):
+                components.append(ExampleBlock(
+                    title=self.copy(context, "Your example to revisit", "Tu ejemplo para repasar"),
+                    content=material[index:index + 1500], language_code=context.language_code))
         if state and state.pending and state.pending.retry_response is not None:
-            components.append(ExampleBlock(title=self.copy(context, "Your answer — not graded", "Tu respuesta — sin evaluar"),
-                                            content=state.pending.retry_response[:1400], language_code=context.language_code))
-        else:
-            material = (state.pending.board_content if state and state.pending else context.lesson_content) or ""
-            if material.strip():
-                components.append(ExampleBlock(title=self.copy(context, "Your example to revisit", "Tu ejemplo para repasar"),
-                                                content=material[:1400], language_code=context.language_code))
+            response = state.pending.retry_response
+            for index in range(0, len(response), 1500):
+                components.append(ExampleBlock(component_id=f"classroom-recovery/answer/{index}",
+                    title=self.copy(context, "Your answer — not graded", "Tu respuesta — sin evaluar"),
+                    content=response[index:index + 1500], language_code=context.language_code))
+        elif state and state.last_feedback:
+            components.append(ExampleBlock(component_id="classroom-recovery/feedback",
+                title=self.copy(context, "About your answer", "Sobre tu respuesta"),
+                content=state.last_feedback, language_code=context.language_code))
+        # The complete recovery message belongs on the board as well as in
+        # narration: a muted phone's two-line caption can otherwise hide it.
+        components.append(ExampleBlock(component_id="classroom-recovery/notice",
+            title=self.copy(context, "Your lesson is paused", "Tu lección está en pausa"),
+            content=text, language_code=context.language_code))
         components.append(CTAButton(label=self.copy(context, "Retry this step", "Reintentar este paso"),
                                     action_intent=ActionIntent.RETRY, language_code=context.language_code))
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
