@@ -24,6 +24,10 @@ from lyo_app.events.concept_summary import (
     ConceptSummary,
     concept_summary_for_user,
 )
+from lyo_app.events.concept_record import (
+    LearnerRecord,
+    learner_record,
+)
 from lyo_app.personalization.recommendations import (
     RecommendationList,
     recommendations_for_user,
@@ -136,6 +140,30 @@ async def get_concept_summary(
     page because a summary query failed.
     """
     return await concept_summary_for_user(db, current_user.id)
+
+
+@router.get("/concepts/record", response_model=LearnerRecord)
+async def get_learner_record(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LearnerRecord:
+    """What this learner has actually shown, concept by concept.
+
+    `/concepts/summary` above answers "how many things do I know?". This
+    answers the question the learner asks about their own work: what did I
+    show, on what, was I helped, and what is left.
+
+    Every claim is read from committed evidence — the rung each demonstration
+    reached, not a mastery score reinterpreted as a rung. A concept the
+    learner has only ever recognised is reported as recognised, however high
+    their score climbed. See `lyo_app/events/concept_record.py`.
+
+    Never raises. A failed read returns `unavailable: true` rather than an
+    empty record, because telling someone they have demonstrated nothing is a
+    claim about them and a query failure is not evidence for it.
+    """
+    return await learner_record(db, current_user.id, limit=limit)
 
 
 @router.get("/mastery", response_model=MasteryProfile)
