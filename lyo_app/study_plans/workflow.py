@@ -93,3 +93,10 @@ def baseline_schedule(profile, now=None):
         sessions.append({"scheduled_at": when.isoformat(), "duration_minutes": profile.daily_minutes_available,
                          "topic": topics[len(sessions) % len(topics)]["name"], "session_type": kind})
     return normalize_schedule(sessions, profile, now)
+
+
+def evening_before(scheduled_at, zone):
+    """20:00 on the preceding local day, stored as naive UTC like sessions."""
+    local = scheduled_at.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone))
+    evening = datetime.combine(local.date() - timedelta(days=1), time(20), ZoneInfo(zone))
+    return evening.astimezone(timezone.utc).replace(tzinfo=None)

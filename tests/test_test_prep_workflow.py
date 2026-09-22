@@ -233,3 +233,9 @@ async def test_completion_retry_keeps_original_evidence(db_session, learner, mon
     assert first == repeated
     assert measure.await_count == 1
     assert (await db_session.scalar(select(func.count()).select_from(PlanEvent))) == 1
+
+
+def test_night_before_reminder_is_previous_local_evening_across_dst():
+    from lyo_app.study_plans.workflow import evening_before
+    # Sunday 18:00 EDT; previous evening is Saturday 20:00 EST.
+    assert evening_before(datetime(2026, 3, 8, 22), "America/New_York") == datetime(2026, 3, 8, 1)

@@ -28,7 +28,7 @@ from lyo_app.study_plans.schemas import (
     TestProfileRead,
     TestProfileUpdate,
 )
-from lyo_app.study_plans.workflow import local_day_bounds, normalize_schedule, profile_ready, baseline_schedule
+from lyo_app.study_plans.workflow import local_day_bounds, normalize_schedule, profile_ready, baseline_schedule, evening_before
 from lyo_app.study_plans.session_outcome import derive_session_outcome
 from lyo_app.study_plans.topic_standing import (
     concept_id_for_topic,
@@ -479,11 +479,11 @@ async def generate_plan(
     for session in sessions_to_insert:
         sched = session.scheduled_at
         
-        # 12 hours before
+        # Prior evening in the learner's timezone (including DST changes).
         reminders_to_insert.append(SessionReminder(
             session_id=session.id,
             user_id=current_user.id,
-            fire_at=sched - timedelta(hours=12),
+            fire_at=evening_before(sched, (profile.workflow_state or {}).get("timezone", "UTC")),
             reminder_type="night_before",
             payload={
                 "title": "Study Session Tomorrow",
