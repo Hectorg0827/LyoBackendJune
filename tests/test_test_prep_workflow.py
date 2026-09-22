@@ -213,3 +213,23 @@ def test_schedule_rejects_unrequested_topics_and_overlaps():
         normalize_schedule([row, row], profile(), now)
     with pytest.raises(ValueError, match="saved test profile"):
         normalize_schedule([row | {"topic": "Unrequested subject"}], profile(), now)
+
+
+@pytest.mark.asyncio
+async def test_completion_retry_keeps_original_evidence(db_session, learner, monkeypatch):
+    from lyo_app.study_plans import routes
+    from lyo_app.study_plans.models import PlanEvent
+    p = Profile(user_id=learner.id, subject="Biology", test_date=date.today() + timedelta(days=14))
+    db_session.add(p); await db_session.flush()
+    plan = StudyPlan(user_id=learner.id, test_profile_id=p.id)
+    db_session.add(plan); await db_session.flush()
+    session = StudySession(user_id=learner.id, study_plan_id=plan.id, topic="Cells",
+        scheduled_at=datetime.now(timezone.utc).replace(tzinfo=None), duration_minutes=25, session_type="practice")
+    db_session.add(session); await db_session.commit()
+    measure = AsyncMock(return_value=SimpleNamespace(score=0.75, graded=4, seen=5, measured=True))
+    monkeypatch.setattr(routes, "derive_session_outcome", measure)
+    first = await routes.complete_session(session.id, current_user=learner, db=db_session, user_notes="")
+    repeated = await routes.complete_session(session.id, current_user=learner, db=db_session, user_notes="")
+    assert first == repeated
+    assert measure.await_count == 1
+    assert (await db_session.scalar(select(func.count()).select_from(PlanEvent))) == 1
