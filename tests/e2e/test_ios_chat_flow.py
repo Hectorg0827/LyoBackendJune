@@ -24,7 +24,7 @@ def mock_auth():
     
     # Create a dummy user
     mock_user = MagicMock()
-    mock_user.id = "test_user_123"
+    mock_user.id = 123  # authenticated User IDs are database integers
 
     # Match SQLAlchemy's real AsyncSession contract. Session I/O is async,
     # while add() and the Result scalar accessors are synchronous.

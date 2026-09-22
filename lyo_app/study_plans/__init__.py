@@ -10,4 +10,8 @@ phrase + a list of daily-breakdown strings. We don't model calendars yet
 (that's Stage C); the deadline is "Tuesday" or "next week" as the user
 typed it.
 """
-from lyo_app.study_plans.routes import router  # noqa: F401
+def __getattr__(name):
+    if name == "router":
+        from lyo_app.study_plans.routes import router
+        return router
+    raise AttributeError(name)

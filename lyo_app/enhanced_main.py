@@ -219,11 +219,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     init_task = asyncio.create_task(run_async_initializations(), name="lifespan_bg_init")
     init_task.add_done_callback(_log_startup_task_result)
     app.state.lifespan_bg_init = init_task
+    reminder_task = None
+    if os.getenv("STUDY_REMINDERS_ENABLED", "false").lower() == "true":
+        from lyo_app.workers.reminder_worker import reminder_loop
+        reminder_task = asyncio.create_task(reminder_loop(), name="study_reminders")
     
     print(">>> [LIFESPAN] Startup background task scheduled successfully. Yielding instantly!", flush=True)
     yield
     
     logger.info("Shutting down LyoBackend...")
+    if reminder_task:
+        reminder_task.cancel()
+        await asyncio.gather(reminder_task, return_exceptions=True)
     await close_db()
     try:
         from lyo_app.core.redis_client import close_redis

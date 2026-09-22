@@ -4,8 +4,8 @@ Device registration and notification management.
 """
 
 import logging
+import os
 from typing import List, Dict, Any, Optional
-from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,9 +13,9 @@ from sqlalchemy import select
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.models import User
-from lyo_app.models.production import PushDevice
+from lyo_app.models.production import PushDevice, PushPlatform
 from lyo_app.auth.production import require_user
-from lyo_app.tasks.push_notifications import send_push_notification
+from lyo_app.services.push_notifications import push_service, PushNotification
 
 logger = logging.getLogger(__name__)
 
@@ -24,20 +24,21 @@ router = APIRouter()
 
 # Request/Response models
 class DeviceRegistrationRequest(BaseModel):
-    device_token: str = Field(..., min_length=1)
+    device_token: str = Field(..., min_length=1, max_length=200)
     device_type: str = Field(..., pattern="^(ios|android)$")
-    app_version: str = Field(None, max_length=20)
-    os_version: str = Field(None, max_length=20)
+    app_version: Optional[str] = Field(None, max_length=20)
+    os_version: Optional[str] = Field(None, max_length=20)
 
 
 class PushDeviceResponse(BaseModel):
     id: str
     device_token: str
     device_type: str
-    app_version: str = None
-    os_version: str = None
+    app_version: Optional[str] = None
+    os_version: Optional[str] = None
     is_active: bool
     registered_at: str
+    delivery_enabled: bool = False
     
     model_config = {
         "from_attributes": True
@@ -48,7 +49,7 @@ class PushNotificationRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     body: str = Field(..., min_length=1, max_length=200)
     data: Dict[str, Any] = Field(default_factory=dict)
-    badge_count: int = Field(None, ge=0)
+    badge_count: Optional[int] = Field(None, ge=0)
     sound: str = Field("default")
 
 
@@ -57,8 +58,8 @@ class NotificationPreferencesRequest(BaseModel):
     achievement_notifications: bool = True
     feed_updates: bool = True
     marketing_notifications: bool = False
-    quiet_hours_start: str = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
-    quiet_hours_end: str = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
+    quiet_hours_start: Optional[str] = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
+    quiet_hours_end: Optional[str] = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
     timezone: str = Field("UTC", max_length=50)
 
 
@@ -67,8 +68,8 @@ class NotificationPreferencesResponse(BaseModel):
     achievement_notifications: bool = True
     feed_updates: bool = True
     marketing_notifications: bool = False
-    quiet_hours_start: str = None
-    quiet_hours_end: str = None
+    quiet_hours_start: Optional[str] = None
+    quiet_hours_end: Optional[str] = None
     timezone: str = "UTC"
 
 
@@ -82,6 +83,13 @@ async def register_device(
     Register a device for push notifications.
     """
     try:
+        # A physical token must not remain active for a previously signed-in account.
+        previous = (await db.execute(select(PushDevice).where(
+            PushDevice.device_token == request.device_token,
+            PushDevice.user_id != current_user.id
+        ).with_for_update())).scalars().all()
+        for registered in previous:
+            registered.is_active = False
         # Check if device already exists
         query = select(PushDevice).where(
             PushDevice.user_id == current_user.id,
@@ -93,7 +101,7 @@ async def register_device(
         
         if existing_device:
             # Update existing device
-            existing_device.device_type = request.device_type
+            existing_device.platform = PushPlatform(request.device_type)
             existing_device.app_version = request.app_version
             existing_device.os_version = request.os_version
             existing_device.is_active = True
@@ -109,7 +117,7 @@ async def register_device(
             device = PushDevice(
                 user_id=current_user.id,
                 device_token=request.device_token,
-                device_type=request.device_type,
+                platform=PushPlatform(request.device_type),
                 app_version=request.app_version,
                 os_version=request.os_version
             )
@@ -123,11 +131,12 @@ async def register_device(
         return PushDeviceResponse(
             id=str(device.id),
             device_token=device.device_token,
-            device_type=device.device_type,
+            device_type=device.platform.value,
             app_version=device.app_version,
             os_version=device.os_version,
             is_active=device.is_active,
-            registered_at=device.registered_at.isoformat()
+            registered_at=device.created_at.isoformat(),
+            delivery_enabled=os.getenv("STUDY_REMINDERS_ENABLED", "false").lower() == "true"
         )
         
     except Exception as e:
@@ -147,7 +156,7 @@ async def list_user_devices(
     try:
         query = select(PushDevice).where(
             PushDevice.user_id == current_user.id
-        ).order_by(PushDevice.registered_at.desc())
+        ).order_by(PushDevice.created_at.desc())
         
         result = await db.execute(query)
         devices = result.scalars().all()
@@ -157,11 +166,12 @@ async def list_user_devices(
             device_responses.append(PushDeviceResponse(
                 id=str(device.id),
                 device_token=device.device_token,
-                device_type=device.device_type,
+                device_type=device.platform.value,
                 app_version=device.app_version,
                 os_version=device.os_version,
                 is_active=device.is_active,
-                registered_at=device.registered_at.isoformat()
+                registered_at=device.created_at.isoformat(),
+                delivery_enabled=os.getenv("STUDY_REMINDERS_ENABLED", "false").lower() == "true"
             ))
         
         return device_responses
@@ -173,7 +183,7 @@ async def list_user_devices(
 
 @router.delete("/devices/{device_id}")
 async def unregister_device(
-    device_id: UUID,
+    device_id: int,
     current_user: User = Depends(require_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -230,26 +240,16 @@ async def send_test_notification(
         if not devices:
             raise HTTPException(status_code=400, detail="No active devices found")
         
-        # Send test notification
-        for device in devices:
-            send_push_notification.delay(
-                user_id=str(current_user.id),
-                title=request.title,
-                body=request.body,
-                data=request.data,
-                badge_count=request.badge_count,
-                sound=request.sound,
-                device_token=device.device_token,
-                device_type=device.device_type
-            )
-        
-        logger.info(f"Test notification sent to {len(devices)} devices for user: {current_user.email}")
-        
-        return {
-            "message": f"Test notification sent to {len(devices)} devices",
-            "devices_count": len(devices)
-        }
-        
+        accepted = await push_service.send_to_user(current_user.id, PushNotification(
+            title=request.title, message=request.body, data=request.data,
+            badge=request.badge_count, sound=request.sound
+        ), db=db)
+        if accepted == 0:
+            raise HTTPException(503, "No push provider accepted this notification. Check device and provider setup.")
+        await db.commit()
+        return {"message": "Notification accepted by provider; device receipt is not yet confirmed",
+                "devices_count": accepted}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -266,7 +266,7 @@ async def get_notification_preferences(
     """
     try:
         # Get preferences from user profile or return defaults
-        preferences = getattr(current_user, 'notification_preferences', {})
+        preferences = (current_user.learning_profile or {}).get('notification_preferences', {})
         
         return NotificationPreferencesResponse(
             course_reminders=preferences.get('course_reminders', True),
@@ -304,10 +304,10 @@ async def update_notification_preferences(
             'timezone': request.timezone
         }
         
-        # Store in user metadata or profile
-        if not current_user.metadata:
-            current_user.metadata = {}
-        current_user.metadata['notification_preferences'] = preferences
+        # SQLAlchemy's metadata is schema metadata, not a persisted user dictionary.
+        profile = dict(current_user.learning_profile or {})
+        profile['notification_preferences'] = preferences
+        current_user.learning_profile = profile
         
         await db.commit()
         
