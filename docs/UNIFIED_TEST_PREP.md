@@ -24,7 +24,7 @@ the same intake and generation handlers; iOS no longer runs its local funnel.
 
 ## Deployment order
 
-1. Deploy backend and apply migration `testprep_001` before clients.
+1. Deploy backend and apply migrations through `testprep_002` before clients.
 2. Deploy web and release native builds after their build checks pass.
 3. Enable reminders only after provider credentials and a consenting test
    device are verified. Set `STUDY_REMINDERS_ENABLED=true` to run the lifecycle
@@ -78,3 +78,18 @@ then call the authenticated `/api/v1/push/test` and confirm physical receipt.
 Test background, foreground, tap navigation, permission denial, and logout.
 Only then enable `STUDY_REMINDERS_ENABLED` and confirm a due scheduled reminder
 with its saved timezone. The feature flag is still off in production.
+
+## Legacy database compatibility
+
+Production retains an older integer-ID `study_plans` table. Test Prep uses
+`test_prep_plans`, `test_prep_sessions`, `test_prep_reminders`, and
+`test_prep_events`, with its existing `test_profiles`. Migration `testprep_002`
+creates this complete foreign-key chain before startup and leaves legacy tables
+untouched. Compatible UUID records are copied with their original IDs, scores
+and reminder state; replay does not duplicate them. The migration downgrade
+retains these additive tables to avoid losing learner data. CI verifies fresh,
+legacy-integer and existing-UUID databases on PostgreSQL, in isolated schemas.
+
+The live domains `api.lyoai.app` and `lyoai.app` belong to the `Lyo` environment
+in Railway project `caring-cat`, not the separate environment named `production`.
+Always verify domain ownership when selecting a deployment target.

@@ -43,7 +43,7 @@ class TestProfile(Base):
 
 class StudyPlan(Base):
     """The generated roadmap containing milestones and referencing the test profile."""
-    __tablename__ = "study_plans"
+    __tablename__ = "test_prep_plans"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     test_profile_id = Column(String(36), ForeignKey("test_profiles.id", ondelete="CASCADE"), nullable=False)
@@ -66,10 +66,10 @@ class StudySession(Base):
     # Not "study_sessions": lyo_app/ai_study/models.py already owns that
     # table on the shared Base, and the duplicate definition made importing
     # both modules in one process raise InvalidRequestError.
-    __tablename__ = "study_plan_sessions"
+    __tablename__ = "test_prep_sessions"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    study_plan_id = Column(String(36), ForeignKey("study_plans.id", ondelete="CASCADE"), nullable=False)
+    study_plan_id = Column(String(36), ForeignKey("test_prep_plans.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     scheduled_at = Column(DateTime, nullable=False, index=True)
@@ -89,10 +89,10 @@ class StudySession(Base):
 
 class SessionReminder(Base):
     """Session reminder notification jobs."""
-    __tablename__ = "session_reminders"
+    __tablename__ = "test_prep_reminders"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    session_id = Column(String(36), ForeignKey("study_plan_sessions.id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(String(36), ForeignKey("test_prep_sessions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     fire_at = Column(DateTime, nullable=False, index=True)
@@ -105,10 +105,10 @@ class SessionReminder(Base):
 
 class PlanEvent(Base):
     """Audit log tracking every adaptation, skipped session, or re-planning."""
-    __tablename__ = "plan_events"
+    __tablename__ = "test_prep_events"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    study_plan_id = Column(String(36), ForeignKey("study_plans.id", ondelete="CASCADE"), nullable=False)
+    study_plan_id = Column(String(36), ForeignKey("test_prep_plans.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
