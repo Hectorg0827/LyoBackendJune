@@ -20,4 +20,7 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_column("test_profiles", "workflow_state")
+    inspector = sa.inspect(op.get_bind())
+    if "test_profiles" in inspector.get_table_names():
+        if "workflow_state" in {c["name"] for c in inspector.get_columns("test_profiles")}:
+            op.drop_column("test_profiles", "workflow_state")

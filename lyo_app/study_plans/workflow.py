@@ -17,6 +17,7 @@ def normalize_schedule(items, profile, now=None):
     zone = ZoneInfo((profile.workflow_state or {}).get("timezone", "UTC"))
     valid = []
     daily = {}
+    topics = {str(t["name"]).strip().casefold(): str(t["name"]).strip() for t in profile.topics}
     for item in items:
         when = datetime.fromisoformat(item["scheduled_at"].replace("Z", "+00:00"))
         if when.tzinfo is None:
@@ -25,6 +26,9 @@ def normalize_schedule(items, profile, now=None):
         minutes = int(item["duration_minutes"])
         topic = str(item["topic"]).strip()
         kind = item["session_type"]
+        if topic.casefold() not in topics:
+            raise ValueError("Session topic is not in the saved test profile")
+        topic = topics[topic.casefold()]
         if not topic or len(topic) > 200 or kind not in {"learn", "practice", "review", "mock_test"}:
             raise ValueError("Invalid study activity")
         if when <= now or local.date() > profile.test_date or not 5 <= minutes <= profile.daily_minutes_available:
@@ -45,7 +49,11 @@ def normalize_schedule(items, profile, now=None):
         weeks[week] = weeks.get(week, 0) + 1
     if any(count > profile.study_days_per_week for count in weeks.values()):
         raise ValueError("Weekly study availability exceeded")
-    return sorted(valid, key=lambda row: row["scheduled_at"])
+    valid.sort(key=lambda row: row["scheduled_at"])
+    for previous, following in zip(valid, valid[1:]):
+        if previous["scheduled_at"] + timedelta(minutes=previous["duration_minutes"]) > following["scheduled_at"]:
+            raise ValueError("Study sessions overlap")
+    return valid
 
 
 def profile_ready(profile):

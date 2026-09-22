@@ -203,3 +203,13 @@ async def test_chat_and_dedicated_intake_share_profile_transcript_and_plan(db_se
     assert "Test Prep" in message and ai.await_count == 3
     assert (await db_session.scalar(select(func.count()).select_from(Profile))) == 1
     assert (await db_session.scalar(select(func.count()).select_from(StudyPlan))) == 1
+
+
+def test_schedule_rejects_unrequested_topics_and_overlaps():
+    now = datetime(2026, 9, 21, 12, tzinfo=timezone.utc)
+    row = {"scheduled_at": "2026-09-22T18:00:00-04:00", "duration_minutes": 10,
+           "topic": "Cells", "session_type": "practice"}
+    with pytest.raises(ValueError, match="overlap"):
+        normalize_schedule([row, row], profile(), now)
+    with pytest.raises(ValueError, match="saved test profile"):
+        normalize_schedule([row | {"topic": "Unrequested subject"}], profile(), now)

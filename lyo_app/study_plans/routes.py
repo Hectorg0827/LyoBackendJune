@@ -241,16 +241,15 @@ async def intake_turn(
     # Limit transcript context size to last 15 messages for safety
     for turn in transcript[-15:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
-    if profile.materials:
-        from lyo_app.ai.multimodal import load_media_attachments
-        from lyo_app.ai.schemas.lyo2 import MediaRef
-        refs = [MediaRef(**m) for m in profile.materials[-4:] if m.get("uri") and m.get("modality")]
-        if refs:
-            attachments = await load_media_attachments(refs, missing_ok=True)
-            if attachments:
-                messages[-1]["content"] = [{"type": "text", "text": body.user_message}, *attachments]
-    
     try:
+        if profile.materials:
+            from lyo_app.ai.multimodal import load_media_attachments
+            from lyo_app.ai.schemas.lyo2 import MediaRef
+            refs = [MediaRef(**m) for m in profile.materials[-4:] if m.get("uri") and m.get("modality")]
+            if refs:
+                attachments = await load_media_attachments(refs, missing_ok=True)
+                if attachments:
+                    messages[-1]["content"] = [{"type": "text", "text": body.user_message}, *attachments]
         raw_res = await ai_resilience_manager.chat_completion(
             messages=messages,
             temperature=0.7,
@@ -443,10 +442,12 @@ async def generate_plan(
     plan = StudyPlan(
         test_profile_id=test_profile_id,
         user_id=current_user.id,
-        weekly_milestones=plan_data.get("weekly_milestones", []),
+        weekly_milestones=[{"week": int(m["week"]), "focus": str(m["focus"])}
+            for m in (plan_data.get("weekly_milestones") or [])
+            if isinstance(m, dict) and str(m.get("week", "")).isdigit() and m.get("focus")],
         total_sessions=len(plan_data.get("sessions", [])),
         generated_by_agent="planner_v2",
-        generation_notes=plan_data.get("reasoning", "")[:500]
+        generation_notes=str(plan_data.get("reasoning") or "")[:500]
     )
     db.add(plan)
     await db.flush()  # Populate plan ID
