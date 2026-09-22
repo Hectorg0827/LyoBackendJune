@@ -121,6 +121,7 @@ class ConversationTurn(BaseModel):
 
 class RouterRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    timezone: Optional[str] = None
     # The authenticated identity is always derived from the bearer token.  This
     # optional field remains for old clients but is never trusted by routes.
     user_id: Optional[str] = None

@@ -37,6 +37,8 @@ class TestProfile(Base):
     # Intake metadata
     intake_complete = Column(Boolean, default=False, nullable=False)
     intake_transcript = Column(JSON, default=list, nullable=False)  # chat log history
+    # Server-owned continuation, explicit fields and retry receipts, shared by all clients.
+    workflow_state = Column(JSON, default=dict, nullable=False)
 
 
 class StudyPlan(Base):

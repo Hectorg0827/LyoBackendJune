@@ -4,6 +4,10 @@ Handles push notifications for iOS (APNs) and Android (FCM)
 """
 
 import logging
+import asyncio
+import os
+import time
+from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -64,7 +68,11 @@ class PushNotificationService:
                     device.last_used_at = datetime.utcnow()
                     sent_count += 1
             
-            await async_db.commit()
+            # The reminder worker owns its transaction and row locks.
+            if close_db:
+                await async_db.commit()
+            else:
+                await async_db.flush()
             logger.info(f"Sent {sent_count} notifications to user {user_id}")
             return sent_count
             
@@ -78,19 +86,54 @@ class PushNotificationService:
     async def send_notification(self, device_token: str, notification: PushNotification, platform: str = "ios") -> bool:
         """Low-level dispatch to FCM or APNs."""
         try:
-            logger.info(f"Dispatching to {platform}: {device_token[:10]}... | {notification.title}")
-            
-            # TODO: Integrate with actual FCM (firebase-admin) or APNs (HTTP/2)
-            # if platform == "ios":
-            #     return await self._dispatch_apns(device_token, notification)
-            # else:
-            #     return await self._dispatch_fcm(device_token, notification)
-            
-            return True
+            if platform == "ios":
+                return await self._dispatch_apns(device_token, notification)
+            if platform in {"android", "web"}:
+                return await self._dispatch_fcm(device_token, notification)
+            return False
             
         except Exception as e:
             logger.error(f"Dispatch error: {e}")
             return False
+
+    async def _dispatch_fcm(self, token: str, notification: PushNotification) -> bool:
+        from firebase_admin import messaging
+        from lyo_app.auth.firebase_utils import _init_firebase
+        await asyncio.to_thread(_init_firebase)
+        data = {str(k): str(v) for k, v in (notification.data or {}).items()}
+        message = messaging.Message(token=token,
+            notification=messaging.Notification(title=notification.title, body=notification.message),
+            data=data, android=messaging.AndroidConfig(collapse_key=data.get("reminder_id")))
+        result = await asyncio.to_thread(messaging.send, message)
+        return bool(result)
+
+    async def _dispatch_apns(self, token: str, notification: PushNotification) -> bool:
+        import httpx
+        from jose import jwt
+        key = os.getenv("APNS_PRIVATE_KEY")
+        key_file = os.getenv("APNS_KEY_FILE") or os.getenv("APNS_KEY_PATH")
+        if not key and key_file:
+            key = await asyncio.to_thread(Path(key_file).read_text)
+        key_id, team_id, bundle_id = (os.getenv(k) for k in ("APNS_KEY_ID", "APNS_TEAM_ID", "APNS_BUNDLE_ID"))
+        if not all((key, key_id, team_id, bundle_id)):
+            logger.warning("APNs credentials incomplete; notification was not sent")
+            return False
+        auth = jwt.encode({"iss": team_id, "iat": int(time.time())}, key,
+            algorithm="ES256", headers={"kid": key_id})
+        host = "api.sandbox.push.apple.com" if os.getenv("APNS_SANDBOX", "false").lower() == "true" else "api.push.apple.com"
+        data = dict(notification.data or {})
+        headers = {"authorization": f"bearer {auth}", "apns-topic": bundle_id,
+                   "apns-push-type": "alert", "apns-priority": "10",
+                   "apns-expiration": str(int(time.time()) + 3600)}
+        if data.get("reminder_id"):
+            headers["apns-collapse-id"] = str(data["reminder_id"])
+        payload = {**data, "aps": {"alert": {"title": notification.title, "body": notification.message},
+                    "sound": notification.sound or "default"}}
+        async with httpx.AsyncClient(http2=True, timeout=15) as client:
+            response = await client.post(f"https://{host}/3/device/{token}", headers=headers, json=payload)
+        if response.status_code != 200:
+            logger.warning("APNs rejected a notification: HTTP %s", response.status_code)
+        return response.status_code == 200
 
 # Global push service instance
 push_service = PushNotificationService()

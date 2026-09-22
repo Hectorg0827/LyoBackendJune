@@ -1048,6 +1048,27 @@ async def stream_lyo2_chat(
             # 2. Layer A: Routing
             logger.info(f"🔍 [STREAM][{trace_id}] Starting Routing...")
             r_start = time.time()
+
+            # Known intake continuations need no additional LLM router call.
+            # This is also what makes short replies such as "Friday" reliable.
+            continuing_prep = False
+            cancelled_prep = (request.text or "").strip().lower() in {"cancel", "stop test prep", "exit test prep"}
+            if authenticated_user_id:
+                from lyo_app.study_plans.routes import owned_profile
+                saved_prep = await owned_profile(db, int(authenticated_user_id))
+                saved_workflow = dict(saved_prep.workflow_state or {}) if saved_prep else {}
+                continuing_prep = bool(saved_prep and not saved_prep.intake_complete and
+                    saved_workflow.get("conversation_id") == str(request.conversation_id))
+                if continuing_prep and cancelled_prep:
+                    saved_workflow.pop("conversation_id", None)
+                    saved_prep.workflow_state = saved_workflow
+                    await db.commit()
+                    continuing_prep = False
+                lower_text = (request.text or "").strip().lower()
+                explicit_prep = any(phrase in lower_text for phrase in
+                    ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
+                if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
+                    request.forced_intent = Intent.TEST_PREP
             
             if request.forced_intent:
                 logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
@@ -1087,6 +1108,21 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
             
+            # Chat is an adapter onto the same account-owned intake as Test Prep.
+            # Continue only the conversation that began intake; ordinary new chats
+            # must never be hijacked by an unfinished exam elsewhere.
+            if authenticated_user_id and not cancelled_prep and decision.intent == Intent.TEST_PREP:
+                from lyo_app.study_plans.chat import process_chat_turn
+                text = await process_chat_turn(request, current_user, db)
+                if persistent_conversation:
+                    await conversation_store.add_message(db, persistent_conversation.id,
+                        role="assistant", content=text, mode_used=ChatMode.TEST_PREP.value,
+                        client_message_id=assistant_client_message_id)
+                yield yield_safe_sse_event("answer", {"type": "answer", "block": {
+                    "type": "TutorMessageBlock", "content": {"text": text}, "priority": 0}})
+                yield "data: [DONE]\n\n"
+                return
+
             if decision.intent == Intent.COURSE:
                 _topic = _extract_course_topic(request.text or "")
                 _preview_oc = {

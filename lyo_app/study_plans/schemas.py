@@ -1,7 +1,8 @@
 """Pydantic schemas for the Test Prep & Study Plans API."""
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Common status literals
 PlanStatus = Literal["active", "paused", "completed", "archived", "abandoned"]
@@ -15,7 +16,21 @@ ReminderStatus = Literal["pending", "sent", "failed", "cancelled"]
 class IntakeMessage(BaseModel):
     """Message sent from client during intake conversation."""
     test_profile_id: Optional[str] = None
-    user_message: str
+    user_message: str = Field(min_length=1, max_length=12000)
+    request_id: Optional[str] = Field(default=None, max_length=100)
+    timezone: Optional[str] = None
+    conversation_id: Optional[str] = None
+    materials: List[Dict[str, Any]] = Field(default_factory=list, max_length=20)
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value):
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError("Use an IANA timezone, such as America/New_York")
+        return value
 
 class IntakeResponse(BaseModel):
     """Response returned to client containing chat reply and smart block UI elements."""
@@ -23,6 +38,7 @@ class IntakeResponse(BaseModel):
     message_to_user: str
     smart_blocks: List[Dict[str, Any]] = []
     intake_complete: bool
+    plan_id: Optional[str] = None
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 📋 TEST PROFILE SCHEMAS
@@ -57,6 +73,41 @@ class TestProfileRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TestProfileUpdate(BaseModel):
+    subject: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    test_date: Optional[date] = None
+    topics: Optional[List[Dict[str, Any]]] = None
+    daily_minutes_available: Optional[int] = Field(default=None, ge=5, le=480)
+    study_days_per_week: Optional[int] = Field(default=None, ge=1, le=7)
+    timezone: Optional[str] = None
+    materials: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=20)
+    expected_revision: int = Field(ge=0)
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value):
+        return IntakeMessage.valid_timezone(value)
+
+    @field_validator("topics")
+    @classmethod
+    def valid_topics(cls, value):
+        if value is None:
+            return value
+        if not 1 <= len(value) <= 200:
+            raise ValueError("Enter between 1 and 200 topics")
+        result = []
+        for item in value:
+            name = str(item.get("name", "")).strip()
+            if not 1 <= len(name) <= 200:
+                raise ValueError("Each topic needs a name under 200 characters")
+            confidence = int(item.get("confidence", 5))
+            weight = float(item.get("weight", 1))
+            if not 1 <= confidence <= 10 or not 0 < weight <= 100:
+                raise ValueError("Invalid topic confidence or weight")
+            result.append({"name": name, "confidence": confidence, "weight": weight})
+        return result
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # 📅 STUDY PLAN SCHEMAS
