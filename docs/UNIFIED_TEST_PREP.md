@@ -61,3 +61,20 @@ boundaries, schedule validation, and truthful reminder outcomes.
 
 SQLite tests do not prove concurrent PostgreSQL locking. Production-like
 concurrency and physical-device delivery must be verified before release.
+
+## Device registration and delivery verification
+
+The production `/api/v1/push` registration endpoints now use the actual
+`PushDevice.platform`, `created_at`, and integer ID fields. Registering a token
+deactivates its registrations under other accounts. Notification preferences
+are persisted in the user's learning profile; reminders respect the off switch
+and quiet hours. The test endpoint reports provider acceptance and returns 503
+when no provider accepts delivery. Android uses data messages so the client can
+suppress reminders after logout or an account change.
+
+Verification sequence: supply provider credentials and the Android Firebase app
+configuration, sign in and allow notifications on a test device, register it,
+then call the authenticated `/api/v1/push/test` and confirm physical receipt.
+Test background, foreground, tap navigation, permission denial, and logout.
+Only then enable `STUDY_REMINDERS_ENABLED` and confirm a due scheduled reminder
+with its saved timezone. The feature flag is still off in production.

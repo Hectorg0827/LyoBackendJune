@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, and_
 
 from lyo_app.core.database import AsyncSessionLocal
+from lyo_app.auth.models import User
+from lyo_app.study_plans.workflow import quiet_until
 from lyo_app.study_plans.models import SessionReminder, StudySession, StudyPlan
 from lyo_app.services.push_notifications import push_service, PushNotification
 
@@ -38,6 +40,18 @@ async def fire_due_reminders():
                         or reminder.fire_at < now - timedelta(hours=2)):
                     reminder.status = "cancelled"
                     continue
+                learner = await db.get(User, reminder.user_id)
+                preferences = ((learner.learning_profile or {}).get("notification_preferences", {}) if learner else {})
+                if preferences.get("course_reminders") is False:
+                    reminder.status = "cancelled"
+                    continue
+                quiet_end = quiet_until(now, preferences)
+                if quiet_end:
+                    if quiet_end > reminder.fire_at + timedelta(hours=2):
+                        reminder.status = "cancelled"
+                    else:
+                        reminder.fire_at = quiet_end
+                    continue
                 title = reminder.payload.get("title", "Lyo Prep")
                 body = reminder.payload.get("body", "Time for your scheduled study session!")
                 deep_link = reminder.payload.get("deep_link", "")
@@ -45,7 +59,7 @@ async def fire_due_reminders():
                 notification = PushNotification(
                     title=title,
                     message=body,
-                    data={"deep_link": deep_link, "reminder_id": reminder.id}
+                    data={"deep_link": deep_link, "reminder_id": reminder.id, "action": "open_test_prep"}
                 )
                 
                 # Send push notification

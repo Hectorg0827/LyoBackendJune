@@ -61,7 +61,8 @@ class PushNotificationService:
             for device in devices:
                 success = await self.send_notification(
                     device_token=device.device_token,
-                    notification=notification,
+                    notification=PushNotification(notification.title, notification.message,
+                        {**(notification.data or {}), "recipient_id": str(user_id)}, notification.badge, notification.sound),
                     platform=device.platform.value if hasattr(device.platform, 'value') else device.platform
                 )
                 if success:
@@ -101,9 +102,10 @@ class PushNotificationService:
         from lyo_app.auth.firebase_utils import _init_firebase
         await asyncio.to_thread(_init_firebase)
         data = {str(k): str(v) for k, v in (notification.data or {}).items()}
-        message = messaging.Message(token=token,
-            notification=messaging.Notification(title=notification.title, body=notification.message),
-            data=data, android=messaging.AndroidConfig(collapse_key=data.get("reminder_id")))
+        # Data messages let Android suppress account-bound reminders after logout.
+        data.update(title=notification.title, body=notification.message)
+        message = messaging.Message(token=token, data=data,
+            android=messaging.AndroidConfig(priority="high", collapse_key=data.get("reminder_id")))
         result = await asyncio.to_thread(messaging.send, message)
         return bool(result)
 

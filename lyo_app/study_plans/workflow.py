@@ -100,3 +100,22 @@ def evening_before(scheduled_at, zone):
     local = scheduled_at.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone))
     evening = datetime.combine(local.date() - timedelta(days=1), time(20), ZoneInfo(zone))
     return evening.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def quiet_until(now, preferences):
+    """Return the UTC end of the user's current quiet period, or None."""
+    start, end = preferences.get("quiet_hours_start"), preferences.get("quiet_hours_end")
+    if not start or not end or start == end:
+        return None
+    try:
+        zone = ZoneInfo(preferences.get("timezone") or "UTC")
+        start, end = time.fromisoformat(start), time.fromisoformat(end)
+    except (ValueError, KeyError):
+        return None
+    local = now.replace(tzinfo=timezone.utc).astimezone(zone)
+    clock = local.time()
+    quiet = start <= clock < end if start < end else clock >= start or clock < end
+    if not quiet:
+        return None
+    day = local.date() + (timedelta(days=1) if start > end and clock >= start else timedelta())
+    return datetime.combine(day, end, zone).astimezone(timezone.utc).replace(tzinfo=None)
