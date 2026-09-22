@@ -82,6 +82,11 @@ jobs:
       - name: Prove database migrations on PostgreSQL
         run: alembic upgrade head
 
+      - name: Prove Test Prep compatibility with legacy PostgreSQL tables
+        env:
+          TEST_PREP_MIGRATION_DATABASE_URL: postgresql://testuser:testpass@localhost:5432/testdb
+        run: python tests/test_test_prep_schema_migration.py
+
       - name: Run tests with coverage
         run: python -m pytest --cov=lyo_app --cov-report=xml tests/
 
