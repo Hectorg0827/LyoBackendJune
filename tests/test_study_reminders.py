@@ -10,10 +10,12 @@ from lyo_app.auth.models import User
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("accepted,expected", [(1, "sent"), (0, "pending")])
+@pytest.mark.parametrize("accepted,expected", [(1, "sent"), (0, "pending"), (1, "cancelled")])
 async def test_reminder_state_requires_provider_acceptance(db_session, monkeypatch, accepted, expected):
     from lyo_app.workers import reminder_worker as worker
     user = User(email="reminder@example.test", username="reminder", hashed_password="unused")
+    if expected == "cancelled":
+        user.learning_profile = {"notification_preferences": {"course_reminders": False}}
     db_session.add(user); await db_session.flush()
     profile = Profile(user_id=user.id, subject="Math", test_date=datetime.utcnow().date() + timedelta(days=5))
     db_session.add(profile); await db_session.flush()
@@ -34,8 +36,10 @@ async def test_reminder_state_requires_provider_acceptance(db_session, monkeypat
     monkeypatch.setattr(worker.push_service, "send_to_user", send)
     await worker.fire_due_reminders()
     assert reminder.status == expected
-    assert (reminder.sent_at is not None) == (accepted > 0)
-    if not accepted:
+    assert (reminder.sent_at is not None) == (expected == "sent")
+    if expected == "cancelled":
+        assert send.await_count == 0
+    elif not accepted:
         await worker.fire_due_reminders()
         await worker.fire_due_reminders()
         assert reminder.status == "failed" and reminder.sent_at is None

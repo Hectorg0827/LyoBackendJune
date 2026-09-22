@@ -47,10 +47,8 @@ async def fire_due_reminders():
                     continue
                 quiet_end = quiet_until(now, preferences)
                 if quiet_end:
-                    if quiet_end > reminder.fire_at + timedelta(hours=2):
-                        reminder.status = "cancelled"
-                    else:
-                        reminder.fire_at = quiet_end
+                    # Sending later would make time-sensitive copy ("in 30 minutes") false.
+                    reminder.status = "cancelled"
                     continue
                 title = reminder.payload.get("title", "Lyo Prep")
                 body = reminder.payload.get("body", "Time for your scheduled study session!")

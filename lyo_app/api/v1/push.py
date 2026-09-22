@@ -26,16 +26,16 @@ router = APIRouter()
 class DeviceRegistrationRequest(BaseModel):
     device_token: str = Field(..., min_length=1, max_length=200)
     device_type: str = Field(..., pattern="^(ios|android)$")
-    app_version: str = Field(None, max_length=20)
-    os_version: str = Field(None, max_length=20)
+    app_version: Optional[str] = Field(None, max_length=20)
+    os_version: Optional[str] = Field(None, max_length=20)
 
 
 class PushDeviceResponse(BaseModel):
     id: str
     device_token: str
     device_type: str
-    app_version: str = None
-    os_version: str = None
+    app_version: Optional[str] = None
+    os_version: Optional[str] = None
     is_active: bool
     registered_at: str
     delivery_enabled: bool = False
@@ -49,7 +49,7 @@ class PushNotificationRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     body: str = Field(..., min_length=1, max_length=200)
     data: Dict[str, Any] = Field(default_factory=dict)
-    badge_count: int = Field(None, ge=0)
+    badge_count: Optional[int] = Field(None, ge=0)
     sound: str = Field("default")
 
 
@@ -58,8 +58,8 @@ class NotificationPreferencesRequest(BaseModel):
     achievement_notifications: bool = True
     feed_updates: bool = True
     marketing_notifications: bool = False
-    quiet_hours_start: str = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
-    quiet_hours_end: str = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
+    quiet_hours_start: Optional[str] = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
+    quiet_hours_end: Optional[str] = Field(None, pattern="^([0-1][0-9]|2[0-3]):[0-5][0-9]$")
     timezone: str = Field("UTC", max_length=50)
 
 
@@ -68,8 +68,8 @@ class NotificationPreferencesResponse(BaseModel):
     achievement_notifications: bool = True
     feed_updates: bool = True
     marketing_notifications: bool = False
-    quiet_hours_start: str = None
-    quiet_hours_end: str = None
+    quiet_hours_start: Optional[str] = None
+    quiet_hours_end: Optional[str] = None
     timezone: str = "UTC"
 
 
