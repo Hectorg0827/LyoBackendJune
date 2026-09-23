@@ -169,6 +169,80 @@ async def test_foreign_profile_cannot_be_resumed_or_edited(db_session, learner):
 
 
 @pytest.mark.asyncio
+async def test_handoff_refuses_to_describe_a_plan_that_is_not_there(
+    db_session, learner, monkeypatch
+):
+    """The guard at its own level, with a profile present and no plan.
+
+    `process_chat_turn` returns before reaching this when intake is unfinished,
+    so the branch is only reachable if the saved state disagrees with the plan
+    that was just generated. It still must not invent a handoff: a client would
+    render "Start now" against a plan id that resolves to nothing.
+    """
+    from lyo_app.study_plans import chat as chat_module
+
+    async def profile_but_no_plan(current_user, db):
+        return {"profile": SimpleNamespace(subject="Biology", test_date=date.today()),
+                "plan": None, "sessions": []}
+
+    monkeypatch.setattr(chat_module.routes, "prep_state", profile_but_no_plan)
+    assert await chat_module._handoff(learner, db_session) is None
+
+    # And with neither, which is a learner who has never started.
+    async def nothing(current_user, db):
+        return {"profile": None, "plan": None, "sessions": []}
+
+    monkeypatch.setattr(chat_module.routes, "prep_state", nothing)
+    assert await chat_module._handoff(learner, db_session) is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_nothing_to_teach_is_not_offered_as_start_now(
+    db_session, learner, monkeypatch
+):
+    """A session with no topic cannot open a Classroom, so offering it would
+    be a button that goes nowhere. The plan is still handed over; only the
+    start is withheld."""
+    from lyo_app.study_plans import chat as chat_module
+
+    async def state(current_user, db):
+        return {
+            "profile": SimpleNamespace(subject="Biology", test_date=date.today()),
+            "plan": SimpleNamespace(id="plan-1"),
+            "sessions": [SimpleNamespace(id="s1", topic="   ", session_type="learn",
+                                         status="scheduled", scheduled_at=None)],
+        }
+
+    monkeypatch.setattr(chat_module.routes, "prep_state", state)
+
+    handoff = await chat_module._handoff(learner, db_session)
+
+    assert handoff is not None and handoff["plan_id"] == "plan-1"
+    assert handoff["next_session"] is None
+
+
+@pytest.mark.asyncio
+async def test_chat_offers_no_start_now_until_a_plan_actually_exists(db_session, learner, monkeypatch):
+    """A handoff is an offer to start something. Mid-intake there is no plan
+    and no session, so offering one would send the learner at a schedule that
+    does not exist — and they would have answered the questions for nothing."""
+    from lyo_app.study_plans import routes
+    from lyo_app.study_plans.chat import process_chat_turn
+
+    # The model still wants more from the learner: intake_complete stays false.
+    ai = AsyncMock(side_effect=[llm_reply(subject="Biology")])
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion", ai)
+    request = SimpleNamespace(text="I have a biology test", client_message_id="mid-1",
+                              conversation_id="mid", timezone="UTC", media=[])
+
+    result = await process_chat_turn(request, learner, db_session)
+
+    assert result.handoff is None
+    # And nothing in the reply promises a schedule that has not been built.
+    assert "[Test Prep](" not in result.text
+
+
+@pytest.mark.asyncio
 async def test_chat_and_dedicated_intake_share_profile_transcript_and_plan(db_session, learner, monkeypatch):
     from lyo_app.study_plans import routes
     from lyo_app.study_plans.chat import process_chat_turn
@@ -194,13 +268,24 @@ async def test_chat_and_dedicated_intake_share_profile_transcript_and_plan(db_se
     plan = await routes.generate_plan(profile_id, learner, db_session)
     # Returning to Chat reopens the saved plan without another intake/model call.
     request.client_message_id = "chat-resume"
-    message = await process_chat_turn(request, learner, db_session)
+    result = await process_chat_turn(request, learner, db_session)
+    message = result.text
     resumed = await routes.prep_state(learner, db_session)
     assert resumed["profile"].id == profile_id
     assert resumed["plan"].id == plan["plan_id"]
     assert resumed["timezone"] == "America/New_York"
     assert len(resumed["profile"].intake_transcript) == 4
     assert "Test Prep" in message and ai.await_count == 3
+    # One sentence, one link, and it is a route rather than an absolute URL:
+    # an app link written as https://lyoai.app/... is a full page load that
+    # drops the learner out of the conversation they are in.
+    assert "[Test Prep](/test-prep)" in message
+    assert "https://lyoai.app" not in message
+    assert message.count("Test Prep") == 1, "the handoff said the same thing twice"
+    # The structured handoff is what lets a client offer "Start now" without
+    # asking anything the learner already answered.
+    assert result.handoff and result.handoff["plan_id"] == plan["plan_id"]
+    assert result.handoff["subject"] == "Biology"
     assert (await db_session.scalar(select(func.count()).select_from(Profile))) == 1
     assert (await db_session.scalar(select(func.count()).select_from(StudyPlan))) == 1
 
