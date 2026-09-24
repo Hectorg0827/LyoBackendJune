@@ -190,12 +190,25 @@ _NEW_TEST_CLASSIFIER = (
 )
 
 
-async def describes_a_different_test(user_message: str, profile) -> bool:
+async def describes_a_different_test(user_message: str, profile):
     """Is this turn about another exam, or the one already planned?
 
-    Returns False on any failure. A wrong true creates an exam the learner
-    never mentioned and starts interrogating them about it; a wrong false
-    leaves them where they already were. Those are not equally bad.
+    Three answers, not two:
+
+      True  — a different exam; start its intake.
+      False — the planned exam, or not an exam at all; answer as before.
+      None  — could not ask. The model was unreachable or gave nothing usable.
+
+    `None` exists because collapsing it into `False` hides an outage behind a
+    confident sentence. Running the eval against a box with no provider
+    configured returned `False` for every case, including "No i have also a
+    social studies test" — which is the reported bug, silently back, any time
+    the provider is down. The caller keeps the learner's existing exam either
+    way, but a turn we could not read should not be answered as though we did.
+
+    A wrong `True` invents an exam nobody sits and interrogates the learner
+    about it; a wrong `False` leaves them where they already were. Those are
+    not equally bad, so anything short of a clear yes is never `True`.
     """
     text = (user_message or "").strip()
     if not text:
@@ -212,11 +225,16 @@ async def describes_a_different_test(user_message: str, profile) -> bool:
             response_format={"type": "json_object"},
         )
         if reply.get("is_fallback"):
-            return False
-        return json.loads(reply.get("content", "{}")).get("different_test") is True
+            return None
+        answer = json.loads(reply.get("content", "{}")).get("different_test")
+        if answer is True:
+            return True
+        # A missing key, a string, a number: the model did not answer the
+        # question, which is not the same as answering "no".
+        return False if answer is False else None
     except Exception:
-        logger.exception("New-test classification failed; treating as the same test")
-        return False
+        logger.exception("New-test classification unavailable")
+        return None
 
 
 
@@ -280,6 +298,36 @@ async def busy_slots(db, user_id, exclude_plan_id=None):
     ]
 
 
+
+async def exams_sharing_a_date(db, user_id, test_date, exclude_profile_id=None):
+    """The learner's other exams on this date.
+
+    A date alone orders a learner's revision perfectly well, so the time of day
+    is not asked for and not stored. It becomes necessary exactly when a second
+    exam lands on the same date and something has to decide which is sat first
+    — which is the only question the time answers.
+    """
+    if not test_date:
+        return []
+    stmt = select(TestProfile).where(
+        TestProfile.user_id == user_id, TestProfile.test_date == test_date)
+    if exclude_profile_id:
+        stmt = stmt.where(TestProfile.id != exclude_profile_id)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+def needs_a_time(profile, same_day):
+    """Should this intake ask what time the exam starts?
+
+    Only when the learner has another exam on the day and at least one of the
+    two has no time yet. Asking otherwise is a question whose answer changes
+    nothing, which is the kind of question that makes a form feel like a form.
+    """
+    if not same_day:
+        return False
+    return profile.test_time is None or any(other.test_time is None for other in same_day)
+
+
 @router.post(
     "/intake/turn",
     response_model=IntakeResponse,
@@ -330,7 +378,9 @@ async def intake_turn(
         #
         # A second exam now starts its own intake. Exams are already one row
         # each; only this lookup assumed a learner sits one.
-        if not body.test_profile_id and await describes_a_different_test(body.user_message, profile):
+        verdict = None if body.test_profile_id else await describes_a_different_test(
+            body.user_message, profile)
+        if verdict is True:
             workflow = dict(profile.workflow_state or {})
             profile = TestProfile(
                 user_id=current_user.id,
@@ -347,8 +397,19 @@ async def intake_turn(
             existing = None
         else:
             await db.commit()
-            return IntakeResponse(test_profile_id=profile.id, intake_complete=True, plan_id=existing.id,
-                message_to_user=f"Your {profile.subject} test plan is saved. Open Test Prep to see your schedule, continue a lesson, or edit your test details.")
+            saved = (f"Your {profile.subject} test plan is saved. Open Test Prep to see "
+                     "your schedule, continue a lesson, or edit your test details.")
+            if verdict is None and not body.test_profile_id:
+                # We could not read the turn. Saying only the line above would
+                # answer a question we never understood — and if they were
+                # telling us about a second exam, this is exactly where that
+                # gets swallowed. Say so, and leave a way through.
+                # Names no surface: the link is already in the sentence above,
+                # and repeating it is the duplication this reply just lost.
+                saved += (" I couldn't tell whether that was about a different exam —"
+                          " if you have another one, you can add it there.")
+            return IntakeResponse(test_profile_id=profile.id, intake_complete=True,
+                                  plan_id=existing.id, message_to_user=saved)
     if profile.intake_complete:
         await db.commit()
         return IntakeResponse(test_profile_id=profile.id, intake_complete=True,
@@ -366,7 +427,20 @@ async def intake_turn(
         if field not in known:
             context.pop(field, None)
     # 3. Call resilient LLM
-    messages = [{"role": "system", "content": INTAKE_SYSTEM_PROMPT +
+    # Two exams on one date is the only case where the time of day matters.
+    same_day = await exams_sharing_a_date(db, current_user.id, profile.test_date, profile.id)
+    clash_note = ""
+    if needs_a_time(profile, same_day):
+        others = ", ".join(sorted({other.subject for other in same_day}))
+        clash_note = (
+            f"\nThis learner already has another exam on {profile.test_date}: {others}. "
+            "Ask what time each exam starts, so the two can be told apart and "
+            "revision scheduled around them. Two exams on one date is normal — "
+            "do not treat it as a mistake or ask them to change the date. "
+            "Report a time you are told as profile_update.test_time in 24-hour "
+            "HH:MM. Never guess one."
+        )
+    messages = [{"role": "system", "content": INTAKE_SYSTEM_PROMPT + clash_note +
         f"\nToday is {datetime.now(ZoneInfo(workflow.get('timezone', 'UTC'))).date()}. "
         f"Learner timezone: {workflow.get('timezone', 'UTC')}. "
         "Never invent the test date or availability. Study days per week may default to 5 if the learner has no preference. "
@@ -410,7 +484,14 @@ async def intake_turn(
     # LLM output is untrusted. Invalid fields do not destroy a recoverable intake.
     validated = {}
     for key, value in updates.items():
-        if key in {"subject", "test_date", "topics", "daily_minutes_available", "study_days_per_week"}:
+        if key == "test_time":
+            # Only meaningful against another exam on the day, and only ever
+            # the learner's own words — never inferred from a date.
+            try:
+                validated[key] = dt_time.fromisoformat(str(value)[:5]) if value else None
+            except (ValueError, TypeError):
+                pass
+        elif key in {"subject", "test_date", "topics", "daily_minutes_available", "study_days_per_week"}:
             try:
                 checked = TestProfileUpdate(expected_revision=0, **{key: value})
                 if value is not None:
@@ -428,6 +509,8 @@ async def intake_turn(
     if updates:
         if "subject" in updates and updates["subject"]:
             profile.subject = str(updates["subject"])
+        if updates.get("test_time") is not None:
+            profile.test_time = updates["test_time"]
         if "test_date" in updates and updates["test_date"]:
             p_date = updates["test_date"]
             if p_date:

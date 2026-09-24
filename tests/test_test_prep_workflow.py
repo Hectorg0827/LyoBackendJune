@@ -1,6 +1,6 @@
 """Account continuity, real scheduling and safe retries across Test Prep surfaces."""
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -308,16 +308,176 @@ async def test_an_unclear_message_never_invents_an_exam(db_session, learner, mon
     from lyo_app.study_plans import routes
 
     profile = SimpleNamespace(subject="Biology", test_date=date.today())
+
+    # Three answers, not two: None means "could not ask". Collapsing it into
+    # False hides an outage behind a confident sentence — running the eval on
+    # a box with no provider returned False for every case, including the
+    # reported bug's own wording.
     monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
                         AsyncMock(side_effect=RuntimeError("model down")))
-    assert await routes.describes_a_different_test("I also have chemistry", profile) is False
+    assert await routes.describes_a_different_test("I also have chemistry", profile) is None
 
     monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
                         AsyncMock(return_value={"content": "{}", "is_fallback": True}))
-    assert await routes.describes_a_different_test("I also have chemistry", profile) is False
+    assert await routes.describes_a_different_test("I also have chemistry", profile) is None
 
-    # And an empty turn is not an exam.
+    # A reply that does not answer the question is not an answer of "no".
+    for junk in ('{"different_test": "maybe"}', '{}', 'not json at all'):
+        monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
+                            AsyncMock(return_value={"content": junk, "is_fallback": False}))
+        assert await routes.describes_a_different_test("I also have chemistry", profile) is None
+
+    # A real no is a real no.
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
+                        AsyncMock(return_value={"content": '{"different_test": false}',
+                                                "is_fallback": False}))
+    assert await routes.describes_a_different_test("thanks", profile) is False
+
+    # And an empty turn is not an exam — no model call needed to know that.
     assert await routes.describes_a_different_test("   ", profile) is False
+
+
+@pytest.mark.asyncio
+async def test_a_turn_we_could_not_read_is_not_answered_as_though_we_did(
+    db_session, learner, monkeypatch
+):
+    """If the learner was telling us about a second exam, an outage is exactly
+    where that gets swallowed. Say so, and leave a way through."""
+    from lyo_app.study_plans import routes
+
+    complete = llm_reply(test_date=(date.today() + timedelta(days=14)).isoformat(),
+        topics=[{"name": "Cells", "confidence": 3}], daily_minutes_available=25,
+        study_days_per_week=4)
+    parsed = json.loads(complete["content"])
+    parsed["intake_complete"] = True
+    complete["content"] = json.dumps(parsed)
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
+        AsyncMock(side_effect=[llm_reply(subject="Biology"), complete]))
+    first = await routes.intake_turn(IntakeMessage(user_message="I have a biology test",
+        request_id="a"), learner, db_session)
+    await routes.intake_turn(IntakeMessage(user_message="In two weeks, cells, 25 minutes",
+        request_id="b"), learner, db_session)
+    await routes.generate_plan(first.test_profile_id, learner, db_session)
+
+    monkeypatch.setattr(routes, "describes_a_different_test", AsyncMock(return_value=None))
+    reply = await routes.intake_turn(IntakeMessage(
+        user_message="No i have also a social studies test", request_id="c"),
+        learner, db_session)
+
+    assert "couldn't tell" in reply.message_to_user
+    assert "add it there" in reply.message_to_user
+    # No exam is invented on an outage.
+    assert (await db_session.scalar(select(func.count()).select_from(Profile))) == 1
+
+
+# ─── The time of day, only when it decides something ─────────────────────────
+
+def test_a_lone_exam_is_never_asked_what_time_it_starts():
+    """A date orders revision perfectly well on its own. Asking for a time that
+    changes nothing is the kind of question that makes a form feel like a
+    form."""
+    from lyo_app.study_plans.routes import needs_a_time
+
+    lone = SimpleNamespace(test_time=None)
+    assert needs_a_time(lone, []) is False
+    # Even with a time already known, no second exam means nothing to decide.
+    assert needs_a_time(SimpleNamespace(test_time=dt_time(9, 0)), []) is False
+
+
+def test_two_exams_on_one_date_are_asked_which_is_first():
+    from lyo_app.study_plans.routes import needs_a_time
+
+    other_unknown = SimpleNamespace(subject="Biology", test_time=None)
+    other_known = SimpleNamespace(subject="Biology", test_time=dt_time(9, 0))
+
+    # Neither knows its time: ask.
+    assert needs_a_time(SimpleNamespace(test_time=None), [other_unknown]) is True
+    # This one knows, the other does not: still ask, or they cannot be ordered.
+    assert needs_a_time(SimpleNamespace(test_time=dt_time(14, 0)), [other_unknown]) is True
+    # This one does not know: ask.
+    assert needs_a_time(SimpleNamespace(test_time=None), [other_known]) is True
+    # Both known: nothing left to settle.
+    assert needs_a_time(SimpleNamespace(test_time=dt_time(14, 0)), [other_known]) is False
+
+
+@pytest.mark.asyncio
+async def test_a_clashing_date_is_what_puts_the_time_question_in_the_prompt(
+    db_session, learner, monkeypatch
+):
+    """The wiring: `needs_a_time` deciding correctly proves nothing if the
+    intake never reads it."""
+    from lyo_app.study_plans import routes
+
+    exam_day = date.today() + timedelta(days=7)
+    db_session.add(Profile(user_id=learner.id, subject="Biology", test_date=exam_day,
+                           intake_complete=True, intake_transcript=[],
+                           workflow_state={"timezone": "UTC"}))
+    await db_session.flush()
+
+    seen = {}
+
+    async def capture(messages, **kwargs):
+        seen["system"] = messages[0]["content"]
+        return llm_reply(subject="Social Studies")
+
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion", capture)
+    # A second exam, same day.
+    second = Profile(user_id=learner.id, subject="Social Studies", test_date=exam_day,
+                     intake_transcript=[], workflow_state={"timezone": "UTC"})
+    db_session.add(second)
+    await db_session.flush()
+
+    await routes.intake_turn(IntakeMessage(user_message="social studies too",
+        test_profile_id=second.id, request_id="x"), learner, db_session)
+
+    assert "another exam on" in seen["system"]
+    assert "Biology" in seen["system"]
+    # And it must not treat an ordinary situation as a mistake.
+    assert "do not treat it as a mistake" in seen["system"]
+
+
+@pytest.mark.asyncio
+async def test_a_lone_exam_intake_is_not_asked_about_times(db_session, learner, monkeypatch):
+    from lyo_app.study_plans import routes
+
+    seen = {}
+
+    async def capture(messages, **kwargs):
+        seen["system"] = messages[0]["content"]
+        return llm_reply(subject="Biology")
+
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion", capture)
+    await routes.intake_turn(IntakeMessage(user_message="I have a biology test",
+                                           request_id="y"), learner, db_session)
+
+    assert "another exam on" not in seen["system"]
+
+
+@pytest.mark.asyncio
+async def test_a_time_is_recorded_only_when_the_learner_gives_one(
+    db_session, learner, monkeypatch
+):
+    """Never inferred. An invented exam time reorders someone's revision around
+    a fact nobody told us."""
+    from lyo_app.study_plans import routes
+
+    reply = json.loads(llm_reply(subject="Biology")["content"])
+    reply["profile_update"] = {"subject": "Biology", "test_time": "14:30"}
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
+                        AsyncMock(return_value={"content": json.dumps(reply), "is_fallback": False}))
+    result = await routes.intake_turn(IntakeMessage(user_message="it starts at 2:30pm",
+                                                    request_id="z"), learner, db_session)
+    saved = await routes.owned_profile(db_session, learner.id, result.test_profile_id)
+    assert saved.test_time == dt_time(14, 30)
+
+    # Garbage is dropped rather than stored as a wrong time.
+    reply["profile_update"] = {"test_time": "half past two"}
+    monkeypatch.setattr(routes.ai_resilience_manager, "chat_completion",
+                        AsyncMock(return_value={"content": json.dumps(reply), "is_fallback": False}))
+    await routes.intake_turn(IntakeMessage(user_message="around then",
+        test_profile_id=saved.id, request_id="z2"), learner, db_session)
+    refreshed = await routes.owned_profile(db_session, learner.id, saved.id)
+    assert refreshed.test_time == dt_time(14, 30)
 
 
 # ─── Two exams, one calendar ─────────────────────────────────────────────────
@@ -486,6 +646,9 @@ async def test_chat_and_dedicated_intake_share_profile_transcript_and_plan(db_se
     # price of the learner being able to say anything at all once they have a
     # plan — including that they have a second exam.
     assert "Test Prep" in message and ai.await_count == 4
+    # The classifier could not reach a model here (the third side_effect is a
+    # fallback), so the reply says so rather than answering confidently.
+    assert "couldn't tell" in message
     # One sentence, one link, and it is a route rather than an absolute URL:
     # an app link written as https://lyoai.app/... is a full page load that
     # drops the learner out of the conversation they are in.
