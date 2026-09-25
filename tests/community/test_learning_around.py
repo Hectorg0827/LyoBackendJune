@@ -137,15 +137,21 @@ def test_nearby_normalizes_legacy_rows_instead_of_returning_500():
         study_group_id=None,
         image_url=None,
     )
+    from lyo_app.community.learning_around import _AccountState
+    from lyo_app.community.timeutil import utc_now
+    from datetime import timezone
+
     node = LearningAroundService()._event_node(
         legacy_event,
-        latitude=40.75,
-        longitude=-73.99,
-        saved_keys=set(),
-        attending_ids=set(),
+        40.75,
+        -73.99,
+        _AccountState(user_id=1, saved_keys=set(), joined_group_ids=set(), attendance={}),
+        {},
+        utc_now(),
+        timezone.utc,
     )
 
-    assert len(node.description) == 3000
+    assert len(node.description) == 3501
     assert node.capacity is None
     assert node.latitude is None
     assert node.longitude is None

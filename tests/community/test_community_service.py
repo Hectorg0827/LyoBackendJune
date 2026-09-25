@@ -535,7 +535,7 @@ class TestCommunityService:
         start_time = datetime.utcnow() + timedelta(days=1)
         end_time = start_time - timedelta(hours=1)  # End before start
         
-        event_data = CommunityEventCreate(
+        fields = dict(
             title="Invalid Event",
             description="This should fail",
             event_type=EventType.STUDY_SESSION,
@@ -549,7 +549,13 @@ class TestCommunityService:
             course_id=None,
             lesson_id=None
         )
-        
+
+        # The request schema rejects an inverted range before any write...
+        with pytest.raises(ValueError, match="must end after it starts"):
+            CommunityEventCreate(**fields)
+
+        # ...and the service still guards callers that bypass the schema.
+        event_data = CommunityEventCreate.model_construct(**fields)
         with pytest.raises(ValueError, match="End time must be after start time"):
             await community_service.create_community_event(db_session, test_user.id, event_data)
 

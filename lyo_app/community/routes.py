@@ -1,24 +1,34 @@
 """
 Community API routes for study groups and community events.
 Provides RESTful endpoints for collaborative learning features.
+
+Error contract for the map-first Community endpoints: expected problems use
+4xx with a short learner-facing ``detail``; unexpected failures are logged
+with their stack trace and answered with a generic message, never the raw
+database error.
 """
 
 import logging
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set, Union
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
 from lyo_app.auth.routes import get_current_user
 from lyo_app.models.enhanced import User
-from lyo_app.community.service import CommunityService
+from lyo_app.community.service import (
+    CommunityConflict,
+    CommunityRateLimited,
+    CommunityService,
+)
 from lyo_app.community.schemas import (
     StudyGroupCreate, StudyGroupUpdate, StudyGroupRead,
     GroupMembershipCreate, GroupMembershipUpdate, GroupMembershipRead,
     CommunityEventCreate, CommunityEventUpdate, CommunityEventRead,
-    EventAttendanceCreate, EventAttendanceUpdate, EventAttendanceRead,
+    EventAttendanceUpdate, EventAttendanceRead,
     BeaconBase, CommunityQuestionCreate, CommunityQuestionRead,
     CommunityAnswerCreate, CommunityAnswerRead,
     MarketplaceItemCreate, MarketplaceItemUpdate, MarketplaceItemRead,
@@ -26,10 +36,17 @@ from lyo_app.community.schemas import (
     BookingCreate, BookingRead, BookingSlotRead,
     ReviewCreate, ReviewRead, ReviewStatsRead,
     CommunityMeResponse, LearningNode, LearningNodeCategory,
-    LearningNodeKind, LearningNodeSaveRequest, NearbyLearningResponse,
+    LearningNodeDetail, LearningNodeKind, LearningNodeSaveRequest,
+    NearbyLearningResponse, EventRSVPRequest, EventReportRequest,
+    EventReportResponse, PlaceSuggestion, RSVPStatus, SearchResolution,
+    EventGuestCreate, EventGuestRead, EventInviteCreate, EventInviteRead,
+    EventInvitesResponse, InvitePreview,
 )
-from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
+from lyo_app.community.invites import InviteNotFound, NotEventHost, invite_service
+from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus, CommunityEvent
+from lyo_app.community import geocoding
 from lyo_app.community.learning_around import learning_around_service
+from lyo_app.community.query_intent import classify
 from lyo_app.services.conversation_sync import conversation_sync_service
 from lyo_app.stack import crud as stack_crud
 from lyo_app.stack.models import StackItemType
@@ -38,6 +55,11 @@ import uuid
 router = APIRouter()
 community_service = CommunityService()
 logger = logging.getLogger(__name__)
+
+_PLACE_TYPES = {
+    "university", "college", "language_school", "music_school", "prep_school",
+    "training", "community_centre",
+}
 
 
 async def _notify_community_change(user_id: int, action: str, **data) -> None:
@@ -49,6 +71,31 @@ async def _notify_community_change(user_id: int, action: str, **data) -> None:
         )
     except Exception as exc:  # A sync outage must never roll back account state.
         logger.warning("Could not broadcast Community update for user %s: %s", user_id, exc)
+
+
+def _unexpected(action: str, exc: Exception) -> HTTPException:
+    """Log the real failure; give the learner a message they can act on."""
+    logger.error("Community %s failed: %s", action, exc, exc_info=True)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"We couldn't {action} right now. Please try again.",
+    )
+
+
+def _parse_categories(categories: Optional[str]) -> Optional[Set[LearningNodeCategory]]:
+    if not categories:
+        return None
+    try:
+        return {
+            LearningNodeCategory(value.strip())
+            for value in categories.split(",")
+            if value.strip()
+        }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown learning node category: {exc}",
+        ) from exc
 
 
 @router.get("/nearby", response_model=NearbyLearningResponse)
@@ -64,44 +111,202 @@ async def get_nearby_learning(
     include_online: bool = Query(True),
     include_institutions: bool = Query(True),
     limit: int = Query(100, ge=1, le=250),
+    when: Optional[str] = Query(None, pattern="^(today|week)$", description="today or week"),
+    free_only: bool = Query(False),
+    place_types: Optional[str] = Query(
+        None,
+        description="Comma-separated place types that narrow educational_center, e.g. university,college",
+    ),
+    tz: Optional[str] = Query(None, max_length=64, description="Viewer IANA timezone for 'today'"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return the canonical, user-aware Learning Around Me map nodes."""
-    parsed_categories: Optional[Set[LearningNodeCategory]] = None
-    if categories:
-        try:
-            parsed_categories = {
-                LearningNodeCategory(value.strip())
-                for value in categories.split(",")
-                if value.strip()
-            }
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Unknown learning node category: {exc}",
-            ) from exc
+    parsed_place_types = (
+        {value.strip() for value in place_types.split(",") if value.strip() in _PLACE_TYPES}
+        if place_types
+        else None
+    )
     return await learning_around_service.get_nearby(
         db,
         user_id=current_user.id,
         latitude=lat,
         longitude=lng,
         radius_km=radius_km,
-        categories=parsed_categories,
+        categories=_parse_categories(categories),
         query_text=q,
         include_online=include_online,
         include_institutions=include_institutions,
         limit=limit,
+        when=when,
+        free_only=free_only,
+        place_types=parsed_place_types or None,
+        tz=tz,
     )
+
+
+def _pick_place(place_text: Optional[str], places: List[PlaceSuggestion]) -> Optional[PlaceSuggestion]:
+    """An area (borough, city, ZIP) always counts; a venue only by exact name.
+
+    "Central Park" should move the map; "yoga" must not jump to a studio that
+    happens to be called "Yoga Vida" — that is a topic search.
+    """
+    if not place_text:
+        return None
+    for candidate in places:
+        if candidate.is_area:
+            return candidate
+    wanted = " ".join(place_text.lower().split())
+    for candidate in places:
+        if " ".join(candidate.name.lower().split()) == wanted:
+            return candidate
+    return None
+
+
+@router.get("/search/resolve", response_model=SearchResolution)
+async def resolve_community_search(
+    q: str = Query(..., min_length=1, max_length=200),
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    current_user: User = Depends(get_current_user),
+):
+    """Decide whether a search is a place (move the map) or a topic (filter)."""
+    intent = classify(q)
+    places: List[PlaceSuggestion] = []
+    if intent.place_text:
+        places = await geocoding.geocode(intent.place_text, latitude=lat, longitude=lng, limit=5)
+    place = _pick_place(intent.place_text, places)
+
+    if place is None:
+        kind = "topic"
+    elif intent.kind == "mixed":
+        kind = "mixed"
+    else:
+        kind = "place"
+    topic = intent.topic
+    return SearchResolution(
+        query=q,
+        intent=kind,
+        topic=None if kind == "place" else (topic.raw or q),
+        terms=[] if kind == "place" else list(topic.terms),
+        categories=[] if kind == "place" else sorted(topic.categories, key=lambda c: c.value),
+        place=place,
+        places=places,
+    )
+
+
+@router.get("/geocode", response_model=List[PlaceSuggestion])
+async def geocode_place(
+    q: str = Query(..., min_length=2, max_length=200),
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    limit: int = Query(5, ge=1, le=10),
+    current_user: User = Depends(get_current_user),
+):
+    """Address and place suggestions for the event location picker."""
+    return await geocoding.geocode(q, latitude=lat, longitude=lng, limit=limit)
+
+
+# Product analytics for the Community tab. One pipeline for every client:
+# allow-listed event names, small scalar properties, and never a location.
+COMMUNITY_ANALYTICS_EVENTS = frozenset({
+    "community_opened",
+    "community_search",
+    "community_search_area",
+    "community_filter_selected",
+    "community_marker_opened",
+    "community_event_opened",
+    "community_place_opened",
+    "community_event_created",
+    "community_event_updated",
+    "community_event_deleted",
+    "community_event_saved",
+    "community_event_rsvp",
+    "community_event_reported",
+    "community_event_shared",
+    "community_directions_opened",
+    "community_location_permission_denied",
+    "community_load_failed",
+    "community_invite_created",
+    "community_invite_accepted",
+})
+_ANALYTICS_BLOCKED_KEYS = ("lat", "lng", "lon", "latitude", "longitude", "location", "address", "coord", "email", "phone")
+
+
+class CommunityAnalyticsEvent(BaseModel):
+    name: str = Field(..., max_length=64)
+    platform: str = Field("unknown", max_length=16)
+    properties: Dict[str, Union[str, int, float, bool, None]] = Field(default_factory=dict)
+
+
+@router.post("/analytics/events", status_code=status.HTTP_204_NO_CONTENT)
+async def record_community_analytics(
+    event: CommunityAnalyticsEvent,
+    current_user: User = Depends(get_current_user),
+):
+    """Record a privacy-respecting Community product event."""
+    if event.name not in COMMUNITY_ANALYTICS_EVENTS:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown analytics event")
+    properties = {}
+    for key, value in list(event.properties.items())[:12]:
+        lowered = key.lower()
+        if any(blocked in lowered for blocked in _ANALYTICS_BLOCKED_KEYS):
+            continue
+        if isinstance(value, str):
+            value = value[:80]
+        properties[key[:40]] = value
+    logger.info(
+        "community_analytics event=%s platform=%s properties=%s",
+        event.name,
+        event.platform[:16],
+        properties,
+        extra={
+            "analytics_event": event.name,
+            "platform": event.platform[:16],
+            "user_id": current_user.id,
+            "properties": properties,
+        },
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/me", response_model=CommunityMeResponse)
 async def get_my_community_state(
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    tz: Optional[str] = Query(None, max_length=64),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Account-owned groups, events, saves, and people followed by this user."""
-    return await learning_around_service.get_my_community(db, current_user.id)
+    return await learning_around_service.get_my_community(
+        db, current_user.id, latitude=lat, longitude=lng, tz=tz
+    )
+
+
+@router.get("/nodes/{kind}/{node_id}", response_model=LearningNodeDetail)
+async def get_learning_node_detail(
+    kind: LearningNodeKind,
+    node_id: str = Path(..., min_length=1, max_length=255),
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    tz: Optional[str] = Query(None, max_length=64),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Full detail for one map item, including past events and related items."""
+    detail = await learning_around_service.get_node_detail(
+        db,
+        user_id=current_user.id,
+        kind=kind,
+        node_id=node_id,
+        latitude=lat,
+        longitude=lng,
+        tz=tz,
+    )
+    if detail is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This item is no longer available")
+    return detail
 
 
 @router.put("/saved-nodes/{kind}/{node_id}", response_model=LearningNode)
@@ -121,6 +326,8 @@ async def save_learning_node(
             node_id=node_id,
             snapshot=payload.snapshot,
         )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await _notify_community_change(current_user.id, "node_saved", node_key=node.key)
@@ -134,20 +341,20 @@ async def unsave_learning_node(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove a saved node from the authenticated Lyo account."""
+    """Remove a saved node. Idempotent: another device may have removed it."""
     removed = await learning_around_service.unsave_node(
         db,
         user_id=current_user.id,
         kind=kind,
         node_id=node_id,
     )
-    if not removed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved node not found")
-    await _notify_community_change(
-        current_user.id,
-        "node_unsaved",
-        node_key=f"{kind.value}:{node_id}",
-    )
+    if removed:
+        await _notify_community_change(
+            current_user.id,
+            "node_unsaved",
+            node_key=f"{kind.value}:{node_id}",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # Study Group Endpoints
@@ -428,25 +635,41 @@ async def create_community_event(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new community event."""
+    """Create a new community event (idempotent per ``client_request_id``)."""
     try:
         event = await community_service.create_community_event(
             db=db,
             organizer_id=current_user.id,
             event_data=event_data
         )
-        await _notify_community_change(
-            current_user.id,
-            "event_created",
-            event_id=event.id,
+    except CommunityRateLimited as e:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(e),
+            headers={"Retry-After": str(e.retry_after_seconds)},
         )
-        return event
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create event")
+        raise _unexpected("create this event", e)
+    await _notify_community_change(
+        current_user.id,
+        "event_created",
+        event_id=event.id,
+    )
+    return await _event_read_for(db, current_user.id, event.id)
+
+
+async def _event_read_for(db: AsyncSession, user_id: int, event_id: int) -> CommunityEventRead:
+    """The event as this viewer may see it, with counts and their RSVP."""
+    account = await learning_around_service._account_state(db, user_id)
+    event = await learning_around_service.visible_event(db, account, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    counts = await learning_around_service._attendance_counts(db, [event.id])
+    return learning_around_service._event_read(event, counts, account)
 
 
 @router.get("/events", response_model=List[CommunityEventRead])
@@ -472,12 +695,16 @@ async def list_community_events(
             user_id=current_user.id,
             q=q,
         )
-        
-        # response_model is List[CommunityEventRead]; the previous dict
-        # envelope failed response validation and 500'd on every call.
-        return events
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch events: {str(e)}")
+        raise _unexpected("load events", e)
+    # Validate row by row so one unreadable legacy event cannot fail the list.
+    readable: List[CommunityEventRead] = []
+    for event in events:
+        try:
+            readable.append(CommunityEventRead.model_validate(event))
+        except Exception as exc:
+            logger.warning("Skipping unreadable community event %s: %s", event.get("id") if isinstance(event, dict) else "?", exc)
+    return readable
 
 
 @router.get("/events/{event_id}", response_model=CommunityEventRead)
@@ -486,29 +713,21 @@ async def get_community_event(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get a specific community event by ID."""
+    """Get a specific community event by ID (respecting visibility)."""
     try:
-        event = await community_service.get_community_event_by_id(
-            db=db,
-            event_id=event_id
-        )
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        return event
+        return await _event_read_for(db, current_user.id, event_id)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch event")
+        raise _unexpected("load this event", e)
 
 
-@router.put("/events/{event_id}", response_model=CommunityEventRead)
-async def update_community_event(
+async def _update_event(
     event_id: int,
     event_data: CommunityEventUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Update a community event (organizer only)."""
+    current_user: User,
+    db: AsyncSession,
+) -> CommunityEventRead:
     try:
         event = await community_service.update_community_event(
             db=db,
@@ -518,12 +737,6 @@ async def update_community_event(
         )
         if not event:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        await _notify_community_change(
-            current_user.id,
-            "event_updated",
-            event_id=event_id,
-        )
-        return event
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
@@ -531,7 +744,35 @@ async def update_community_event(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update event")
+        raise _unexpected("update this event", e)
+    await _notify_community_change(
+        current_user.id,
+        "event_updated",
+        event_id=event_id,
+    )
+    return await _event_read_for(db, current_user.id, event_id)
+
+
+@router.put("/events/{event_id}", response_model=CommunityEventRead)
+async def update_community_event(
+    event_id: int,
+    event_data: CommunityEventUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a community event (organizer only). Only sent fields change."""
+    return await _update_event(event_id, event_data, current_user, db)
+
+
+@router.patch("/events/{event_id}", response_model=CommunityEventRead)
+async def patch_community_event(
+    event_id: int,
+    event_data: CommunityEventUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Partially update a community event (organizer only)."""
+    return await _update_event(event_id, event_data, current_user, db)
 
 
 @router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -549,11 +790,6 @@ async def delete_community_event(
         )
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found or access denied")
-        await _notify_community_change(
-            current_user.id,
-            "event_deleted",
-            event_id=event_id,
-        )
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
@@ -561,36 +797,300 @@ async def delete_community_event(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete event")
+        raise _unexpected("delete this event", e)
+    await _notify_community_change(
+        current_user.id,
+        "event_deleted",
+        event_id=event_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# Event Attendance Endpoints
+async def _rsvp(
+    db: AsyncSession,
+    user_id: int,
+    event_id: int,
+    going: bool,
+):
+    event = await learning_around_service.visible_event(db, user_id, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    try:
+        attendance = await community_service.set_event_rsvp(
+            db, user_id=user_id, event=event, going=going
+        )
+    except CommunityConflict as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    await _notify_community_change(
+        user_id,
+        "event_rsvp",
+        event_id=event_id,
+        status="going" if going else "interested",
+    )
+    return attendance
+
+
+@router.put("/events/{event_id}/rsvp", response_model=LearningNode)
+async def set_event_rsvp(
+    event_id: int,
+    payload: EventRSVPRequest,
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    tz: Optional[str] = Query(None, max_length=64),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set the caller's RSVP (going or interested); safe to repeat."""
+    try:
+        await _rsvp(db, current_user.id, event_id, going=payload.status == RSVPStatus.GOING)
+        node = await learning_around_service.event_node_for_user(
+            db, user_id=current_user.id, event_id=event_id, latitude=lat, longitude=lng, tz=tz
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unexpected("update your RSVP", e)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return node
+
+
+@router.delete("/events/{event_id}/rsvp", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_event_rsvp(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove the caller's RSVP. Idempotent across devices."""
+    try:
+        removed = await community_service.cancel_event_registration(
+            db=db, user_id=current_user.id, event_id=event_id
+        )
+    except Exception as e:
+        raise _unexpected("update your RSVP", e)
+    if removed:
+        await _notify_community_change(current_user.id, "event_left", event_id=event_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/events/{event_id}/report",
+    response_model=EventReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def report_community_event(
+    event_id: int,
+    payload: EventReportRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Report an inappropriate event for moderation."""
+    event = await learning_around_service.visible_event(db, current_user.id, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    try:
+        created = await community_service.report_event(
+            db,
+            reporter_id=current_user.id,
+            event=event,
+            reason=payload.reason,
+            description=payload.description,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise _unexpected("send your report", e)
+    if created:
+        return EventReportResponse(
+            status="received",
+            message="Thanks — our team will review this event.",
+        )
+    return EventReportResponse(
+        status="already_reported",
+        message="You've already reported this event. Our team will review it.",
+    )
+
+
+# Invitations: private events are opened to guests by link or by name.
+
+def _invite_error(exc: Exception, action: str) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, InviteNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, NotEventHost):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, CommunityConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, CommunityRateLimited):
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+    return _unexpected(action, exc)
+
+
+@router.post(
+    "/events/{event_id}/invites",
+    response_model=EventInviteRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_event_invite(
+    event_id: int,
+    payload: Optional[EventInviteCreate] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a shareable invite link (host only)."""
+    try:
+        return await invite_service.create_link(
+            db, event_id=event_id, host_id=current_user.id, options=payload or EventInviteCreate()
+        )
+    except Exception as e:
+        raise _invite_error(e, "create an invite link")
+
+
+@router.get("/events/{event_id}/invites", response_model=EventInvitesResponse)
+async def list_event_invites(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The host's invite links and guest list."""
+    try:
+        return await invite_service.list_invitations(db, event_id=event_id, host_id=current_user.id)
+    except Exception as e:
+        raise _invite_error(e, "load your guest list")
+
+
+@router.delete("/events/{event_id}/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_event_invite(
+    event_id: int,
+    invite_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn off an invite link. People who already joined stay on the guest list."""
+    try:
+        await invite_service.revoke_link(
+            db, event_id=event_id, host_id=current_user.id, invite_id=invite_id
+        )
+    except Exception as e:
+        raise _invite_error(e, "turn off this invite link")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/events/{event_id}/guests",
+    response_model=EventGuestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def invite_event_guest(
+    event_id: int,
+    payload: EventGuestCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Invite one Lyo member by account; they are notified on every device."""
+    try:
+        guest, added = await invite_service.invite_member(
+            db, event_id=event_id, host_id=current_user.id, user_id=payload.user_id
+        )
+    except Exception as e:
+        raise _invite_error(e, "send this invitation")
+    if added:
+        event = await db.get(CommunityEvent, event_id)
+        title = event.title if event is not None else "an event"
+        try:
+            from lyo_app.routers.notifications import create_notification, get_actor_display_name
+
+            host_name = await get_actor_display_name(db, current_user.id)
+            await create_notification(
+                db,
+                user_id=payload.user_id,
+                type="event_invite",
+                title="You're invited",
+                body=f"{host_name} invited you to {title}",
+                actor_id=current_user.id,
+                target_id=str(event_id),
+                target_type="community_event",
+            )
+        except Exception as exc:  # A notification outage never undoes the invite.
+            logger.warning("Could not notify invited guest %s: %s", payload.user_id, exc)
+        await _notify_community_change(payload.user_id, "event_invited", event_id=event_id)
+    return guest
+
+
+@router.delete("/events/{event_id}/guests/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_event_guest(
+    event_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take someone off the guest list (and their RSVP to a private event)."""
+    try:
+        await invite_service.remove_guest(
+            db, event_id=event_id, host_id=current_user.id, user_id=user_id
+        )
+    except Exception as e:
+        raise _invite_error(e, "remove this guest")
+    await _notify_community_change(user_id, "event_uninvited", event_id=event_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/invites/{token}", response_model=InvitePreview)
+async def preview_event_invite(
+    token: str = Path(..., min_length=16, max_length=64),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What an invite link opens, shown before the learner accepts it."""
+    try:
+        return await invite_service.preview(db, token=token, user_id=current_user.id)
+    except Exception as e:
+        raise _invite_error(e, "open this invite")
+
+
+@router.post("/invites/{token}/accept", response_model=LearningNode)
+async def accept_event_invite(
+    token: str = Path(..., min_length=16, max_length=64),
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    tz: Optional[str] = Query(None, max_length=64),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Join an event's guest list with an invite link. Safe to repeat."""
+    try:
+        event_id = await invite_service.accept(db, token=token, user_id=current_user.id)
+        node = await learning_around_service.event_node_for_user(
+            db, user_id=current_user.id, event_id=event_id, latitude=lat, longitude=lng, tz=tz
+        )
+    except Exception as e:
+        raise _invite_error(e, "accept this invite")
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This invite link isn't valid.")
+    await _notify_community_change(current_user.id, "event_invite_accepted", event_id=event_id)
+    return node
+
+
+# Event Attendance Endpoints (legacy clients; same rows as /rsvp)
 @router.post("/events/{event_id}/attend", response_model=EventAttendanceRead, status_code=status.HTTP_201_CREATED)
 async def register_event_attendance(
     event_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Register attendance for an event."""
+    """Register as going. Repeating the call keeps the existing RSVP."""
     try:
-        attendance_data = EventAttendanceCreate(event_id=event_id)
-        attendance = await community_service.register_for_event(
-            db=db,
-            user_id=current_user.id,
-            attendance_data=attendance_data
-        )
-        await _notify_community_change(
-            current_user.id,
-            "event_attending",
-            event_id=event_id,
-        )
-        return attendance
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        attendance = await _rsvp(db, current_user.id, event_id, going=True)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to register attendance")
+        raise _unexpected("register for this event", e)
+    return attendance
 
 
 @router.put("/events/{event_id}/attendance", response_model=EventAttendanceRead)
@@ -622,7 +1122,7 @@ async def update_event_attendance(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update attendance")
+        raise _unexpected("update your attendance", e)
 
 
 @router.delete("/events/{event_id}/attend", status_code=status.HTTP_204_NO_CONTENT)
@@ -631,19 +1131,19 @@ async def leave_event(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Cancel attendance for an event."""
-    success = await community_service.cancel_event_registration(
+    """Cancel attendance for an event. Idempotent across devices."""
+    removed = await community_service.cancel_event_registration(
         db=db,
         user_id=current_user.id,
         event_id=event_id
     )
-    if not success:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance not found")
-    await _notify_community_change(
-        current_user.id,
-        "event_left",
-        event_id=event_id,
-    )
+    if removed:
+        await _notify_community_change(
+            current_user.id,
+            "event_left",
+            event_id=event_id,
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --- Phase 3: Campus Map & Beacons ---
