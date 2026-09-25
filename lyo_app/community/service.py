@@ -10,6 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from sqlalchemy import select, func, and_, or_, desc, asc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,7 +34,33 @@ from lyo_app.community.schemas import (
 )
 from lyo_app.models.enhanced import User
 from lyo_app.stack.models import StackItem, StackItemType, StackItemStatus
+from lyo_app.community.timeutil import utc_now
 import uuid
+
+# Event creation limits per organizer. Generous for real hosts, but enough to
+# stop a script from flooding the shared map.
+EVENTS_PER_HOUR_LIMIT = 10
+EVENTS_PER_DAY_LIMIT = 30
+# Distinct reporters after which an event leaves public discovery until a
+# moderator reviews it. The organizer and existing attendees still see it.
+REPORTS_TO_HIDE_EVENT = 3
+_EVENT_STRING_ENUM_FIELDS = ("visibility", "price_type", "attendance_mode")
+
+
+class CommunityRateLimited(Exception):
+    """Raised when an organizer creates events faster than allowed."""
+
+    def __init__(self, message: str, retry_after_seconds: int):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class CommunityConflict(Exception):
+    """A valid request that conflicts with the event's current state."""
+
+
+def _string_value(value):
+    return getattr(value, "value", value)
 
 
 def _display_name(user) -> str:
@@ -475,22 +502,27 @@ class CommunityService:
         event_data: CommunityEventCreate
     ) -> CommunityEvent:
         """
-        Create a new community event.
-        
-        Args:
-            db: Database session
-            organizer_id: ID of the user organizing the event
-            event_data: Event creation data
-            
-        Returns:
-            Created event instance
-            
+        Create a new community event, exactly once per submission.
+
+        A repeated submit (double tap, retry after a timeout, refresh) returns
+        the event the first submit created: by ``client_request_id`` when the
+        client sends one, otherwise by same organizer + title + start time
+        within the last ten minutes.
+
         Raises:
-            ValueError: If validation fails or permissions insufficient
+            ValueError: If validation fails
+            PermissionError: If the organizer cannot post for the linked group
+            CommunityRateLimited: If the organizer is creating too quickly
         """
-        # Validate dates
+        existing = await self._find_duplicate_event(db, organizer_id, event_data)
+        if existing is not None:
+            return existing
+
+        # Validate dates (the schema already does; kept for direct callers)
         if event_data.end_time <= event_data.start_time:
             raise ValueError("End time must be after start time")
+
+        await self._enforce_event_rate_limit(db, organizer_id)
         
         # If associated with study group, check permissions
         if event_data.study_group_id:
@@ -500,6 +532,7 @@ class CommunityService:
             ):
                 raise PermissionError("Insufficient permissions to create events for this group")
         
+        now = utc_now()
         db_event = CommunityEvent(
             title=event_data.title,
             description=event_data.description,
@@ -519,21 +552,40 @@ class CommunityService:
             longitude=event_data.longitude,
             room_id=event_data.room_id,
             image_url=event_data.image_url,
+            visibility=_string_value(event_data.visibility),
+            price_type=_string_value(event_data.price_type),
+            price_amount=event_data.price_amount,
+            currency=event_data.currency,
+            website_url=event_data.website_url,
+            organizer_name=event_data.organizer_name,
+            venue_name=event_data.venue_name,
+            address=event_data.address,
+            attendance_mode=_string_value(event_data.attendance_mode) or "in_person",
+            moderation_status="active",
+            client_request_id=event_data.client_request_id,
             status=EventStatus.SCHEDULED,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=now,
+            updated_at=now,
         )
         
         db.add(db_event)
-        # The event and organizer RSVP are a single durable account write.
-        await db.flush()
+        try:
+            # The event and organizer RSVP are a single durable account write.
+            await db.flush()
+        except IntegrityError:
+            # Two concurrent submits with one request id: the other won.
+            await db.rollback()
+            existing = await self._find_duplicate_event(db, organizer_id, event_data)
+            if existing is not None:
+                return existing
+            raise
 
         # Automatically register organizer
         organizer_attendance = EventAttendance(
             user_id=organizer_id,
             event_id=db_event.id,
             status=AttendanceStatus.GOING,
-            registered_at=datetime.utcnow(),
+            registered_at=now,
         )
         
         db.add(organizer_attendance)
@@ -541,6 +593,61 @@ class CommunityService:
         await db.refresh(db_event)
 
         return db_event
+
+    async def _find_duplicate_event(
+        self,
+        db: AsyncSession,
+        organizer_id: int,
+        event_data: CommunityEventCreate,
+    ) -> Optional[CommunityEvent]:
+        if event_data.client_request_id:
+            result = await db.execute(
+                select(CommunityEvent).where(
+                    CommunityEvent.organizer_id == organizer_id,
+                    CommunityEvent.client_request_id == event_data.client_request_id,
+                )
+            )
+            found = result.scalar_one_or_none()
+            if found is not None:
+                return found
+        result = await db.execute(
+            select(CommunityEvent)
+            .where(
+                CommunityEvent.organizer_id == organizer_id,
+                CommunityEvent.title == event_data.title,
+                CommunityEvent.start_time == event_data.start_time,
+                CommunityEvent.created_at >= utc_now() - timedelta(minutes=10),
+                CommunityEvent.status != EventStatus.CANCELLED,
+            )
+            .order_by(CommunityEvent.id)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _enforce_event_rate_limit(self, db: AsyncSession, organizer_id: int) -> None:
+        now = utc_now()
+        recent = await db.execute(
+            select(CommunityEvent.created_at).where(
+                CommunityEvent.organizer_id == organizer_id,
+                CommunityEvent.created_at >= now - timedelta(days=1),
+            )
+        )
+        created = [value for value in recent.scalars().all() if value is not None]
+        last_hour = [value for value in created if value >= now - timedelta(hours=1)]
+        if len(last_hour) >= EVENTS_PER_HOUR_LIMIT:
+            oldest = min(last_hour)
+            retry = int((oldest + timedelta(hours=1) - now).total_seconds()) + 1
+            raise CommunityRateLimited(
+                "You've created a lot of events in the last hour. Please try again later.",
+                max(retry, 60),
+            )
+        if len(created) >= EVENTS_PER_DAY_LIMIT:
+            oldest = min(created)
+            retry = int((oldest + timedelta(days=1) - now).total_seconds()) + 1
+            raise CommunityRateLimited(
+                "You've reached today's event limit. Please try again tomorrow.",
+                max(retry, 60),
+            )
 
     async def get_community_event_by_id(
         self, 
@@ -570,19 +677,11 @@ class CommunityService:
         event_data: CommunityEventUpdate
     ) -> Optional[CommunityEvent]:
         """
-        Update a community event.
-        
-        Args:
-            db: Database session
-            event_id: Event ID to update
-            user_id: ID of the user attempting to update
-            event_data: Updated event data
-            
-        Returns:
-            Updated event instance or None if not found
-            
+        Update a community event (organizer, or a linked group's admins).
+
         Raises:
             PermissionError: If user doesn't have update permissions
+            ValueError: If the resulting event would be incoherent
         """
         # Get the event
         event = await self.get_community_event_by_id(db, event_id)
@@ -600,12 +699,17 @@ class CommunityService:
         if not has_permission:
             raise PermissionError("Insufficient permissions to update this event")
         
-        # Validate dates if both are being updated
-        start_time = event_data.start_time or event.start_time
-        end_time = event_data.end_time or event.end_time
-        
+        changes = event_data.model_dump(exclude_unset=True)
+
+        # Validate dates if either is being updated
+        start_time = changes.get("start_time") or event.start_time
+        end_time = changes.get("end_time") or event.end_time
         if end_time <= start_time:
             raise ValueError("End time must be after start time")
+        if ("start_time" in changes or "end_time" in changes) and end_time <= utc_now():
+            raise ValueError("An event can't be rescheduled into the past")
+        if end_time - start_time > timedelta(days=31):
+            raise ValueError("Events can last at most 31 days")
         
         # Apply only explicit changes; optional fields can intentionally be
         # cleared while untouched fields retain their canonical value.
@@ -617,13 +721,38 @@ class CommunityService:
             "end_time",
             "timezone",
             "status",
+            "visibility",
+            "price_type",
+            "attendance_mode",
         }
-        for field, value in event_data.model_dump(exclude_unset=True).items():
+        for field, value in changes.items():
             if field in required_event_fields and value is None:
                 raise ValueError(f"{field} cannot be null")
+            if field in _EVENT_STRING_ENUM_FIELDS:
+                value = _string_value(value)
             setattr(event, field, value)
+
+        # Keep the derived fields coherent with whatever changed.
+        latitude, longitude = event.latitude, event.longitude
+        if (latitude is None) != (longitude is None):
+            raise ValueError("A map location needs both latitude and longitude")
+        if "attendance_mode" not in changes and "is_online" in changes:
+            event.attendance_mode = (
+                "hybrid" if event.is_online and latitude is not None
+                else "online" if event.is_online
+                else "in_person"
+            )
+        if event.attendance_mode in {"online", "hybrid"}:
+            event.is_online = True
+        elif event.attendance_mode == "in_person":
+            event.is_online = False
+        if event.attendance_mode == "online":
+            event.latitude = None
+            event.longitude = None
+        if event.price_type == "free":
+            event.price_amount = None
         
-        event.updated_at = datetime.utcnow()
+        event.updated_at = utc_now()
         
         await db.commit()
         await db.refresh(event)
@@ -664,10 +793,137 @@ class CommunityService:
         
         if not has_permission:
             raise PermissionError("Insufficient permissions to delete this event")
-        
+
+        # Saved copies on every learner's account go with the event, so no
+        # device keeps showing an event that no longer exists.
+        from lyo_app.community.models import CommunitySavedNode
+
+        saved = await db.execute(
+            select(CommunitySavedNode).where(
+                CommunitySavedNode.node_kind == "event",
+                CommunitySavedNode.node_id == str(event_id),
+            )
+        )
+        for row in saved.scalars().all():
+            await db.delete(row)
         await db.delete(event)
         await db.commit()
         
+        return True
+
+    async def set_event_rsvp(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: int,
+        event: CommunityEvent,
+        going: bool,
+    ) -> EventAttendance:
+        """Idempotently set the caller's RSVP to going (True) or interested."""
+        if event.status == EventStatus.CANCELLED:
+            raise CommunityConflict("This event was cancelled")
+        if event.end_time is not None and event.end_time <= utc_now():
+            raise CommunityConflict("This event has already ended")
+        if getattr(event, "moderation_status", "active") != "active" and event.organizer_id != user_id:
+            raise CommunityConflict("This event is not accepting RSVPs right now")
+
+        result = await db.execute(
+            select(EventAttendance).where(
+                EventAttendance.user_id == user_id,
+                EventAttendance.event_id == event.id,
+            )
+        )
+        attendance = result.scalar_one_or_none()
+        desired = AttendanceStatus.GOING if going else AttendanceStatus.MAYBE
+        already_going = attendance is not None and attendance.status in (
+            AttendanceStatus.GOING,
+            AttendanceStatus.ATTENDED,
+        )
+        if going and not already_going and event.max_attendees and event.max_attendees > 0:
+            going_count = await db.scalar(
+                select(func.count(EventAttendance.id)).where(
+                    EventAttendance.event_id == event.id,
+                    EventAttendance.status.in_([AttendanceStatus.GOING, AttendanceStatus.ATTENDED]),
+                )
+            )
+            if (going_count or 0) >= event.max_attendees:
+                raise CommunityConflict("This event is full")
+
+        if attendance is None:
+            attendance = EventAttendance(
+                user_id=user_id,
+                event_id=event.id,
+                status=desired,
+                registered_at=utc_now(),
+            )
+            db.add(attendance)
+        elif attendance.status != AttendanceStatus.ATTENDED or not going:
+            attendance.status = desired
+        await db.commit()
+        await db.refresh(attendance)
+        return attendance
+
+    async def report_event(
+        self,
+        db: AsyncSession,
+        *,
+        reporter_id: int,
+        event: CommunityEvent,
+        reason: str,
+        description: Optional[str],
+    ) -> bool:
+        """File a report; returns False when this learner already reported it."""
+        from lyo_app.community.models import (
+            ContentReport,
+            ReportReason,
+            ReportStatus,
+            ReportTargetType,
+        )
+
+        if event.organizer_id == reporter_id:
+            raise ValueError("You can't report your own event")
+        try:
+            reason_value = ReportReason(reason)
+        except ValueError:
+            reason_value = ReportReason.OTHER
+
+        existing = await db.execute(
+            select(ContentReport.id).where(
+                ContentReport.reporter_id == reporter_id,
+                ContentReport.target_type == ReportTargetType.EVENT,
+                ContentReport.target_id == str(event.id),
+            )
+        )
+        if existing.first() is not None:
+            return False
+
+        db.add(
+            ContentReport(
+                reporter_id=reporter_id,
+                target_type=ReportTargetType.EVENT,
+                target_id=str(event.id),
+                reason=reason_value,
+                description=description,
+                status=ReportStatus.PENDING,
+                created_at=utc_now(),
+            )
+        )
+        await db.flush()
+        reporters = await db.scalar(
+            select(func.count(func.distinct(ContentReport.reporter_id))).where(
+                ContentReport.target_type == ReportTargetType.EVENT,
+                ContentReport.target_id == str(event.id),
+                ContentReport.status == ReportStatus.PENDING,
+            )
+        )
+        if (reporters or 0) >= REPORTS_TO_HIDE_EVENT and event.moderation_status == "active":
+            event.moderation_status = "hidden"
+            logger.warning(
+                "Community event %s hidden pending review after %s reports",
+                event.id,
+                reporters,
+            )
+        await db.commit()
         return True
 
     async def register_for_event(
@@ -965,6 +1221,20 @@ class CommunityService:
         # Build query
         query = select(CommunityEvent).options(selectinload(CommunityEvent.organizer))
         conditions = []
+        if user_id is not None:
+            # Lists follow the same rules as the map: public events, plus the
+            # viewer's own; hidden/removed events only for their organizer.
+            conditions.append(or_(
+                CommunityEvent.visibility == "public",
+                CommunityEvent.organizer_id == user_id,
+            ))
+            conditions.append(or_(
+                CommunityEvent.moderation_status == "active",
+                CommunityEvent.organizer_id == user_id,
+            ))
+        else:
+            conditions.append(CommunityEvent.visibility == "public")
+            conditions.append(CommunityEvent.moderation_status == "active")
         
         if status:
             conditions.append(CommunityEvent.status == status)
