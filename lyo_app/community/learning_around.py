@@ -23,6 +23,7 @@ from lyo_app.auth.models import User
 from lyo_app.community.models import (
     AttendanceStatus,
     CommunityEvent,
+    CommunityEventGuest,
     CommunitySavedNode,
     EventAttendance,
     EventStatus,
@@ -224,11 +225,14 @@ class _AccountState:
         saved_keys: Set[str],
         joined_group_ids: Set[int],
         attendance: dict[int, AttendanceStatus],
+        guest_event_ids: Optional[Set[int]] = None,
     ) -> None:
         self.user_id = user_id
         self.saved_keys = saved_keys
         self.joined_group_ids = joined_group_ids
         self.attendance = attendance
+        # Events the host let this learner into (invite link or by name).
+        self.guest_event_ids = guest_event_ids or set()
 
     @property
     def attending_event_ids(self) -> Set[int]:
@@ -473,6 +477,7 @@ class LearningAroundService:
                 CommunityEvent.visibility != EventVisibility.UNLISTED.value,
                 CommunityEvent.organizer_id == account.user_id,
                 CommunityEvent.id.in_(account.attending_event_ids or [-1]),
+                CommunityEvent.id.in_(account.guest_event_ids or [-1]),
             )
         )
         if when == "today":
@@ -501,6 +506,7 @@ class LearningAroundService:
             CommunityEvent.visibility.is_(None),
             CommunityEvent.organizer_id == account.user_id,
             CommunityEvent.id.in_(account.attending_event_ids or [-1]),
+            CommunityEvent.id.in_(account.guest_event_ids or [-1]),
             and_(
                 CommunityEvent.study_group_id.isnot(None),
                 CommunityEvent.study_group_id.in_(account.joined_group_ids or [-1]),
@@ -676,6 +682,7 @@ class LearningAroundService:
                     CommunityEvent.moderation_status != "hidden",
                     CommunityEvent.organizer_id == account.user_id,
                     CommunityEvent.id.in_(account.attending_event_ids or [-1]),
+                    CommunityEvent.id.in_(account.guest_event_ids or [-1]),
                 ),
             )
         )
@@ -750,6 +757,7 @@ class LearningAroundService:
         hosting: list[LearningNode] = []
         going: list[LearningNode] = []
         interested: list[LearningNode] = []
+        invited: list[LearningNode] = []
         for event in account_events:
             try:
                 node = self._event_node(event, origin_lat, origin_lng, account, counts, now, zone)
@@ -763,6 +771,8 @@ class LearningAroundService:
                     going.append(node)
                 elif node.rsvp_status == RSVPStatus.INTERESTED:
                     interested.append(node)
+                elif node.is_invited:
+                    invited.append(node)
 
         following = await self._read_or_default(
             db, "following", lambda: self._following(db, user_id), []
@@ -784,6 +794,7 @@ class LearningAroundService:
             hosting=hosting,
             going=going,
             interested=interested,
+            invited=invited,
         )
 
     @staticmethod
@@ -824,7 +835,9 @@ class LearningAroundService:
                         CommunityEvent.end_time >= history_floor,
                     ),
                     and_(
-                        CommunityEvent.id.in_(account.attending_event_ids or [-1]),
+                        CommunityEvent.id.in_(
+                            (account.attending_event_ids | account.guest_event_ids) or [-1]
+                        ),
                         CommunityEvent.end_time >= now,
                         CommunityEvent.moderation_status != "removed",
                     ),
@@ -1167,6 +1180,7 @@ class LearningAroundService:
             website_url=_clean_text(getattr(event, "website_url", None), 1000),
             is_owner=is_owner,
             is_full=bool(capacity and going >= capacity),
+            is_invited=event.id in account.guest_event_ids,
         )
 
     def _group_node(
@@ -1299,7 +1313,16 @@ class LearningAroundService:
         attendance = await self._read_or_default(
             db, "event attendance", lambda: self._attendance_statuses(db, user_id), {}
         )
-        return _AccountState(user_id, saved_keys, joined_group_ids, attendance)
+        guest_event_ids = await self._read_or_default(
+            db, "event invitations", lambda: self._guest_event_ids(db, user_id), set()
+        )
+        return _AccountState(user_id, saved_keys, joined_group_ids, attendance, guest_event_ids)
+
+    async def _guest_event_ids(self, db: AsyncSession, user_id: int) -> Set[int]:
+        result = await db.execute(
+            select(CommunityEventGuest.event_id).where(CommunityEventGuest.user_id == user_id)
+        )
+        return set(result.scalars().all())
 
     async def _saved_keys(self, db: AsyncSession, user_id: int) -> Set[str]:
         result = await db.execute(

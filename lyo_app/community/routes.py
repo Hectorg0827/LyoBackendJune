@@ -39,8 +39,11 @@ from lyo_app.community.schemas import (
     LearningNodeDetail, LearningNodeKind, LearningNodeSaveRequest,
     NearbyLearningResponse, EventRSVPRequest, EventReportRequest,
     EventReportResponse, PlaceSuggestion, RSVPStatus, SearchResolution,
+    EventGuestCreate, EventGuestRead, EventInviteCreate, EventInviteRead,
+    EventInvitesResponse, InvitePreview,
 )
-from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus
+from lyo_app.community.invites import InviteNotFound, NotEventHost, invite_service
+from lyo_app.community.models import StudyGroupPrivacy, EventType, AttendanceStatus, CommunityEvent
 from lyo_app.community import geocoding
 from lyo_app.community.learning_around import learning_around_service
 from lyo_app.community.query_intent import classify
@@ -224,6 +227,8 @@ COMMUNITY_ANALYTICS_EVENTS = frozenset({
     "community_directions_opened",
     "community_location_permission_denied",
     "community_load_failed",
+    "community_invite_created",
+    "community_invite_accepted",
 })
 _ANALYTICS_BLOCKED_KEYS = ("lat", "lng", "lon", "latitude", "longitude", "location", "address", "coord", "email", "phone")
 
@@ -904,6 +909,171 @@ async def report_community_event(
         status="already_reported",
         message="You've already reported this event. Our team will review it.",
     )
+
+
+# Invitations: private events are opened to guests by link or by name.
+
+def _invite_error(exc: Exception, action: str) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, InviteNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, NotEventHost):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, CommunityConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, CommunityRateLimited):
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+    return _unexpected(action, exc)
+
+
+@router.post(
+    "/events/{event_id}/invites",
+    response_model=EventInviteRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_event_invite(
+    event_id: int,
+    payload: Optional[EventInviteCreate] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a shareable invite link (host only)."""
+    try:
+        return await invite_service.create_link(
+            db, event_id=event_id, host_id=current_user.id, options=payload or EventInviteCreate()
+        )
+    except Exception as e:
+        raise _invite_error(e, "create an invite link")
+
+
+@router.get("/events/{event_id}/invites", response_model=EventInvitesResponse)
+async def list_event_invites(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The host's invite links and guest list."""
+    try:
+        return await invite_service.list_invitations(db, event_id=event_id, host_id=current_user.id)
+    except Exception as e:
+        raise _invite_error(e, "load your guest list")
+
+
+@router.delete("/events/{event_id}/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_event_invite(
+    event_id: int,
+    invite_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn off an invite link. People who already joined stay on the guest list."""
+    try:
+        await invite_service.revoke_link(
+            db, event_id=event_id, host_id=current_user.id, invite_id=invite_id
+        )
+    except Exception as e:
+        raise _invite_error(e, "turn off this invite link")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/events/{event_id}/guests",
+    response_model=EventGuestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def invite_event_guest(
+    event_id: int,
+    payload: EventGuestCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Invite one Lyo member by account; they are notified on every device."""
+    try:
+        guest, added = await invite_service.invite_member(
+            db, event_id=event_id, host_id=current_user.id, user_id=payload.user_id
+        )
+    except Exception as e:
+        raise _invite_error(e, "send this invitation")
+    if added:
+        event = await db.get(CommunityEvent, event_id)
+        title = event.title if event is not None else "an event"
+        try:
+            from lyo_app.routers.notifications import create_notification, get_actor_display_name
+
+            host_name = await get_actor_display_name(db, current_user.id)
+            await create_notification(
+                db,
+                user_id=payload.user_id,
+                type="event_invite",
+                title="You're invited",
+                body=f"{host_name} invited you to {title}",
+                actor_id=current_user.id,
+                target_id=str(event_id),
+                target_type="community_event",
+            )
+        except Exception as exc:  # A notification outage never undoes the invite.
+            logger.warning("Could not notify invited guest %s: %s", payload.user_id, exc)
+        await _notify_community_change(payload.user_id, "event_invited", event_id=event_id)
+    return guest
+
+
+@router.delete("/events/{event_id}/guests/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_event_guest(
+    event_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take someone off the guest list (and their RSVP to a private event)."""
+    try:
+        await invite_service.remove_guest(
+            db, event_id=event_id, host_id=current_user.id, user_id=user_id
+        )
+    except Exception as e:
+        raise _invite_error(e, "remove this guest")
+    await _notify_community_change(user_id, "event_uninvited", event_id=event_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/invites/{token}", response_model=InvitePreview)
+async def preview_event_invite(
+    token: str = Path(..., min_length=16, max_length=64),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What an invite link opens, shown before the learner accepts it."""
+    try:
+        return await invite_service.preview(db, token=token, user_id=current_user.id)
+    except Exception as e:
+        raise _invite_error(e, "open this invite")
+
+
+@router.post("/invites/{token}/accept", response_model=LearningNode)
+async def accept_event_invite(
+    token: str = Path(..., min_length=16, max_length=64),
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    tz: Optional[str] = Query(None, max_length=64),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Join an event's guest list with an invite link. Safe to repeat."""
+    try:
+        event_id = await invite_service.accept(db, token=token, user_id=current_user.id)
+        node = await learning_around_service.event_node_for_user(
+            db, user_id=current_user.id, event_id=event_id, latitude=lat, longitude=lng, tz=tz
+        )
+    except Exception as e:
+        raise _invite_error(e, "accept this invite")
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This invite link isn't valid.")
+    await _notify_community_change(current_user.id, "event_invite_accepted", event_id=event_id)
+    return node
 
 
 # Event Attendance Endpoints (legacy clients; same rows as /rsvp)

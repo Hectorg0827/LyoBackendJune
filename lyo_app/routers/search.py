@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.jwt_auth import get_current_user
@@ -88,9 +88,20 @@ async def search(
         ]
 
     if type in (SearchType.ALL, SearchType.EVENTS):
+        # Only public, live events: private and unlisted events are reached by
+        # invitation or link, never by searching for their title.
         result = await db.execute(
             select(CommunityEvent)
-            .where(or_(CommunityEvent.title.ilike(pattern), CommunityEvent.description.ilike(pattern)))
+            .where(
+                or_(CommunityEvent.title.ilike(pattern), CommunityEvent.description.ilike(pattern)),
+                or_(
+                    and_(
+                        or_(CommunityEvent.visibility == "public", CommunityEvent.visibility.is_(None)),
+                        CommunityEvent.moderation_status == "active",
+                    ),
+                    CommunityEvent.organizer_id == current_user.id,
+                ),
+            )
             .order_by(CommunityEvent.start_time)
             .limit(limit)
         )

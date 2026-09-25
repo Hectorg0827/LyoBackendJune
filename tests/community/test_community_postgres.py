@@ -87,7 +87,16 @@ async def pg(monkeypatch):
 
     async with sessions() as session:
         params = {"ids": user_ids}
+        # The app creates ``notifications`` at startup rather than by migration.
+        if await session.scalar(text("SELECT to_regclass('public.notifications') IS NOT NULL")):
+            await session.execute(
+                text("DELETE FROM notifications WHERE user_id = ANY(:ids) OR actor_id = ANY(:ids)"),
+                params,
+            )
         for statement in (
+            "DELETE FROM community_event_guests WHERE user_id = ANY(:ids) OR event_id IN "
+            "(SELECT id FROM community_events WHERE organizer_id = ANY(:ids))",
+            "DELETE FROM community_event_invites WHERE created_by_id = ANY(:ids)",
             "DELETE FROM content_reports WHERE reporter_id = ANY(:ids)",
             "DELETE FROM community_saved_nodes WHERE user_id = ANY(:ids)",
             "DELETE FROM event_attendances WHERE user_id = ANY(:ids) OR event_id IN "
@@ -234,3 +243,43 @@ async def test_rsvp_save_and_report_on_postgres(pg):
 
     deleted = await pg.client.delete(f"/community/events/{event_id}", headers=pg.a)
     assert deleted.status_code == 204, deleted.text
+
+
+async def test_private_event_invites_on_postgres(pg):
+    """Links, guests, and removal on the real schema (migration 004)."""
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=2)
+    payload = _payload("Private lab", start.isoformat().replace("+00:00", "Z"), start + timedelta(hours=2))
+    payload["visibility"] = "private"
+    created = await pg.client.post("/community/events", headers=pg.a, json=payload)
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    assert (await pg.client.get(f"/community/nodes/event/{event_id}", headers=pg.b)).status_code == 404
+
+    link = await pg.client.post(f"/community/events/{event_id}/invites", headers=pg.a, json={"max_uses": 1})
+    assert link.status_code == 201, link.text
+    token = link.json()["token"]
+    accepted = await pg.client.post(f"/community/invites/{token}/accept", headers=pg.b)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["is_invited"] is True
+    assert (await pg.client.post(f"/community/invites/{token}/accept", headers=pg.b)).status_code == 200
+    rsvp = await pg.client.put(f"/community/events/{event_id}/rsvp", headers=pg.b, json={"status": "going"})
+    assert rsvp.status_code == 200, rsvp.text
+
+    listing = await pg.client.get(f"/community/events/{event_id}/invites", headers=pg.a)
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["links"][0]["use_count"] == 1
+    assert [g["rsvp_status"] for g in listing.json()["guests"]] == ["going"]
+
+    removed = await pg.client.delete(f"/community/events/{event_id}/guests/{pg.ids[1]}", headers=pg.a)
+    assert removed.status_code == 204, removed.text
+    assert (await pg.client.get(f"/community/nodes/event/{event_id}", headers=pg.b)).status_code == 404
+
+    direct = await pg.client.post(f"/community/events/{event_id}/guests", headers=pg.a, json={"user_id": pg.ids[1]})
+    assert direct.status_code == 201, direct.text
+    me = await pg.client.get("/community/me", headers=pg.b)
+    assert me.status_code == 200, me.text
+    assert [node["key"] for node in me.json()["invited"]] == [f"event:{event_id}"]
+
+    deleted = await pg.client.delete(f"/community/events/{event_id}", headers=pg.a)
+    assert deleted.status_code == 204, deleted.text
+    assert (await pg.client.get(f"/community/invites/{token}", headers=pg.b)).status_code == 404

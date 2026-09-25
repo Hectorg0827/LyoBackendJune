@@ -508,6 +508,57 @@ class CommunitySavedNode(Base):
 # SOCIAL FEED MODELS (Posts, Comments, Likes, Reports, Blocks)
 # =============================================================================
 
+class CommunityEventInvite(Base):
+    """A shareable invite link to one event, created by its host.
+
+    The token is the secret in the link (256 bits from ``secrets``). Only the
+    host can create, list, or revoke links; anyone signed in who holds a live
+    token can accept it, which puts them on the event's guest list.
+    """
+
+    __tablename__ = "community_event_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(
+        Integer, ForeignKey("community_events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    max_uses = Column(Integer, nullable=True)
+    use_count = Column(Integer, nullable=False, default=0, server_default="0")
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CommunityEventGuest(Base):
+    """Someone the host let into an event, by invite link or by name.
+
+    Guests can open, RSVP to, and see a private event on the map; removing a
+    guest takes that away again.
+    """
+
+    __tablename__ = "community_event_guests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(
+        Integer, ForeignKey("community_events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    invited_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    invite_id = Column(
+        Integer, ForeignKey("community_event_invites.id", ondelete="SET NULL"), nullable=True
+    )
+    source = Column(String(10), nullable=False, default="link", server_default="link")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id], lazy="noload")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_id", name="uq_community_event_guest"),
+    )
+
+
 class PostType(str, Enum):
     """Post type enumeration."""
     TEXT = "text"

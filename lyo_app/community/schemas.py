@@ -558,6 +558,8 @@ class LearningNode(BaseModel):
     relevance: Optional[str] = Field(None, max_length=300)
     is_owner: bool = False
     is_full: Optional[bool] = None
+    # The viewer is on this event's guest list (invited by link or by name).
+    is_invited: bool = False
 
 
 class NearbyLearningResponse(BaseModel):
@@ -587,6 +589,8 @@ class CommunityMeResponse(BaseModel):
     hosting: List[LearningNode] = Field(default_factory=list)
     going: List[LearningNode] = Field(default_factory=list)
     interested: List[LearningNode] = Field(default_factory=list)
+    # Upcoming events the learner was invited to and has not answered yet.
+    invited: List[LearningNode] = Field(default_factory=list)
 
 
 class LearningNodeDetail(BaseModel):
@@ -615,6 +619,66 @@ class EventReportRequest(BaseModel):
 class EventReportResponse(BaseModel):
     status: Literal["received", "already_reported"]
     message: str
+
+
+# --- Invitations ---------------------------------------------------------
+
+
+class EventInviteCreate(BaseModel):
+    """A new invite link. Links expire after 30 days unless the host chooses."""
+
+    max_uses: Optional[int] = Field(None, ge=1, le=1000)
+    expires_in_days: Optional[int] = Field(30, ge=1, le=90)
+
+
+class EventInviteRead(BaseModel):
+    id: int
+    token: str
+    url: str
+    created_at: UTCDateTime
+    expires_at: Optional[UTCDateTime] = None
+    max_uses: Optional[int] = None
+    use_count: int = 0
+    active: bool = True
+
+
+class EventGuestCreate(BaseModel):
+    """Invite one Lyo member by account."""
+
+    user_id: int = Field(..., ge=1)
+
+
+class EventGuestRead(BaseModel):
+    user: UserPreview
+    source: Literal["link", "direct"]
+    invited_at: UTCDateTime
+    rsvp_status: Optional[RSVPStatus] = None
+
+
+class EventInvitesResponse(BaseModel):
+    """The host's view: live and past links, and everyone on the guest list."""
+
+    links: List[EventInviteRead] = Field(default_factory=list)
+    guests: List[EventGuestRead] = Field(default_factory=list)
+
+
+class InvitePreview(BaseModel):
+    """What someone holding an invite link sees before they accept it."""
+
+    status: Literal["valid", "expired", "revoked", "used_up", "ended", "cancelled"]
+    already_guest: bool = False
+    is_host: bool = False
+    event_id: int
+    title: str
+    starts_at: Optional[UTCDateTime] = None
+    ends_at: Optional[UTCDateTime] = None
+    timezone: Optional[str] = None
+    location_name: Optional[str] = None
+    attendance_mode: Optional[AttendanceMode] = None
+    visibility: Optional[EventVisibility] = None
+    host: Optional[UserPreview] = None
+    organizer_name: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class PlaceSuggestion(BaseModel):

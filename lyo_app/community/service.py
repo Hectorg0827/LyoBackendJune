@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import select, func, and_, or_, desc, asc
+from sqlalchemy import select, func, and_, or_, desc, asc, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -795,8 +795,16 @@ class CommunityService:
             raise PermissionError("Insufficient permissions to delete this event")
 
         # Saved copies on every learner's account go with the event, so no
-        # device keeps showing an event that no longer exists.
-        from lyo_app.community.models import CommunitySavedNode
+        # device keeps showing an event that no longer exists. Its guest list
+        # and invite links go too (PostgreSQL cascades; SQLite does not).
+        from lyo_app.community.models import (
+            CommunityEventGuest,
+            CommunityEventInvite,
+            CommunitySavedNode,
+        )
+
+        await db.execute(delete(CommunityEventGuest).where(CommunityEventGuest.event_id == event_id))
+        await db.execute(delete(CommunityEventInvite).where(CommunityEventInvite.event_id == event_id))
 
         saved = await db.execute(
             select(CommunitySavedNode).where(
