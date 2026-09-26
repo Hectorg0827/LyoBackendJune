@@ -44,8 +44,8 @@ class AdaptiveSession:
                 plan=plan, mode=context.classroom_mode.value,
                 remaining_units=list(range(1, len(plan.units))),
                 challenge_requested=challenge,
-                phase="independent" if challenge else "orient",
-                next_move="independent" if challenge else "orient",
+                phase="independent" if challenge else "diagnose",
+                next_move="independent" if challenge else "diagnose",
             )
             progress["course_complete"] = False
             progress["guided_state"] = state.model_dump()
@@ -183,70 +183,105 @@ class AdaptiveSession:
                        verdict=result.verdict, extra_help=pending.extra_help_used,
                        response_format=pending.task.response_format, response=response,
                        feedback=result.feedback, misconception=result.misconception)
-            if result.verdict == "partial" and pending.attempts < 3:
+            if pending.phase == "diagnose":
+                move = self.after_diagnostic(context, state, pending, result, response,
+                                             response_time_ms=data.get("response_time_ms"))
+            elif result.verdict == "partial" and pending.attempts < 3:
                 pending.assisted = pending.extra_help_used = True
                 pending.hints_used += 1
                 pending.hint_level = pending.hint_level or "principle"
                 pending.follow_up = result.follow_up
                 pending.id = str(uuid4())
                 return self.save(progress, state, self.checkpoint(context, state, follow_up=True))
-            if result.verdict in ("correct", "incorrect"):
-                state.outbox.append(dict(
-                    event_id=pending.id, user_id=context.user_id,
-                    concept_id=context.lesson_title or context.topic,
-                    correct=result.verdict == "correct",
-                    evidence_type=None if choice else "application" if pending.task.kind == "apply" else "explanation",
-                    hints_used=pending.hints_used, hint_level=pending.hint_level,
-                    misconception=result.misconception if result.verdict == "incorrect" else None,
-                    response_time_ms=data.get("response_time_ms"),
-                ))
-            if result.verdict == "correct":
-                state.successes += 1
-                state.support_attempts = 0
-                if self.after_success(state, pending):
-                    state.pending = None
-                    return self.save(progress, state, self.summary(context, state))
-                move = state.phase
-            elif result.verdict == "clarify":
-                # Ambiguous wording and requests for help are not failures.
-                move = "help" if requests_help(response) else "clarify"
-                state.return_to_checkpoint = requests_help(response)
-                pending.assisted = pending.extra_help_used = True
-                pending.hints_used += 1
-                if state.return_to_checkpoint:
-                    pending.id = str(uuid4())
             else:
-                state.support_attempts += 1
-                state.target_index = pending.task.target_index
-                state.faded_targets = [i for i in state.faded_targets if i != state.target_index]
-                move = "prerequisite" if state.support_attempts >= 2 else "reteach"
-                state.return_to_checkpoint = False
+                if result.verdict in ("correct", "incorrect"):
+                    state.outbox.append(dict(
+                        event_id=pending.id, user_id=context.user_id,
+                        concept_id=context.lesson_title or context.topic,
+                        correct=result.verdict == "correct",
+                        evidence_type=None if choice else "application" if pending.task.kind == "apply" else "explanation",
+                        hints_used=pending.hints_used, hint_level=pending.hint_level,
+                        misconception=result.misconception if result.verdict == "incorrect" else None,
+                        response_time_ms=data.get("response_time_ms"),
+                    ))
+                if result.verdict == "correct":
+                    state.successes += 1
+                    state.support_attempts = 0
+                    if self.after_success(state, pending):
+                        state.pending = None
+                        return self.save(progress, state, self.summary(context, state))
+                    move = state.phase
+                elif result.verdict == "clarify":
+                    # Ambiguous wording and requests for help are not failures.
+                    move = "help" if requests_help(response) else "clarify"
+                    state.return_to_checkpoint = requests_help(response)
+                    pending.assisted = pending.extra_help_used = True
+                    pending.hints_used += 1
+                    if state.return_to_checkpoint:
+                        pending.id = str(uuid4())
+                else:
+                    state.support_attempts += 1
+                    state.target_index = pending.task.target_index
+                    state.faded_targets = [i for i in state.faded_targets if i != state.target_index]
+                    move = "prerequisite" if state.support_attempts >= 2 else "reteach"
+                    state.return_to_checkpoint = False
             learner_input = response
 
         elif intent == ActionIntent.SKIP_QUESTION:
             if not pending or trigger.component_id != pending.id:
                 return self.current_or_retry(context, state)
             self.handled(state, pending.id)
-            if state.unit_index not in state.skipped and state.unit_index not in state.completed:
-                state.skipped.append(state.unit_index)
-            self.event(state, "practise_later", phase=state.phase)
-            state.pending = None
-            self.finish_unit(state)
-            state.last_feedback = self.copy(context, "You can return to this skill when you are ready.",
-                                            "Puedes volver a esta habilidad cuando estés listo.")
-            return self.save(progress, state, self.summary(context, state))
+            if pending.phase == "diagnose":
+                # Passing on "can you already do this?" is itself an answer: no.
+                # It must not mark the skill for later review the way skipping
+                # practice does — the learner has asked to be taught it now.
+                state.diagnosed = True
+                state.return_to_checkpoint = False
+                self.event(state, "diagnostic", phase="diagnose", verdict="declined",
+                           target=pending.task.target_index)
+                state.last_feedback = self.copy(
+                    context, "No problem — let's build it from the start.",
+                    "Sin problema: vamos a construirlo desde el principio.")
+                state.phase = move = "orient"
+            else:
+                if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+                    state.skipped.append(state.unit_index)
+                self.event(state, "practise_later", phase=state.phase)
+                state.pending = None
+                self.finish_unit(state)
+                state.last_feedback = self.copy(context, "You can return to this skill when you are ready.",
+                                                "Puedes volver a esta habilidad cuando estés listo.")
+                return self.save(progress, state, self.summary(context, state))
         elif intent in (ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE,
                         ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
             if state.presentation and not state.paused_presentation:
                 state.paused_presentation = dict(presentation=state.presentation.model_dump(),
                                                 beat_index=state.beat_index, phase=state.phase)
-            state.return_to_checkpoint = pending is not None and pending.id not in state.handled
-            if pending:
+            asking_about_a_probe = (
+                pending is not None and pending.phase == "diagnose"
+                and intent in (ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE)
+            )
+            state.return_to_checkpoint = (
+                pending is not None and pending.id not in state.handled
+                and not asking_about_a_probe
+            )
+            if pending and not asking_about_a_probe:
                 pending.assisted = pending.extra_help_used = True
                 pending.hints_used += 1
                 pending.hint_level = "full_example" if intent == ActionIntent.REQUEST_EXAMPLE else "worked_step"
-            move = ("answer_question" if intent in (ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE)
-                    else "reteach" if intent == ActionIntent.REQUEST_EXAMPLE else "help")
+            if asking_about_a_probe:
+                # Hinting at a probe's answer destroys the only thing the probe
+                # measures, and returning to it afterwards would grade the
+                # learner on an answer we handed them. Wanting help here is
+                # itself the finding: teach the skill.
+                self.handled(state, pending.id)
+                state.diagnosed = True
+                self.event(state, "diagnostic", phase="diagnose", verdict="asked_for_help",
+                           target=pending.task.target_index)
+                state.phase = move = "orient"
+            else:
+                move = ("answer_question" if intent in (ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE)
+                        else "reteach" if intent == ActionIntent.REQUEST_EXAMPLE else "help")
             self.event(state, "help", phase=state.phase, intent=str(intent))
         elif intent == ActionIntent.SKIP_AHEAD:
             # A learner explicitly asking for a challenge may demonstrate prior
@@ -283,12 +318,21 @@ class AdaptiveSession:
             state.presentation = turn
             state.beat_index = -1
             state.step_id = str(uuid4())
-            state.phase = "orient" if move == "orient" else "model"
+            # A probe that somehow arrived without a question is an
+            # orientation, not a modelling step: there is nothing to model yet.
+            state.phase = "orient" if move in ("orient", "diagnose") else "model"
             return self.save(progress, state, self.presentation_scene(context, state))
 
         state.presentation = None
-        phase = state.phase if state.phase in ("guided", "faded", "independent") else "guided"
-        supported = phase != "independent"
+        if move == "diagnose":
+            # A probe is unsupported by definition — nothing has been taught
+            # for it to lean on. Marking it assisted, as practice is, would
+            # damp the confidence of the strongest demonstration this engine
+            # can collect: the learner doing it before being shown how.
+            phase, supported = "diagnose", False
+        else:
+            phase = state.phase if state.phase in ("guided", "faded", "independent") else "guided"
+            supported = phase != "independent"
         state.pending = PendingTask(
             task=turn.task, speech=turn.speech, board_title=turn.board_title,
             board_content=turn.board_content, visual=turn.visual, phase=phase,
@@ -299,6 +343,72 @@ class AdaptiveSession:
         state.recent_questions = [*state.recent_questions, normalize_text(turn.task.scenario + " " + turn.task.question)][-12:]
         state.next_move = phase
         return self.save(progress, state, self.checkpoint(context, state))
+
+    def after_diagnostic(self, context, state, pending, result, response, response_time_ms=None) -> str:
+        """Decide where this unit actually starts, from what the learner just showed.
+
+        A diagnostic is the one checkpoint a learner cannot fail. It is asked
+        before anything is taught, so a wrong answer says only that the unit
+        has work to do — which is what the unit is for. Nothing here increments
+        `support_attempts`, marks the unit for review, or reteaches an answer
+        the learner was never given: those all read a wrong answer as a
+        setback, and this one is the starting line.
+
+        The three routes are the whole point of asking:
+
+        * **Already has it** — skip the worked demonstration entirely and go
+          straight to fading support. Sitting a learner through "watch me" on
+          a skill they just performed is the single fastest way to lose them.
+        * **Has part of it** — begin at guided practice, building on the part
+          they showed rather than starting from zero.
+        * **Does not have it yet** — teach it properly, now with the learner's
+          own words and the named misconception in hand, so the explanation
+          can address what they actually said.
+
+        Evidence is written only for a correct, unaided probe, and it is the
+        strongest thing this engine can record: performance before
+        instruction. It is filed as `explanation`, never `transfer`, because
+        transfer is defined relative to something taught and nothing was.
+
+        An incorrect probe writes **no** evidence rather than a zero. "Measured
+        at zero on a skill never taught" is a claim about the learner that the
+        probe does not support, and the learner record keeps "not started"
+        and "attempted and got nothing" apart deliberately.
+        """
+        state.diagnosed = True
+        state.support_attempts = 0
+        state.return_to_checkpoint = False
+        unaided = not pending.assisted and not pending.extra_help_used
+        self.event(state, "diagnostic", phase="diagnose", target=pending.task.target_index,
+                   verdict=result.verdict, unaided=unaided,
+                   response_format=pending.task.response_format, response=response,
+                   misconception=result.misconception)
+
+        if result.verdict == "correct" and unaided:
+            state.outbox.append(dict(
+                event_id=pending.id, user_id=context.user_id,
+                concept_id=context.lesson_title or context.topic,
+                correct=True, evidence_type="explanation",
+                hints_used=0, hint_level=None, misconception=None,
+                response_time_ms=response_time_ms,
+            ))
+            state.last_feedback = (result.feedback + " " + self.copy(
+                context,
+                "You already have this, so we won't sit through the basics.",
+                "Ya dominas esto, así que no repasaremos lo básico.",
+            )).strip()
+            state.phase = "faded"
+            return "faded"
+
+        if result.verdict == "partial":
+            state.phase = "guided"
+            return "guided"
+
+        # Wrong, unclear, or a request for help: teach it, starting from what
+        # they said. `orient` reaches the generator with the learner's answer
+        # and this feedback already in its payload.
+        state.phase = "orient"
+        return "orient"
 
     @staticmethod
     def after_success(state, pending):
@@ -335,11 +445,12 @@ class AdaptiveSession:
         state.pending = state.presentation = state.paused_presentation = None
         state.last_feedback = ""
         state.generation_input = ""
-        state.phase = state.next_move = "orient"
+        state.phase = state.next_move = "diagnose"
         state.guided_targets = []
         state.faded_targets = []
         state.target_index = state.model_steps_seen = state.support_attempts = 0
         state.return_to_checkpoint = state.challenge_requested = False
+        state.diagnosed = False
         state.step_id = str(uuid4())
 
     @staticmethod
@@ -389,9 +500,11 @@ class AdaptiveSession:
 
     def stage(self, context, state):
         return self.copy(context, {
+            "diagnose": "Where you're starting",
             "orient": "Our goal", "model": "Watch me", "guided": "Let's do it together",
             "faded": "Finish this step", "independent": "Try it yourself",
         }[state.phase], {
+            "diagnose": "Dónde empiezas",
             "orient": "Nuestra meta", "model": "Mira cómo", "guided": "Hagámoslo juntos",
             "faded": "Completa este paso", "independent": "Inténtalo tú",
         }[state.phase])
@@ -536,11 +649,61 @@ class AdaptiveSession:
                                         action_intent=ActionIntent.REQUEST_REVIEW, language_code=context.language_code))
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
 
+    #: How much of the last taught step to re-present while a turn is retried.
+    _PAUSED_TEACHING_CHARS = 700
+
+    def paused_notice(self, context) -> str:
+        """The failure, in the learner's language, for the screen — never for the teacher.
+
+        This sentence names a server problem and asks the learner to press a
+        button. It is a product notice, so it belongs on the board beside the
+        Retry control that acts on it, not in `TeacherMessage`, which is the
+        teacher's voice and is narrated aloud.
+
+        A teacher who apologises for the backend stops being a teacher. It was
+        also the most repeated line in the product: every generation failure
+        spoke it, so a learner on a bad connection heard their teacher say
+        "I couldn't prepare the next step" over and over. The failure is real
+        and must be visible — it is what the Retry button is for — but saying
+        it in the teacher's voice charges the lesson for an outage.
+        """
+        return self.copy(
+            context,
+            "This lesson is paused because the next step didn't load. Nothing you've "
+            "done is lost and this doesn't count as a wrong answer. Press Retry to carry on.",
+            "Esta lección está en pausa porque el siguiente paso no se cargó. No se ha "
+            "perdido nada de tu trabajo y esto no cuenta como error. Pulsa Reintentar para continuar.",
+        )
+
+    def paused_teaching(self, context, state) -> str:
+        """What the teacher says instead: the lesson, again, from what we already hold.
+
+        Never an apology and never about the server. The material the learner
+        was working on is in session state, so the teacher can keep teaching
+        from it while the screen carries the notice and the retry. Every branch
+        reads values that are already present — this runs on the error path,
+        and a recovery that raises leaves the dead screen it exists to prevent.
+        """
+        subject = ""
+        if state:
+            subject = (state.unit.title or "").strip()
+        subject = subject or (context.lesson_title or context.topic or "").strip()
+        material = ""
+        if state:
+            material = (state.taught_steps[-1] if state.taught_steps else state.unit.material) or ""
+        material = (material or context.lesson_content or "").strip()[:self._PAUSED_TEACHING_CHARS]
+
+        lead = self.copy(
+            context,
+            f"Let's stay with {subject} a moment longer." if subject else "Let's take the main idea again.",
+            f"Quedémonos un momento más con {subject}." if subject else "Retomemos la idea principal.",
+        )
+        return (lead + "\n\n" + material).strip() if material else lead
+
     def unavailable(self, context, state):
-        text = self.copy(context,
-            "I couldn't prepare the next step. This interruption doesn't count as a wrong answer. Your place is kept here; retry when you're ready.",
-            "No pude preparar el siguiente paso. Esta interrupción no cuenta como error. Conservamos tu lugar aquí; reintenta cuando quieras.")
-        components = [TeacherMessage(text=text, language_code=context.language_code)]
+        text = self.paused_notice(context)
+        components = [TeacherMessage(text=self.paused_teaching(context, state),
+                                     emotion="encouraging", language_code=context.language_code)]
         # Keep the visible example, even after the final modelling beat has
         # advanced and no question was successfully installed. Recovery notices
         # are replaced, never accumulated across repeated failed attempts.

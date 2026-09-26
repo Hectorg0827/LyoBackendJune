@@ -2701,11 +2701,13 @@ class SceneLifecycleEngine:
             warning = runner.copy(context,
                 "This step has not synced. Keep this classroom open and retry before leaving; progress may not resume on another device.",
                 "Este paso no se ha sincronizado. Mantén esta aula abierta y reintenta antes de salir; podría no reanudarse en otro dispositivo.")
-            scene.components.insert(0, TeacherMessage(
-                text=warning,
-                language_code=context.language_code,
-            ))
-            scene.components.insert(1, ExampleBlock(
+            # On the board beside the Retry control, not in the teacher's voice.
+            # This is a product warning about syncing — consequential, and the
+            # learner has to act on it — and the scene already carries the
+            # teacher's own line about the lesson. A teacher who narrates the
+            # backend's problems stops being a teacher.
+            scene.components.insert(0, ExampleBlock(
+                component_id="classroom-recovery/sync",
                 title=runner.copy(context, "Save this step before leaving", "Guarda este paso antes de salir"),
                 content=warning, language_code=context.language_code,
             ))
