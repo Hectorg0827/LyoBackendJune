@@ -92,7 +92,12 @@ class LearningPlan(StrictModel):
         # question is shown or evidence is filed under a misleading key.
         keys = [re.sub(r"[^a-z0-9]+", "_", unit.title.strip().lower()).strip("_")[:80]
                 for unit in self.units]
-        if any(key in ("", "general", "current_concept") for key in keys) or len(set(keys)) != len(keys):
+        generic = {
+            "", "general", "current_concept", "intro", "introduction", "overview",
+            "basics", "fundamentals", "summary", "recap", "practice", "review",
+        }
+        if (any(key in generic or re.fullmatch(r"(?:unit|lesson|part|step|module|skill)_?\d+", key)
+                for key in keys) or len(set(keys)) != len(keys)):
             raise ValueError("A pathway must name distinct, specific skills")
         return self
 

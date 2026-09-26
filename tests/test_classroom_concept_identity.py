@@ -57,6 +57,14 @@ def test_plan_titles_that_collapse_to_one_record_are_rejected():
         LearningPlan(units=units)
 
 
+@pytest.mark.parametrize("title", ["Introduction", "Basics", "Part 1", "Lesson 2"])
+def test_generic_titles_cannot_merge_unrelated_subjects_records(title):
+    unit = LearningUnit(title=title, objective="Compare equal parts of the same whole.",
+                        material="Equal parts of the same whole can be compared with a common denominator.")
+    with pytest.raises(ValueError, match="distinct, specific skills"):
+        LearningPlan(units=[unit])
+
+
 @pytest.mark.asyncio
 async def test_old_session_and_authored_lesson_keep_their_canonical_identity():
     teacher = ScriptedTeacher()
