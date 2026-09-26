@@ -86,9 +86,14 @@ class LearningPlan(StrictModel):
 
     @model_validator(mode="after")
     def distinct_units(self):
-        titles = [unit.title.casefold() for unit in self.units]
-        if len(set(titles)) != len(titles):
-            raise ValueError("A pathway must have distinct learning objectives")
+        # The learner record uses the same 80-character slug as Chat. Two
+        # different-looking titles can collapse to one record card after
+        # punctuation removal or truncation, so reject that plan before any
+        # question is shown or evidence is filed under a misleading key.
+        keys = [re.sub(r"[^a-z0-9]+", "_", unit.title.strip().lower()).strip("_")[:80]
+                for unit in self.units]
+        if any(key in ("", "general", "current_concept") for key in keys) or len(set(keys)) != len(keys):
+            raise ValueError("A pathway must name distinct, specific skills")
         return self
 
 
@@ -290,6 +295,9 @@ class GuidedState(StrictModel):
     lesson_id: str | None = None
     lesson_index: int = 0
     plan: LearningPlan
+    # A saved session keeps its evidence identity across worker/device
+    # reconnects. Old sessions default to the original topic/lesson key.
+    record_scope: Literal["topic", "unit"] = "topic"
     unit_index: int = 0
     remaining_units: list[int] = Field(default_factory=list)
     completed: list[int] = Field(default_factory=list)
@@ -490,7 +498,9 @@ class AdaptiveTeacher:
             try:
                 plan = await self.generate(
                     "You are Lyo's curriculum planner. Build a progressive pathway of distinct, "
-                    "small skills, prerequisites first, with exactly unit_count units. Ground an "
+                    "small skills, prerequisites first, with exactly unit_count units. Give each "
+                    "unit a short, specific skill title suitable for a durable learner record, "
+                    "not a generic heading such as Introduction or Part 1. Ground an "
                     "authored lesson in the supplied material; for a free topic provide accurate "
                     "foundational teaching. Each material field must TEACH the skill with a worked "
                     "example, not announce what will be taught. Give each unit 1–3 specific "

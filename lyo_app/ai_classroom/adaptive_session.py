@@ -23,6 +23,19 @@ class AdaptiveSession:
     def __init__(self, teacher: AdaptiveTeacher):
         self.teacher = teacher
 
+    @staticmethod
+    def record_concept(context, state: GuidedState) -> str | None:
+        """Keep the question's public identity and committed evidence together.
+
+        An authored lesson or a focused study-plan session keeps the canonical
+        lesson/topic key that readiness and Chat already read. A free-topic
+        pathway explicitly opened for unit records names each distinct skill
+        from its saved plan. The scope is immutable for the life of that plan.
+        """
+        if state.record_scope == "unit":
+            return state.unit.title
+        return context.lesson_title or context.topic
+
     async def run(self, context, progress: dict[str, Any], trigger) -> Scene:
         data = trigger.action_data or {}
         intent = data.get("action_intent")
@@ -33,6 +46,9 @@ class AdaptiveSession:
         if state is None:
             if intent == ActionIntent.UPDATE_ACTIVITY:
                 return self.unavailable(context, None)
+            progress.setdefault(
+                "record_scope", "unit" if data.get("record_scope") == "unit" else "topic"
+            )
             try:
                 plan = await self.teacher.plan(context)
             except TeachingUnavailable:
@@ -42,6 +58,8 @@ class AdaptiveSession:
                 owner=context.user_id, course_id=context.course_id,
                 lesson_id=context.lesson_id, lesson_index=context.lesson_index,
                 plan=plan, mode=context.classroom_mode.value,
+                record_scope=("unit" if progress["record_scope"] == "unit"
+                              and not context.lesson_title and len(plan.units) > 1 else "topic"),
                 remaining_units=list(range(1, len(plan.units))),
                 challenge_requested=challenge,
                 phase="independent" if challenge else "diagnose",
@@ -197,7 +215,7 @@ class AdaptiveSession:
                 if result.verdict in ("correct", "incorrect"):
                     state.outbox.append(dict(
                         event_id=pending.id, user_id=context.user_id,
-                        concept_id=context.lesson_title or context.topic,
+                        concept_id=self.record_concept(context, state),
                         correct=result.verdict == "correct",
                         evidence_type=None if choice else "application" if pending.task.kind == "apply" else "explanation",
                         hints_used=pending.hints_used, hint_level=pending.hint_level,
@@ -390,7 +408,7 @@ class AdaptiveSession:
         if result.verdict == "correct" and unaided and pending.task.response_format != "choice":
             state.outbox.append(dict(
                 event_id=pending.id, user_id=context.user_id,
-                concept_id=context.lesson_title or context.topic,
+                concept_id=self.record_concept(context, state),
                 correct=True, evidence_type="explanation",
                 hints_used=0, hint_level=None, misconception=None,
                 response_time_ms=response_time_ms,
@@ -499,6 +517,12 @@ class AdaptiveSession:
 
     @staticmethod
     def save(progress, state, scene):
+        if state.record_scope == "unit":
+            # Scene start travels on every reconnect. List the skills already
+            # encountered so the record panel can place their evidence in this
+            # class even when a new device has no earlier board history.
+            indices = sorted(set([*state.completed, *state.skipped, state.unit_index]))
+            scene.metadata.target_concepts = [state.plan.units[i].title for i in indices]
         state.scene = scene.model_dump(mode="json")
         progress["guided_state"] = state.model_dump(mode="json")
         return scene
@@ -602,12 +626,12 @@ class AdaptiveSession:
                                     feedback_correct=None if evidence_bearing or not o.correct else o.feedback,
                                     feedback_incorrect=None if evidence_bearing or o.correct else o.feedback)
                          for o in task.options],
-                concept_id=context.lesson_title or context.topic, language_code=context.language_code, priority=4,
+                concept_id=self.record_concept(context, state), language_code=context.language_code, priority=4,
             ))
         else:
             components.append(InputField(
                 component_id=pending.id, question=prompt + "\n\n" + task.response_hint, placeholder=task.response_hint,
-                concept_id=context.lesson_title or context.topic,
+                concept_id=self.record_concept(context, state),
                 evidence_type="application" if task.kind == "apply" else "explanation",
                 min_words=1, max_words=200, expected_keywords=[], source_attributions=context.source_attributions[:5],
                 language_code=context.language_code, priority=4,
