@@ -10,14 +10,30 @@ import asyncio
 import json
 import logging
 import re
+from time import perf_counter
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from prometheus_client import Counter, Histogram
 
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 
 logger = logging.getLogger(__name__)
+
+# Provider calls dominate the wait between a learner answering and the next
+# teaching move. These labels have bounded values and contain no learner text.
+# Token counts are usage, not a dollar estimate: provider prices and input/
+# output rates must be applied to measured usage before claiming a cost.
+classroom_model_seconds = Histogram(
+    "lyo_classroom_model_seconds", "Time spent generating a classroom model response",
+    ["operation", "provider", "outcome"],
+    buckets=(0.25, 0.5, 1, 2, 4, 8, 15, 30, 45, 60),
+)
+classroom_model_tokens = Counter(
+    "lyo_classroom_model_tokens_total", "Reported tokens used by classroom model calls",
+    ["operation", "provider"],
+)
 
 
 class TeachingUnavailable(RuntimeError):
@@ -404,34 +420,55 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         providers.append(rejected_provider)
     # Internal routing metadata never becomes part of learner/model context.
     public_payload = {key: value for key, value in payload.items() if not key.startswith("_")}
-    result = await asyncio.wait_for(
-        ai_resilience_manager.chat_completion(
-            messages=[
-                {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
-                 + json.dumps(contract, ensure_ascii=False)},
-                {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
-            ],
-            provider_order=providers,
-            max_tokens=4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000,
-            temperature=0.1 if schema is Evaluation else 0.6,
-            response_format={"type": "json_object"},
-            use_cache=False,
-        ),
-        timeout=45,
-    )
-    if result.get("is_fallback"):
-        raise TeachingUnavailable("Providers unavailable")
-    responding_provider = result.get("model_used") or result.get("model")
-    if responding_provider in configured_providers:
-        # Validation happens below. If it rejects this response, the caller's
-        # next attempt sees which provider actually produced it—even when the
-        # resilience layer skipped/fell through earlier providers.
-        payload["_rejected_provider"] = responding_provider
-    raw = (result.get("content") or "").strip()
-    first, last = raw.find("{"), raw.rfind("}")
-    if first < 0 or last <= first:
-        raise TeachingUnavailable("Missing structured response")
-    return schema.model_validate_json(raw[first:last + 1])
+    started = perf_counter()
+    result = None
+    outcome = "error"
+    try:
+        result = await asyncio.wait_for(
+            ai_resilience_manager.chat_completion(
+                messages=[
+                    {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
+                     + json.dumps(contract, ensure_ascii=False)},
+                    {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
+                ],
+                provider_order=providers,
+                max_tokens=4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000,
+                temperature=0.1 if schema is Evaluation else 0.6,
+                response_format={"type": "json_object"},
+                use_cache=False,
+            ),
+            timeout=45,
+        )
+        if result.get("is_fallback"):
+            raise TeachingUnavailable("Providers unavailable")
+        responding_provider = result.get("model_used") or result.get("model")
+        if responding_provider in configured_providers:
+            # Validation happens below. If it rejects this response, the caller's
+            # next attempt sees which provider actually produced it—even when the
+            # resilience layer skipped/fell through earlier providers.
+            payload["_rejected_provider"] = responding_provider
+        raw = (result.get("content") or "").strip()
+        first, last = raw.find("{"), raw.rfind("}")
+        if first < 0 or last <= first:
+            raise TeachingUnavailable("Missing structured response")
+        response = schema.model_validate_json(raw[first:last + 1])
+        outcome = "success"
+        return response
+    except ValidationError:
+        outcome = "invalid"
+        raise
+    except TeachingUnavailable:
+        outcome = "unavailable"
+        raise
+    finally:
+        operation = schema.__name__
+        metadata = result if isinstance(result, dict) else {}
+        provider = metadata.get("model_used") or metadata.get("model")
+        provider = provider if provider in configured_providers else "unknown"
+        classroom_model_seconds.labels(operation, provider, outcome).observe(perf_counter() - started)
+        tokens = metadata.get("tokens_used")
+        if provider != "unknown" and isinstance(tokens, int) and tokens > 0:
+            classroom_model_tokens.labels(operation, provider).inc(tokens)
 
 
 class AdaptiveTeacher:
