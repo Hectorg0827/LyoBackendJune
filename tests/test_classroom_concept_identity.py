@@ -10,8 +10,10 @@ from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     _SESSION_PROGRESS, SceneLifecycleEngine, SceneCompiler, ContextSnapshot, session_concept,
 )
-from lyo_app.ai_classroom.sdui_models import InputField
-from tests.adaptive_fixtures import context, engine, seed
+from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField
+from lyo_app.ai_classroom.adaptive_teaching import LearningPlan, LearningUnit, GuidedState, TeachingUnavailable
+from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+from tests.adaptive_fixtures import action, context, engine, seed, plan, ScriptedTeacher
 
 PLAN_CONCEPT = "square_roots"
 SESSION = "concept-identity-session"
@@ -45,6 +47,88 @@ def test_concepts_share_the_same_key_as_chat_and_never_use_placeholders(name, ex
 def test_a_graph_concept_id_is_preserved():
     concept = str(uuid.uuid4())
     assert SceneLifecycleEngine._canonical_concept_id(concept) == concept
+
+
+def test_plan_titles_that_collapse_to_one_record_are_rejected():
+    units = [LearningUnit(title=title, objective="Compare equal parts of the same whole.",
+                          material="Equal parts of the same whole can be compared with a common denominator.")
+             for title in ("Square Roots!", "Square Roots?")]
+    with pytest.raises(ValueError, match="distinct, specific skills"):
+        LearningPlan(units=units)
+
+
+def test_non_latin_skills_remain_distinct_in_plans_and_evidence():
+    units = [LearningUnit(title=title, objective="Learn to compare a particular type of concept.",
+                          material="Each concept has specific criteria and a worked example of the comparison.")
+             for title in ("客户细分", "顧客分析")]
+    LearningPlan(units=units)
+    assert slugify_skill(units[0].title) != slugify_skill(units[1].title)
+    with pytest.raises(ValueError, match="distinct, specific skills"):
+        LearningPlan(units=[units[0], units[0].model_copy(update={"title": "客户细分！"})])
+
+
+@pytest.mark.parametrize("title", ["Introduction", "Basics", "Part 1", "Lesson 2"])
+def test_generic_titles_cannot_merge_unrelated_subjects_records(title):
+    unit = LearningUnit(title=title, objective="Compare equal parts of the same whole.",
+                        material="Equal parts of the same whole can be compared with a common denominator.")
+    with pytest.raises(ValueError, match="distinct, specific skills"):
+        LearningPlan(units=[unit])
+
+
+@pytest.mark.asyncio
+async def test_old_session_and_authored_lesson_keep_their_canonical_identity():
+    teacher = ScriptedTeacher()
+    runner = AdaptiveSession(teacher)
+    ctx = context(topic="Mathematics", lesson_title="Quadratic equations", total_lessons=3)
+    progress = {}
+    await runner.run(ctx, progress, action(welcome=True, record_scope="unit"))
+    state = GuidedState.model_validate(progress["guided_state"])
+    assert state.record_scope == "topic"
+    assert AdaptiveSession.record_concept(ctx, state) == "Quadratic equations"
+
+    # Stored states written before this field existed resume as topic scoped;
+    # changing devices cannot silently retarget the next answer.
+    old = state.model_dump()
+    old.pop("record_scope")
+    restored = GuidedState.model_validate(old)
+    assert restored.record_scope == "topic"
+    assert AdaptiveSession.record_concept(ctx, restored) == "Quadratic equations"
+
+
+@pytest.mark.asyncio
+async def test_reconnecting_without_scope_preserves_unit_identity_and_server_class_labels():
+    teacher = ScriptedTeacher()
+    runner = AdaptiveSession(teacher)
+    ctx = context(target_duration_minutes=24)
+    progress = {}
+    await runner.run(ctx, progress, action(welcome=True, record_scope="unit"))
+    first = GuidedState.model_validate(progress["guided_state"])
+    assert first.scene["metadata"]["target_concepts"] == ["Fraction skill 1"]
+
+    # A resumed session is restored from JSON on another device, which may
+    # connect without the entry URL's record_scope query parameter.
+    progress["guided_state"] = json.loads(json.dumps(progress["guided_state"]))
+    await runner.run(ctx, progress, action(welcome=True))
+    resumed = GuidedState.model_validate(progress["guided_state"])
+    assert resumed.record_scope == "unit"
+    assert resumed.pending.id == first.pending.id
+    assert AdaptiveSession.record_concept(ctx, resumed) == "Fraction skill 1"
+
+
+@pytest.mark.asyncio
+async def test_first_plan_failure_does_not_drop_unit_scope_on_retry():
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = [TeachingUnavailable("provider unavailable"), plan()]
+    runner = AdaptiveSession(teacher)
+    ctx = context(target_duration_minutes=24)
+    progress = {}
+    await runner.run(ctx, progress, action(welcome=True, record_scope="unit"))
+    assert "guided_state" not in progress
+    assert progress["record_scope"] == "unit"
+    await runner.run(ctx, progress, action(ActionIntent.RETRY))
+    state = GuidedState.model_validate(progress["guided_state"])
+    assert state.record_scope == "unit"
+    assert AdaptiveSession.record_concept(ctx, state) == "Fraction skill 1"
 
 
 @pytest.mark.asyncio

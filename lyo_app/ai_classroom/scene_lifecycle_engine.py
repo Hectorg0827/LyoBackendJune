@@ -377,6 +377,12 @@ class ContextAssembler:
         # Apply explicit launch identity before resolving content. A lesson URL
         # must open that authored lesson, rather than silently teaching index 0.
         action_data = trigger.action_data or {}
+        # A failed first plan has no GuidedState yet. Keep the requested
+        # filing scope across Retry and worker restarts so a transient model
+        # error does not silently turn a free-topic pathway into a topic card.
+        progress.setdefault(
+            "record_scope", "unit" if action_data.get("record_scope") == "unit" else "topic"
+        )
         explicit_course_id = action_data.get("course_id")
         explicit_lesson_id = action_data.get("lesson_id")
         if explicit_course_id:
@@ -2501,6 +2507,7 @@ class SceneLifecycleEngine:
                 "hint_levels": dict(progress.get("hint_levels", {})),
                 "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
+                "record_scope": progress.get("record_scope", "topic"),
                 "difficulty": progress.get("difficulty"),
                 "classroom_mode": progress.get("classroom_mode", ClassroomMode.SOLO.value),
                 "target_duration_minutes": progress.get("target_duration_minutes", 10),

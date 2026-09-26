@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
@@ -214,7 +215,22 @@ def slugify_skill(topic: str) -> str:
     "Square Roots!" and "square roots" must land on the same LearnerMastery row
     or nothing ever accumulates.
     """
-    slug = re.sub(r"[^a-z0-9]+", "_", (topic or "").strip().lower()).strip("_")
+    # Existing Latin keys, including accented titles, must keep matching the
+    # already-applied skillkey migration. That migration discarded accents;
+    # changing their keys here would hide existing mastery. A non-Latin script
+    # previously collapsed to "general" (or a stray ASCII digit); preserve
+    # those letters for new records so distinct skills can be filed at all.
+    normalized = unicodedata.normalize("NFKC", (topic or "").strip())
+    has_non_latin = any(
+        unicodedata.category(char)[0] in ("L", "N")
+        and not char.isascii()
+        and not unicodedata.name(char, "").startswith("LATIN")
+        for char in normalized
+    )
+    if has_non_latin:
+        slug = re.sub(r"[\W_]+", "_", normalized.casefold(), flags=re.UNICODE).strip("_")
+    else:
+        slug = re.sub(r"[^a-z0-9]+", "_", (topic or "").strip().lower()).strip("_")
     return slug[:80] or "general"
 
 

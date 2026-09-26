@@ -115,7 +115,8 @@ class Learner:
         return ANSWERS.get(self.profile, "Half: fewer equal cuts of the same whole leave more on each piece.")
 
 
-async def simulate(profile: str, minutes: int = 8, max_turns: int = 80):
+async def simulate(profile: str, minutes: int = 8, max_turns: int = 80,
+                   record_scope: str = "topic"):
     """Run one learner through a session and return the moves the teacher chose.
 
     Eight minutes is one unit, which is the right size for comparing profiles:
@@ -127,9 +128,10 @@ async def simulate(profile: str, minutes: int = 8, max_turns: int = 80):
     teacher = ScriptedTeacher()
     teacher.evaluate.side_effect = learner.evaluator()
     runner, progress, ctx = AdaptiveSession(teacher), {}, context(target_duration_minutes=minutes)
-    await runner.run(ctx, progress, action(welcome=True))
+    await runner.run(ctx, progress, action(welcome=True, record_scope=record_scope))
 
     beats_in_a_row, worst_run = 1, 1
+    question_concepts = []
     for _ in range(max_turns):
         current = state(progress)
         if current.path_done:
@@ -156,6 +158,9 @@ async def simulate(profile: str, minutes: int = 8, max_turns: int = 80):
             continue
 
         if current.pending is not None:
+            question = next(c for c in current.scene["components"]
+                            if c["type"] in ("InputField", "QuizCard"))
+            question_concepts.append(question["concept_id"])
             choice = current.pending.task.response_format == "choice"
             payload = ({"selected_option_id": learner.option_for_next_verdict()} if choice
                        else {"response": learner.answer_text()})
@@ -170,6 +175,7 @@ async def simulate(profile: str, minutes: int = 8, max_turns: int = 80):
     return dict(
         profile=profile, moves=moves, state=state(progress), units=len(state(progress).plan.units),
         answered=learner.answered, worst_teacher_run=worst_run, teacher=teacher,
+        question_concepts=question_concepts,
     )
 
 
@@ -357,3 +363,22 @@ async def test_a_full_session_probes_each_unit_once_and_ends_with_demonstrations
 
     # And no stretch of the session was a lecture.
     assert run["worst_teacher_run"] <= 4, run["worst_teacher_run"]
+
+
+@pytest.mark.asyncio
+async def test_free_topic_pathway_files_each_units_questions_and_evidence_on_that_skill():
+    run = await simulate("ADVANCED", minutes=24, record_scope="unit")
+    titles = [unit.title for unit in run["state"].plan.units]
+    assert len(titles) == 3
+    assert set(run["question_concepts"]) == set(titles)
+    assert set(e["concept_id"] for e in run["state"].outbox) == set(titles)
+    assert run["state"].record_scope == "unit"
+    assert run["state"].scene["metadata"]["target_concepts"] == titles
+
+
+@pytest.mark.asyncio
+async def test_focused_topic_keeps_the_plan_key_across_multiple_units():
+    run = await simulate("ADVANCED", minutes=24)
+    assert run["state"].record_scope == "topic"
+    assert set(run["question_concepts"]) == {"Fractions"}
+    assert set(e["concept_id"] for e in run["state"].outbox) == {"Fractions"}

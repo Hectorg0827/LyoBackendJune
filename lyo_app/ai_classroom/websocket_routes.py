@@ -363,6 +363,7 @@ async def _send_welcome_scene(
         course_id_from_query = connection.websocket.query_params.get("course_id")
         lesson_id_from_query = connection.websocket.query_params.get("lesson_id")
         objective_from_query = connection.websocket.query_params.get("objective")
+        record_scope_from_query = connection.websocket.query_params.get("record_scope")
         difficulty_from_query = connection.websocket.query_params.get("difficulty")
         mode_from_query = connection.websocket.query_params.get("mode") or "solo"
         duration_from_query = connection.websocket.query_params.get("duration_minutes") or "10"
@@ -421,6 +422,7 @@ async def _send_welcome_scene(
                     connection.websocket.query_params.get("client_contract_version") or "1"
                 ),
                 "objective": objective_from_query,
+                "record_scope": record_scope_from_query,
                 "difficulty": difficulty_from_query,
                 "mode": mode_from_query,
                 "duration_minutes": duration_from_query,
