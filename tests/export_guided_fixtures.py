@@ -45,6 +45,30 @@ class FixtureTeacher(ScriptedTeacher):
     def _turn(self, ctx, state, move, learner_input=""):
         turn = super()._turn(ctx, state, move, learner_input)
         tools = visuals()
+        if move == "diagnose":
+            # The opening move of every unit: one line of framing, then a real
+            # question, before anything has been taught. Clients render it with
+            # the components they already have, which is why adding it needed
+            # no client change — only this fixture regenerated.
+            return LearningTurn(
+                speech="Before I explain anything, I want to see where you're starting from.",
+                board_title="Two identical pizzas",
+                board_content="One pizza is cut into 2 equal pieces. The other is cut into 3.",
+                # No visual, deliberately. The comparison tool's own description
+                # says half is larger *because* there are fewer equal pieces —
+                # which is the answer to the question below it. A probe's board
+                # may carry the situation; it may not carry the reasoning.
+                task=LearningTask(
+                    kind="diagnose", response_format="short_answer",
+                    target_index=state.target_index,
+                    scenario="Two identical pizzas sit on the table. One is cut into 2 equal pieces, the other into 3.",
+                    question="Take one piece from each. Which piece is bigger, and how can you tell?",
+                    response_hint="Name the bigger piece and give your reason.",
+                    criteria=["Identifies the piece from the pizza cut into 2 as larger",
+                              "Reasons from the number of equal pieces"],
+                    example_answer="The piece from the pizza cut in 2, because fewer cuts leave more on each piece.",
+                ),
+            )
         if move == "orient":
             return LearningTurn(
                 speech="Imagine sharing a snack with a friend. Today we'll find which fraction gives the larger piece. I'll show you one example, then we'll try the next step together.",
@@ -79,7 +103,11 @@ async def export():
     teacher, ctx, progress = FixtureTeacher(), context(target_duration_minutes=8), {}
     runner = AdaptiveSession(teacher)
     scenes = {}
-    scenes["orientation"] = await runner.run(ctx, progress, action(welcome=True))
+    scenes["diagnostic"] = await runner.run(ctx, progress, action(welcome=True))
+    # Declining the probe is the "starts from zero" route, and the one that
+    # reaches the modelled example these fixtures already covered.
+    scenes["orientation"] = await runner.run(ctx, progress, action(
+        ActionIntent.SKIP_QUESTION, progress["guided_state"]["pending"]["id"]))
     for name in ("model_1", "model_2", "guided"):
         scenes[name] = await runner.run(ctx, progress, action(component_id=progress["guided_state"]["step_id"]))
     for name, response in (("faded", "One half"), ("independent", "4"), ("summary", "1/3")):

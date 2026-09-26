@@ -14,7 +14,7 @@ from lyo_app.ai_classroom.sdui_models import ActionIntent, Scene, SceneType, Tea
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager
 from lyo_app.ai_classroom.websocket_routes import _register_lifecycle_handlers
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
-from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation, advance_to_task
+from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation, decline_probe, past_the_probe
 from tests.export_guided_fixtures import FixtureTeacher
 
 
@@ -28,6 +28,9 @@ async def test_database_restores_an_explored_model_without_an_interaction_or_new
         progress, ctx = {}, context(target_duration_minutes=8)
         runner = AdaptiveSession(FixtureTeacher())
         await runner.run(ctx, progress, action(welcome=True))
+        # Only the probe is passed: exploring a visual has to happen while the
+        # modelled example is still on screen.
+        await decline_probe(runner, progress, ctx)
         activity_id = "visual:" + progress["guided_state"]["step_id"]
         change = action(ActionIntent.UPDATE_ACTIVITY, activity_id, answer_data={"value": 3})
         expected = await runner.run(ctx, progress, change)
@@ -59,7 +62,7 @@ async def test_database_restores_the_exact_partial_question_and_rejects_another_
         teacher, progress, ctx = ScriptedTeacher(), {}, context()
         runner = AdaptiveSession(teacher)
         await runner.run(ctx, progress, action(welcome=True))
-        await advance_to_task(runner, progress, ctx)
+        await past_the_probe(runner, progress, ctx)
         pending = progress["guided_state"]["pending"]
         await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, pending["id"],
                                               answer_data={"selected_option_id": "a"}))
