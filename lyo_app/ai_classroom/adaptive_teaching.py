@@ -17,6 +17,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from prometheus_client import Counter, Histogram
 
+from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 
 logger = logging.getLogger(__name__)
@@ -90,8 +91,7 @@ class LearningPlan(StrictModel):
         # different-looking titles can collapse to one record card after
         # punctuation removal or truncation, so reject that plan before any
         # question is shown or evidence is filed under a misleading key.
-        keys = [re.sub(r"[^a-z0-9]+", "_", unit.title.strip().lower()).strip("_")[:80]
-                for unit in self.units]
+        keys = [slugify_skill(unit.title) for unit in self.units]
         generic = {
             "", "general", "current_concept", "intro", "introduction", "overview",
             "basics", "fundamentals", "summary", "recap", "practice", "review",

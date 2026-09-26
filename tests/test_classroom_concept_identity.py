@@ -57,6 +57,16 @@ def test_plan_titles_that_collapse_to_one_record_are_rejected():
         LearningPlan(units=units)
 
 
+def test_non_latin_skills_remain_distinct_in_plans_and_evidence():
+    units = [LearningUnit(title=title, objective="Learn to compare a particular type of concept.",
+                          material="Each concept has specific criteria and a worked example of the comparison.")
+             for title in ("客户细分", "顧客分析")]
+    LearningPlan(units=units)
+    assert slugify_skill(units[0].title) != slugify_skill(units[1].title)
+    with pytest.raises(ValueError, match="distinct, specific skills"):
+        LearningPlan(units=[units[0], units[0].model_copy(update={"title": "客户细分！"})])
+
+
 @pytest.mark.parametrize("title", ["Introduction", "Basics", "Part 1", "Lesson 2"])
 def test_generic_titles_cannot_merge_unrelated_subjects_records(title):
     unit = LearningUnit(title=title, objective="Compare equal parts of the same whole.",

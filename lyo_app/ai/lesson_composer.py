@@ -214,7 +214,13 @@ def slugify_skill(topic: str) -> str:
     "Square Roots!" and "square roots" must land on the same LearnerMastery row
     or nothing ever accumulates.
     """
-    slug = re.sub(r"[^a-z0-9]+", "_", (topic or "").strip().lower()).strip("_")
+    # Preserve letters and numbers from every language. The old ASCII-only
+    # pattern collapsed unrelated non-Latin skills to the same "general" row.
+    # Classroom plan validation uses this exact function before filing records.
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKC", (topic or "").strip()).casefold()
+    slug = re.sub(r"[\W_]+", "_", normalized, flags=re.UNICODE).strip("_")
     return slug[:80] or "general"
 
 
