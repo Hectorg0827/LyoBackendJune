@@ -54,7 +54,10 @@ class FixtureTeacher(ScriptedTeacher):
                 speech="Before I explain anything, I want to see where you're starting from.",
                 board_title="Two identical pizzas",
                 board_content="One pizza is cut into 2 equal pieces. The other is cut into 3.",
-                visual=tools[1],
+                # No visual, deliberately. The comparison tool's own description
+                # says half is larger *because* there are fewer equal pieces —
+                # which is the answer to the question below it. A probe's board
+                # may carry the situation; it may not carry the reasoning.
                 task=LearningTask(
                     kind="diagnose", response_format="short_answer",
                     target_index=state.target_index,

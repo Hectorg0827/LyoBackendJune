@@ -34,7 +34,14 @@ def task(kind="apply", number=1):
         example_answer="One half: the same pizza is divided into fewer equal pieces.",
         options=[
             TaskOption(id="a", label="One half", correct=True, feedback="Fewer equal pieces make each piece larger."),
-            TaskOption(id="b", label="One third", correct=False, feedback="More equal cuts make smaller pieces, not bigger ones."),
+            # The distractor names the misconception choosing it would reveal.
+            # The authoring contract demands that of every distractor, and
+            # without it here nothing in the suite exercised the choice path's
+            # misconception capture — a tapped wrong answer reached the learner
+            # record with no account of the error in it.
+            TaskOption(id="b", label="One third", correct=False,
+                       feedback="More equal cuts make smaller pieces, not bigger ones.",
+                       misconception="more_pieces_means_more_each"),
         ] if kind == "choose" else [],
     )
 
