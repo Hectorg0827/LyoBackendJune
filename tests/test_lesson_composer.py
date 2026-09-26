@@ -29,6 +29,7 @@ def test_slugify_gives_one_stable_skill_id_per_concept():
     assert slugify_skill("  ") == "general"
     assert len(slugify_skill("x" * 200)) <= 80
     assert slugify_skill("Square__Roots") == "square_roots"
+    assert slugify_skill("Ünicode Things") == "nicode_things"
     assert slugify_skill("客户细分") == "客户细分"
     assert slugify_skill("顧客分析") == "顧客分析"
     assert slugify_skill("가격 비교") == "가격_비교"
