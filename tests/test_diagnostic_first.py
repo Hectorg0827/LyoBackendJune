@@ -26,7 +26,7 @@ from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, ClassroomMode, CTAButton, InputField, QuizCard, TeacherMessage,
 )
 from tests.adaptive_fixtures import (
-    ScriptedTeacher, action, advance_to_task, context, decline_probe, evaluation,
+    ScriptedTeacher, action, advance_to_task, context, decline_probe, evaluation, task,
 )
 
 
@@ -60,7 +60,8 @@ async def test_a_unit_opens_with_a_question_and_no_worked_example():
     assert current.presentation is None and not current.diagnosed
     # One teacher line, then the floor is the learner's.
     assert len([c for c in opening.components if isinstance(c, TeacherMessage)]) == 1
-    assert any(isinstance(c, (InputField, QuizCard)) for c in opening.components)
+    assert any(isinstance(c, InputField) for c in opening.components)
+    assert not any(isinstance(c, QuizCard) for c in opening.components)
     # Nothing offers to move on without an answer: a Continue here would make
     # the question optional, which is the monologue with an extra step.
     assert not any(isinstance(c, CTAButton) and c.action_intent == ActionIntent.CONTINUE
@@ -82,7 +83,8 @@ def test_a_probe_may_not_carry_a_lesson_or_grade_taught_work():
         scenario="Two identical pizzas are cut into 2 and 3 equal pieces.",
         question="Which single piece is bigger, and how can you tell?",
         response_hint="Name the piece and give a reason.",
-        criteria=["Identifies the piece from the pizza cut into two"],
+        criteria=["Identifies the piece from the pizza cut into two",
+                  "Explains why fewer equal cuts make a bigger piece"],
         example_answer="The one from the pizza cut in two.")
 
     assert DiagnosticTurn(**beat, task=probe).task.kind == "diagnose"
@@ -96,6 +98,15 @@ def test_a_probe_may_not_carry_a_lesson_or_grade_taught_work():
     # `apply` grades taught work. Nothing has been taught.
     with pytest.raises(ValueError):
         DiagnosticTurn(**beat, task=probe.model_copy(update={"kind": "apply"}))
+
+    # A lucky tap cannot prove that the learner can explain a skill. The
+    # diagnostic's strongest evidence needs their own words and reasoning.
+    with pytest.raises(ValueError):
+        DiagnosticTurn(**beat, task=probe.model_copy(update={"response_format": "choice"}))
+    with pytest.raises(ValueError):
+        DiagnosticTurn(**beat, task=probe.model_copy(update={"response_format": "completion"}))
+    with pytest.raises(ValueError):
+        DiagnosticTurn(**beat, task=probe.model_copy(update={"criteria": ["Names the bigger piece"]}))
 
     # A probe that lectures before asking is the thing it replaced.
     with pytest.raises(ValueError):
@@ -203,6 +214,27 @@ async def test_a_correct_probe_records_performance_before_instruction_not_transf
     assert evidence[0]["correct"] is True
     # Unaided: no hint damping, because no help was available to take.
     assert evidence[0]["hints_used"] == 0 and evidence[0]["hint_level"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_saved_choice_probe_cannot_leak_its_key_or_award_explanation():
+    # A session authored before the format restriction can still be resumed.
+    # The client must not receive its key, and a correct tap only justifies
+    # guided practice, never an explanation rung or a skipped example.
+    _, runner, progress, ctx, _ = await open_session()
+    current = state(progress)
+    current.pending.task = task("choose").model_copy(update={"kind": "diagnose"})
+    scene = runner.checkpoint(ctx, current)
+    runner.save(progress, current, scene)
+    card = next(c for c in scene.components if isinstance(c, QuizCard))
+    assert all(option.is_correct is None for option in card.options)
+    assert all(option.feedback_correct is None and option.feedback_incorrect is None
+               for option in card.options)
+
+    await answer_probe(runner, progress, ctx)
+    current = state(progress)
+    assert current.phase == "guided" and current.pending.phase == "guided"
+    assert current.outbox == []
 
 
 @pytest.mark.asyncio

@@ -200,6 +200,10 @@ class DiagnosticTurn(LearningTurn):
     def probes_rather_than_tests(self):
         if self.task.kind not in ("diagnose", "predict"):
             raise ValueError("A diagnostic probes prior knowledge; it does not grade taught work")
+        if self.task.response_format != "short_answer":
+            raise ValueError("A diagnostic needs the learner's own judgement and reason")
+        if len(self.task.criteria) < 2:
+            raise ValueError("Check the learner's decision and the reasoning behind it separately")
         if len(self.speech.split()) > 45:
             raise ValueError("Frame the probe briefly, then hand the floor to the learner")
         return self
@@ -495,8 +499,11 @@ class AdaptiveTeacher:
                     "a teaching beat is not automatically a test. Each speech is 20–55 words. "
                     "Board content is a concrete example, comparison, equation or short steps "
                     "that remain visible beside the learner's task. Keep one useful goal. "
-                    "For move=diagnose: demonstration=[], kind=diagnose or predict, and any "
-                    "response_format. Teach NOTHING yet. Speech is at most 45 words: say what "
+                    "For move=diagnose: demonstration=[], kind=diagnose or predict, "
+                    "response_format=short_answer. Ask for the learner's judgement AND reason "
+                    "in their own words; a choice or one-word completion cannot establish that "
+                    "they can explain the skill. Give two separate criteria: the decision and "
+                    "the reasoning behind it. Teach NOTHING yet. Speech is at most 45 words: say what "
                     "the unit is about in one line, then ask one concrete question that reveals "
                     "whether the learner can already do the practice_target. Use a real, specific "
                     "situation with all needed data — never 'what do you know about X'. A learner "
@@ -508,7 +515,7 @@ class AdaptiveTeacher:
                     "the answer, do not preview the method, and do not promise a grade. Write "
                     "criteria for what a learner who ALREADY has this skill would say. "
                     "For move=orient: task=null. Introduce a relevant situation and a clear "
-                    "achievable goal; do not ask a knowledge test. Supply 2–4 demonstration beats "
+                    "achievable goal; do not ask a knowledge test. Supply 2–3 demonstration beats "
                     "that model ONE complete worked example, explaining the reason for each step. "
                     "Each beat builds on the same example, with all necessary context on its board. "
                     "The learner will advance those beats one at a time. "

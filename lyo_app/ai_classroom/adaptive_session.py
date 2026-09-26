@@ -365,10 +365,9 @@ class AdaptiveSession:
           own words and the named misconception in hand, so the explanation
           can address what they actually said.
 
-        Evidence is written only for a correct, unaided probe, and it is the
-        strongest thing this engine can record: performance before
-        instruction. It is filed as `explanation`, never `transfer`, because
-        transfer is defined relative to something taught and nothing was.
+        Evidence is written only for a correct, unaided open-answer probe.
+        The learner's own reasoning before instruction earns `explanation`,
+        never `transfer`, which is defined relative to something taught.
 
         An incorrect probe writes **no** evidence rather than a zero. "Measured
         at zero on a skill never taught" is a claim about the learner that the
@@ -384,7 +383,11 @@ class AdaptiveSession:
                    response_format=pending.task.response_format, response=response,
                    misconception=result.misconception)
 
-        if result.verdict == "correct" and unaided:
+        # A legacy choice probe can still be resumed from a saved session.
+        # Picking the right option is recognition, not an explanation, even
+        # when the server grades the tap correctly. It cannot skip modelling
+        # or create the strongest pre-instruction evidence.
+        if result.verdict == "correct" and unaided and pending.task.response_format != "choice":
             state.outbox.append(dict(
                 event_id=pending.id, user_id=context.user_id,
                 concept_id=context.lesson_title or context.topic,
@@ -400,7 +403,9 @@ class AdaptiveSession:
             state.phase = "faded"
             return "faded"
 
-        if result.verdict == "partial":
+        if result.verdict == "partial" or (
+            result.verdict == "correct" and pending.task.response_format == "choice"
+        ):
             state.phase = "guided"
             return "guided"
 
@@ -569,20 +574,19 @@ class AdaptiveSession:
             components.append(ExampleBlock(title=self.copy(context, "Your reasoning so far", "Tu razonamiento hasta ahora"),
                                             content="\n\n".join(pending.answers)[-1400:], language_code=context.language_code, priority=3))
         prompt = task.scenario + "\n\n" + (pending.follow_up if follow_up else task.question)
-        evidence_bearing = task.kind == "apply"
+        # A saved choice diagnostic remains possible from an earlier session.
+        # Its key must not travel to the client, even though this branch now
+        # authors new probes as open answers with a reason.
+        evidence_bearing = task.kind == "apply" or pending.phase == "diagnose"
         if task.response_format == "choice":
             components.append(QuizCard(
                 component_id=pending.id, question=prompt,
                 # Clients colour a tap instantly from the option's own
                 # correctness rather than waiting for the server, which is
-                # worth the round-trip it saves on practice. It cannot be
-                # worth it here: an `apply` checkpoint is the one whose
-                # correct answer banks application evidence and closes a
-                # unit, and shipping its key puts the answer in the page
-                # for anyone who opens it. Sending a key the learner can
-                # read, for the one question that decides what the product
-                # believes they can do, buys a few hundred milliseconds and
-                # costs the record its meaning.
+                # worth the round-trip it saves on ordinary practice. It
+                # cannot be worth it for an `apply` checkpoint or a saved
+                # diagnostic: the answer key would already be on the device
+                # when the learner is asked to demonstrate the skill.
                 #
                 # This was harmless while `choose` was the only kind that
                 # could be answered by tapping — recognition never closed a
