@@ -34,7 +34,14 @@ def task(kind="apply", number=1):
         example_answer="One half: the same pizza is divided into fewer equal pieces.",
         options=[
             TaskOption(id="a", label="One half", correct=True, feedback="Fewer equal pieces make each piece larger."),
-            TaskOption(id="b", label="One third", correct=False, feedback="More equal cuts make smaller pieces, not bigger ones."),
+            # The distractor names the misconception choosing it would reveal.
+            # The authoring contract demands that of every distractor, and
+            # without it here nothing in the suite exercised the choice path's
+            # misconception capture — a tapped wrong answer reached the learner
+            # record with no account of the error in it.
+            TaskOption(id="b", label="One third", correct=False,
+                       feedback="More equal cuts make smaller pieces, not bigger ones.",
+                       misconception="more_pieces_means_more_each"),
         ] if kind == "choose" else [],
     )
 
@@ -55,11 +62,12 @@ class ScriptedTeacher:
 
     def _turn(self, context, state, move, learner_input=""):
         self.number += 1
-        teaching = move not in ("guided", "faded", "independent")
+        teaching = move not in ("diagnose", "guided", "faded", "independent")
         kind = "choose" if move == "guided" else "apply" if move == "independent" else "diagnose"
         checkpoint = None if teaching else task(kind, self.number).model_copy(update={
             "target_index": state.target_index,
-            "response_format": "choice" if kind == "choose" else "completion" if move == "faded" else "short_answer",
+            "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
+            else "short_answer",
         })
         beats = [TeachingBeat(speech=speech, board_title="One example, step by step", board_content=board)
                  for speech, board in [
@@ -67,11 +75,34 @@ class ScriptedTeacher:
                      ("Cut the second into three equal pieces. Each third is smaller than a half because there are more equal pieces.", "Same whole: 1/2 > 1/3. More equal cuts make smaller pieces."),
                  ]] if move in ("orient", "reteach", "prerequisite") else []
         return LearningTurn(
-            speech="Equal pieces are comparable when they come from the same whole. More cuts make each piece smaller.",
+            speech=("Before I explain anything, show me where you are."
+                    if move == "diagnose" else
+                    "Equal pieces are comparable when they come from the same whole. "
+                    "More cuts make each piece smaller."),
             board_title="Equal-sized wholes",
             board_content="One bar cut into 4 equal pieces has larger pieces than an identical bar cut into 8.",
             task=checkpoint, demonstration=beats,
         )
+
+
+async def decline_probe(runner, progress, ctx):
+    """Pass on the unit's opening diagnostic, leaving the teaching at its first beat.
+
+    Every unit now opens by finding out what the learner can already do.
+    Declining that probe is the "starts from zero" route, which is what tests
+    about modelling, support and recovery are written against. Calling it
+    explicitly keeps the probe visible in each test rather than hiding it
+    inside a helper that claims to do something else.
+    """
+    pending = (progress.get("guided_state") or {}).get("pending")
+    if pending and pending.get("phase") == "diagnose":
+        await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, pending["id"]))
+
+
+async def past_the_probe(runner, progress, ctx):
+    """`decline_probe`, then advance through the teaching to the first checkpoint."""
+    await decline_probe(runner, progress, ctx)
+    await advance_to_task(runner, progress, ctx)
 
 
 async def advance_to_task(runner, progress, ctx):
@@ -84,6 +115,21 @@ async def advance_engine(instance):
     progress = _SESSION_PROGRESS[session_progress_key("42", "fractions")]
     while progress["guided_state"].get("presentation"):
         await instance.process_trigger(action(component_id=progress["guided_state"]["step_id"]))
+
+
+async def engine_decline_probe(instance):
+    """`decline_probe`, for a test driving the whole engine rather than the session."""
+    from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
+    progress = _SESSION_PROGRESS[session_progress_key("42", "fractions")]
+    pending = (progress.get("guided_state") or {}).get("pending")
+    if pending and pending.get("phase") == "diagnose":
+        await instance.process_trigger(action(ActionIntent.SKIP_QUESTION, pending["id"]))
+
+
+async def engine_past_the_probe(instance):
+    """`past_the_probe`, for a test driving the whole engine rather than the session."""
+    await engine_decline_probe(instance)
+    await advance_engine(instance)
 
 
 def action(intent=ActionIntent.CONTINUE, component_id=None, **data):

@@ -15,7 +15,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
 from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField, QuizCard, Scene, TeacherMessage
-from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task, advance_to_task, advance_engine
+from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task, advance_to_task, advance_engine, engine_past_the_probe, past_the_probe
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +84,7 @@ async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
 @pytest.mark.asyncio
 async def test_partial_answer_gets_one_targeted_follow_up_and_keeps_previous_reasoning():
     teacher, runner, progress, ctx, _ = await start()
+    await past_the_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     teacher.evaluate.return_value = evaluation("partial", feedback="One half is the larger piece.",
                                               follow_up="Why does cutting the same pizza fewer times make a bigger piece?")
@@ -105,6 +106,7 @@ async def test_partial_answer_gets_one_targeted_follow_up_and_keeps_previous_rea
 @pytest.mark.asyncio
 async def test_incorrect_answer_gets_different_example_then_a_fresh_check():
     teacher, runner, progress, ctx, first = await start()
+    await past_the_probe(runner, progress, ctx)
     original = state(progress).pending.id
     scene = await answer(runner, progress, ctx, option="b")
     assert teacher.turn.await_args.args[2] == "reteach"
@@ -118,16 +120,28 @@ async def test_incorrect_answer_gets_different_example_then_a_fresh_check():
     assert state(progress).pending.task.response_format == "choice"
 
 
+async def to_practice(runner, progress, ctx):
+    """Get from a fresh unit's opening probe to its first practice checkpoint."""
+    if state(progress).pending and state(progress).pending.phase == "diagnose":
+        await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, state(progress).pending.id))
+    await advance_to_task(runner, progress, ctx)
+
+
 @pytest.mark.asyncio
 async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
     _, runner, progress, ctx, _ = await start()
     await runner.run(ctx, progress, action(ActionIntent.REQUEST_HINT, state(progress).pending.id))
     assert not state(progress).outbox
+    # Wanting help on the opening probe is a finding, not a failure: it starts
+    # the teaching and must not mark the skill for review the way skipping
+    # practice does.
+    assert state(progress).skipped == [] and state(progress).diagnosed
+    await advance_to_task(runner, progress, ctx)
     for _ in range(3):
-        await advance_to_task(runner, progress, ctx)
         await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, state(progress).pending.id))
         if not state(progress).path_done:
             await runner.run(ctx, progress, action())
+            await to_practice(runner, progress, ctx)
     assert state(progress).completed == [] and state(progress).skipped == [0, 1, 2]
     await runner.run(ctx, progress, action(ActionIntent.REQUEST_REVIEW))
     assert state(progress).unit_index == 0 and not state(progress).path_done
@@ -161,6 +175,7 @@ async def test_resume_restores_identical_scene_and_question_without_new_generati
 @pytest.mark.asyncio
 async def test_duplicate_or_stale_answer_cannot_grade_another_checkpoint():
     teacher, runner, progress, ctx, _ = await start()
+    await past_the_probe(runner, progress, ctx)
     old_id = state(progress).pending.id
     next_scene = await answer(runner, progress, ctx)
     duplicate = await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, old_id,
@@ -322,7 +337,7 @@ async def test_engine_serializes_duplicate_submissions_and_saves_before_evidence
     instance._persist_session_progress.side_effect = persisted
     instance._record_adaptive_evidence = AsyncMock(side_effect=recorded)
     await instance.process_trigger(action(welcome=True))
-    await advance_engine(instance)
+    await engine_past_the_probe(instance)
     pending_id = state(_SESSION_PROGRESS[session_progress_key("42", "fractions")]).pending.id
     await asyncio.gather(*[instance.handle_quiz_submission("42", "fractions", pending_id, "a") for _ in range(2)])
     instance._record_adaptive_evidence.assert_awaited_once()
@@ -333,13 +348,15 @@ async def test_save_failure_never_emits_evidence_or_promises_resume():
     instance = engine()
     instance._record_adaptive_evidence = AsyncMock(return_value=True)
     await instance.process_trigger(action(welcome=True))
-    await advance_engine(instance)
+    await engine_past_the_probe(instance)
     pending_id = state(_SESSION_PROGRESS[session_progress_key("42", "fractions")]).pending.id
     instance._persist_session_progress.return_value = False
     scene = await instance.handle_quiz_submission("42", "fractions", pending_id, "a")
     instance._record_adaptive_evidence.assert_not_awaited()
-    assert "has not synced" in " ".join(c.text for c in scene.components if isinstance(c, TeacherMessage))
+    # The warning reaches the learner on the board, beside the control that
+    # acts on it — and not in the teacher's voice, which is narrated aloud.
     assert any("has not synced" in getattr(c, "content", "") for c in scene.components)
+    assert "has not synced" not in " ".join(c.text for c in scene.components if isinstance(c, TeacherMessage))
     assert any(getattr(c, "action_intent", None) == ActionIntent.RETRY for c in scene.components)
     instance._persist_session_progress.return_value = True
     await instance.process_trigger(action(welcome=True))

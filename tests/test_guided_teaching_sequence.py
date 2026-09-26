@@ -11,9 +11,12 @@ from pydantic import ValidationError
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState, LearningUnit, PendingTask, TeachingUnavailable
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
-from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, InputField, QuizCard
+from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, InputField, QuizCard, Scene, TeacherMessage
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
-from tests.adaptive_fixtures import ScriptedTeacher, action, advance_to_task, context, engine, evaluation, plan
+from tests.adaptive_fixtures import (
+    ScriptedTeacher, action, advance_to_task, context, decline_probe, engine,
+    engine_decline_probe, evaluation, plan,
+)
 
 
 def state(progress):
@@ -28,6 +31,18 @@ def fraction_visual():
 
 
 async def begin(teacher=None):
+    """Open a session and pass on its diagnostic, landing on the modelled example.
+
+    Everything below this helper is about what happens once teaching starts.
+    `open_session` is the same thing without the probe declined, for the one
+    test whose subject is the opening itself.
+    """
+    teacher, runner, progress, ctx, _ = await open_session(teacher)
+    await decline_probe(runner, progress, ctx)
+    return teacher, runner, progress, ctx, Scene.model_validate(state(progress).scene)
+
+
+async def open_session(teacher=None):
     teacher = teacher or ScriptedTeacher()
     runner, progress, ctx = AdaptiveSession(teacher), {}, context(target_duration_minutes=8)
     scene = await runner.run(ctx, progress, action(welcome=True))
@@ -44,10 +59,21 @@ async def respond(runner, progress, ctx, option="a"):
 
 
 @pytest.mark.asyncio
-async def test_first_visit_models_a_complete_example_before_any_question_and_double_taps_do_not_skip():
-    teacher, runner, progress, ctx, opening = await begin()
+async def test_first_visit_asks_before_it_teaches_then_models_a_complete_example():
+    teacher, runner, progress, ctx, probe = await open_session()
+    # The unit opens by finding out where the learner is. Nothing has been
+    # taught, so there is a question and no worked example to walk through.
+    assert state(progress).phase == "diagnose" and state(progress).pending.phase == "diagnose"
+    assert any(isinstance(c, InputField) for c in probe.components)
+    assert state(progress).presentation is None and not state(progress).diagnosed
+    assert len([c for c in probe.components if isinstance(c, TeacherMessage)]) == 1
+
+    # Passing on it is an answer: teach from the start.
+    await decline_probe(runner, progress, ctx)
+    opening = Scene.model_validate(state(progress).scene)
     assert not any(isinstance(c, (InputField, QuizCard)) for c in opening.components)
     assert state(progress).phase == "orient" and state(progress).pending is None
+    assert state(progress).diagnosed and state(progress).skipped == []
     for index in range(2):
         tap = action(component_id=state(progress).step_id)
         scene = await runner.run(ctx, progress, tap)
@@ -56,7 +82,9 @@ async def test_first_visit_models_a_complete_example_before_any_question_and_dou
         assert not any(isinstance(c, (InputField, QuizCard)) for c in scene.components)
         replay = await runner.run(ctx, progress, tap)
         assert replay == scene and state(progress).beat_index == index
-    assert teacher.turn.await_count == 1  # No new content generation is needed for each prepared beat.
+    # The probe and the modelled example: two generations for the whole
+    # opening, and none at all for each prepared beat the learner advances.
+    assert teacher.turn.await_count == 2
     scene = await runner.run(ctx, progress, action(component_id=state(progress).step_id))
     assert state(progress).phase == "guided"
     assert any(isinstance(c, QuizCard) for c in scene.components)
@@ -116,7 +144,9 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     # application problem, which `test_independent_practice_demands_application`
     # holds separately.
     assert state(progress).completed == [0] and state(progress).path_done
-    assert len(state(progress).practice_events) == 5
+    # The opening probe, then five practice events across the unit.
+    assert [e["kind"] for e in state(progress).practice_events].count("diagnostic") == 1
+    assert len(state(progress).practice_events) == 6
 
 
 @pytest.mark.asyncio
@@ -172,7 +202,10 @@ async def test_visual_manipulation_persists_with_same_scene_and_creates_no_evide
     assert updated.scene_id == opening.scene_id
     assert state(progress).presentation.visual.value == 3
     assert state(progress).step_id == before.step_id and state(progress).beat_index == -1
-    assert state(progress).pending is None and state(progress).outbox == [] and state(progress).practice_events == []
+    # Moving a teaching visual is exploration, not an answer: no evidence and
+    # no graded response. The one recorded event is the declined opening probe.
+    assert state(progress).pending is None and state(progress).outbox == []
+    assert [e["kind"] for e in state(progress).practice_events] == ["diagnostic"]
     assert [c.component_id for c in updated.components] == [c.component_id for c in opening.components]
     restored = json.loads(json.dumps(progress))
     replay = await AdaptiveSession(ScriptedTeacher()).run(ctx, restored, action(welcome=True))
@@ -193,6 +226,7 @@ async def test_visual_save_uses_existing_persistence_without_replaying_audio_or_
     teacher.turn.side_effect = lambda *args: teacher._turn(*args).model_copy(update={"visual": fraction_visual()})
     instance.websocket_manager = SimpleNamespace(stream_scene_to_session=AsyncMock())
     await instance.process_trigger(action(welcome=True))
+    await engine_decline_probe(instance)
     instance.websocket_manager.stream_scene_to_session.reset_mock()
     progress = _SESSION_PROGRESS[session_progress_key("42", "fractions")]
     await instance.process_trigger(action(ActionIntent.UPDATE_ACTIVITY, "visual:" + state(progress).step_id, answer_data={"value": 2}))

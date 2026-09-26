@@ -9,10 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningTurn, TeachingUnavailable
 from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine
-from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, ExampleBlock, QuizCard, Scene
+from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, ExampleBlock, QuizCard, Scene, TeacherMessage
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
-from tests.adaptive_fixtures import ScriptedTeacher, action, advance_to_task, context, evaluation, plan
+from tests.adaptive_fixtures import (
+    ScriptedTeacher, action, advance_to_task, context, decline_probe, evaluation, plan,
+)
 
 
 def current(progress):
@@ -25,8 +27,16 @@ def retry(scene):
 
 
 async def final_example(teacher):
+    """Open a session, pass on its diagnostic, and walk the modelled example to its end.
+
+    Recovery is about what happens to work already done, so every test here
+    starts from a learner who has been taught something. Declining the opening
+    probe is the route that reaches the teaching.
+    """
     runner, progress, ctx = AdaptiveSession(teacher), {}, context(target_duration_minutes=8)
-    scene = await runner.run(ctx, progress, action(welcome=True))
+    await runner.run(ctx, progress, action(welcome=True))
+    await decline_probe(runner, progress, ctx)
+    scene = Scene.model_validate(current(progress).scene)
     while current(progress).beat_index + 1 < len(current(progress).presentation.demonstration):
         scene = await runner.run(ctx, progress, action(component_id=current(progress).step_id))
     return runner, progress, ctx, scene
@@ -235,9 +245,12 @@ async def test_repeated_difficulty_allows_progress_and_returns_to_teaching_on_re
         await advance_to_task(runner, progress, ctx)
     assert current(progress).unit_done and current(progress).skipped == [0]
     assert current(progress).completed == [] and not current(progress).independent_application
-    # Continuing goes to the next teaching goal without inventing success.
+    # Continuing goes to the next teaching goal without inventing success, and
+    # that goal opens by finding out where the learner is rather than lecturing.
     await runner.run(ctx, progress, action(component_id=current(progress).step_id))
-    assert current(progress).unit_index == 1 and current(progress).phase == "orient"
+    assert current(progress).unit_index == 1 and current(progress).phase == "diagnose"
+    assert not current(progress).diagnosed
+    await decline_probe(runner, progress, ctx)
     await advance_to_task(runner, progress, ctx)
     pending = current(progress).pending
     await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, pending.id))
@@ -248,3 +261,47 @@ async def test_repeated_difficulty_allows_progress_and_returns_to_teaching_on_re
     assert not current(progress).challenge_requested and not current(progress).completed
     assert not any(isinstance(c, QuizCard) for c in reviewed.components)
     assert all(not event["correct"] for event in current(progress).outbox)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en-US", "es-ES"])
+async def test_a_generation_failure_is_shown_to_the_learner_but_never_spoken_by_the_teacher(language):
+    """The teacher keeps teaching; the screen carries the failure and the retry.
+
+    A learner on a bad connection used to hear "I couldn't prepare the next
+    step" from their teacher, repeatedly — the most-heard line in the product,
+    and an apology for the backend in the voice of the person teaching them.
+
+    The failure still has to be visible: it is what the Retry control is for,
+    and hiding it would leave a learner pressing Continue at a screen that has
+    stopped moving. So it goes where product notices go, on the board next to
+    the control, while the teacher goes on teaching from the material the
+    session already holds.
+    """
+    teacher = ScriptedTeacher()
+    runner, progress, ctx, _ = await final_example(teacher)
+    ctx.language_code = language
+    teacher.turn.side_effect = TeachingUnavailable("providers down")
+
+    scene = await runner.run(ctx, progress, action(component_id=current(progress).step_id))
+
+    spoken = " ".join(c.text for c in scene.components if isinstance(c, TeacherMessage))
+    board = " ".join(getattr(c, "content", "") for c in scene.components)
+    notice = "no se cargó" if language.startswith("es") else "didn't load"
+    paused = "pausa" if language.startswith("es") else "paused"
+
+    # Visible, actionable, and on the board.
+    assert notice in board and paused in board
+    assert any(getattr(c, "action_intent", None) == ActionIntent.RETRY for c in scene.components)
+
+    # Not in the teacher's voice, in either language.
+    assert notice not in spoken and paused not in spoken
+    for apology in ("couldn't prepare", "No pude preparar", "doesn't count as a wrong answer"):
+        assert apology not in spoken
+
+    # The teacher is still teaching: the unit, and the material already taught.
+    assert spoken.strip()
+    assert current(progress).unit.title in spoken or "idea" in spoken.lower()
+
+    # Nothing was graded, lost, or claimed by the failure.
+    assert current(progress).outbox == [] and not current(progress).completed
