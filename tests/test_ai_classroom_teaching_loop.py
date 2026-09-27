@@ -437,7 +437,10 @@ class DurableSkipTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["completed"], [])
         self.assertEqual(state["outbox"], [])
         self.assertTrue(state["unit_done"])
-        self.engine._persist_session_progress.assert_awaited_once()
+        # Skipping writes no correctness, and now owes the learner a revisit:
+        # the unit is queued for spaced review as a failed recall, which is a
+        # second durable write and so a second persist.
+        self.assertEqual(self.engine._persist_session_progress.await_count, 2)
 
     async def test_explicit_continue_advances_after_skip_without_marking_mastery(self):
         from tests.adaptive_fixtures import action

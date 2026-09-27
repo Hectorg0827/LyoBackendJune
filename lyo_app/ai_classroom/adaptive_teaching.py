@@ -409,6 +409,10 @@ class GuidedState(StrictModel):
     # Retain the learner's question across a failed generation and reconnect.
     generation_input: str = ""
     outbox: list[dict[str, Any]] = Field(default_factory=list)
+    # One spaced-review write per unit, drained by the engine like `outbox`.
+    # Retention is the one thing a lesson cannot demonstrate on the day, so it
+    # is the one thing the classroom has to hand to a schedule.
+    review_outbox: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -668,9 +672,12 @@ class AdaptiveTeacher:
                     "For move=faded: demonstration=[], supply a completion, choice or short_answer task "
                     "with most of a related worked example already completed. Ask for ONE missing "
                     "step or result; never a broad explanation. Only the final step is removed. "
-                    "For move=independent: demonstration=[], kind=apply, and any "
-                    "response_format. Ask one fresh problem closely aligned with practised work, "
-                    "with a concise response; avoid an essay. Do not provide its solution. "
+                    "For move=independent: demonstration=[], kind=apply, and response_format "
+                    "short_answer or completion — never choice. This is the checkpoint that "
+                    "closes the unit, and it closes only on an answer the learner produced "
+                    "themselves; a tapped answer cannot close it. Ask one fresh problem closely "
+                    "aligned with practised work, with a concise response; avoid an essay. Do not "
+                    "provide its solution. "
                     "For move=reteach or prerequisite: task=null, supply 1–3 demonstration beats. "
                     "Make the learner's previous answer part of the conversation: acknowledge any "
                     "sound reasoning, name the specific mistaken step using previous_task, "
@@ -742,8 +749,22 @@ class AdaptiveTeacher:
                     # application problem is no easier for being answered from
                     # prepared candidates — provided the distractors are
                     # genuine misconceptions rather than filler.
+                    #
+                    # The one exception is the checkpoint that closes the unit.
+                    # `after_success` will not complete on a tapped answer, so
+                    # offering one there asks a learner to keep answering a
+                    # question that can never finish the lesson.
                     if move == "independent" and turn.task.kind != "apply":
                         raise TeachingContractError("Independent application required")
+                    # The completion gate wants the learner to produce the
+                    # answer, so it refuses a tapped one. Nothing used to stop
+                    # the generator offering a tap here anyway, and then a
+                    # learner could answer correctly for ever without the unit
+                    # ever closing — right every time, told nothing, going
+                    # nowhere. The two rules now agree.
+                    if move == "independent" and turn.task.response_format == "choice":
+                        raise TeachingContractError(
+                            "A unit closes on an answer the learner produced, not one they picked")
                 else:
                     if turn.task is not None:
                         raise TeachingContractError("Model and explain without attaching a graded question")

@@ -238,8 +238,12 @@ async def test_confidence_is_not_evidence_and_a_named_misconception_is_reteaught
     reteach_call = next(c for c in run["teacher"].turn.await_args_list if c.args[2] == "reteach")
     assert reteach_call.args[3] == "One third"
     # And the reteaching is built from the grader's own account of the error,
-    # not from a generic "wrong".
-    assert "smaller" in run["state"].last_feedback or "smaller" in reteach_call.args[1].last_feedback
+    # not from a generic "wrong". The recorded turn is the durable place to
+    # check that: `last_feedback` is retired once the learner has been told it,
+    # so that a line said at the right moment is not repeated four screens
+    # later on top of an unrelated question.
+    assert any("smaller" in (event.get("feedback") or "")
+               for event in run["state"].practice_events)
     # The wrong practice answer is recorded as what it was, with the specific
     # error named so remediation can target it. The wrong *probe* is not
     # recorded at all, so the first thing in the record is the practice answer.

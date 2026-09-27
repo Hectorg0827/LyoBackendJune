@@ -2726,17 +2726,86 @@ class SceneLifecycleEngine:
             return scene
         # A durable outbox closes the crash window between consuming a question
         # and recording evidence. Replaying it is safe by checkpoint event ID.
-        outbox_states = [s for s in [state_data, *progress.get("guided_history", [])]
-                         if s and s.get("outbox")]
-        if outbox_states:
+        snapshots = [s for s in [state_data, *progress.get("guided_history", [])] if s]
+        outbox_states = [s for s in snapshots if s.get("outbox")]
+        # A finished unit also owes the learner a review. Both queues drain
+        # under one persist so a crash cannot lose one and keep the other.
+        review_states = [s for s in snapshots if s.get("review_outbox")]
+        if outbox_states or review_states:
             for snapshot in outbox_states:
                 remaining = []
                 for evidence in snapshot["outbox"]:
                     if not await self._record_adaptive_evidence(**evidence):
                         remaining.append(evidence)
                 snapshot["outbox"] = remaining
+            for snapshot in review_states:
+                remaining = []
+                for review in snapshot["review_outbox"]:
+                    if not await self._schedule_adaptive_review(**review):
+                        remaining.append(review)
+                snapshot["review_outbox"] = remaining
             await self._persist_session_progress(trigger, context, progress, record_interaction=False)
         return scene
+
+    async def _schedule_adaptive_review(self, *, user_id, concept_id, passed,
+                                        decided_at=None, **_ignored) -> bool:
+        """Advance this learner's spaced-review schedule for a finished unit.
+
+        The classroom had no way into the scheduler at all: the only writers
+        were Chat's answer check and the review endpoints, and those endpoints
+        can only update a schedule that already exists. So nothing a learner
+        did here ever became due, and the review queue they were offered stayed
+        empty however many units they finished. This is that missing write, and
+        it goes through `record_review` — the one SM-2 in the product — rather
+        than keeping a second schedule the way the classroom used to.
+
+        Replaying the queue is safe. `decided_at` is the moment the unit was
+        decided, and a schedule already reviewed at or after that moment has
+        had this write applied, so it is skipped rather than advanced twice —
+        which would quietly push the learner's next review further out than
+        their work earned.
+        """
+        from datetime import datetime as _datetime
+
+        concept = self._canonical_concept_id(concept_id)
+        if not concept:
+            return True
+        try:
+            learner_id = int(user_id)
+        except (TypeError, ValueError):
+            return True  # Guests have no durable schedule.
+        try:
+            from lyo_app.personalization.models import SpacedRepetitionSchedule
+            from lyo_app.personalization.service import personalization_engine
+            from lyo_app.personalization.spaced_repetition import (
+                QUALITY_FOR_CORRECT, QUALITY_FOR_INCORRECT)
+
+            decided = None
+            if isinstance(decided_at, str) and decided_at:
+                try:
+                    decided = _datetime.fromisoformat(decided_at)
+                    if decided.tzinfo is not None:
+                        decided = decided.replace(tzinfo=None)
+                except ValueError:
+                    decided = None
+            if decided is not None:
+                existing = (await self.db.execute(select(SpacedRepetitionSchedule).where(
+                    SpacedRepetitionSchedule.user_id == learner_id,
+                    SpacedRepetitionSchedule.item_id == concept,
+                ).limit(1))).scalar_one_or_none()
+                if existing is not None and isinstance(existing.last_review, _datetime) \
+                        and existing.last_review >= decided:
+                    return True
+
+            await personalization_engine.record_review(
+                self.db, learner_id, concept, concept,
+                QUALITY_FOR_CORRECT if passed else QUALITY_FOR_INCORRECT,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Could not schedule classroom review: %s", type(exc).__name__)
+            await self.db.rollback()
+            return False
 
     async def _record_adaptive_evidence(self, **evidence) -> bool:
         """Deduplicate evidence; only use measured response time for legacy DKT."""

@@ -142,6 +142,10 @@ class AdaptiveSession:
                 # pass-or-repeat gate or award unearned completion evidence.
                 if state.unit_index not in state.skipped and state.unit_index not in state.completed:
                     state.skipped.append(state.unit_index)
+                # A skill the learner could not do today is the one most worth
+                # bringing back soonest, so it is scheduled as a failed recall
+                # rather than left out of the schedule altogether.
+                self.schedule_review(context, state, passed=False)
                 self.event(state, "practise_later", phase=state.phase, reason="continued_after_support")
                 state.last_feedback = self.copy(context,
                     "We've worked through the tricky step together. Let's keep learning and revisit this skill for more practice.",
@@ -236,6 +240,7 @@ class AdaptiveSession:
                     state.support_attempts = 0
                     if self.after_success(state, pending):
                         state.pending = None
+                        self.schedule_review(context, state, passed=True)
                         return self.save(progress, state, self.summary(context, state))
                     move = state.phase
                 elif result.verdict == "clarify":
@@ -274,6 +279,7 @@ class AdaptiveSession:
             else:
                 if state.unit_index not in state.skipped and state.unit_index not in state.completed:
                     state.skipped.append(state.unit_index)
+                self.schedule_review(context, state, passed=False)
                 self.event(state, "practise_later", phase=state.phase)
                 state.pending = None
                 self.finish_unit(state)
@@ -349,7 +355,7 @@ class AdaptiveSession:
             # A probe that somehow arrived without a question is an
             # orientation, not a modelling step: there is nothing to model yet.
             state.phase = "orient" if move in ("orient", "diagnose") else "model"
-            return self.save(progress, state, self.presentation_scene(context, state))
+            return self.save(progress, state, self.delivered(state, self.presentation_scene(context, state)))
 
         state.presentation = None
         if move == "diagnose":
@@ -370,7 +376,26 @@ class AdaptiveSession:
         state.task_kinds = [*state.task_kinds, turn.task.kind][-8:]
         state.recent_questions = [*state.recent_questions, normalize_text(turn.task.scenario + " " + turn.task.question)][-12:]
         state.next_move = phase
-        return self.save(progress, state, self.checkpoint(context, state))
+        return self.save(progress, state, self.delivered(state, self.checkpoint(context, state)))
+
+    @staticmethod
+    def delivered(state, scene):
+        """Retire a feedback line once the learner has actually been told it.
+
+        `last_feedback` was written when the answer was graded and read by
+        whichever screen came next, but nothing ever cleared it — so it was
+        read again by the screen after that. A learner who tapped "I'm not sure
+        yet" was told "let's build it from the start", sat through the whole
+        worked example, and then met their first practice question with the
+        same sentence on top of it. The line is right where it is said and
+        wrong four screens later, when it describes a decision already acted
+        on.
+
+        The rendered scene keeps the text — it is saved with it, so a resume
+        shows the learner what they were shown.
+        """
+        state.last_feedback = ""
+        return scene
 
     def after_diagnostic(self, context, state, pending, result, response,
                          response_time_ms=None, option=None) -> str:
@@ -509,6 +534,37 @@ class AdaptiveSession:
         """
         state.diagnostic_ceiling = None
         state.diagnostic_misconception = ""
+
+    def schedule_review(self, context, state, passed: bool) -> None:
+        """Put this unit's skill into the learner's review schedule, once.
+
+        Spaced retrieval is the difference between a lesson that went well and
+        a skill the learner still has next month, and the classroom never
+        reached the scheduler. Its only writers were Chat's answer check and
+        the review endpoints — which can update a schedule but not create one —
+        so a learner taught here had nothing ever come due, `review_due_items`
+        stayed empty however much they learned, and the summary's "try a fresh
+        example in a later session" was an invitation with no mechanism behind
+        it.
+
+        One write per unit, at the moment the unit's fate is decided. SM-2
+        counts every write as a separate sitting — `next_schedule` advances
+        `repetitions` on each call — so writing once per checkpoint would
+        inflate the interval as though four days had passed inside one lesson.
+
+        The grade is the pass/fail mapping the chat path already uses, not a
+        finer judgement this engine can support: a unit closed by unaided
+        independent application passes, and one filed for more practice fails,
+        which resets the ladder so the skill comes back tomorrow. `hints_used`
+        on the evidence already records how much help it took.
+        """
+        concept = self.record_concept(context, state)
+        if not concept:
+            return
+        state.review_outbox = [*state.review_outbox, dict(
+            user_id=context.user_id, concept_id=concept, passed=passed,
+            decided_at=datetime.now(timezone.utc).isoformat(),
+        )]
 
     @staticmethod
     def after_success(state, pending):

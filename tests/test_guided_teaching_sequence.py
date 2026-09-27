@@ -312,21 +312,68 @@ async def test_independent_practice_demands_application(weaker_kind):
 
 
 @pytest.mark.asyncio
-async def test_an_application_problem_may_be_answered_by_choosing():
-    """The format is free even at the bar: a real application problem answered
-    from genuine competing candidates is still application."""
+async def test_a_feedback_line_is_read_to_the_learner_once():
+    """Said at the right moment, and not again four screens later.
+
+    `last_feedback` was written when the answer was graded and read by whichever
+    screen came next — and never cleared, so the screen after that read it too.
+    A learner who tapped "I'm not sure yet" was told "let's build it from the
+    start", sat through the whole worked example, and then met their first
+    practice question with the same sentence on top of it, describing a decision
+    they had already watched play out.
+    """
+    _, runner, progress, ctx, _ = await open_session()
+    line = "let's build it from the start"
+
+    opening = await runner.run(ctx, progress, action(
+        ActionIntent.SKIP_QUESTION, state(progress).pending.id))
+    assert line in next(c.text for c in opening.components if isinstance(c, TeacherMessage))
+
+    said_again = []
+    for _ in range(4):
+        current = state(progress)
+        if current.presentation is None:
+            break
+        scene = await runner.run(ctx, progress, action(component_id=current.step_id))
+        said_again.append(next((c.text for c in scene.components if isinstance(c, TeacherMessage)), ""))
+
+    assert said_again, "the modelled example should have played"
+    assert not any(line in text for text in said_again), said_again
+    # And the question the example leads to does not reopen with it either.
+    assert any(isinstance(c, QuizCard) for c in Scene.model_validate(state(progress).scene).components)
+    assert state(progress).last_feedback == ""
+
+
+@pytest.mark.asyncio
+async def test_an_application_problem_may_be_answered_by_choosing_except_at_the_bar():
+    """Format stays free through practice, and is not free where the unit closes.
+
+    A real application problem answered from genuine competing candidates is
+    still application, and faded practice may ask for one. The checkpoint that
+    *closes* the unit may not: `after_success` refuses to complete on a tapped
+    answer, because recognising the answer among four is the weakest rung the
+    ladder has. Nothing used to stop the generator offering a tap there anyway,
+    and the two rules disagreeing had a cost a learner pays — answering
+    correctly for ever while the unit silently cannot finish.
+    """
     teacher = ScriptedTeacher()
     _, _, progress, ctx, _ = await begin(teacher)
     current = state(progress)
-    turn = teacher._turn(ctx, current, "independent")
-    assert turn.task.kind == "apply"
     choice = teacher._turn(ctx, current, "guided")
-    turn.task.response_format = "choice"
-    turn.task.options = choice.task.options
-    generate = AsyncMock(return_value=turn)
-    accepted = await AdaptiveTeacher(generate).turn(ctx, current, "independent")
-    assert accepted.task.kind == "apply"
-    assert accepted.task.response_format == "choice"
+
+    faded = teacher._turn(ctx, current, "faded")
+    faded.task.kind = "apply"
+    faded.task.response_format = "choice"
+    faded.task.options = choice.task.options
+    accepted = await AdaptiveTeacher(AsyncMock(return_value=faded)).turn(ctx, current, "faded")
+    assert accepted.task.kind == "apply" and accepted.task.response_format == "choice"
+
+    closing = teacher._turn(ctx, current, "independent")
+    assert closing.task.kind == "apply"
+    closing.task.response_format = "choice"
+    closing.task.options = choice.task.options
+    with pytest.raises(TeachingUnavailable):
+        await AdaptiveTeacher(AsyncMock(return_value=closing)).turn(ctx, current, "independent")
 
 
 @pytest.mark.asyncio
