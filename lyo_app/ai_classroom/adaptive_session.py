@@ -206,6 +206,14 @@ class AdaptiveSession:
                                              response_time_ms=data.get("response_time_ms"),
                                              option=option if choice else None)
             elif result.verdict == "partial" and pending.attempts < 3:
+                # Needing a targeted follow-up on supported practice says the
+                # same thing a wrong answer says about a ceiling that claims
+                # independence, and this branch returns before the withdrawal
+                # below. Without it, a learner who was partly right at guided
+                # practice and then unaided at faded practice would carry the
+                # tap's claim into every remaining component skill, while one
+                # who was simply wrong and recovered the same way would not.
+                self.withdraw_ceiling(state)
                 pending.assisted = pending.extra_help_used = True
                 pending.hints_used += 1
                 pending.hint_level = pending.hint_level or "principle"
@@ -239,11 +247,7 @@ class AdaptiveSession:
                     if state.return_to_checkpoint:
                         pending.id = str(uuid4())
                 else:
-                    # Real work has contradicted the opening tap, so the tap
-                    # stops having a say: from here the unit is paced by what
-                    # the learner does, not by what they picked before it
-                    # taught them anything.
-                    state.diagnostic_ceiling = None
+                    self.withdraw_ceiling(state)
                     state.support_attempts += 1
                     state.target_index = pending.task.target_index
                     state.faded_targets = [i for i in state.faded_targets if i != state.target_index]
@@ -487,6 +491,24 @@ class AdaptiveSession:
         state.diagnostic_misconception = "" if declined else (result.misconception or "")
         state.phase = entry
         return entry
+
+    @staticmethod
+    def withdraw_ceiling(state):
+        """Drop what the opening tap claimed, once the learner's work disagrees.
+
+        Both the ceiling and the misconception behind it come from one tap,
+        taken before the unit had taught anything. The moment the learner's own
+        work says otherwise the tap stops having a say, and the unit is paced by
+        what they do.
+
+        The misconception goes with the ceiling rather than outliving it.
+        `AdaptiveTeacher.turn` sends it on every later payload and the prompt
+        teaches against it by name, so leaving it behind would aim the next
+        reteaching at the error the learner made before the lesson started
+        instead of the one they just made — which is the teacher not listening.
+        """
+        state.diagnostic_ceiling = None
+        state.diagnostic_misconception = ""
 
     @staticmethod
     def after_success(state, pending):

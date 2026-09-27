@@ -35,7 +35,7 @@ from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, ClassroomMode, CTAButton, InputField, QuizCard, TeacherMessage,
 )
 from tests.adaptive_fixtures import (
-    ScriptedTeacher, action, advance_to_task, context, decline_probe, plan, probe,
+    ScriptedTeacher, action, advance_to_task, context, decline_probe, evaluation, plan, probe,
 )
 
 
@@ -323,6 +323,67 @@ async def test_real_work_that_contradicts_the_tap_withdraws_what_it_claimed():
     current = state(progress)
     assert current.diagnostic_ceiling is None
     assert teacher.turn.await_args.args[2] == "reteach"
+
+
+@pytest.mark.asyncio
+async def test_a_partial_answer_withdraws_the_tap_as_surely_as_a_wrong_one():
+    """A follow-up on supported practice contradicts a claim of independence.
+
+    A partial answer returns early to re-ask the question, which is a path that
+    once skipped the withdrawal below. It mattered because the partial marks
+    *that* checkpoint as helped, while the faded checkpoint after it is a fresh
+    one: a learner who was partly right at guided practice and then unaided at
+    faded practice would have carried the tap's claim into every remaining
+    component skill, where one who was simply wrong and recovered identically
+    would not.
+    """
+    teacher = ScriptedTeacher()
+
+    def open_guided(ctx, current, move, learner_input=""):
+        # Format is not pinned to the phase in production, so guided practice
+        # can be an open question — which is the only way a partial verdict
+        # reaches a guided checkpoint at all.
+        turn = teacher._turn(ctx, current, move, learner_input)
+        if move != "guided":
+            return turn
+        return turn.model_copy(update={"task": turn.task.model_copy(update={
+            "response_format": "short_answer", "options": []})})
+
+    teacher.turn.side_effect = open_guided
+    _, runner, progress, ctx, _ = await open_session(teacher)
+    await tap(runner, progress, ctx, "a")
+    assert state(progress).diagnostic_ceiling == "independent"
+
+    teacher.evaluate.return_value = evaluation(
+        "partial", feedback="Half is right; the reason is what is missing.",
+        follow_up="Why does cutting the same pizza fewer times make a bigger piece?")
+    await answer_open(runner, progress, ctx, "Half")
+    current = state(progress)
+    assert current.diagnostic_ceiling is None
+    # The question is still there, and still not a failure.
+    assert current.pending is not None and current.pending.follow_up
+    assert current.outbox == [] and current.support_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_the_next_reteaching_addresses_the_error_the_learner_just_made():
+    """A withdrawn tap takes its misconception with it.
+
+    `diagnostic_misconception` rides every later generation payload, and the
+    prompt teaches against it by name. Left behind after the learner's own work
+    revealed something else, it would aim reteaching at the error they made
+    before the lesson started rather than the one they just made.
+    """
+    teacher, runner, progress, ctx, _ = await open_session()
+    await tap(runner, progress, ctx, "b")
+    assert state(progress).diagnostic_misconception == "more_pieces_means_more_each"
+    await advance_to_task(runner, progress, ctx)
+
+    await tap(runner, progress, ctx, "b")
+    current = state(progress)
+    assert teacher.turn.await_args.args[2] == "reteach"
+    assert current.diagnostic_misconception == "" and current.diagnostic_ceiling is None
+    assert teacher.turn.await_args.args[1].diagnostic_misconception == ""
 
 
 @pytest.mark.asyncio
