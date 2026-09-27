@@ -1,14 +1,17 @@
 """Persistence and authenticated routing, including a real SQLite round trip."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from lyo_app.ai_classroom.adaptive_persistence import learner_session
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningTask
 from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine
 from lyo_app.ai_classroom.sdui_models import ActionIntent, Scene, SceneType, TeacherMessage, UserActionPayload
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager
@@ -16,6 +19,47 @@ from lyo_app.ai_classroom.websocket_routes import _register_lifecycle_handlers
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
 from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation, decline_probe, past_the_probe
 from tests.export_guided_fixtures import FixtureTeacher
+
+
+@pytest.mark.asyncio
+async def test_a_rolled_back_server_can_still_read_a_session_saved_by_a_newer_one():
+    """A new pedagogical field must not be a one-way deploy.
+
+    Every field added to `GuidedState` used to mean that a server rolled back
+    below it could not read sessions saved above it: the payload was refused
+    and the learner's lesson died mid-unit to protect a field that server would
+    not have used anyway. It degrades instead — the unknown field is dropped,
+    the session is read, and teaching continues.
+
+    The generation contracts keep refusing unknown fields, because there the
+    strictness is what makes a model that echoes its input or invents a field
+    get rejected and asked again.
+    """
+    progress, ctx = {}, context(target_duration_minutes=8)
+    runner = AdaptiveSession(ScriptedTeacher())
+    await runner.run(ctx, progress, action(welcome=True))
+    saved = json.loads(json.dumps(progress["guided_state"]))
+    saved["confidence_weighting"] = {"from": "a later release"}
+    saved["review_cadence_days"] = 3
+
+    restored = GuidedState.model_validate(saved)
+    assert restored.owner == "42" and restored.phase == "diagnose"
+    assert restored.pending is not None and restored.pending.phase == "diagnose"
+    assert not hasattr(restored, "confidence_weighting")
+
+    # The learner carries on from the restored session rather than losing it.
+    progress["guided_state"] = saved
+    scene = await AdaptiveSession(ScriptedTeacher()).run(ctx, progress, action(welcome=True))
+    assert any(isinstance(c, TeacherMessage) for c in scene.components)
+
+    with pytest.raises(ValidationError):
+        LearningTask(
+            kind="apply", response_format="short_answer",
+            scenario="Two identical pies are cut into 3 and 6 equal slices.",
+            question="Which slice is larger, and why?", response_hint="Name it and say why.",
+            criteria=["Names the third"], example_answer="A third.",
+            invented_by_the_model="not a field",
+        )
 
 
 @pytest.mark.asyncio

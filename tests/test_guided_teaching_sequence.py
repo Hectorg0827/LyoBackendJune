@@ -133,9 +133,15 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     teacher.plan.return_value = curriculum
     _, runner, progress, ctx, _ = await begin(teacher)
     await advance_to_task(runner, progress, ctx)
-    for phase, target in [("guided", 0), ("faded", 0), ("guided", 1), ("faded", 1), ("independent", 1)]:
+    # The explanation their first success earns sits beside the ladder rather
+    # than on it: it keeps the rung it was asked at and moves the learner
+    # neither up nor down, so faded practice on target 0 still follows.
+    expected = [("guided", 0, False), ("faded", 0, True), ("faded", 0, False),
+                ("guided", 1, False), ("faded", 1, False), ("independent", 1, False)]
+    for phase, target, explaining in expected:
         pending = state(progress).pending
-        assert (pending.phase, pending.task.target_index) == (phase, target)
+        assert (pending.phase, pending.task.target_index,
+                pending.task.kind == "explain") == (phase, target, explaining)
         assert state(progress).completed == []
         await respond(runner, progress, ctx)
     # What this pins is the phase and target sequence, above. It used to also
@@ -146,9 +152,10 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     # application problem, which `test_independent_practice_demands_application`
     # holds separately.
     assert state(progress).completed == [0] and state(progress).path_done
-    # The opening probe, then five practice events across the unit.
+    # The opening probe, then six answers across the unit: five rungs and the
+    # once-per-unit explanation.
     assert [e["kind"] for e in state(progress).practice_events].count("diagnostic") == 1
-    assert len(state(progress).practice_events) == 6
+    assert len(state(progress).practice_events) == 7
 
 
 @pytest.mark.asyncio
@@ -184,10 +191,25 @@ async def test_struggle_reteaches_then_models_a_prerequisite_without_a_pass_or_r
             assert state(progress).pending.task.scenario != old_question
             assert state(progress).phase == "guided"
         else:
+            # The prerequisite is not the end of the unit. A learner who has
+            # just been wrong three times gets one question at the level of the
+            # step just taught, so the last thing that happens is something they
+            # can do — and the unit is already saved for more practice whatever
+            # they answer.
+            closing = state(progress).pending
+            assert closing is not None and state(progress).closing_win_asked
+            assert closing.assisted, "the closing question is supported"
+            assert state(progress).skipped == [] and not state(progress).path_done
+            assert teacher.turn.await_args.args[2] == "closing_win"
+            await respond(runner, progress, ctx, option="a")
             assert state(progress).pending is None
             assert state(progress).skipped == [0] and state(progress).path_done
     assert state(progress).completed == []
-    assert all(not event["correct"] for event in state(progress).outbox)
+    # The closing question was got right, and it still awards no completion:
+    # repeated difficulty is saved for another visit, never converted into a
+    # pass by one easier question.
+    assert [event["correct"] for event in state(progress).outbox] == [False, False, True]
+    assert not state(progress).independent_application
     assert state(progress).unit.objective == "Compare equal parts of the same whole."
 
 

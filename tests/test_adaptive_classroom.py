@@ -56,6 +56,9 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
     # this unit, and it is still only a tap: it starts supported practice.
     await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    # Their first success earns the once-per-unit "why does this work?", which
+    # moves the ladder neither up nor down.
+    await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).completed == []
     assert state(progress).phase == "independent"
@@ -75,6 +78,7 @@ async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
         await tap_probe(runner, progress, ctx)
         await advance_to_task(runner, progress, ctx)
         await answer(runner, progress, ctx)
+        await answer(runner, progress, ctx)   # the explanation
         await answer(runner, progress, ctx)
         scene = await answer(runner, progress, ctx)
         if index < 2:
@@ -157,6 +161,7 @@ async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
     assert state(progress).skipped == [0, 1, 2]
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    await answer(runner, progress, ctx)
     assert state(progress).skipped == [1, 2]
 
 
@@ -215,11 +220,13 @@ async def test_generation_outage_after_grading_never_regrades_the_answer():
     await tap_probe(runner, progress, ctx)
     teacher.turn.side_effect = TeachingUnavailable("offline")
     await answer(runner, progress, ctx)
-    assert state(progress).next_move == "faded"
+    # The move that failed to generate is the one retried, whatever it was —
+    # here the explanation their first success just earned.
+    assert state(progress).next_move == "explain"
     assert len(state(progress).outbox) == 1
     teacher.turn.side_effect = teacher._turn
     await runner.run(ctx, progress, action(ActionIntent.RETRY))
-    assert teacher.turn.await_args.args[2] == "faded"
+    assert teacher.turn.await_args.args[2] == "explain"
     assert len(state(progress).outbox) == 1
 
 
@@ -241,7 +248,8 @@ async def test_questions_keep_existing_client_types_and_allow_short_answers():
     assert "example_answer" not in wire and '"criteria"' not in wire
     field = next(c for c in scene.components if isinstance(c, InputField))
     assert field.min_words == 1 and field.expected_keywords == []
-    assert "give one reason" in field.question  # Expectations remain visible while typing.
+    # Expectations remain visible while typing.
+    assert "in your own words" in field.question
     assert Scene.model_validate_json(wire).scene_id == scene.scene_id
 
 
@@ -403,6 +411,7 @@ async def test_learner_questions_from_each_client_reach_the_teacher(field):
 async def test_a_finished_step_still_answers_the_learners_question():
     teacher, runner, progress, ctx, _ = await start()
     await tap_probe(runner, progress, ctx)
+    await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)

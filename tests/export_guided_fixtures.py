@@ -109,6 +109,22 @@ class FixtureTeacher(ScriptedTeacher):
                     TeachingBeat(speech="Now I compare one piece from each pizza. Cutting the same whole into more pieces makes each piece smaller. So one half is larger than one third.",
                         board_title="Step 2 · Compare one piece", board_content="Same whole: 1/2 > 1/3. Fewer equal pieces → a larger piece.", visual=tools[2]),
                 ])
+        if move == "explain":
+            return LearningTurn(
+                speech="You've got it. Now tell me why it works — that's the part you can take to any fraction, not just this one.",
+                board_title="Say why it works",
+                board_content="You chose the piece from the pizza cut into 2. The whole pizza was the same size in both cases.",
+                visual=tools[1],
+                task=LearningTask(
+                    kind="explain", response_format="short_answer",
+                    target_index=state.target_index,
+                    scenario="You just compared one piece of a pizza cut into 2 with one piece of an identical pizza cut into 3.",
+                    question="Why does cutting the same pizza into more equal pieces make each piece smaller?",
+                    response_hint="Two or three sentences in your own words.",
+                    criteria=["Relates more equal pieces to a smaller share of the same whole"],
+                    example_answer="The pizza stays the same size, so sharing it between more pieces leaves less on each one.",
+                ),
+            )
         if move == "guided":
             turn.visual = tools[1]
             turn.task.question = "Which single piece is larger?"

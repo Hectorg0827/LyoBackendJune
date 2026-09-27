@@ -77,6 +77,18 @@ def probe(number=1):
     )
 
 
+def explanation(number=1):
+    """The once-per-unit "why does this work?", asked after a first success."""
+    return LearningTask(
+        kind="explain", response_format="short_answer",
+        scenario=f"In example {number}, you compared one half with one third of the same pizza.",
+        question="Why does cutting the same pizza into more equal pieces make each piece smaller?",
+        response_hint="Two or three sentences in your own words.",
+        criteria=["Relates more equal pieces to a smaller share of the same whole"],
+        example_answer="The whole stays the same size, so sharing it between more pieces leaves less on each.",
+    )
+
+
 def evaluation(verdict="correct", **overrides):
     fields = dict(verdict=verdict, confidence=0.96, question_clear=True,
                   feedback="You compared pieces from the same whole.")
@@ -93,17 +105,20 @@ class ScriptedTeacher:
 
     def _turn(self, context, state, move, learner_input=""):
         self.number += 1
-        teaching = move not in ("diagnose", "guided", "faded", "independent")
-        kind = "choose" if move == "guided" else "apply" if move == "independent" else "diagnose"
-        checkpoint = None if teaching else (
-            probe(self.number) if move == "diagnose" else task(kind, self.number)
-        ).model_copy(update={
-            "target_index": state.target_index,
-            **({} if move == "diagnose" else {
-                "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
-                else "short_answer",
-            }),
-        })
+        teaching = move not in ("diagnose", "guided", "faded", "independent", "explain", "closing_win")
+        kind = "choose" if move in ("guided", "closing_win") else "apply" if move == "independent" else "diagnose"
+        if move == "explain":
+            checkpoint = explanation(self.number).model_copy(update={"target_index": state.target_index})
+        else:
+            checkpoint = None if teaching else (
+                probe(self.number) if move == "diagnose" else task(kind, self.number)
+            ).model_copy(update={
+                "target_index": state.target_index,
+                **({} if move == "diagnose" else {
+                    "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
+                    else "short_answer",
+                }),
+            })
         beats = [TeachingBeat(speech=speech, board_title="One example, step by step", board_content=board)
                  for speech, board in [
                      ("First compare two identical pizzas. Cut the first into two equal pieces.", "Same-sized pizzas. First pizza: 2 equal pieces. Each is 1/2."),
