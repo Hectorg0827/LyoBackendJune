@@ -46,6 +46,37 @@ def task(kind="apply", number=1):
     )
 
 
+def probe(number=1):
+    """The unit's opening question: one tap, four options, before any teaching.
+
+    Two distractors, each naming the misconception tapping it reveals and how
+    far it leaves the learner from the skill, and one option for saying so
+    when they are not sure. The routing this drives is the whole reason the
+    probe is asked, so a fixture that skipped any of it would let a probe with
+    nothing to diagnose pass the suite.
+    """
+    return LearningTask(
+        kind="diagnose", response_format="choice",
+        scenario=f"In example {number}, two identical pizzas are cut into 2 and 3 equal pieces.",
+        question="Take one piece from each. Which piece is bigger?",
+        response_hint="Choose the piece you think is bigger.",
+        criteria=["Identifies the piece from the pizza cut into 2 as larger"],
+        example_answer="The piece from the pizza cut into 2.",
+        options=[
+            TaskOption(id="a", label="The piece from the pizza cut into 2", correct=True,
+                       feedback="Fewer equal pieces from the same whole leaves more on each one."),
+            TaskOption(id="b", label="The piece from the pizza cut into 3", correct=False,
+                       feedback="More equal cuts make each piece smaller, not bigger.",
+                       misconception="more_pieces_means_more_each", gap="fundamental"),
+            TaskOption(id="c", label="They are the same size", correct=False,
+                       feedback="The wholes match, but the number of equal cuts still decides the piece.",
+                       misconception="equal_wholes_means_equal_pieces", gap="near_miss"),
+            TaskOption(id="d", label="I'm not sure yet", correct=False, abstains=True,
+                       feedback="Declining to guess; teach from the start."),
+        ],
+    )
+
+
 def evaluation(verdict="correct", **overrides):
     fields = dict(verdict=verdict, confidence=0.96, question_clear=True,
                   feedback="You compared pieces from the same whole.")
@@ -64,16 +95,22 @@ class ScriptedTeacher:
         self.number += 1
         teaching = move not in ("diagnose", "guided", "faded", "independent")
         kind = "choose" if move == "guided" else "apply" if move == "independent" else "diagnose"
-        checkpoint = None if teaching else task(kind, self.number).model_copy(update={
+        checkpoint = None if teaching else (
+            probe(self.number) if move == "diagnose" else task(kind, self.number)
+        ).model_copy(update={
             "target_index": state.target_index,
-            "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
-            else "short_answer",
+            **({} if move == "diagnose" else {
+                "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
+                else "short_answer",
+            }),
         })
         beats = [TeachingBeat(speech=speech, board_title="One example, step by step", board_content=board)
                  for speech, board in [
                      ("First compare two identical pizzas. Cut the first into two equal pieces.", "Same-sized pizzas. First pizza: 2 equal pieces. Each is 1/2."),
                      ("Cut the second into three equal pieces. Each third is smaller than a half because there are more equal pieces.", "Same whole: 1/2 > 1/3. More equal cuts make smaller pieces."),
                  ]] if move in ("orient", "reteach", "prerequisite") else []
+        if move == "orient" and state.diagnostic_ceiling == "faded":
+            beats = beats[:1]
         return LearningTurn(
             speech=("Before I explain anything, show me where you are."
                     if move == "diagnose" else
@@ -97,6 +134,21 @@ async def decline_probe(runner, progress, ctx):
     pending = (progress.get("guided_state") or {}).get("pending")
     if pending and pending.get("phase") == "diagnose":
         await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, pending["id"]))
+
+
+async def tap_probe(runner, progress, ctx, option="a"):
+    """Answer the unit's opening probe with one tap, the way a learner does.
+
+    The default taps the correct option, which is the "already has it" route:
+    the unit skips the worked example and starts at supported practice, one
+    rung below what the tap suggests. Pass another id for a distractor or for
+    "not sure yet". Like `decline_probe`, this is called explicitly so the
+    probe stays visible in the test that walks past it.
+    """
+    pending = (progress.get("guided_state") or {}).get("pending")
+    if pending and pending.get("phase") == "diagnose":
+        await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, pending["id"],
+                                               answer_data={"selected_option_id": option}))
 
 
 async def past_the_probe(runner, progress, ctx):

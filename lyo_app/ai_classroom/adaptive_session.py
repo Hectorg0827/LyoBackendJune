@@ -203,7 +203,8 @@ class AdaptiveSession:
                        feedback=result.feedback, misconception=result.misconception)
             if pending.phase == "diagnose":
                 move = self.after_diagnostic(context, state, pending, result, response,
-                                             response_time_ms=data.get("response_time_ms"))
+                                             response_time_ms=data.get("response_time_ms"),
+                                             option=option if choice else None)
             elif result.verdict == "partial" and pending.attempts < 3:
                 pending.assisted = pending.extra_help_used = True
                 pending.hints_used += 1
@@ -238,6 +239,11 @@ class AdaptiveSession:
                     if state.return_to_checkpoint:
                         pending.id = str(uuid4())
                 else:
+                    # Real work has contradicted the opening tap, so the tap
+                    # stops having a say: from here the unit is paced by what
+                    # the learner does, not by what they picked before it
+                    # taught them anything.
+                    state.diagnostic_ceiling = None
                     state.support_attempts += 1
                     state.target_index = pending.task.target_index
                     state.faded_targets = [i for i in state.faded_targets if i != state.target_index]
@@ -362,7 +368,8 @@ class AdaptiveSession:
         state.next_move = phase
         return self.save(progress, state, self.checkpoint(context, state))
 
-    def after_diagnostic(self, context, state, pending, result, response, response_time_ms=None) -> str:
+    def after_diagnostic(self, context, state, pending, result, response,
+                         response_time_ms=None, option=None) -> str:
         """Decide where this unit actually starts, from what the learner just showed.
 
         A diagnostic is the one checkpoint a learner cannot fail. It is asked
@@ -372,20 +379,39 @@ class AdaptiveSession:
         the learner was never given: those all read a wrong answer as a
         setback, and this one is the starting line.
 
-        The three routes are the whole point of asking:
+        The answer sets a ceiling — the furthest this unit may fast-forward to
+        once real work confirms it — and the unit starts one rung *below* that
+        ceiling. Four options cannot tell knowing something apart from picking
+        it: a learner who has never met the skill lands on the right option
+        once in four. So the rung below is where being wrong about the tap is
+        cheap. It costs a learner who did know it one question they will get
+        right, where starting above them drops someone into practice they
+        cannot do, which is what makes an opening question feel like the test
+        it was never meant to be.
 
-        * **Already has it** — skip the worked demonstration entirely and go
-          straight to fading support. Sitting a learner through "watch me" on
-          a skill they just performed is the single fastest way to lose them.
-        * **Has part of it** — begin at guided practice, building on the part
-          they showed rather than starting from zero.
-        * **Does not have it yet** — teach it properly, now with the learner's
-          own words and the named misconception in hand, so the explanation
-          can address what they actually said.
+        | What the learner did | Ceiling | Starts at |
+        | --- | --- | --- |
+        | Tapped the correct option | `independent` | guided practice |
+        | Tapped a near miss | `faded` | the one step it turns on |
+        | Tapped a fundamental misconception | `guided` | the full example, aimed at it |
+        | Tapped "not sure yet" | none | the beginning |
+        | Explained it correctly, unaided (saved session) | `independent` | faded practice |
 
-        Evidence is written only for a correct, unaided open-answer probe.
+        A correct tap and a correct explanation share a ceiling and not an
+        entry point, because a tap has no reasoning behind it to start from:
+        the explanation enters at faded practice as it always has, while the
+        tap buys supported practice and skips the demonstration.
+
+        The ceiling only ever lets the unit move faster than the ladder would;
+        it cannot award a rung, complete a unit, or survive being contradicted
+        by real work.
+
+        Evidence is written only for a correct, unaided *open* answer, which
+        reaches this method from sessions saved before the probe became a tap.
         The learner's own reasoning before instruction earns `explanation`,
-        never `transfer`, which is defined relative to something taught.
+        never `transfer`, which is defined relative to something taught. A tap
+        earns nothing at all: recognising the right answer among four is not a
+        claim worth keeping about anybody, and the record is for claims.
 
         An incorrect probe writes **no** evidence rather than a zero. "Measured
         at zero on a skill never taught" is a claim about the learner that the
@@ -396,16 +422,25 @@ class AdaptiveSession:
         state.support_attempts = 0
         state.return_to_checkpoint = False
         unaided = not pending.assisted and not pending.extra_help_used
+        declined = option is not None and option.abstains
         self.event(state, "diagnostic", phase="diagnose", target=pending.task.target_index,
-                   verdict=result.verdict, unaided=unaided,
+                   verdict="declined" if declined else result.verdict, unaided=unaided,
                    response_format=pending.task.response_format, response=response,
-                   misconception=result.misconception)
+                   misconception=None if declined else result.misconception)
 
-        # A legacy choice probe can still be resumed from a saved session.
-        # Picking the right option is recognition, not an explanation, even
-        # when the server grades the tap correctly. It cannot skip modelling
-        # or create the strongest pre-instruction evidence.
-        if result.verdict == "correct" and unaided and pending.task.response_format != "choice":
+        if declined:
+            # Tapping "I'm not sure yet" is the same answer as passing on the
+            # question, and it is the reason that option exists: a learner who
+            # does not know should not have to guess to get taught.
+            ceiling, entry = None, "orient"
+            state.last_feedback = self.copy(
+                context, "No problem — let's build it from the start.",
+                "Sin problema: vamos a construirlo desde el principio.")
+        elif result.verdict == "correct" and unaided and pending.task.response_format != "choice":
+            # An open answer with its reasoning, from a session saved before
+            # the probe became a tap. Performance before instruction is the
+            # strongest thing this engine can record.
+            ceiling, entry = "independent", "faded"
             state.outbox.append(dict(
                 event_id=pending.id, user_id=context.user_id,
                 concept_id=self.record_concept(context, state),
@@ -418,20 +453,40 @@ class AdaptiveSession:
                 "You already have this, so we won't sit through the basics.",
                 "Ya dominas esto, así que no repasaremos lo básico.",
             )).strip()
-            state.phase = "faded"
-            return "faded"
+        elif result.verdict == "correct":
+            ceiling, entry = "independent", "guided"
+            state.last_feedback = self.copy(
+                context,
+                "That's it. We'll skip the basics and pick this up in practice.",
+                "Exacto. Nos saltamos lo básico y lo retomamos practicando.")
+        elif option is not None and option.gap == "near_miss":
+            ceiling, entry = "faded", "orient"
+            state.last_feedback = self.copy(
+                context,
+                "You have most of this already. Let's look at the step it turns on.",
+                "Ya tienes casi todo esto. Veamos el paso del que depende.")
+        elif option is not None and option.gap == "fundamental":
+            ceiling, entry = "guided", "orient"
+            state.last_feedback = self.copy(
+                context,
+                "Thanks — that tells me where to start. Let's build it up together.",
+                "Gracias: eso me dice dónde empezar. Vamos a construirlo juntos.")
+        elif result.verdict == "partial":
+            # An open answer with part of the skill in it, from a saved
+            # session. Its own words are the place to build from, so the
+            # evaluator's feedback stands and practice starts supported.
+            ceiling, entry = "faded", "guided"
+        else:
+            # Wrong, unclear, or an option saved before distractors named the
+            # gap they reveal: teach it, starting from what the learner said.
+            # `orient` reaches the generator with their answer and this
+            # feedback already in its payload.
+            ceiling, entry = None, "orient"
 
-        if result.verdict == "partial" or (
-            result.verdict == "correct" and pending.task.response_format == "choice"
-        ):
-            state.phase = "guided"
-            return "guided"
-
-        # Wrong, unclear, or a request for help: teach it, starting from what
-        # they said. `orient` reaches the generator with the learner's answer
-        # and this feedback already in its payload.
-        state.phase = "orient"
-        return "orient"
+        state.diagnostic_ceiling = ceiling
+        state.diagnostic_misconception = "" if declined else (result.misconception or "")
+        state.phase = entry
+        return entry
 
     @staticmethod
     def after_success(state, pending):
@@ -445,7 +500,14 @@ class AdaptiveSession:
             missing = [i for i in range(len(state.unit.targets)) if i not in state.faded_targets]
             if missing:
                 state.target_index = missing[0]
-                state.phase = "faded" if missing[0] in state.guided_targets else "guided"
+                # A learner the probe placed at the top of the unit, who has
+                # since shown it on real work, does not go back to supported
+                # practice for each remaining component skill. This is the only
+                # place the opening tap buys back the time it cost, and it buys
+                # it only after unaided faded practice has confirmed the tap.
+                confirmed = state.diagnostic_ceiling == "independent" and not pending.extra_help_used
+                state.phase = ("faded" if missing[0] in state.guided_targets or confirmed
+                               else "guided")
             else:
                 state.phase = "independent"
         elif pending.phase == "independent":
@@ -461,6 +523,8 @@ class AdaptiveSession:
 
     @staticmethod
     def reset_unit(state):
+        state.diagnostic_ceiling = None
+        state.diagnostic_misconception = ""
         state.unit_done = False
         state.successes = 0
         state.independent_application = False
@@ -598,9 +662,10 @@ class AdaptiveSession:
             components.append(ExampleBlock(title=self.copy(context, "Your reasoning so far", "Tu razonamiento hasta ahora"),
                                             content="\n\n".join(pending.answers)[-1400:], language_code=context.language_code, priority=3))
         prompt = task.scenario + "\n\n" + (pending.follow_up if follow_up else task.question)
-        # A saved choice diagnostic remains possible from an earlier session.
-        # Its key must not travel to the client, even though this branch now
-        # authors new probes as open answers with a reason.
+        # The opening probe is a choice, and an `apply` checkpoint may be one.
+        # Neither may ship its key: the probe because the learner is still
+        # deciding what they think, and `apply` because that is the checkpoint
+        # whose answer counts.
         evidence_bearing = task.kind == "apply" or pending.phase == "diagnose"
         if task.response_format == "choice":
             components.append(QuizCard(
@@ -608,9 +673,9 @@ class AdaptiveSession:
                 # Clients colour a tap instantly from the option's own
                 # correctness rather than waiting for the server, which is
                 # worth the round-trip it saves on ordinary practice. It
-                # cannot be worth it for an `apply` checkpoint or a saved
+                # cannot be worth it for an `apply` checkpoint or the opening
                 # diagnostic: the answer key would already be on the device
-                # when the learner is asked to demonstrate the skill.
+                # while the learner is deciding what they think.
                 #
                 # This was harmless while `choose` was the only kind that
                 # could be answered by tapping — recognition never closed a

@@ -15,7 +15,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
 from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField, QuizCard, Scene, TeacherMessage
-from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task, advance_to_task, advance_engine, engine_past_the_probe, past_the_probe
+from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task, advance_to_task, advance_engine, engine_past_the_probe, past_the_probe, tap_probe
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +52,9 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
     teacher, runner, progress, ctx, scene = await start()
     assert len(state(progress).plan.units) == 3
     assert ctx.total_lessons == 0
+    # Tapping the right option on the opening probe is the fast route through
+    # this unit, and it is still only a tap: it starts supported practice.
+    await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).completed == []
@@ -69,6 +72,7 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
 async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
     _, runner, progress, ctx, _ = await start()
     for index in range(3):
+        await tap_probe(runner, progress, ctx)
         await advance_to_task(runner, progress, ctx)
         await answer(runner, progress, ctx)
         await answer(runner, progress, ctx)
@@ -159,6 +163,7 @@ async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
 @pytest.mark.asyncio
 async def test_resume_restores_identical_scene_and_question_without_new_generation():
     teacher, runner, progress, ctx, _ = await start()
+    await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     teacher.evaluate.return_value = evaluation("partial", follow_up="What makes the equal piece larger?")
     before = await answer(runner, progress, ctx, "One half")
@@ -191,6 +196,7 @@ async def test_duplicate_or_stale_answer_cannot_grade_another_checkpoint():
 @pytest.mark.asyncio
 async def test_evaluator_outage_keeps_answer_ungraded_and_retry_reuses_it():
     teacher, runner, progress, ctx, _ = await start()
+    await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     teacher.evaluate.return_value = evaluation("unavailable", confidence=0)
     scene = await answer(runner, progress, ctx, "One half")
@@ -206,6 +212,7 @@ async def test_evaluator_outage_keeps_answer_ungraded_and_retry_reuses_it():
 @pytest.mark.asyncio
 async def test_generation_outage_after_grading_never_regrades_the_answer():
     teacher, runner, progress, ctx, _ = await start()
+    await tap_probe(runner, progress, ctx)
     teacher.turn.side_effect = TeachingUnavailable("offline")
     await answer(runner, progress, ctx)
     assert state(progress).next_move == "faded"
@@ -228,6 +235,7 @@ async def test_provider_outage_does_not_invent_a_generic_quiz():
 @pytest.mark.asyncio
 async def test_questions_keep_existing_client_types_and_allow_short_answers():
     _, runner, progress, ctx, _ = await start()
+    await tap_probe(runner, progress, ctx)
     scene = await answer(runner, progress, ctx)
     wire = json.dumps(scene.model_dump(mode="json"))
     assert "example_answer" not in wire and '"criteria"' not in wire
@@ -394,6 +402,7 @@ async def test_learner_questions_from_each_client_reach_the_teacher(field):
 @pytest.mark.asyncio
 async def test_a_finished_step_still_answers_the_learners_question():
     teacher, runner, progress, ctx, _ = await start()
+    await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)

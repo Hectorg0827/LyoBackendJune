@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
-from lyo_app.ai_classroom.adaptive_teaching import LearningTask, LearningTurn, TeachingBeat
+from lyo_app.ai_classroom.adaptive_teaching import LearningTask, LearningTurn, TaskOption, TeachingBeat
 from lyo_app.ai_classroom.sdui_models import ActionIntent
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 from tests.adaptive_fixtures import ScriptedTeacher, action, context
@@ -46,10 +46,13 @@ class FixtureTeacher(ScriptedTeacher):
         turn = super()._turn(ctx, state, move, learner_input)
         tools = visuals()
         if move == "diagnose":
-            # The opening move of every unit: one line of framing, then a real
-            # question, before anything has been taught. Clients render it with
-            # the components they already have, which is why adding it needed
-            # no client change — only this fixture regenerated.
+            # The opening move of every unit: one line of framing, then one real
+            # question, before anything has been taught. It is a tap, so a
+            # learner who has never met the skill can still answer it, and the
+            # options do the diagnosing: two named misconceptions and somewhere
+            # to say "not sure yet". Clients render it with the components they
+            # already have, which is why this needed no client change — only
+            # this fixture regenerated.
             return LearningTurn(
                 speech="Before I explain anything, I want to see where you're starting from.",
                 board_title="Two identical pizzas",
@@ -59,16 +62,42 @@ class FixtureTeacher(ScriptedTeacher):
                 # which is the answer to the question below it. A probe's board
                 # may carry the situation; it may not carry the reasoning.
                 task=LearningTask(
-                    kind="diagnose", response_format="short_answer",
+                    kind="diagnose", response_format="choice",
                     target_index=state.target_index,
                     scenario="Two identical pizzas sit on the table. One is cut into 2 equal pieces, the other into 3.",
-                    question="Take one piece from each. Which piece is bigger, and how can you tell?",
-                    response_hint="Name the bigger piece and give your reason.",
-                    criteria=["Identifies the piece from the pizza cut into 2 as larger",
-                              "Reasons from the number of equal pieces"],
-                    example_answer="The piece from the pizza cut in 2, because fewer cuts leave more on each piece.",
+                    question="Take one piece from each. Which piece is bigger?",
+                    response_hint="Tap the piece you think is bigger.",
+                    criteria=["Identifies the piece from the pizza cut into 2 as larger"],
+                    example_answer="The piece from the pizza cut into 2.",
+                    # None of this reaches the learner while they are deciding:
+                    # the key and both diagnoses are withheld from the wire.
+                    options=[
+                        TaskOption(id="a", label="The piece from the pizza cut into 3", correct=False,
+                                   feedback="Reads more pieces as more pizza on each piece.",
+                                   misconception="more_pieces_means_more_each", gap="fundamental"),
+                        TaskOption(id="b", label="The piece from the pizza cut into 2", correct=True,
+                                   feedback="Fewer equal pieces from the same whole leaves more on each one."),
+                        TaskOption(id="c", label="They are the same size", correct=False,
+                                   feedback="Has the matching wholes, but not yet what the number of cuts does.",
+                                   misconception="equal_wholes_means_equal_pieces", gap="near_miss"),
+                        TaskOption(id="d", label="I'm not sure yet", correct=False, abstains=True,
+                                   feedback="Declined to guess; teach the skill from the start."),
+                    ],
                 ),
             )
+        if move == "orient" and state.diagnostic_ceiling == "faded":
+            # A near miss on the probe: this learner matched the wholes and
+            # then read the cuts backwards, so they get the step their answer
+            # turned on and not the derivation they half-showed. One beat,
+            # which is what `FocusedModelledTurn` asks the model for.
+            return LearningTurn(
+                speech="You checked the pizzas were the same size, which is the part most people miss. One thing left: what the number of cuts does.",
+                board_title="The step it turns on",
+                board_content="Same whole, more equal cuts, smaller pieces. 2 cuts → 1/2 each. 3 cuts → 1/3 each.",
+                visual=tools[1], demonstration=[
+                    TeachingBeat(speech="Cutting the same pizza into more equal pieces makes every piece smaller. So one half is larger than one third.",
+                        board_title="Step 1 · More cuts, smaller pieces", board_content="Same whole: 1/2 > 1/3. Fewer equal pieces → a larger piece.", visual=tools[2]),
+                ])
         if move == "orient":
             return LearningTurn(
                 speech="Imagine sharing a snack with a friend. Today we'll find which fraction gives the larger piece. I'll show you one example, then we'll try the next step together.",
@@ -99,11 +128,28 @@ class FixtureTeacher(ScriptedTeacher):
         return turn
 
 
+async def near_miss_example():
+    """The compressed example, which is what a near miss on the probe earns.
+
+    A learner who has the idea and slipped on one step is shown that step
+    rather than the whole derivation, so this opening carries one beat where
+    `orientation` carries three. It is its own scene because the difference is
+    the visible one: same components, less of the teacher.
+    """
+    teacher, ctx, progress = FixtureTeacher(), context(target_duration_minutes=8), {}
+    runner = AdaptiveSession(teacher)
+    await runner.run(ctx, progress, action(welcome=True))
+    return await runner.run(ctx, progress, action(
+        ActionIntent.SUBMIT_ANSWER, progress["guided_state"]["pending"]["id"],
+        answer_data={"selected_option_id": "c"}))
+
+
 async def export():
     teacher, ctx, progress = FixtureTeacher(), context(target_duration_minutes=8), {}
     runner = AdaptiveSession(teacher)
     scenes = {}
     scenes["diagnostic"] = await runner.run(ctx, progress, action(welcome=True))
+    scenes["focused_example"] = await near_miss_example()
     # Declining the probe is the "starts from zero" route, and the one that
     # reaches the modelled example these fixtures already covered.
     scenes["orientation"] = await runner.run(ctx, progress, action(
