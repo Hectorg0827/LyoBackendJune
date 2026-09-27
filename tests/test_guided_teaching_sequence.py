@@ -62,9 +62,11 @@ async def respond(runner, progress, ctx, option="a"):
 async def test_first_visit_asks_before_it_teaches_then_models_a_complete_example():
     teacher, runner, progress, ctx, probe = await open_session()
     # The unit opens by finding out where the learner is. Nothing has been
-    # taught, so there is a question and no worked example to walk through.
+    # taught, so there is one question, answerable with one tap, and no worked
+    # example to walk through.
     assert state(progress).phase == "diagnose" and state(progress).pending.phase == "diagnose"
-    assert any(isinstance(c, InputField) for c in probe.components)
+    assert any(isinstance(c, QuizCard) for c in probe.components)
+    assert not any(isinstance(c, InputField) for c in probe.components)
     assert state(progress).presentation is None and not state(progress).diagnosed
     assert len([c for c in probe.components if isinstance(c, TeacherMessage)]) == 1
 

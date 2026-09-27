@@ -86,7 +86,7 @@ class Learner:
         self.answered += 1
         return name
 
-    def option_for_next_verdict(self) -> str:
+    def option_for_next_verdict(self, available=("a", "b")) -> str:
         """Which option to tap so a *choice* checkpoint scores as scripted.
 
         A choice checkpoint is graded from the option's own `correct` flag and
@@ -96,8 +96,18 @@ class Learner:
         and the whole profile quietly becomes a learner who gets everything
         right. That is exactly what happened the first time this ran, and it
         made five of these tests assert the wrong thing while passing four.
+
+        A tap has no "partial": a learner either picks the answer or picks
+        something else. The nearest thing they can do is tap the near miss —
+        the option for having the idea and slipping on one step — which the
+        opening probe offers and an ordinary two-option practice card does not.
         """
-        return "a" if self.next_verdict() == "correct" else "b"
+        name = self.next_verdict()
+        if name == "correct":
+            return "a"
+        if name == "partial" and "c" in available:
+            return "c"
+        return "b"
 
     def evaluator(self):
         def evaluate(context, pending, response):
@@ -162,7 +172,8 @@ async def simulate(profile: str, minutes: int = 8, max_turns: int = 80,
                             if c["type"] in ("InputField", "QuizCard"))
             question_concepts.append(question["concept_id"])
             choice = current.pending.task.response_format == "choice"
-            payload = ({"selected_option_id": learner.option_for_next_verdict()} if choice
+            payload = ({"selected_option_id": learner.option_for_next_verdict(
+                            [o.id for o in current.pending.task.options])} if choice
                        else {"response": learner.answer_text()})
             await runner.run(ctx, progress, action(
                 ActionIntent.SUBMIT_ANSWER if choice else ActionIntent.SUBMIT_TRANSFER,
@@ -189,7 +200,12 @@ async def test_a_learner_who_already_has_the_skill_is_not_taught_it_from_scratch
     # to lose them.
     assert run["moves"][0] == "diagnose"
     assert "orient" not in run["moves"] and "model" not in run["moves"]
-    assert run["moves"][1] == "faded"
+    # What is skipped is the demonstration, not the support. The probe is one
+    # tap in four, so it starts supported practice and lets the work confirm
+    # what the tap suggested — the ceiling it set is independent, and the
+    # ladder still has to be climbed to reach it.
+    assert run["moves"][1] == "guided"
+    assert run["state"].diagnostic_ceiling == "independent"
     # And it is real completion, not a shortcut: the gate still wanted an
     # unaided independent application.
     assert run["state"].independent_application
@@ -237,10 +253,12 @@ async def test_confidence_is_not_evidence_and_a_named_misconception_is_reteaught
 @pytest.mark.asyncio
 async def test_a_short_answer_gets_one_targeted_follow_up_not_a_rewrite_request():
     run = await simulate("QUIET")
-    # The probe came back partial, so the unit starts at guided practice — not
-    # from zero, because they did show something.
-    assert run["moves"][0] == "diagnose" and run["moves"][1] == "guided"
-    assert "orient" not in run["moves"]
+    # The probe was a near miss, so the unit does teach — but only the step the
+    # answer turned on, not the whole derivation. Being taught what you already
+    # know is how a learner stops listening.
+    assert run["moves"][0] == "diagnose" and run["moves"][1] == "orient"
+    assert run["state"].diagnostic_ceiling == "faded"
+    assert run["state"].model_steps_seen == 1
     # Their reasoning so far is kept, and the follow-up asks for the one thing
     # missing rather than the whole answer again.
     assert run["state"].independent_application
@@ -311,7 +329,12 @@ async def test_no_two_learners_get_the_same_lesson():
     # profiles scripted to answer identically (ADVANCED, FAST_LEARNER, and
     # CURIOUS/INTERRUPTER before their questions) are expected to share a
     # spine, so the check is on the distinct answering behaviours.
-    distinct = {sequences[name] for name in
+    # A near miss and a fundamental misconception both route through `orient`,
+    # and differ in how much of the example the learner is shown, so the
+    # fingerprint is the move sequence together with the beats they sat
+    # through: QUIET gets the one step their answer turned on, BEGINNER the
+    # whole worked example.
+    distinct = {(sequences[name], runs[name]["state"].model_steps_seen) for name in
                 ("BEGINNER", "CONFIDENT_BUT_WRONG", "ADVANCED", "QUIET", "STRUGGLING", "CURIOUS")}
     assert len(distinct) == 6, sequences
 
