@@ -499,6 +499,8 @@ async def test_a_fresh_unit_asks_its_own_question_and_inherits_no_ceiling():
         if state(progress).unit_done:
             break
         await answer_checkpoint(runner, progress, ctx)
+    assert state(progress).phase == "transfer" and not state(progress).unit_done
+    await answer_checkpoint(runner, progress, ctx)
     assert state(progress).unit_done and state(progress).diagnostic_ceiling == "independent"
     await runner.run(ctx, progress, action(component_id=state(progress).step_id))
     current = state(progress)

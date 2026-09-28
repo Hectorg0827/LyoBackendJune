@@ -253,7 +253,8 @@ def test_the_compressed_opening_asks_for_one_beat_without_contradicting_itself()
 
 def test_every_move_the_schema_knows_about_has_instructions_of_its_own():
     for move in ("diagnose", "orient", "reteach", "prerequisite", "guided", "faded",
-                 "independent", "help", "clarify", "answer_question"):
+                 "independent", "transfer", "interleave", "explain", "closing_win",
+                 "help", "clarify", "answer_question"):
         assert move in MOVES, move
         assert turn_schema(move) is not None
     # An unknown move still gets a usable contract rather than a promptless call.
