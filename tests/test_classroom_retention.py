@@ -212,3 +212,68 @@ async def test_a_guest_has_no_schedule_to_write_to_and_is_not_faked():
         decided_at=datetime.utcnow().isoformat())
     assert await engine._schedule_adaptive_review(
         user_id="42", concept_id=None, passed=True, decided_at=None)
+
+
+# ── A demonstration is not lost to a secondary update ────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_failing_mastery_update_cannot_erase_the_demonstration():
+    """The learner answered. Nothing downstream gets to undo that.
+
+    `log_learning_event` commits the event and then writes the MasteryState
+    projection that readiness and the next lesson actually read. That
+    projection is still uncommitted when the optional DKT update runs, so a
+    failure there used to fall through to a shared handler whose `rollback()`
+    discarded it — the learner answered, the event was stored, and every
+    surface still reported the skill as never attempted.
+
+    The update it protects is a derived score the projection already covers. It
+    is not worth a demonstration.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+    engine.db = MagicMock()
+    engine.db.commit = AsyncMock()
+    engine.db.rollback = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None          # no prior event
+    engine.db.execute = AsyncMock(return_value=result)
+    engine._log_classroom_evidence = AsyncMock(return_value=True)
+
+    # Exactly what the end-to-end run does to hold the DKT back, and what any
+    # real outage looks like from here.
+    broken = MagicMock()
+    broken.return_value.dkt.update_mastery = AsyncMock(side_effect=AttributeError("dkt is unavailable"))
+    with patch("lyo_app.personalization.service.PersonalizationEngine", broken):
+        recorded = await engine._record_adaptive_evidence(
+            event_id="checkpoint-1", user_id="42", concept_id="long_division",
+            correct=True, evidence_type=None, hints_used=0, hint_level=None,
+            misconception=None, response_time_ms=5000,
+        )
+
+    assert recorded is True, "the answer is recorded even when the mastery update fails"
+    engine._log_classroom_evidence.assert_awaited_once()
+    # What the projection already wrote is kept, not thrown away.
+    engine.db.commit.assert_awaited()
+    engine.db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_real_failure_recording_the_evidence_is_still_reported():
+    """The protection above is for the optional update, not for everything."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+    engine.db = MagicMock()
+    engine.db.rollback = AsyncMock()
+    engine.db.execute = AsyncMock(side_effect=RuntimeError("the database is gone"))
+    engine._log_classroom_evidence = AsyncMock(return_value=True)
+
+    recorded = await engine._record_adaptive_evidence(
+        event_id="checkpoint-2", user_id="42", concept_id="long_division",
+        correct=True, evidence_type=None, hints_used=0, hint_level=None,
+        misconception=None, response_time_ms=5000,
+    )
+    assert recorded is False, "a genuine failure keeps the evidence queued for retry"
+    engine.db.rollback.assert_awaited()

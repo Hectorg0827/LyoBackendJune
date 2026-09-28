@@ -1568,11 +1568,35 @@ class SceneLifecycleEngine:
             concept_id = self._canonical_concept_id(evidence.get("concept_id"))
             # Missing timing is unknown, not a fictional one-second answer.
             if concept_id and isinstance(response_time_ms, (int, float)) and 0 < response_time_ms < 3600000:
-                from lyo_app.personalization.service import PersonalizationEngine
-                await PersonalizationEngine().dkt.update_mastery(
-                    self.db, learner_id, concept_id, evidence["correct"],
-                    response_time_ms / 1000.0, evidence.get("hints_used", 0),
-                )
+                # Best effort, and deliberately unable to take the learner's
+                # demonstration with it.
+                #
+                # `log_learning_event` above commits the event and then writes
+                # the MasteryState projection that readiness and the next
+                # lesson actually read. That projection is not committed yet
+                # when this runs, so letting a failure here fall through to the
+                # handler below meant `rollback()` discarding it: the learner
+                # answered, the event was stored, and every surface still
+                # reported the skill as never attempted. The update this
+                # protects is a derived score the projection already covers —
+                # it is not worth a demonstration.
+                try:
+                    from lyo_app.personalization.service import PersonalizationEngine
+                    await PersonalizationEngine().dkt.update_mastery(
+                        self.db, learner_id, concept_id, evidence["correct"],
+                        response_time_ms / 1000.0, evidence.get("hints_used", 0),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Classroom evidence kept; its mastery update failed: %s",
+                        type(exc).__name__)
+                    try:
+                        # Keep what was already written for this answer.
+                        await self.db.commit()
+                    except Exception:
+                        # Only if the session cannot be used at all, and then
+                        # the evidence event itself is already committed.
+                        await self.db.rollback()
             return True
         except Exception as exc:
             logger.warning("Could not persist classroom evidence: %s", type(exc).__name__)
