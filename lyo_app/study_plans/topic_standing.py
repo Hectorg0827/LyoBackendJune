@@ -10,6 +10,15 @@ had only ever been exposed to.
 This module is the join. It reads the same `MasteryState` rows the Classroom
 teaches from, keyed the same way Chat keys them, so a plan's view of a learner
 is the learner — not a second opinion assembled from self-report.
+
+Since the Classroom began recording against persistent skill identities, that
+join has two halves. Chat still writes a slug. The Classroom writes the id of
+a `Concept` row, and the units it teaches are finer-grained than a plan topic
+— "Divide by a two-digit number" under "Long division" — so no single row is
+the topic. What they do share is a scope, derived from the topic's own name,
+so a plan topic reaches its taught skills through `skill_identity.topic_scope`
+and reads all of them. Both halves are read and folded together; neither is
+guessed into the other.
 """
 
 from __future__ import annotations
@@ -22,7 +31,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.ai.lesson_composer import slugify_skill
-from lyo_app.ai_classroom.models import MasteryState
+from lyo_app.ai_classroom.models import Concept, MasteryState
+from lyo_app.ai_classroom.skill_identity import topic_scope
 
 #: A topic carries no weight of its own unless the intake gave it one. Equal
 #: weighting is the honest default: it says "we were not told", not "this
@@ -201,11 +211,12 @@ def weakest_topics(
 async def load_mastery(
     db: AsyncSession, user_id: int, concept_ids: Sequence[str]
 ) -> Dict[str, tuple]:
-    """`{concept_id: (mastery_score, attempts)}` from the canonical table.
+    """`{concept_id: (mastery_score, attempts)}` for slug-keyed evidence.
 
     Slug-identified concepts live in `objective_id`; `concept_id` carries
-    graph UUIDs and is not what a plan's topics resolve to. `MasteryState`
-    stores the user id as a string, which is what the projection writes.
+    graph UUIDs, which `load_taught_skill_mastery` below reads instead.
+    `MasteryState` stores the user id as a string, which is what the
+    projection writes.
     """
     if not concept_ids:
         return {}
@@ -222,10 +233,93 @@ async def load_mastery(
     return {row[0]: (row[1], row[2]) for row in result.all() if row[0]}
 
 
+async def load_taught_skill_mastery(
+    db: AsyncSession, user_id: int, planned: Sequence[tuple]
+) -> Dict[str, tuple]:
+    """`{concept_id: (mastery_score, attempts)}` for what the Classroom taught.
+
+    A plan topic is coarser than a taught skill: one hour on "Long division"
+    is recorded against "Divide by a two-digit number" and "Interpret a
+    remainder", each a `Concept` row of its own. They share the scope the
+    topic's name derives, which is the only join available that does not
+    involve guessing — and the reason `topic_scope` exists.
+
+    A topic's score is the plain mean over the skills in it the learner has
+    actually been assessed on, and its attempts are their sum. Mean rather
+    than attempt-weighted so that one heavily drilled sub-skill cannot speak
+    for the topic; over assessed skills only, because a unit the lesson has
+    not reached yet is not a zero — it is silence, which is what a topic with
+    no attempts already reports.
+    """
+    scopes = {}
+    for name, concept_id, _ in planned:
+        scope = topic_scope(name)
+        # First spelling wins, matching the de-duplication in `_plan_topics`.
+        if scope and scope not in scopes:
+            scopes[scope] = concept_id
+    if not scopes:
+        return {}
+
+    rows = (await db.execute(
+        select(Concept.subject, MasteryState.mastery_score, MasteryState.attempts)
+        .join(MasteryState, MasteryState.concept_id == Concept.id)
+        .where(
+            MasteryState.user_id == str(user_id),
+            Concept.subject.in_(list(scopes)),
+            # Only skills the Classroom recorded an identity for. A legacy
+            # taxonomy row that happens to sit in this scope carries no
+            # identity key and is not evidence of anything a learner did.
+            Concept.identity_key.isnot(None),
+        )
+    )).all()
+
+    folded: Dict[str, tuple] = {}
+    for scope, score, attempts in rows:
+        concept_id = scopes[scope]
+        scores, total = folded.get(concept_id, ([], 0))
+        attempts = int(attempts or 0)
+        if attempts > 0:
+            scores.append(float(score or 0.0))
+        folded[concept_id] = (scores, total + attempts)
+    return {
+        concept_id: (sum(scores) / len(scores) if scores else 0.0, attempts)
+        for concept_id, (scores, attempts) in folded.items()
+    }
+
+
+def _merge_mastery(*sources: Dict[str, tuple]) -> Dict[str, tuple]:
+    """One standing per topic from evidence recorded under different keys.
+
+    A learner can have both: chat answers filed under the slug, classroom
+    work filed under skill ids. Attempts add up, and the two scores are
+    combined in proportion to the attempts behind them, so neither half
+    silently replaces the other.
+    """
+    merged: Dict[str, tuple] = {}
+    for source in sources:
+        for concept_id, (score, attempts) in source.items():
+            attempts = int(attempts or 0)
+            score = float(score or 0.0)
+            if concept_id not in merged:
+                merged[concept_id] = (score, attempts)
+                continue
+            prior_score, prior_attempts = merged[concept_id]
+            total = prior_attempts + attempts
+            if total <= 0:
+                # Two rows of pure exposure. Keep the exposure, invent no score.
+                merged[concept_id] = (0.0, 0)
+                continue
+            merged[concept_id] = (
+                (prior_score * prior_attempts + score * attempts) / total, total,
+            )
+    return merged
+
+
 async def standings_for_profile(
     db: AsyncSession, user_id: int, topics: Iterable[Any]
 ) -> List[TopicStanding]:
     """Where the learner stands on every topic of one test profile."""
     planned = _plan_topics(topics)
-    mastery = await load_mastery(db, user_id, [concept_id for _, concept_id, _ in planned])
-    return build_standings(topics, mastery)
+    by_slug = await load_mastery(db, user_id, [concept_id for _, concept_id, _ in planned])
+    by_skill = await load_taught_skill_mastery(db, user_id, planned)
+    return build_standings(topics, _merge_mastery(by_slug, by_skill))

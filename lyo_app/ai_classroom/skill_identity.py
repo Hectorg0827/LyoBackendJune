@@ -38,6 +38,20 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def topic_scope(topic: str | None) -> str | None:
+    """The scope every skill taught under one free-topic heading shares.
+
+    Derived from the topic's own name and nothing else, so a reader that
+    holds only a topic name — a study plan's topic list, say — can name the
+    same scope the classroom taught into without guessing at anything. This
+    is not slug matching: the scope is the whole normalized name, and it
+    still cannot reach a skill taught inside an authored lesson, which lives
+    under a `lesson:` scope of its own.
+    """
+    normalized = normalized_name(topic) if topic else ""
+    return "topic:" + _digest(normalized) if normalized else None
+
+
 def identity_scope(context) -> str | None:
     # A session id may masquerade as course_id on a free-topic classroom, so
     # a course is authoritative only when it has a resolved lesson as well.
@@ -45,8 +59,7 @@ def identity_scope(context) -> str | None:
         # Repeated titles in two authored lessons are not proof of the same
         # skill. Only an explicit later identity mapping can join them.
         return "lesson:" + _digest(f"{context.course_id}\0{context.lesson_id}")
-    topic = context.topic or context.lesson_title
-    return "topic:" + _digest(normalized_name(topic)) if topic and normalized_name(topic) else None
+    return topic_scope(context.topic or context.lesson_title)
 
 
 async def _resolve(db: AsyncSession, scope: str, title: str, objective: str) -> Concept:
