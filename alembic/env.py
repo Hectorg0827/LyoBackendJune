@@ -53,7 +53,9 @@ except ImportError:
 from lyo_app.skills.models import Skill, SkillEdge, SkillTag  # noqa: F401
 from lyo_app.evolution.goals_models import UserGoal, GoalSkillMapping, GoalProgressSnapshot  # noqa: F401
 from lyo_app.events.models import LearningEvent  # noqa: F401
-from lyo_app.ai_classroom.models import Concept, ConceptPrerequisite  # noqa: F401
+from lyo_app.ai_classroom.models import (  # noqa: F401
+    Concept, ConceptPrerequisite, ClassroomUnitPackage, ClassroomQuestionExposure,
+)
 
 target_metadata = Base.metadata
 

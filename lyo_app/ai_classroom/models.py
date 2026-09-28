@@ -346,6 +346,40 @@ class ConceptPrerequisite(Base):
     )
 
 
+class ClassroomUnitPackage(Base):
+    """Validated teaching content shared by learners of the same scoped skill."""
+
+    __tablename__ = "classroom_unit_packages"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    skill_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    level_band: Mapped[int] = mapped_column(Integer, nullable=False)
+    language_code: Mapped[str] = mapped_column(String(35), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[Dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
+class ClassroomQuestionExposure(Base):
+    """A question already shown to a learner, without storing answer text."""
+
+    __tablename__ = "classroom_question_exposures"
+
+    learner_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    skill_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("concepts.id", ondelete="CASCADE"), primary_key=True,
+    )
+    question_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
 # =============================================================================
 # MISCONCEPTION MODEL
 # =============================================================================

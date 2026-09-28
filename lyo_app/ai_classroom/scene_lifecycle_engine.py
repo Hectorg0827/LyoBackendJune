@@ -1409,12 +1409,14 @@ class SceneLifecycleEngine:
                 progress["current_lesson_index"] = context.lesson_index
                 progress["lesson_id"] = context.lesson_id
         from lyo_app.ai_classroom.skill_identity import resolve_skill_plan
+        from lyo_app.ai_classroom.unit_package_cache import DatabaseUnitPackageCache
 
         async def resolve_skills(classroom_context, plan):
             return await resolve_skill_plan(self.db, classroom_context, plan)
 
         runner = AdaptiveSession(
-            getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(),
+            getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(
+                package_cache=DatabaseUnitPackageCache(self.db)),
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
         )

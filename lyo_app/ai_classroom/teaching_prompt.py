@@ -237,6 +237,40 @@ ASKING_MOVES = frozenset({"diagnose", "guided", "faded", "independent", "transfe
 TAUGHT_ONLY_MOVES = frozenset({"guided", "faded", "independent", "transfer", "interleave", "explain", "closing_win"})
 
 
+def unit_package_prompt() -> str:
+    """Author the ordinary teaching path as one coherent, reusable unit."""
+    return "".join((
+        CORE,
+        "Create ONE complete unit package from the supplied unit and its component "
+        "practice_targets. It is shared across learners of this exact skill, level "
+        "and language: never invent a learner answer, diagnosis or achievement. "
+        "The root keys are diagnostic, orient, targets and interleave. There must "
+        "be exactly one targets entry per practice_target, in the same order. "
+        "Each entry has guided, faded, independent, explain and transfer, with "
+        "task.target_index equal to that entry's zero-based index. Diagnostic "
+        "and interleave target_index are zero. Keep every question distinct, "
+        "including across target entries and phases. Each explain question must refer "
+        "to its target's guided situation and ask why that decision works; "
+        "the teacher will author a fresh explanation if the learner instead "
+        "succeeds on another kind of question. For other questions vary the "
+        "situation rather than restating an exercise; provide private example_answer and "
+        "semantic criteria for each task. The board and speech of a question "
+        "must never give its answer. Ground authored lessons in supplied material. "
+        "The server will choose moves after seeing actual learner work, so this "
+        "package does not declare completion, mastery, a score or a gate. ",
+        "For diagnostic: ", DIAGNOSE,
+        "For orient: ", ORIENT,
+        "For each target's guided: ", GUIDED,
+        "For each target's faded: ", FADED,
+        "For each target's independent: ", INDEPENDENT,
+        "For each target's explain: ", EXPLAIN,
+        "For each target's transfer: ", TRANSFER,
+        "For interleave: ", INTERLEAVE,
+        "For all questions except the initial diagnostic: ", TAUGHT_ONLY,
+        TASK_RULES, VISUALS, CLOSING,
+    ))
+
+
 def teaching_prompt(move: str, *, focused: bool = False) -> str:
     """The instructions for one move: the shared rules, then that move's own.
 

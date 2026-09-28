@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
-from lyo_app.ai_classroom.teaching_prompt import teaching_prompt
+from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,10 @@ classroom_diagnostics = Counter(
 classroom_teaching_turns = Counter(
     "lyo_classroom_teaching_turns_total", "Validated classroom teaching turns by move",
     ["move"],
+)
+classroom_unit_package_events = Counter(
+    "lyo_classroom_unit_package_events_total", "Validated unit package cache and fallback decisions",
+    ["result"],
 )
 # Rates use existing denominators: completed / all unit outcomes; reteach and
 # prerequisite moves / all teaching turns; abstained or skipped / all
@@ -421,6 +425,71 @@ def turn_schema(move: str, focused: bool = False) -> type[LearningTurn]:
     return ExplanationTurn
 
 
+class UnitTargetPackage(StrictModel):
+    """One complete progression for one component skill of a unit."""
+
+    guided: PracticeTurn
+    faded: PracticeTurn
+    independent: PracticeTurn
+    explain: ExplanationPracticeTurn
+    transfer: TransferPracticeTurn
+
+
+class UnitPackage(StrictModel):
+    """Shared authored teaching; learner-specific decisions stay in GuidedState.
+
+    Reteaching, hints, answering questions, a focused misconception and the
+    closing supported question depend on the learner's actual words. They are
+    authored live, while the ordinary route is selected from this package.
+    """
+
+    diagnostic: DiagnosticTurn
+    orient: ModelledTurn
+    targets: list[UnitTargetPackage] = Field(min_length=1, max_length=3)
+    interleave: TransferPracticeTurn
+
+
+def packaged_turns(package: UnitPackage):
+    """Yield every authored move with its expected target index."""
+    yield "diagnose", package.diagnostic, 0
+    yield "orient", package.orient, 0
+    for index, target in enumerate(package.targets):
+        for move in ("guided", "faded", "independent", "explain", "transfer"):
+            yield move, getattr(target, move), index
+    yield "interleave", package.interleave, 0
+
+
+def validate_unit_package(package: UnitPackage, unit: LearningUnit) -> None:
+    """Apply the live turn contract to *every* move before caching any of it."""
+    if len(package.targets) != len(unit.targets):
+        raise TeachingContractError("Package must cover each component skill")
+    questions: set[str] = set()
+    for move, turn, index in packaged_turns(package):
+        turn_schema(move).model_validate(turn.model_dump())
+        validate_semantic_content(turn)
+        task = turn.task
+        if task is None:
+            continue
+        if task.target_index != index:
+            raise TeachingContractError("Package question targets the wrong component skill")
+        if move == "independent" and (task.kind != "apply" or task.response_format == "choice"):
+            raise TeachingContractError("Independent work needs an open application")
+        question = normalize_text(task.scenario + " " + task.question)
+        if question in questions:
+            raise TeachingContractError("Package repeats a question across teaching moves")
+        questions.add(question)
+
+
+def select_package_turn(package: UnitPackage, move: str, index: int) -> LearningTurn:
+    if move == "diagnose":
+        return package.diagnostic.model_copy(deep=True)
+    if move == "orient":
+        return package.orient.model_copy(deep=True)
+    if move == "interleave":
+        return package.interleave.model_copy(deep=True)
+    return getattr(package.targets[index], move).model_copy(deep=True)
+
+
 class CriterionResult(StrictModel):
     index: int = Field(ge=0, le=2)
     met: bool
@@ -680,12 +749,13 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                     {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
                 ],
                 provider_order=providers,
-                max_tokens=4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000,
+                max_tokens=(16000 if issubclass(schema, UnitPackage) else
+                            4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000),
                 temperature=0.1 if schema is Evaluation else 0.6,
                 response_format={"type": "json_object"},
                 use_cache=False,
             ),
-            timeout=45,
+            timeout=100 if issubclass(schema, UnitPackage) else 45,
         )
         if result.get("is_fallback"):
             raise TeachingUnavailable("Providers unavailable")
@@ -721,11 +791,107 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
 
 class AdaptiveTeacher:
     def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json,
-                 semantic_judge: Callable[..., Awaitable[bool]] | None = None):
+                 semantic_judge: Callable[..., Awaitable[bool]] | None = None,
+                 package_cache=None):
         self.generate = generate
         # Optional separate review of meaning the deterministic gate cannot
         # infer: distractor plausibility, gap labeling and factual teaching.
         self.semantic_judge = semantic_judge
+        self.package_cache = package_cache
+
+    @staticmethod
+    def saved_skill(state: GuidedState, move: str) -> str | None:
+        index = state.active_review_index if move == "interleave" else state.unit_index
+        return (state.skill_ids[index] if state.identity_required and index is not None
+                and index < len(state.skill_ids) else None)
+
+    async def claim_question(self, context, state: GuidedState, move: str,
+                             task: LearningTask) -> bool:
+        skill_id = self.saved_skill(state, move)
+        if self.package_cache is None or skill_id is None:
+            return True
+        return await self.package_cache.claim_question(context.user_id, skill_id, task)
+
+    async def build_package(self, context, unit: LearningUnit, level_band: int) -> UnitPackage:
+        """Generate and check the complete path before showing any of its tasks."""
+        payload = {
+            "unit": unit.model_dump(mode="json"), "language": context.language_code,
+            "level_band": level_band, "goal": context.learning_objective,
+            "source_material": (context.lesson_content or "")[:12000],
+        }
+        for attempt in range(2):
+            try:
+                proposed = await self.generate(unit_package_prompt(), payload, UnitPackage)
+                package = UnitPackage.model_validate(proposed.model_dump())
+                validate_unit_package(package, unit)
+                if self.semantic_judge is not None:
+                    for move, turn, _ in packaged_turns(package):
+                        if not await self.semantic_judge(move, unit, turn):
+                            raise TeachingContractError("Independent semantic review rejected the unit")
+                return package
+            except Exception as exc:
+                logger.warning("Classroom package rejected: attempt=%s cause=%s",
+                               attempt + 1, validation_summary(exc))
+                payload["repair"] = validation_summary(exc) + ". Return the entire unit package."
+        raise TeachingUnavailable("Could not build a validated unit package")
+
+    async def cached_turn(self, context, state: GuidedState, move: str,
+                          unit: LearningUnit, index: int) -> LearningTurn | None:
+        """Select a fresh packaged question, or use live authoring for a detour."""
+        if (self.package_cache is None or move not in {
+            "diagnose", "orient", "guided", "faded", "independent", "explain", "transfer", "interleave",
+        } or (move == "orient" and state.diagnostic_misconception) or
+                (move == "orient" and state.diagnostic_ceiling == "faded") or
+                (move == "explain" and state.pending and state.pending.phase != "guided")):
+            return None
+        from lyo_app.ai_classroom.unit_package_cache import package_key
+        key = package_key(context, unit, self.saved_skill(state, move))
+        if key is None:
+            return None
+        try:
+            stored = await self.package_cache.get(key)
+            package = None
+            if stored is not None:
+                try:
+                    package = UnitPackage.model_validate(stored)
+                    validate_unit_package(package, unit)
+                except (ValidationError, ValueError):
+                    # A broken cached answer must never be shown to a learner.
+                    classroom_unit_package_events.labels("invalid").inc()
+                    await self.package_cache.evict(key)
+            if package is None:
+                try:
+                    package = await self.build_package(context, unit, key.level_band)
+                except TeachingUnavailable:
+                    # A provider unable to return a complete package can
+                    # still teach one validated move. Keep the learner's
+                    # lesson available and never cache incomplete material.
+                    classroom_unit_package_events.labels("fallback").inc()
+                    return None
+                await self.package_cache.put(key, package.model_dump(mode="json"))
+                classroom_unit_package_events.labels("generated").inc()
+            else:
+                classroom_unit_package_events.labels("hit").inc()
+            turn = select_package_turn(package, move, index)
+            if turn.task is not None and normalize_text(
+                turn.task.scenario + " " + turn.task.question
+            ) in state.recent_questions:
+                # The learner needs a new question after an error, revisit or
+                # retry. Do not recycle an answer they have already seen.
+                classroom_unit_package_events.labels("repeated").inc()
+                return None
+            if turn.task is not None and not await self.claim_question(context, state, move, turn.task):
+                # Reuse across learners is fine. Repeating the same question
+                # to one learner in a later session would overstate transfer
+                # and make the opening probe less informative.
+                classroom_unit_package_events.labels("repeated").inc()
+                return None
+            return turn
+        except TeachingUnavailable:
+            raise
+        except Exception as exc:
+            logger.warning("Classroom unit package unavailable: %s", type(exc).__name__)
+            raise TeachingUnavailable("Could not load a validated unit package") from exc
 
     async def plan(self, context) -> LearningPlan:
         count = unit_count(context.target_duration_minutes, context.total_lessons)
@@ -776,6 +942,9 @@ class AdaptiveTeacher:
         unit = (state.plan.units[state.active_review_index]
                 if move == "interleave" and state.active_review_index is not None else state.unit)
         target_index = 0 if move == "interleave" else state.target_index
+        packaged = await self.cached_turn(context, state, move, unit, target_index)
+        if packaged is not None:
+            return packaged
         payload = {
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
@@ -874,6 +1043,8 @@ class AdaptiveTeacher:
                             "Provide a complete example across at least two paced steps")
                     if move in ("reteach", "prerequisite") and not turn.demonstration:
                         raise TeachingContractError("Demonstrate the missing step before another attempt")
+                if turn.task is not None and not await self.claim_question(context, state, move, turn.task):
+                    raise TeachingContractError("Previously seen checkpoint; ask a new question")
                 return turn
             except Exception as exc:
                 logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
