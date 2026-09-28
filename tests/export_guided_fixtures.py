@@ -141,6 +141,18 @@ class FixtureTeacher(ScriptedTeacher):
                 response_hint="Write just the missing number." if move == "faded" else "Write the larger fraction.",
                 criteria=["Answers 4" if move == "faded" else "Answers one third"],
                 example_answer="4" if move == "faded" else "1/3")
+        if move in ("transfer", "interleave"):
+            turn.board_title = "Try the idea in a new setting"
+            turn.board_content = "Two equal ribbons are divided into 4 or 8 equal lengths."
+            turn.speech = "You've compared slices. Now try the same principle with ribbons of equal length."
+            turn.visual = None
+            turn.task = LearningTask(kind="apply", response_format="short_answer",
+                target_index=0 if move == "interleave" else state.target_index,
+                scenario="Two ribbons of equal length are cut into 4 and 8 equal pieces.",
+                question="Which cut gives a longer single piece, and why?",
+                response_hint="Name the cut and give one reason.",
+                criteria=["Identifies the ribbon cut into 4", "Explains fewer cuts leave longer pieces"],
+                example_answer="The ribbon cut into 4, because fewer equal cuts leave longer pieces.")
         return turn
 
 
@@ -172,7 +184,8 @@ async def export():
         ActionIntent.SKIP_QUESTION, progress["guided_state"]["pending"]["id"]))
     for name in ("model_1", "model_2", "guided"):
         scenes[name] = await runner.run(ctx, progress, action(component_id=progress["guided_state"]["step_id"]))
-    for name, response in (("faded", "One half"), ("independent", "4"), ("summary", "1/3")):
+    for name, response in (("faded", "One half"), ("independent", "4"),
+                           ("transfer", "1/3"), ("summary", "The ribbon cut into 4; fewer cuts make longer pieces.")):
         pending = progress["guided_state"]["pending"]
         intent = ActionIntent.SUBMIT_ANSWER if pending["task"]["response_format"] == "choice" else ActionIntent.SUBMIT_TRANSFER
         scenes[name] = await runner.run(ctx, progress, action(intent, pending["id"], answer_data={"selected_option_id": "a", "response": response}))

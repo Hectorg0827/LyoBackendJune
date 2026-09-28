@@ -294,6 +294,7 @@ class ContextSnapshot(BaseModel):
     )
     source_attributions: List[str] = Field(default_factory=list)
     review_due_items: List[str] = Field(default_factory=list)
+    scheduled_due_items: List[str] = Field(default_factory=list)
 
     # Current learner input + durable personalization context
     learner_signal: Optional[str] = None
@@ -579,11 +580,12 @@ class ContextAssembler:
         context.review_due_items = list(dict.fromkeys(
             item for item in skipped_review if item
         ))
-        if context.classroom_mode == ClassroomMode.REVIEW:
-            scheduled_review = await self._get_due_review_items(trigger.user_id)
-            context.review_due_items = list(dict.fromkeys(
-                item for item in [*context.review_due_items, *scheduled_review] if item
-            ))
+        # Spaced items can be mixed into an ordinary unit. Keep their origin
+        # separate from the skipped queue: a recent revisit is not retention.
+        context.scheduled_due_items = await self._get_due_review_items(trigger.user_id)
+        context.review_due_items = list(dict.fromkeys(
+            item for item in [*context.review_due_items, *context.scheduled_due_items] if item
+        ))
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)

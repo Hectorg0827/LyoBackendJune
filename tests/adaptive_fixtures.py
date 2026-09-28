@@ -89,6 +89,17 @@ def explanation(number=1):
     )
 
 
+def transfer_task(number=1):
+    return LearningTask(
+        kind="apply", response_format="short_answer",
+        scenario=f"In workshop {number}, two equal lengths of ribbon are each cut into 4 or 8 equal pieces.",
+        question="Which ribbon gives a longer single piece, and why?",
+        response_hint="Name the cut and give one reason.",
+        criteria=["Identifies the ribbon cut into 4", "Relates fewer cuts to longer pieces"],
+        example_answer="The ribbon cut into 4; fewer equal cuts of the same length leave longer pieces.",
+    )
+
+
 def evaluation(verdict="correct", **overrides):
     fields = dict(verdict=verdict, confidence=0.96, question_clear=True,
                   feedback="You compared pieces from the same whole.")
@@ -105,10 +116,14 @@ class ScriptedTeacher:
 
     def _turn(self, context, state, move, learner_input=""):
         self.number += 1
-        teaching = move not in ("diagnose", "guided", "faded", "independent", "explain", "closing_win")
-        kind = "choose" if move in ("guided", "closing_win") else "apply" if move == "independent" else "diagnose"
+        teaching = move not in ("diagnose", "guided", "faded", "independent", "transfer", "interleave", "explain", "closing_win")
+        kind = "choose" if move in ("guided", "closing_win") else "apply" if move in ("independent", "transfer", "interleave") else "diagnose"
         if move == "explain":
             checkpoint = explanation(self.number).model_copy(update={"target_index": state.target_index})
+        elif move in ("transfer", "interleave"):
+            checkpoint = transfer_task(self.number).model_copy(update={
+                "target_index": 0 if move == "interleave" else state.target_index
+            })
         else:
             checkpoint = None if teaching else (
                 probe(self.number) if move == "diagnose" else task(kind, self.number)
@@ -132,7 +147,9 @@ class ScriptedTeacher:
                     "Equal pieces are comparable when they come from the same whole. "
                     "More cuts make each piece smaller."),
             board_title="Equal-sized wholes",
-            board_content="One bar cut into 4 equal pieces has larger pieces than an identical bar cut into 8.",
+            board_content=("Two equal ribbons are cut into 4 or 8 equal lengths."
+                           if move in ("transfer", "interleave") else
+                           "One bar cut into 4 equal pieces has larger pieces than an identical bar cut into 8."),
             task=checkpoint, demonstration=beats,
         )
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.adaptive_teaching import (
     AdaptiveTeacher, Evaluation, GuidedState, LearningTurn, PendingTask, TeachingUnavailable,
     normalize_text, requests_help, validation_summary,
@@ -33,7 +34,8 @@ class AdaptiveSession:
         from its saved plan. The scope is immutable for the life of that plan.
         """
         if state.record_scope == "unit":
-            return state.unit.title
+            index = state.active_review_index
+            return state.plan.units[index].title if index is not None else state.unit.title
         return context.lesson_title or context.topic
 
     async def run(self, context, progress: dict[str, Any], trigger) -> Scene:
@@ -235,6 +237,15 @@ class AdaptiveSession:
                 move = self.after_diagnostic(context, state, pending, result, response,
                                              response_time_ms=data.get("response_time_ms"),
                                              option=option if choice else None)
+            elif pending.phase in ("transfer", "interleave") and result.verdict != "clarify":
+                # Neither a transfer nor a revisit is a pass-or-repeat gate.
+                # A partial answer is useful feedback, but proves neither rung.
+                if result.verdict in ("correct", "incorrect"):
+                    self.record_practice(context, state, pending, result, data)
+                if pending.phase == "transfer":
+                    self.finish_transfer(context, state)
+                    return self.save(progress, state, self.summary(context, state))
+                move = self.end_interleave(state)
             elif result.verdict == "partial" and pending.attempts < 3:
                 # Needing a targeted follow-up on supported practice says the
                 # same thing a wrong answer says about a ceiling that claims
@@ -252,15 +263,7 @@ class AdaptiveSession:
                 return self.save(progress, state, self.checkpoint(context, state, follow_up=True))
             else:
                 if result.verdict in ("correct", "incorrect"):
-                    state.outbox.append(dict(
-                        event_id=pending.id, user_id=context.user_id,
-                        concept_id=self.record_concept(context, state),
-                        correct=result.verdict == "correct",
-                        evidence_type=None if choice else "application" if pending.task.kind == "apply" else "explanation",
-                        hints_used=pending.hints_used, hint_level=pending.hint_level,
-                        misconception=result.misconception if result.verdict == "incorrect" else None,
-                        response_time_ms=data.get("response_time_ms"),
-                    ))
+                    self.record_practice(context, state, pending, result, data)
                 if result.verdict == "correct":
                     state.successes += 1
                     state.support_attempts = 0
@@ -275,6 +278,8 @@ class AdaptiveSession:
                     # the next move after this is where practice left off.
                     if not state.explained and not state.challenge_requested:
                         move = "explain"
+                    elif self.start_interleave(context, state):
+                        move = "interleave"
                 elif result.verdict == "clarify":
                     # Ambiguous wording and requests for help are not failures.
                     move = "help" if requests_help(response) else "clarify"
@@ -309,15 +314,21 @@ class AdaptiveSession:
                     "Sin problema: vamos a construirlo desde el principio.")
                 state.phase = move = "orient"
             else:
-                if state.unit_index not in state.skipped and state.unit_index not in state.completed:
-                    state.skipped.append(state.unit_index)
-                self.schedule_review(context, state, passed=False)
-                self.event(state, "practise_later", phase=state.phase)
-                state.pending = None
-                self.finish_unit(state)
-                state.last_feedback = self.copy(context, "You can return to this skill when you are ready.",
-                                                "Puedes volver a esta habilidad cuando estés listo.")
-                return self.save(progress, state, self.summary(context, state))
+                if pending.phase == "interleave":
+                    move = self.end_interleave(state)
+                elif pending.phase == "transfer":
+                    self.finish_transfer(context, state)
+                    return self.save(progress, state, self.summary(context, state))
+                else:
+                    if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+                        state.skipped.append(state.unit_index)
+                    self.schedule_review(context, state, passed=False)
+                    self.event(state, "practise_later", phase=state.phase)
+                    state.pending = None
+                    self.finish_unit(state)
+                    state.last_feedback = self.copy(context, "You can return to this skill when you are ready.",
+                                                    "Puedes volver a esta habilidad cuando estés listo.")
+                    return self.save(progress, state, self.summary(context, state))
         elif intent in (ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE,
                         ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
             if state.presentation and not state.paused_presentation:
@@ -397,8 +408,8 @@ class AdaptiveSession:
             # can collect: the learner doing it before being shown how.
             phase, supported = "diagnose", False
         else:
-            phase = state.phase if state.phase in ("guided", "faded", "independent") else "guided"
-            supported = phase != "independent"
+            phase = state.phase if state.phase in ("guided", "faded", "independent", "transfer", "interleave") else "guided"
+            supported = phase in ("guided", "faded")
         state.pending = PendingTask(
             task=turn.task, speech=turn.speech, board_title=turn.board_title,
             board_content=turn.board_content, visual=turn.visual, phase=phase,
@@ -701,10 +712,71 @@ class AdaptiveSession:
         concept = self.record_concept(context, state)
         if not concept:
             return
-        state.review_outbox = [*state.review_outbox, dict(
+        review = dict(
             user_id=context.user_id, concept_id=concept, passed=passed,
-            decided_at=datetime.now(timezone.utc).isoformat(),
-        )]
+            decided_at=datetime.now(timezone.utc).isoformat(), unit_index=state.unit_index,
+        )
+        state.review_history = [*state.review_history, review]
+        # The scheduler's interface takes only these four fields.
+        state.review_outbox = [*state.review_outbox, {k: review[k] for k in (
+            "user_id", "concept_id", "passed", "decided_at"
+        )}]
+
+    def record_practice(self, context, state, pending, result, data):
+        evidence_type = None if pending.task.response_format == "choice" else (
+            "transfer" if pending.phase == "transfer" and not pending.assisted
+            and not pending.extra_help_used else
+            "retrieval" if pending.phase == "interleave" and state.review_is_due
+            and not pending.assisted and not pending.extra_help_used else
+            "application" if pending.task.kind == "apply" else "explanation"
+        )
+        state.outbox.append(dict(
+            event_id=pending.id, user_id=context.user_id,
+            concept_id=self.record_concept(context, state),
+            correct=result.verdict == "correct", evidence_type=evidence_type,
+            hints_used=pending.hints_used, hint_level=pending.hint_level,
+            misconception=result.misconception if result.verdict == "incorrect" else None,
+            response_time_ms=data.get("response_time_ms"),
+        ))
+
+    def start_interleave(self, context, state) -> bool:
+        """One earlier skill, inside a later unit, after normal practice starts."""
+        if state.phase == "transfer" or state.active_review_index is not None:
+            return False
+        due = {slugify_skill(item) for item in context.scheduled_due_items}
+        candidates = [item for item in state.review_history
+                      if item["unit_index"] < state.unit_index
+                      and item["unit_index"] not in state.interleaved_units]
+        if not candidates:
+            return False
+        candidates.sort(key=lambda item: (
+            slugify_skill(item["concept_id"]) not in due, item["unit_index"]
+        ))
+        item = candidates[0]
+        state.active_review_index = item["unit_index"]
+        state.review_return_phase = state.phase
+        # A due schedule only supports a retention claim after a real time gap.
+        # Same-sitting review after an independent success is application.
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(item["decided_at"])
+        state.review_is_due = slugify_skill(item["concept_id"]) in due and age >= timedelta(hours=20)
+        state.phase = "interleave"
+        return True
+
+    @staticmethod
+    def end_interleave(state) -> str:
+        if state.active_review_index is not None:
+            state.interleaved_units.append(state.active_review_index)
+        state.active_review_index = None
+        state.review_is_due = False
+        state.phase = state.review_return_phase or "guided"
+        state.review_return_phase = None
+        state.pending = None
+        return state.phase
+
+    def finish_transfer(self, context, state) -> None:
+        state.pending = None
+        self.schedule_review(context, state, passed=state.independent_application)
+        self.finish_unit(state)
 
     @staticmethod
     def after_success(state, pending):
@@ -741,8 +813,8 @@ class AdaptiveSession:
                 state.independent_application = True
                 state.completed = sorted(set([*state.completed, state.unit_index]))
                 state.skipped = [i for i in state.skipped if i != state.unit_index]
-                AdaptiveSession.finish_unit(state)
-                return True
+                state.phase = "transfer"
+                return False
             state.phase = "faded" if target in state.guided_targets else "guided"
         return False
 
@@ -764,6 +836,9 @@ class AdaptiveSession:
         state.faded_targets = []
         state.target_index = state.model_steps_seen = state.support_attempts = 0
         state.return_to_checkpoint = state.challenge_requested = False
+        state.active_review_index = None
+        state.review_return_phase = None
+        state.review_is_due = False
         state.diagnosed = False
         state.step_id = str(uuid4())
 
@@ -823,10 +898,12 @@ class AdaptiveSession:
             "diagnose": "Where you're starting",
             "orient": "Our goal", "model": "Watch me", "guided": "Let's do it together",
             "faded": "Finish this step", "independent": "Try it yourself",
+            "transfer": "Use it somewhere new", "interleave": "Revisit an earlier idea",
         }[state.phase], {
             "diagnose": "Dónde empiezas",
             "orient": "Nuestra meta", "model": "Mira cómo", "guided": "Hagámoslo juntos",
             "faded": "Completa este paso", "independent": "Inténtalo tú",
+            "transfer": "Úsalo en otro contexto", "interleave": "Repasa una idea anterior",
         }[state.phase])
 
     def surface(self, context, state, speech, title, content, visual=None, activity_id=None):
@@ -837,7 +914,9 @@ class AdaptiveSession:
         separate_description = len(example_content) > 1500
         components = [
             ProgressBar(current=len(state.completed), total=len(state.plan.units), label=self.stage(context, state), priority=0),
-            TeacherMessage(text=speech, language_code=context.language_code, concept_tags=[state.unit.title],
+            TeacherMessage(text=speech, language_code=context.language_code,
+                           concept_tags=[state.plan.units[state.active_review_index].title
+                                         if state.active_review_index is not None else state.unit.title],
                            emotion="encouraging", priority=1, source_attributions=context.source_attributions[:5]),
             ExampleBlock(title=title,
                          content=content if separate_description else example_content,
@@ -924,7 +1003,9 @@ class AdaptiveSession:
             components.append(InputField(
                 component_id=pending.id, question=prompt + "\n\n" + task.response_hint, placeholder=task.response_hint,
                 concept_id=self.record_concept(context, state),
-                evidence_type="application" if task.kind == "apply" else "explanation",
+                evidence_type="retrieval" if pending.phase == "interleave" and state.review_is_due
+                else "transfer" if pending.phase == "transfer"
+                else "application" if task.kind == "apply" else "explanation",
                 min_words=1, max_words=200, expected_keywords=[], source_attributions=context.source_attributions[:5],
                 language_code=context.language_code, priority=4,
             ))

@@ -136,11 +136,29 @@ FADED = (
 
 INDEPENDENT = (
     "This move is independent: demonstration=[], kind=apply, and response_format "
-    "short_answer or completion — never choice. This is the checkpoint that closes "
-    "the unit, and it closes only on an answer the learner produced themselves; a "
-    "tapped answer cannot close it. Ask one fresh problem closely aligned with "
+    "short_answer or completion — never choice. This checkpoint establishes "
+    "familiar application only on an answer the learner produced themselves; a "
+    "tapped answer cannot establish it. A transfer question follows, but does "
+    "not gate unit completion. Ask one fresh problem closely aligned with "
     "practised work, with a concise response; avoid an essay. Do not provide its "
     "solution. "
+)
+
+TRANSFER = (
+    "This move is transfer: demonstration=[], kind=apply, response_format=short_answer "
+    "or completion, no options. The learner has already applied the principle "
+    "in the familiar setting. Ask one concise, genuinely unfamiliar situation "
+    "using the same principle, with all necessary facts and no worked solution "
+    "on the board or in the question. A wrong answer does not erase the earlier "
+    "application or prevent the learner continuing. "
+)
+
+INTERLEAVE = (
+    "This move is interleave: demonstration=[], kind=apply, response_format=short_answer "
+    "or completion, no options. Revisit the supplied earlier unit with a fresh "
+    "specific situation and a short, open application question. Give no answer "
+    "or method on the board. This is one brief revisit within the current unit; "
+    "the next step returns to the current skill whatever the answer. "
 )
 
 EXPLAIN = (
@@ -200,6 +218,8 @@ MOVES: dict[str, str] = {
     "guided": GUIDED,
     "faded": FADED,
     "independent": INDEPENDENT,
+    "transfer": TRANSFER,
+    "interleave": INTERLEAVE,
     "explain": EXPLAIN,
     "closing_win": CLOSING_WIN,
     "reteach": RETEACH,
@@ -210,11 +230,11 @@ MOVES: dict[str, str] = {
 }
 
 #: Moves that ask the learner something, and so need the task rules.
-ASKING_MOVES = frozenset({"diagnose", "guided", "faded", "independent", "explain", "closing_win"})
+ASKING_MOVES = frozenset({"diagnose", "guided", "faded", "independent", "transfer", "interleave", "explain", "closing_win"})
 
 #: Moves whose question must stay inside what this learner has been taught.
 #: `diagnose` is excluded because probing prior knowledge is its whole purpose.
-TAUGHT_ONLY_MOVES = frozenset({"guided", "faded", "independent", "explain", "closing_win"})
+TAUGHT_ONLY_MOVES = frozenset({"guided", "faded", "independent", "transfer", "interleave", "explain", "closing_win"})
 
 
 def teaching_prompt(move: str, *, focused: bool = False) -> str:

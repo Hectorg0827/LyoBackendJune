@@ -270,6 +270,16 @@ class ExplanationPracticeTurn(LearningTurn):
         return self
 
 
+class TransferPracticeTurn(PracticeTurn):
+    """A fresh setting requires an answer produced by the learner."""
+
+    @model_validator(mode="after")
+    def open_application(self):
+        if self.task.kind != "apply" or self.task.response_format == "choice":
+            raise ValueError("Transfer requires an open application in a new setting")
+        return self
+
+
 class DiagnosticTurn(LearningTurn):
     """One short framing beat and one tap, asked before any teaching.
 
@@ -329,6 +339,8 @@ def turn_schema(move: str, focused: bool = False) -> type[LearningTurn]:
         return FocusedModelledTurn if focused else ModelledTurn
     if move == "explain":
         return ExplanationPracticeTurn
+    if move in ("transfer", "interleave"):
+        return TransferPracticeTurn
     if move in ("reteach", "prerequisite"):
         return ReteachingTurn
     if move in ("guided", "faded", "independent", "closing_win"):
@@ -367,7 +379,7 @@ class PendingTask(StrictModel):
     board_title: str
     board_content: str
     visual: TeachingVisual | None = None
-    phase: Literal["diagnose", "guided", "faded", "independent"] = "guided"
+    phase: Literal["diagnose", "guided", "faded", "independent", "transfer", "interleave"] = "guided"
     extra_help_used: bool = False
     taught_steps: list[str] = Field(default_factory=list)
     # Only independent, unassisted application may close a unit. A follow-up
@@ -417,7 +429,7 @@ class GuidedState(StrictModel):
     skipped: list[int] = Field(default_factory=list)
     successes: int = 0
     independent_application: bool = False
-    phase: Literal["diagnose", "orient", "model", "guided", "faded", "independent"] = "orient"
+    phase: Literal["diagnose", "orient", "model", "guided", "faded", "independent", "transfer", "interleave"] = "orient"
     # Whether this unit has already found out where the learner is starting
     # from. One probe per unit: asking twice wastes the learner's time, which
     # is the thing a diagnostic exists to stop doing.
@@ -473,6 +485,13 @@ class GuidedState(StrictModel):
     # Retention is the one thing a lesson cannot demonstrate on the day, so it
     # is the one thing the classroom has to hand to a schedule.
     review_outbox: list[dict[str, Any]] = Field(default_factory=list)
+    # Kept after the scheduler drains the outbox, so a later unit can briefly
+    # revisit this skill. A same-sitting revisit never proves retention.
+    review_history: list[dict[str, Any]] = Field(default_factory=list)
+    interleaved_units: list[int] = Field(default_factory=list)
+    active_review_index: int | None = None
+    review_return_phase: Literal["guided", "faded", "independent"] | None = None
+    review_is_due: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -662,20 +681,23 @@ class AdaptiveTeacher:
         # different model of the situation needs the example built, not
         # abbreviated, however precisely their tap named the error.
         focused = move == "orient" and state.diagnostic_ceiling == "faded"
+        unit = (state.plan.units[state.active_review_index]
+                if move == "interleave" and state.active_review_index is not None else state.unit)
+        target_index = 0 if move == "interleave" else state.target_index
         payload = {
             "language": context.language_code, "mode": state.mode,
-            "unit": state.unit.model_dump(), "move": move,
+            "unit": unit.model_dump(), "move": move,
             "goal": context.learning_objective, "level": context.preferred_difficulty,
             "previous_kinds": state.task_kinds[-6:],
             "previous_questions": state.recent_questions[-8:],
-            "already_taught": state.taught_steps[-6:],
+            "already_taught": [unit.material] if move == "interleave" else state.taught_steps[-6:],
             "learner_input": learner_input[:2000], "feedback": state.last_feedback,
             "previous_task": state.pending.task.model_dump() if state.pending else None,
             "previous_answers": state.pending.answers[-3:] if state.pending else [],
             "successes": state.successes,
             "phase": state.phase,
-            "target_index": state.target_index,
-            "practice_target": state.unit.targets[state.target_index],
+            "target_index": target_index,
+            "practice_target": unit.targets[target_index],
             "guided_targets": state.guided_targets,
             "faded_targets": state.faded_targets,
             "support_attempts": state.support_attempts,
@@ -701,14 +723,18 @@ class AdaptiveTeacher:
                         raise TeachingContractError("Ask the learner to explain this, in their own words")
                     if normalize_text(turn.task.scenario + " " + turn.task.question) in state.recent_questions:
                         raise TeachingContractError("Repeated checkpoint")
-                elif move in ("guided", "faded", "independent", "closing_win"):
+                elif move in ("guided", "faded", "independent", "transfer", "interleave", "closing_win"):
                     if turn.task is None or turn.demonstration:
                         raise TeachingContractError("Practice requires one bounded task, without an unpaced lesson")
                     question = normalize_text(turn.task.scenario + " " + turn.task.question)
                     if question in state.recent_questions:
                         raise TeachingContractError("Repeated checkpoint")
-                    if turn.task.target_index != state.target_index:
+                    if turn.task.target_index != target_index:
                         raise TeachingContractError("Practise the current component skill")
+                    if move in ("transfer", "interleave") and (
+                        turn.task.kind != "apply" or turn.task.response_format == "choice"
+                    ):
+                        raise TeachingContractError("Ask for an open application in a fresh setting")
                     # Format is deliberately NOT pinned to the phase. Tying
                     # "guided" to choice and "independent" to typing made the
                     # shape of every checkpoint predictable from the phase

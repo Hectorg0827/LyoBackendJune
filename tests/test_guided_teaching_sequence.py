@@ -151,11 +151,14 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     # The demand is still fixed where it matters: independent practice is an
     # application problem, which `test_independent_practice_demands_application`
     # holds separately.
-    assert state(progress).completed == [0] and state(progress).path_done
-    # The opening probe, then six answers across the unit: five rungs and the
-    # once-per-unit explanation.
+    assert state(progress).completed == [0]
+    assert state(progress).pending.phase == "transfer" and not state(progress).path_done
+    await respond(runner, progress, ctx)
+    assert state(progress).path_done
+    # The opening probe, then seven answers: familiar practice, the
+    # once-per-unit explanation, and one transfer in a new setting.
     assert [e["kind"] for e in state(progress).practice_events].count("diagnostic") == 1
-    assert len(state(progress).practice_events) == 7
+    assert len(state(progress).practice_events) == 8
 
 
 @pytest.mark.asyncio

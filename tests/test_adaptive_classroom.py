@@ -65,6 +65,9 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
     await answer(runner, progress, ctx)
     current = state(progress)
     assert current.completed == [0]
+    assert current.phase == "transfer" and not current.unit_done
+    await answer(runner, progress, ctx)
+    current = state(progress)
     assert current.unit_done and not current.path_done
     await runner.run(ctx, progress, action())
     assert state(progress).unit_index == 1
@@ -74,15 +77,21 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
 @pytest.mark.asyncio
 async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
     _, runner, progress, ctx, _ = await start()
+    moves_seen = []
     for index in range(3):
         await tap_probe(runner, progress, ctx)
         await advance_to_task(runner, progress, ctx)
-        await answer(runner, progress, ctx)
-        await answer(runner, progress, ctx)   # the explanation
-        await answer(runner, progress, ctx)
-        scene = await answer(runner, progress, ctx)
+        for _ in range(8):
+            current = state(progress)
+            if current.unit_done or current.path_done:
+                break
+            moves_seen.append(current.next_move)
+            scene = await answer(runner, progress, ctx)
+        assert state(progress).unit_done or state(progress).path_done
         if index < 2:
             await runner.run(ctx, progress, action())
+    assert moves_seen.count("transfer") == 3
+    assert moves_seen.count("interleave") == 2
     assert state(progress).completed == [0, 1, 2]
     assert state(progress).path_done
     assert any(getattr(c, "action_intent", None) == ActionIntent.REQUEST_REVIEW for c in scene.components)
@@ -414,6 +423,8 @@ async def test_a_finished_step_still_answers_the_learners_question():
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    await answer(runner, progress, ctx)
+    assert state(progress).phase == "transfer"
     await answer(runner, progress, ctx)
     assert state(progress).unit_done
     await runner.run(ctx, progress, action(ActionIntent.ASK_QUESTION, message="What if the pizzas are different sizes?"))

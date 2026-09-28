@@ -143,6 +143,13 @@ REWORDED = {
         ("The two distractors must reveal different misconceptions, and each must "
          "be a position a real learner holds; never filler, and never one "
          "obviously silly choice.",),
+    # Independent application now leads to an optional transfer rung; the
+    # original completion claim must change without losing its evidence rule.
+    "This is the checkpoint that closes the unit, and it closes only on an answer "
+    "the learner produced themselves; a tapped answer cannot close it.":
+        ("This checkpoint establishes familiar application only on an answer "
+         "the learner produced themselves; a tapped answer cannot establish it.",
+         "A transfer question follows, but does not gate unit completion."),
 }
 
 ALL_MOVES = sorted(set(MOVES) | {"orient_focused"})
@@ -182,7 +189,9 @@ FINGERPRINTS = {
     "orient_focused": "exactly ONE demonstration beat",
     "guided": "support ONE next decision",
     "faded": "Only the final step is removed",
-    "independent": "closes the unit",
+    "independent": "establishes familiar application",
+    "transfer": "genuinely unfamiliar situation",
+    "interleave": "Revisit the supplied earlier unit",
     "explain": "ask them why it works",
     "closing_win": "the last thing that happens to",
     "reteach": "bridge back to the original goal",
