@@ -548,10 +548,20 @@ class GuidedState(StrictModel):
     Refusing unknown fields made every new field a one-way deploy: a session
     saved by a server carrying a new pedagogical field could not be read by the
     server it rolled back to, so the learner's lesson died mid-unit to protect
-    a field that server would not have used. Ignoring them degrades instead —
-    the rolled-back server reads the session, loses only what it never knew
-    about, and the learner keeps teaching. Saved evidence is unaffected either
-    way: that lives in the learner's record, not in here.
+    a field that server would not have used.
+
+    Be precise about what this fixes, because it is easy to claim too much.
+    It cannot help a rollback *past* this commit: the build below still has
+    `extra="forbid"` and will refuse the fields added here, and nothing
+    written now changes a binary already deployed. What it does is stop the
+    next field from having the same problem — from here on, a server rolled
+    back to a build carrying this reads a session saved above it, losing only
+    what it never knew about, and the learner keeps teaching.
+
+    For the sessions this build genuinely cannot read, see
+    `SceneLifecycleEngine._read_guided_state`: they are set aside rather than
+    raised through the learner's turn. Saved evidence is unaffected either
+    way; that lives in the learner's record, not in here.
     """
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)

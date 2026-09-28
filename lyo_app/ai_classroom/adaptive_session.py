@@ -330,6 +330,21 @@ class AdaptiveSession:
                     pending.hints_used += 1
                     if state.return_to_checkpoint:
                         pending.id = str(uuid4())
+                elif pending.task.kind == "explain":
+                    # Asked once, whatever they answer. An explanation is
+                    # beside the ladder, so a shaky one cannot cost the
+                    # learner their ceiling, a support attempt or their rung
+                    # — and above all it must not stay unasked, or their next
+                    # successful answer would ask again and a learner who can
+                    # do the skill but cannot yet say why would go round that
+                    # loop until repeated difficulty ended the unit on them.
+                    # Reteaching is the whole response, and they step down a
+                    # rung the way any reteach leaves a learner — supported,
+                    # having just been shown it again — rather than by the
+                    # failure path, which would take their standing with it.
+                    state.explained = True
+                    move = "reteach"
+                    state.return_to_checkpoint = False
                 else:
                     self.withdraw_ceiling(state)
                     state.support_attempts += 1
@@ -726,6 +741,24 @@ class AdaptiveSession:
     #: between "has met this" and "has this".
     RECORD_ANSWERS_ABOVE = 0.7
 
+    @staticmethod
+    def _same_skill(key: str | None) -> str | None:
+        """Name a skill the way the writer of the evidence named it.
+
+        Evidence is persisted through `_canonical_concept_id`, which leaves a
+        `Concept` row's UUID alone and slugifies anything else. Comparing a
+        raw title against that store never matches — "Compare Fractions" is
+        not `compare_fractions` — so the probe shortcut silently never fired
+        for any session without a resolved skill identity. Both sides go
+        through the same canonicalisation here.
+        """
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+
+        key = (key or "").strip()
+        if not key:
+            return None
+        return key if is_concept_graph_id(key) else slugify_skill(key)
+
     def record_answers_the_probe(self, context, state):
         """Recent, consistent evidence on this unit's own skill, if there is any.
 
@@ -735,20 +768,30 @@ class AdaptiveSession:
         Worse, it reads as a teacher who was not paying attention.
 
         Deliberately narrow. It wants this unit's skill and not a neighbouring
-        one, evidence strong enough to act on, no recent failure on it, and a
-        demonstration recent enough to still describe them. Anything short of
-        that and the unit asks, because asking costs one tap.
+        one, evidence strong enough to act on, a history that agrees with it,
+        and a demonstration recent enough to still describe them. Anything
+        short of that and the unit asks, because asking costs one tap.
+
+        "Agrees with it" is a success rate, not a streak. `KnowledgeState`
+        carries `consecutive_incorrect`, and an earlier version of this check
+        read it — but nothing populates it on the canonical mastery path,
+        where it is always zero, and on the legacy path it holds a *lifetime*
+        incorrect count. So it was dead in one direction and permanently
+        disqualifying in the other. Attempts and successes are written on both
+        paths, so they are what this asks about.
         """
         concept = self.record_concept(context, state)
-        if not concept:
+        wanted = self._same_skill(concept)
+        if not wanted:
             return None
-        wanted = concept.strip().lower()
         for known in context.knowledge_states:
-            if (known.concept_id or "").strip().lower() != wanted:
+            if self._same_skill(known.concept_id) != wanted:
                 continue
             if known.total_attempts < 1 or known.mastery_level < self.RECORD_ANSWERS_ABOVE:
                 return None
-            if known.consecutive_incorrect or known.last_attempt is None:
+            if known.successes < self.RECORD_ANSWERS_ABOVE * known.total_attempts:
+                return None
+            if known.last_attempt is None:
                 return None
             seen = known.last_attempt
             if seen.tzinfo is not None:

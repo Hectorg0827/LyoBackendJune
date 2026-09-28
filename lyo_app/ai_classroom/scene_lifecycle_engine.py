@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Any, Callable
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select, func as sa_func, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -158,6 +158,10 @@ class KnowledgeState(BaseModel):
     consecutive_correct: int = 0
     consecutive_incorrect: int = 0
     total_attempts: int = 0
+    #: How many of those attempts the learner got right. Unlike the two
+    #: consecutive counters above, this is populated on every path that
+    #: builds a KnowledgeState, so a reader can rely on it.
+    successes: int = 0
 
 
 class FrustrationMetrics(BaseModel):
@@ -930,6 +934,7 @@ class ContextAssembler:
                         mastery_level=r.mastery_level or 0.0,
                         confidence=max(0.0, min(1.0, 1.0 - (r.uncertainty or 0.5))),
                         total_attempts=r.attempts or 0,
+                        successes=r.successes or 0,
                         last_attempt=r.last_seen,
                     )
                     for r in rows
@@ -955,6 +960,7 @@ class ContextAssembler:
                     consecutive_correct=r.correct_count,
                     consecutive_incorrect=r.incorrect_count,
                     total_attempts=r.attempts,
+                    successes=r.correct_count or 0,
                     last_attempt=r.last_seen,
                 )
                 for r in rows
@@ -1361,20 +1367,61 @@ class SceneLifecycleEngine:
                 )
             return scene
 
+    @staticmethod
+    def _read_guided_state(progress: dict, raw):
+        """Hydrate a saved session, or set it aside rather than fail the turn.
+
+        `GuidedState` now ignores fields it does not know, so a *newer* save
+        is readable here. That is worth being precise about, because it does
+        not work in the direction people assume: it cannot make an older
+        build read a session this one wrote. That build still forbids extras
+        and will reject the fields added since. Tolerance only pays from the
+        next change onward, once a build carrying it is the one being rolled
+        back to.
+
+        Which leaves the case this guards. A session that cannot be read —
+        rolled back into, hand-edited, or written by a version whose field
+        types have since moved — used to raise straight through the learner's
+        turn and give them an error where their lesson was. It is kept in
+        `guided_history` so nothing is lost and so it can be looked at, and
+        the classroom starts them a fresh session instead.
+        """
+        from lyo_app.ai_classroom.adaptive_teaching import GuidedState
+
+        if not raw:
+            return None
+        try:
+            return GuidedState.model_validate(raw)
+        except ValidationError as exc:
+            logger.warning(
+                "Saved classroom session could not be read (%d problems); starting fresh",
+                exc.error_count(),
+            )
+            # History entries are read back as dicts (`snapshot.get(...)`),
+            # so only keep a blob that can be. Anything else is logged and
+            # dropped rather than left to break the reader that finds it.
+            if isinstance(raw, dict):
+                progress["guided_history"] = [*progress.get("guided_history", []), raw]
+            progress.pop("guided_state", None)
+            return None
+
     async def _process_adaptive_trigger(self, trigger: Trigger, key: str) -> Scene:
-        from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState
+        from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
         from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 
         context = await self.context_assembler.assemble_context(trigger)
         progress = _SESSION_PROGRESS.setdefault(key, {})
         data = trigger.action_data or {}
         intent = data.get("action_intent")
+        state = None
         raw_state = progress.get("guided_state")
         record_interaction = intent != ActionIntent.UPDATE_ACTIVITY and (
             not raw_state or trigger.component_id not in raw_state.get("handled", [])
         )
         if raw_state:
-            state = GuidedState.model_validate(raw_state)
+            state = self._read_guided_state(progress, raw_state)
+            raw_state = progress.get("guided_state")
+        if raw_state and state is not None:
             if state.course_id != context.course_id or state.lesson_id != context.lesson_id:
                 # An explicit different lesson never inherits another lesson's
                 # active question or grading rubric. Keep its state for review.
@@ -1392,7 +1439,7 @@ class SceneLifecycleEngine:
                 else:
                     progress.pop("guided_state", None)
                 raw_state = progress.get("guided_state")
-                state = GuidedState.model_validate(raw_state) if raw_state else None
+                state = self._read_guided_state(progress, raw_state)
             # The next authored lesson begins only on explicit Continue.
             if (state and state.path_done and intent == ActionIntent.CONTINUE
                     and AdaptiveSession.current_continue(state, trigger)
@@ -1422,8 +1469,8 @@ class SceneLifecycleEngine:
         )
         scene = await runner.run(context, progress, trigger)
         state_data = progress.get("guided_state")
-        if state_data:
-            state = GuidedState.model_validate(state_data)
+        state = self._read_guided_state(progress, state_data) if state_data else None
+        if state is not None:
             context.course_complete = (
                 state.path_done and not state.skipped
                 and not any(snapshot.get("skipped") for snapshot in progress.get("guided_history", []))

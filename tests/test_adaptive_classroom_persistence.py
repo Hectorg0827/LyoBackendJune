@@ -22,14 +22,21 @@ from tests.export_guided_fixtures import FixtureTeacher
 
 
 @pytest.mark.asyncio
-async def test_a_rolled_back_server_can_still_read_a_session_saved_by_a_newer_one():
-    """A new pedagogical field must not be a one-way deploy.
+async def test_this_build_reads_a_session_saved_by_a_later_one():
+    """Tolerance for unknown fields, stated in the direction it actually works.
 
-    Every field added to `GuidedState` used to mean that a server rolled back
-    below it could not read sessions saved above it: the payload was refused
-    and the learner's lesson died mid-unit to protect a field that server would
-    not have used anyway. It degrades instead — the unknown field is dropped,
-    the session is read, and teaching continues.
+    This does not make an *older* build read a session saved here. That build
+    still has `extra="forbid"` and will refuse the fields added since; nothing
+    committed now can change a binary already deployed. What it does is make
+    every future field safe: once a build carrying this tolerance is the one
+    being rolled back to, a session written above it is readable rather than
+    refused — which is the whole of the guarantee, and the previous version
+    of this test claimed more than that.
+
+    Until then, the case that matters is a session this build cannot read at
+    all, which must not cost the learner their turn. That is
+    `test_an_unreadable_saved_session_costs_the_learner_nothing_but_the_session`
+    below.
 
     The generation contracts keep refusing unknown fields, because there the
     strictness is what makes a model that echoes its input or invents a field
@@ -60,6 +67,45 @@ async def test_a_rolled_back_server_can_still_read_a_session_saved_by_a_newer_on
             criteria=["Names the third"], example_answer="A third.",
             invented_by_the_model="not a field",
         )
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_saved_session_costs_the_learner_nothing_but_the_session():
+    """The case unknown-field tolerance cannot reach.
+
+    A session can be unreadable for reasons no `extra=` setting helps with: a
+    field whose type has moved, a value no longer in an enum, a rollback into
+    a build that predates a field, a hand-edited row. Hydration used to raise
+    straight through the learner's turn, so they opened their lesson and got
+    an error where the teaching was.
+
+    It is set aside instead. The blob is kept in `guided_history` so nothing
+    is destroyed and it can be looked at, and the classroom starts them again
+    rather than handing them a failure.
+    """
+    engine = SceneLifecycleEngine(AsyncMock())
+    progress = {"guided_state": {"owner": "42", "phase": "a phase that no longer exists"}}
+
+    state = engine._read_guided_state(progress, progress["guided_state"])
+
+    assert state is None, "an unreadable session is not silently half-read"
+    assert "guided_state" not in progress, "it is cleared, or the next turn fails the same way"
+    assert progress["guided_history"] == [{"owner": "42", "phase": "a phase that no longer exists"}]
+
+
+@pytest.mark.asyncio
+async def test_a_readable_session_is_left_exactly_where_it_was():
+    """The guard must not become a way to lose a session that was fine."""
+    progress, ctx = {}, context(target_duration_minutes=8)
+    await AdaptiveSession(ScriptedTeacher()).run(ctx, progress, action(welcome=True))
+    saved = json.loads(json.dumps(progress["guided_state"]))
+
+    engine = SceneLifecycleEngine(AsyncMock())
+    state = engine._read_guided_state(progress, saved)
+
+    assert state is not None and state.owner == "42"
+    assert progress["guided_state"] == saved
+    assert "guided_history" not in progress
 
 
 @pytest.mark.asyncio

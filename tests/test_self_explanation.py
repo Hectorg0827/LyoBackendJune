@@ -96,6 +96,8 @@ async def test_a_shaky_explanation_is_taught_into_rather_than_failed():
     teacher, runner, progress, ctx = await open_session()
     await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    before_phase = state(progress).phase
+    before_ceiling = state(progress).diagnostic_ceiling
     teacher.evaluate.return_value = evaluation(
         "incorrect", feedback="More equal cuts make each piece smaller, not bigger.",
         misconception="more_pieces_means_more_each")
@@ -106,6 +108,51 @@ async def test_a_shaky_explanation_is_taught_into_rather_than_failed():
     assert teacher.turn.await_args.args[2] == "reteach"
     assert current.skipped == [] and not current.unit_done
     assert current.presentation is not None
+    # And it costs them nothing they had earned. The ordinary wrong-answer
+    # path spends a support attempt and withdraws the ceiling the probe
+    # predicted; an explanation is beside the ladder, so neither may happen
+    # here — two of those and the engine would call this repeated difficulty
+    # and end a unit the learner was in fact succeeding at.
+    assert current.support_attempts == 0
+    assert current.diagnostic_ceiling == before_ceiling
+    # They do step down a rung, because reteaching is a presentation and
+    # practice resumes supported after one. That is the teaching working, not
+    # a verdict: it is the same step any reteach makes, and their standing —
+    # the ceiling and the support count above — is untouched.
+    assert before_phase == "faded" and current.phase == "model"
+
+
+@pytest.mark.asyncio
+async def test_a_learner_who_cannot_yet_say_why_is_not_asked_for_ever():
+    """The loop a non-gating question can still close on someone.
+
+    `explained` used to be set only by `after_success`, which an incorrect
+    verdict never reaches. So the flag stayed false, the next successful
+    practice answer asked for an explanation again, and each round spent a
+    support attempt — a learner who can do the skill but cannot articulate it
+    was walked into "repeated difficulty" and had the unit filed as failed.
+    """
+    teacher, runner, progress, ctx = await open_session()
+    await tap_probe(runner, progress, ctx)
+    await answer(runner, progress, ctx)
+    assert state(progress).pending.task.kind == "explain"
+
+    teacher.evaluate.return_value = evaluation(
+        "incorrect", feedback="More equal cuts make each piece smaller, not bigger.",
+        misconception="more_pieces_means_more_each")
+    await answer(runner, progress, ctx, response="Because three is more than two.")
+    # Asked, and now done with — whatever they said.
+    assert state(progress).explained
+
+    teacher.evaluate.return_value = evaluation("correct")
+    for _ in range(4):
+        if state(progress).unit_done or state(progress).path_done:
+            break
+        await answer(runner, progress, ctx)
+    asked = [call.args[2] for call in teacher.turn.await_args_list]
+    assert asked.count("explain") == 1, asked
+    # They got there on their own work, not by being ground down.
+    assert state(progress).skipped == []
 
 
 @pytest.mark.asyncio
