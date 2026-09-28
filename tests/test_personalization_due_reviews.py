@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from lyo_app.ai_classroom.models import Concept
 from lyo_app.personalization.models import LearnerMastery, SpacedRepetitionSchedule
 from lyo_app.personalization.service import personalization_engine
 
@@ -61,6 +62,26 @@ async def test_get_due_reviews_returns_overdue_item_enriched(db_session):
     assert item["mastery_level"] == 0.35
     assert item["last_misconception"] == "confusing the root with a nearby square"
     assert item["days_overdue"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_persistent_skill_due_review_keeps_id_and_displays_its_name(db_session):
+    from uuid import uuid4
+
+    skill = Concept(id=str(uuid4()), name="Compare equal shares", display_name="Compare equal shares",
+                    subject="topic:test", identity_key="a" * 64)
+    db_session.add(skill)
+    await db_session.commit()
+    await _due_schedule(db_session, user_id=1, skill_id=skill.id, item_id=skill.id)
+
+    due = await personalization_engine.get_due_reviews(db_session, user_id=1)
+    assert due[0]["skill_id"] == skill.id
+    assert due[0]["skill_name"] == "Compare equal shares"
+
+    from types import SimpleNamespace
+    from lyo_app.ai_classroom.playback_routes import get_review_queue
+    classroom = await get_review_queue(SimpleNamespace(id=1), limit=20, db=db_session)
+    assert classroom.items[0].concept_name == "Compare equal shares"
 
 
 @pytest.mark.asyncio

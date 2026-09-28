@@ -151,6 +151,7 @@ class KnowledgeState(BaseModel):
     """User's current learning state for specific concepts"""
 
     concept_id: str
+    concept_name: Optional[str] = None
     mastery_level: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     last_attempt: Optional[datetime] = None
@@ -897,6 +898,22 @@ class ContextAssembler:
         classroom reads the same evidence that the rest of personalization
         uses. Legacy classroom mastery remains a migration fallback.
         """
+        async def names_for(keys):
+            from lyo_app.events.mastery_projection import is_concept_graph_id
+            ids = [key for key in keys if is_concept_graph_id(key)]
+            if not ids:
+                return {}
+            from lyo_app.ai_classroom.models import Concept
+            try:
+                async with self.db.begin_nested():
+                    rows = (await self.db.execute(select(
+                        Concept.id, Concept.display_name, Concept.name,
+                    ).where(Concept.id.in_(ids)))).all()
+                return {identity: display or name for identity, display, name in rows}
+            except Exception:
+                logger.debug("Skill titles unavailable in the classroom context")
+                return {}
+
         try:
             user_id_int = int(user_id)
             from lyo_app.personalization.models import LearnerMastery
@@ -905,9 +922,11 @@ class ContextAssembler:
             )
             rows = result.scalars().all()
             if rows:
+                titles = await names_for([r.skill_id for r in rows])
                 return [
                     KnowledgeState(
                         concept_id=r.skill_id,
+                        concept_name=titles.get(r.skill_id),
                         mastery_level=r.mastery_level or 0.0,
                         confidence=max(0.0, min(1.0, 1.0 - (r.uncertainty or 0.5))),
                         total_attempts=r.attempts or 0,
@@ -926,9 +945,11 @@ class ContextAssembler:
                 select(MasteryStateDB).where(MasteryStateDB.user_id == user_id)
             )
             rows = result.scalars().all()
+            titles = await names_for([r.concept_id for r in rows])
             return [
                 KnowledgeState(
                     concept_id=r.concept_id or r.objective_id or "unknown",
+                    concept_name=titles.get(r.concept_id),
                     mastery_level=r.mastery_score,
                     confidence=r.confidence,
                     consecutive_correct=r.correct_count,
@@ -1387,7 +1408,16 @@ class SceneLifecycleEngine:
                 progress.pop("guided_state", None)
                 progress["current_lesson_index"] = context.lesson_index
                 progress["lesson_id"] = context.lesson_id
-        runner = AdaptiveSession(getattr(self, "adaptive_teacher", None) or AdaptiveTeacher())
+        from lyo_app.ai_classroom.skill_identity import resolve_skill_plan
+
+        async def resolve_skills(classroom_context, plan):
+            return await resolve_skill_plan(self.db, classroom_context, plan)
+
+        runner = AdaptiveSession(
+            getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(),
+            skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
+                            else self.skill_resolver),
+        )
         scene = await runner.run(context, progress, trigger)
         state_data = progress.get("guided_state")
         if state_data:
@@ -1799,23 +1829,15 @@ class SceneLifecycleEngine:
 
     @staticmethod
     def _canonical_concept_id(concept_id: Optional[str]) -> Optional[str]:
-        """Name a concept the way every other surface names it.
+        """Keep historical string keys readable alongside new Concept IDs.
 
-        Chat keys mastery on `slugify_skill(topic)` — lowercased, underscored,
-        capped at 80 characters — so "Square Roots!" and "square roots" reach
-        one row. The Classroom carries human-facing text instead: a learning
-        objective, a lesson title, or whatever an authored component put in
-        `concept_id`.
+        New guided plans resolve their skill IDs against the database before
+        presenting a question. Saved older sessions and compatibility scene
+        handlers can still carry plain text; those retain their historical
+        slug key without being guessed into another scoped skill's credit.
 
-        Logged raw, "Compare fractions" and "compare_fractions" are two
-        different concepts to the projection, and the two surfaces would go on
-        keeping separate records of the same idea — the exact split this whole
-        change exists to end. Long titles would also overflow the 80-character
-        column and be dropped by the catch-and-log path, silently.
-
-        UUIDs are left alone: those identify a row in `concepts`, the
-        projection routes them to the foreign-keyed column, and slugifying one
-        would turn a valid graph id into a string that matches nothing.
+        UUIDs are left alone: those identify a row in `concepts`, and the
+        projection routes them to the foreign-keyed column.
 
         The placeholder `current_concept` is not a concept. It is what the
         callers fall back to when they could not determine one, and recording
@@ -1849,13 +1871,10 @@ class SceneLifecycleEngine:
     ) -> bool:
         """Record what the learner just demonstrated on the shared event stream.
 
-        Chat already logs its checks here, and the event processor projects
-        that evidence into `ai_classroom.MasteryState` — the table this engine
-        reads before choosing how to teach. Until now the Classroom only read
-        it. So a learner could prove a concept in the Classroom and arrive at
-        Chat as a stranger, and the Classroom's own next lesson could not see
-        what its own last question had shown. Logging here closes the loop in
-        the other direction: both surfaces write one record of one learner.
+        The event processor projects this evidence into MasteryState. New
+        guided questions name a persisted Concept ID. Older chat checks name
+        legacy slugs; they stay separate until a verified identity mapping is
+        available, rather than crediting an unrelated skill by title alone.
 
         Three things this deliberately does not do:
 

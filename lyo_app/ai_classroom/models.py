@@ -16,13 +16,13 @@ This is not a linear "list of lessons" - it's a directed graph that adapts.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from enum import Enum
 import uuid
 
 from sqlalchemy import (
-    Column, String, Text, Integer, Boolean, DateTime, JSON,
-    ForeignKey, Index, Float, Enum as SQLEnum, UniqueConstraint, text
+    String, Text, Integer, Boolean, DateTime, JSON,
+    ForeignKey, Index, Float, UniqueConstraint, CheckConstraint, text
 )
 
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -280,7 +280,9 @@ class LearningEdge(Base):
 class Concept(Base):
     """
     A concept in the subject matter taxonomy.
-    Used to map content to learning objectives.
+    Also holds persistent scoped classroom skill identities. New classroom
+    rows carry an identity_key and a learner-facing display_name; older graph
+    concepts keep both NULL.
     """
     __tablename__ = "concepts"
     
@@ -291,6 +293,10 @@ class Concept(Base):
     # Identity
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # New classroom skills use a hash of the full title and objective. Legacy
+    # taxonomy concepts retain NULL: no old evidence is re-keyed by a guess.
+    identity_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     
     # Taxonomy
     subject: Mapped[str] = mapped_column(String(100), nullable=False)  # Index via composite
@@ -310,10 +316,33 @@ class Concept(Base):
     # Relationships
     nodes = relationship("LearningNode", back_populates="concept")
     misconceptions = relationship("Misconception", back_populates="concept")
+    prerequisite_edges = relationship(
+        "ConceptPrerequisite", foreign_keys="ConceptPrerequisite.concept_id",
+        cascade="all, delete-orphan",
+    )
     
     __table_args__ = (
         Index('ix_concepts_subject', 'subject', 'grade_band'),
         UniqueConstraint('name', 'subject', name='uq_concept_name_subject'),
+        Index('uq_concept_subject_identity', 'subject', 'identity_key', unique=True),
+    )
+
+
+class ConceptPrerequisite(Base):
+    """Explicit skill dependency; it does not gate a learner's progress."""
+
+    __tablename__ = "concept_prerequisites"
+
+    concept_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("concepts.id", ondelete="CASCADE"), primary_key=True,
+    )
+    prerequisite_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("concepts.id", ondelete="CASCADE"), primary_key=True,
+    )
+
+    __table_args__ = (
+        Index("ix_concept_prerequisites_prerequisite", "prerequisite_id"),
+        CheckConstraint("concept_id <> prerequisite_id", name="ck_concept_prerequisite_distinct"),
     )
 
 

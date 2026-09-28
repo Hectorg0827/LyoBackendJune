@@ -13,7 +13,9 @@ from lyo_app.ai_classroom.scene_lifecycle_engine import (
 from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField, QuizCard
 from lyo_app.ai_classroom.adaptive_teaching import LearningPlan, LearningUnit, GuidedState, TeachingUnavailable
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
-from tests.adaptive_fixtures import action, context, engine, seed, plan, ScriptedTeacher, tap_probe
+from tests.adaptive_fixtures import (
+    action, context, engine, seed, plan, ScriptedTeacher, tap_probe, simulated_skill_identity,
+)
 
 PLAN_CONCEPT = "square_roots"
 SESSION = "concept-identity-session"
@@ -133,12 +135,12 @@ async def test_first_plan_failure_does_not_drop_unit_scope_on_retry():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["choose", "apply"])
-@pytest.mark.parametrize("topic,title,expected", [
-    ("Square roots", None, "square_roots"),
-    ("Mathematics", "Square roots", "square_roots"),
-    (None, None, None),
+@pytest.mark.parametrize("topic,title,has_identity", [
+    ("Square roots", None, True),
+    ("Mathematics", "Square roots", True),
+    (None, None, False),
 ])
-async def test_live_evidence_names_the_taught_lesson_or_topic_never_a_generic_objective(kind, topic, title, expected):
+async def test_live_evidence_names_the_taught_lesson_or_topic_never_a_generic_objective(kind, topic, title, has_identity):
     ctx = context(topic=topic, lesson_title=title, learning_objective="Learn the basic concepts of mathematics")
     instance = engine(ctx)
     component_id = seed(instance, ctx, kind)
@@ -149,9 +151,11 @@ async def test_live_evidence_names_the_taught_lesson_or_topic_never_a_generic_ob
             await instance.handle_quiz_submission("42", "fractions", component_id, "a", 4000)
         else:
             await instance.handle_transfer_submission("42", "fractions", component_id, "One half, because fewer cuts make bigger pieces.", 4000)
-    if expected:
+    if has_identity:
+        expected = simulated_skill_identity(ctx, plan()).unit_ids[0]
         assert log.await_args.args[1].concept_id == expected
         assert dkt.await_args.args[2] == expected
+        assert expected != slugify_skill(ctx.learning_objective)
     else:
         log.assert_not_awaited()
         dkt.assert_not_awaited()

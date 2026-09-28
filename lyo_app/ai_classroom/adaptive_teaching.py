@@ -92,6 +92,7 @@ class LearningUnit(StrictModel):
     material: str = Field(min_length=30, max_length=1600)
     practice_targets: list[str] = Field(default_factory=list, max_length=3)
     takeaway: str = Field(default="", max_length=300)
+    prerequisite_titles: list[str] = Field(default_factory=list, max_length=5)
 
     @model_validator(mode="after")
     def concrete_targets(self):
@@ -100,6 +101,9 @@ class LearningUnit(StrictModel):
         if len({target.strip().casefold() for target in self.practice_targets}) != len(self.practice_targets):
             raise ValueError("Practice targets must be distinct")
         self.practice_targets = [target.strip() for target in self.practice_targets]
+        if any(not title.strip() or len(title) > 100 for title in self.prerequisite_titles):
+            raise ValueError("Prerequisites must name specific earlier skills")
+        self.prerequisite_titles = [title.strip() for title in self.prerequisite_titles]
         return self
 
     @property
@@ -124,6 +128,14 @@ class LearningPlan(StrictModel):
         if (any(key in generic or re.fullmatch(r"(?:unit|lesson|part|step|module|skill)_?\d+", key)
                 for key in keys) or len(set(keys)) != len(keys)):
             raise ValueError("A pathway must name distinct, specific skills")
+        from lyo_app.ai_classroom.skill_identity import normalized_name
+        titles = [normalized_name(unit.title) for unit in self.units]
+        for i, unit in enumerate(self.units):
+            requirements = [normalized_name(name) for name in unit.prerequisite_titles]
+            if len(requirements) != len(set(requirements)) or any(
+                title not in titles[:i] for title in requirements
+            ):
+                raise ValueError("Prerequisites must name distinct earlier units in this pathway")
         return self
 
 
@@ -482,8 +494,14 @@ class GuidedState(StrictModel):
     lesson_index: int = 0
     plan: LearningPlan
     # A saved session keeps its evidence identity across worker/device
-    # reconnects. Old sessions default to the original topic/lesson key.
+    # reconnects. Old sessions default to the original topic/lesson key and
+    # bind future answers to specific unit IDs when first resumed.
     record_scope: Literal["topic", "unit"] = "topic"
+    # Stable database identities. An old saved session resolves these before
+    # its next graded answer; new sessions cannot fall back to a guessed slug.
+    skill_ids: list[str] = Field(default_factory=list)
+    topic_skill_id: str | None = None
+    identity_required: bool = False
     unit_index: int = 0
     remaining_units: list[int] = Field(default_factory=list)
     completed: list[int] = Field(default_factory=list)
@@ -726,8 +744,11 @@ class AdaptiveTeacher:
                     "You are Lyo's curriculum planner. Build a progressive pathway of distinct, "
                     "small skills, prerequisites first, with exactly unit_count units. Give each "
                     "unit a short, specific skill title suitable for a durable learner record, "
-                    "not a generic heading such as Introduction or Part 1. Ground an "
-                    "authored lesson in the supplied material; for a free topic provide accurate "
+                    "not a generic heading such as Introduction or Part 1. Set each unit's "
+                    "prerequisite_titles to exact earlier unit titles only "
+                    "when that earlier skill is genuinely needed; otherwise use []. Dependencies "
+                    "guide teaching and never gate progress. Ground an authored lesson in the "
+                    "supplied material; for a free topic provide accurate "
                     "foundational teaching. Each material field must TEACH the skill with a worked "
                     "example, not announce what will be taught. Give each unit 1–3 specific "
                     "practice_targets covering the component skills the learner must practise, "

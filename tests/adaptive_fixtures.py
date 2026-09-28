@@ -1,6 +1,7 @@
 """Scripted pedagogical collaborators: tests never contact an AI provider."""
 
 from unittest.mock import AsyncMock, MagicMock
+from uuid import NAMESPACE_URL, uuid5
 
 from lyo_app.ai_classroom.adaptive_teaching import (
     Evaluation, GuidedState, LearningPlan, LearningTask, LearningTurn, LearningUnit, PendingTask, TaskOption, TeachingBeat, unit_count,
@@ -8,6 +9,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     ContextSnapshot, SceneLifecycleEngine, Trigger, TriggerType,
 )
+from lyo_app.ai_classroom.skill_identity import SkillPlanIdentity, identity_scope, normalized_name
 from lyo_app.ai_classroom.sdui_models import ActionIntent
 
 
@@ -23,6 +25,27 @@ def plan(count=3):
         title=f"Fraction skill {i + 1}", objective="Compare equal parts of the same whole.",
         material="Equal parts must come from the same whole. Half a pizza is larger than a third of that pizza.",
     ) for i in range(count)])
+
+
+def simulated_skill_identity(ctx, learning_plan):
+    """Model stable database IDs while the interaction fixture uses a fake DB."""
+    scope = identity_scope(ctx)
+    if scope is None:
+        return SkillPlanIdentity(unit_ids=[], topic_id=None)
+
+    def identity(title, objective):
+        return str(uuid5(NAMESPACE_URL, scope + "\0" + normalized_name(title)
+                         + "\0" + normalized_name(objective)))
+
+    title = ctx.lesson_title or ctx.topic
+    return SkillPlanIdentity(
+        unit_ids=[identity(unit.title, unit.objective) for unit in learning_plan.units],
+        topic_id=identity(title, ctx.learning_objective or title) if title else None,
+    )
+
+
+async def resolve_simulated_skill_identity(ctx, learning_plan):
+    return simulated_skill_identity(ctx, learning_plan)
 
 
 def task(kind="apply", number=1):
@@ -233,6 +256,10 @@ def engine(ctx=None):
     instance.context_assembler.assemble_context = AsyncMock(return_value=ctx)
     instance.context_assembler.db = instance.db
     instance.adaptive_teacher = ScriptedTeacher()
+    # The interaction fixture uses a MagicMock DB, but must still exercise
+    # production-style persistent IDs. SQLite resolver tests exercise real
+    # inserts, foreign keys, and prerequisite edges separately.
+    instance.skill_resolver = resolve_simulated_skill_identity
     instance.session_contexts = {}
     instance.active_scenes = {}
     instance.websocket_manager = None

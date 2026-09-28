@@ -10,12 +10,14 @@ the counts throw away.
 """
 
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from lyo_app.core.database import Base
+from lyo_app.ai_classroom.models import Concept
 from lyo_app.events.concept_record import (
     RECORD_CAP,
     build_records,
@@ -166,7 +168,7 @@ async def db():
         connect_args={"check_same_thread": False},
     )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[LearningEvent.__table__])
+        await conn.run_sync(Base.metadata.create_all, tables=[Concept.__table__, LearningEvent.__table__])
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         yield session
@@ -201,6 +203,18 @@ async def test_a_learner_reads_their_own_record_and_nobody_elses(db):
 
     assert set(concepts) == {"fractions"}
     assert [rung.kind for rung in concepts["fractions"].rungs] == ["application"]
+
+
+async def test_a_persistent_skill_keeps_its_name_next_to_the_earned_rung(db):
+    skill = Concept(id=str(uuid4()), name="Compare equal shares", subject="topic:fractions")
+    db.add(skill)
+    db.add(_event(1, skill.id, "application", STRONG))
+    await db.flush()
+
+    record = (await learner_record(db, 1)).concepts[0]
+    assert record.concept_id == skill.id
+    assert record.display_name == "Compare equal shares"
+    assert record.best_rung == "application"
 
 
 async def test_a_learner_with_no_history_has_an_empty_record_not_an_error(db):

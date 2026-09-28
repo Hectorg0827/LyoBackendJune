@@ -10,7 +10,6 @@ These routes handle the core "Netflix-like" playback experience:
 - Review queue management
 """
 
-import asyncio
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -21,9 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.core.database import get_async_session
 from lyo_app.auth.dependencies import get_current_user
 from lyo_app.models.enhanced import User
-from lyo_app.ai_classroom.graph_service import GraphService, get_graph_service
+from lyo_app.ai_classroom.graph_service import get_graph_service
 from lyo_app.ai_classroom.models import (
-    GraphCourse, LearningNode, CourseProgress, NodeType, 
+    LearningNode, NodeType,
     MasteryState, ReviewSchedule
 )
 from lyo_app.ai_classroom.schemas import (
@@ -33,7 +32,6 @@ from lyo_app.ai_classroom.schemas import (
     LearningNodeRead, LearningNodeWithAssets,
     ReviewQueueResponse, ReviewItem, ReviewSubmitRequest, ReviewSubmitResponse,
     MasteryDashboard, MasteryStateRead,
-    CelebrationTrigger, AdSlot
 )
 
 logger = logging.getLogger(__name__)
@@ -444,10 +442,9 @@ async def get_review_queue(
             # The check block this schedule was created from, when there is
             # one. Empty rather than invented for schedules that name no item.
             node_id=str(entry.get("item_id") or ""),
-            # The skill's own id. This was previously a fixed placeholder
-            # string for every row, with a comment saying a real lookup would
-            # happen in production.
-            concept_name=str(entry.get("skill_id") or ""),
+            # Keep the persisted ID for submissions but show a readable name
+            # when this schedule points to a scoped classroom skill.
+            concept_name=str(entry.get("skill_name") or entry.get("skill_id") or ""),
             last_reviewed_at=entry.get("last_review"),
             interval_days=int(entry.get("interval_days") or 1),
             # SM-2's repetition count *is* the streak: consecutive successful

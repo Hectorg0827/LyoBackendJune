@@ -23,18 +23,19 @@ logger = logging.getLogger(__name__)
 
 
 class AdaptiveSession:
-    def __init__(self, teacher: AdaptiveTeacher):
+    def __init__(self, teacher: AdaptiveTeacher, skill_resolver=None):
         self.teacher = teacher
+        self.skill_resolver = skill_resolver
 
     @staticmethod
     def record_concept(context, state: GuidedState) -> str | None:
-        """Keep the question's public identity and committed evidence together.
-
-        An authored lesson or a focused study-plan session keeps the canonical
-        lesson/topic key that readiness and Chat already read. A free-topic
-        pathway explicitly opened for unit records names each distinct skill
-        from its saved plan. The scope is immutable for the life of that plan.
-        """
+        """Keep the question, evidence and review on the same saved skill ID."""
+        if state.identity_required:
+            if state.record_scope == "topic":
+                return state.topic_skill_id
+            index = state.active_review_index
+            index = index if index is not None else state.unit_index
+            return state.skill_ids[index] if index < len(state.skill_ids) else None
         if state.record_scope == "unit":
             index = state.active_review_index
             return state.plan.units[index].title if index is not None else state.unit.title
@@ -47,6 +48,33 @@ class AdaptiveSession:
         state = GuidedState.model_validate(raw) if raw else None
         if state and state.owner != context.user_id:
             raise ValueError("Guided session owner mismatch")
+        if state is not None and self.skill_resolver is not None and not state.identity_required:
+            try:
+                identity = await self.skill_resolver(context, state.plan)
+            except Exception as exc:
+                logger.warning("Could not resolve saved classroom skills: %s", type(exc).__name__)
+                return self.unavailable(context, state)
+            state.skill_ids = identity.unit_ids
+            state.topic_skill_id = identity.topic_id
+            state.identity_required = True
+            # Earlier servers could record every unit against one broad
+            # lesson key. Keep historical events unchanged, but bind the
+            # still-open question to the specific taught unit from now on.
+            state.record_scope = "unit"
+            if state.scene:
+                # The question was already shown before the identity upgrade.
+                # Rebind its public component to the same unit without changing
+                # the question, answer key, or any historical outbox entry.
+                concept_id = self.record_concept(context, state)
+                for component in state.scene.get("components", []):
+                    if component.get("type") in ("QuizCard", "InputField"):
+                        component["concept_id"] = concept_id
+                if state.record_scope == "unit":
+                    indices = sorted(set([*state.completed, *state.skipped, state.unit_index]))
+                    state.scene.setdefault("metadata", {})["target_concepts"] = [
+                        state.skill_ids[i] for i in indices if i < len(state.skill_ids)
+                    ]
+            progress["guided_state"] = state.model_dump(mode="json")
         if state is None:
             if intent == ActionIntent.UPDATE_ACTIVITY:
                 return self.unavailable(context, None)
@@ -57,13 +85,24 @@ class AdaptiveSession:
                 plan = await self.teacher.plan(context)
             except TeachingUnavailable:
                 return self.unavailable(context, None)
+            identity = None
+            if self.skill_resolver is not None:
+                try:
+                    identity = await self.skill_resolver(context, plan)
+                except Exception as exc:
+                    logger.warning("Could not resolve classroom skills: %s", type(exc).__name__)
+                    return self.unavailable(context, None)
             challenge = context.classroom_mode.value in ("challenge", "review")
             state = GuidedState(
                 owner=context.user_id, course_id=context.course_id,
                 lesson_id=context.lesson_id, lesson_index=context.lesson_index,
                 plan=plan, mode=context.classroom_mode.value,
-                record_scope=("unit" if progress["record_scope"] == "unit"
-                              and not context.lesson_title and len(plan.units) > 1 else "topic"),
+                record_scope=("unit" if self.skill_resolver is not None or
+                              (not context.lesson_title and progress["record_scope"] == "unit"
+                               and len(plan.units) > 1) else "topic"),
+                skill_ids=identity.unit_ids if identity else [],
+                topic_skill_id=identity.topic_id if identity else None,
+                identity_required=self.skill_resolver is not None,
                 remaining_units=list(range(1, len(plan.units))),
                 challenge_requested=challenge,
                 phase="independent" if challenge else "diagnose",
@@ -803,22 +842,29 @@ class AdaptiveSession:
         """One earlier skill, inside a later unit, after normal practice starts."""
         if state.phase == "transfer" or state.active_review_index is not None:
             return False
-        due = {slugify_skill(item) for item in context.scheduled_due_items}
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+        key = lambda item: item if is_concept_graph_id(item) else slugify_skill(item)
+        due = {key(item) for item in context.scheduled_due_items}
         candidates = [item for item in state.review_history
                       if item["unit_index"] < state.unit_index
                       and item["unit_index"] not in state.interleaved_units]
         if not candidates:
             return False
         candidates.sort(key=lambda item: (
-            slugify_skill(item["concept_id"]) not in due, item["unit_index"]
+            key(item["concept_id"]) not in due, item["unit_index"]
         ))
         item = candidates[0]
         state.active_review_index = item["unit_index"]
         state.review_return_phase = state.phase
         # A due schedule only supports a retention claim after a real time gap.
+        # The due item must also name this exact skill. Old topic-scoped
+        # schedules cannot prove retention of a newly scoped unit skill.
         # Same-sitting review after an independent success is application.
         age = datetime.now(timezone.utc) - datetime.fromisoformat(item["decided_at"])
-        state.review_is_due = slugify_skill(item["concept_id"]) in due and age >= timedelta(hours=20)
+        current_id = self.record_concept(context, state)
+        state.review_is_due = (current_id is not None and
+                               key(item["concept_id"]) == key(current_id) and
+                               key(item["concept_id"]) in due and age >= timedelta(hours=20))
         state.phase = "interleave"
         return True
 
@@ -961,7 +1007,11 @@ class AdaptiveSession:
             # encountered so the record panel can place their evidence in this
             # class even when a new device has no earlier board history.
             indices = sorted(set([*state.completed, *state.skipped, state.unit_index]))
-            scene.metadata.target_concepts = [state.plan.units[i].title for i in indices]
+            scene.metadata.target_concepts = [
+                state.skill_ids[i] if state.identity_required and i < len(state.skill_ids)
+                else state.plan.units[i].title for i in indices
+                if not state.identity_required or i < len(state.skill_ids)
+            ]
         state.scene = scene.model_dump(mode="json")
         progress["guided_state"] = state.model_dump(mode="json")
         return scene
