@@ -153,6 +153,11 @@ class TaskOption(StrictModel):
         return self
 
 
+def comparable_text(value: str) -> str:
+    """Case and punctuation insensitive comparison, with word boundaries."""
+    return " ".join(re.findall(r"\w+", value.casefold().replace("_", " "), flags=re.UNICODE))
+
+
 class LearningTask(StrictModel):
     # Private authoring object, never serialized directly to a client.
     kind: Literal["predict", "choose", "apply", "diagnose", "explain"]
@@ -191,6 +196,12 @@ class LearningTask(StrictModel):
                 raise ValueError("Choice tasks need exactly one correct option")
             if len({option.id for option in self.options}) != len(self.options):
                 raise ValueError("Option identifiers must be unique")
+            if len({comparable_text(option.label) for option in self.options}) != len(self.options):
+                raise ValueError("Choice options must have distinct visible answers")
+            distractor_tags = [comparable_text(option.misconception) for option in self.options
+                               if not option.correct and not option.abstains and option.misconception]
+            if len(set(distractor_tags)) != len(distractor_tags):
+                raise ValueError("Distractors must diagnose distinct misconceptions")
             if sum(option.abstains for option in self.options) > 1:
                 raise ValueError("One option is enough for saying 'not sure yet'")
         elif self.options:
@@ -302,6 +313,32 @@ class TransferPracticeTurn(PracticeTurn):
         if self.task.kind != "apply" or self.task.response_format == "choice":
             raise ValueError("Transfer requires an open application in a new setting")
         return self
+
+
+def validate_semantic_content(turn: LearningTurn) -> None:
+    """Reject mechanically detectable meaning failures before a learner sees them.
+
+    This cannot establish whether a distractor is plausible, whether a
+    near_miss/fundamental gap is correctly labeled, or whether the teaching is
+    fluent but wrong. `AdaptiveTeacher.semantic_judge` is the integration hook
+    for a separate model review of those remaining cases; a future judge must
+    inspect the complete turn and unit, not trust the authoring model's claim.
+    """
+    task = turn.task
+    if task is None:
+        return
+    answer = (next(option.label for option in task.options if option.correct)
+              if task.response_format == "choice" else task.example_answer)
+    normalized = comparable_text(answer)
+    # Short numbers, fractions and one-word answers often occur as *data* in
+    # the scenario. Reject a full answer phrase, not a necessary operand.
+    if len(normalized) < 7 or len(normalized.split()) < 2:
+        return
+    visible = [turn.speech, turn.board_title, turn.board_content, task.scenario, task.question]
+    if turn.visual:
+        visible.extend([turn.visual.caption, turn.visual.description])
+    if any(f" {normalized} " in f" {comparable_text(item)} " for item in visible):
+        raise TeachingContractError("The visible question or teaching beat reveals the answer")
 
 
 class DiagnosticTurn(LearningTurn):
@@ -665,8 +702,12 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
 
 
 class AdaptiveTeacher:
-    def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json):
+    def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json,
+                 semantic_judge: Callable[..., Awaitable[bool]] | None = None):
         self.generate = generate
+        # Optional separate review of meaning the deterministic gate cannot
+        # infer: distractor plausibility, gap labeling and factual teaching.
+        self.semantic_judge = semantic_judge
 
     async def plan(self, context) -> LearningPlan:
         count = unit_count(context.target_duration_minutes, context.total_lessons)
@@ -741,6 +782,10 @@ class AdaptiveTeacher:
                     teaching_prompt(move, focused=focused),
                     payload, turn_schema(move, focused),
                 )
+                turn = turn_schema(move, focused).model_validate(turn.model_dump())
+                validate_semantic_content(turn)
+                if self.semantic_judge is not None and not await self.semantic_judge(move, unit, turn):
+                    raise TeachingContractError("Independent semantic review rejected this teaching turn")
                 if move == "diagnose":
                     if turn.task is None or turn.demonstration:
                         raise TeachingContractError("A diagnostic is one question, not a lesson")
