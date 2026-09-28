@@ -36,6 +36,30 @@ classroom_model_tokens = Counter(
     "lyo_classroom_model_tokens_total", "Reported tokens used by classroom model calls",
     ["operation", "provider"],
 )
+# Bounded operational labels: skill titles, answers, prompts, user identifiers
+# and misconception text never enter Prometheus. A saved event in GuidedState
+# ties a ceiling comparison to its unit index for per-skill analysis.
+classroom_ceiling_comparisons = Counter(
+    "lyo_classroom_ceiling_comparisons_total",
+    "Opening ceiling compared with later graded work",
+    ["predicted", "observed", "result", "source"],
+)
+classroom_unit_outcomes = Counter(
+    "lyo_classroom_unit_outcomes_total", "Classroom units closed by outcome",
+    ["outcome"],
+)
+classroom_diagnostics = Counter(
+    "lyo_classroom_diagnostics_total", "Opening diagnostic decisions",
+    ["response"],
+)
+classroom_teaching_turns = Counter(
+    "lyo_classroom_teaching_turns_total", "Validated classroom teaching turns by move",
+    ["move"],
+)
+# Rates use existing denominators: completed / all unit outcomes; reteach and
+# prerequisite moves / all teaching turns; abstained or skipped / all
+# diagnostics. Ceiling accuracy is confirmed / (confirmed + contradicted);
+# unresolved remains visible instead of being silently counted as accurate.
 
 
 class TeachingUnavailable(RuntimeError):
@@ -442,6 +466,12 @@ class GuidedState(StrictModel):
     # it clears it, and from then on the unit is driven by what the learner
     # actually does.
     diagnostic_ceiling: Literal["guided", "faded", "independent"] | None = None
+    # The opening prediction survives pacing withdrawal so it can be checked
+    # against later work exactly once, even after a reconnect.
+    ceiling_prediction: Literal["guided", "faded", "independent"] | None = None
+    ceiling_source: Literal["tap", "open", "record"] = "tap"
+    ceiling_assessed: bool = False
+    unit_outcome_recorded: bool = False
     # The misconception the tapped distractor named, so the teaching that
     # follows can address the error the learner actually made.
     diagnostic_misconception: str = ""

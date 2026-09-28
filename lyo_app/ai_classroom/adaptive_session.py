@@ -10,12 +10,14 @@ from pydantic import ValidationError
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.adaptive_teaching import (
     AdaptiveTeacher, Evaluation, GuidedState, LearningTurn, PendingTask, TeachingUnavailable,
-    normalize_text, requests_help, validation_summary,
+    classroom_ceiling_comparisons, classroom_diagnostics, classroom_teaching_turns,
+    classroom_unit_outcomes, normalize_text, requests_help, validation_summary,
 )
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
     QuizOption, Scene, SceneType, TeacherMessage,
 )
+from lyo_app.ai_classroom.teaching_prompt import MOVES
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +269,7 @@ class AdaptiveSession:
                 if result.verdict == "correct":
                     state.successes += 1
                     state.support_attempts = 0
+                    self.confirm_ceiling(state, pending)
                     if self.after_success(state, pending):
                         state.pending = None
                         self.schedule_review(context, state, passed=True)
@@ -307,6 +310,7 @@ class AdaptiveSession:
                 # practice does — the learner has asked to be taught it now.
                 state.diagnosed = True
                 state.return_to_checkpoint = False
+                classroom_diagnostics.labels("skipped").inc()
                 self.event(state, "diagnostic", phase="diagnose", verdict="declined",
                            target=pending.task.target_index)
                 state.last_feedback = self.copy(
@@ -353,6 +357,7 @@ class AdaptiveSession:
                 # itself the finding: teach the skill.
                 self.handled(state, pending.id)
                 state.diagnosed = True
+                classroom_diagnostics.labels("help").inc()
                 self.event(state, "diagnostic", phase="diagnose", verdict="asked_for_help",
                            target=pending.task.target_index)
                 state.phase = move = "orient"
@@ -398,7 +403,9 @@ class AdaptiveSession:
             # A probe that somehow arrived without a question is an
             # orientation, not a modelling step: there is nothing to model yet.
             state.phase = "orient" if move in ("orient", "diagnose") else "model"
-            return self.save(progress, state, self.delivered(state, self.presentation_scene(context, state)))
+            scene = self.presentation_scene(context, state)
+            classroom_teaching_turns.labels(move if move in MOVES else "other").inc()
+            return self.save(progress, state, self.delivered(state, scene))
 
         state.presentation = None
         if move == "diagnose":
@@ -419,7 +426,9 @@ class AdaptiveSession:
         state.task_kinds = [*state.task_kinds, turn.task.kind][-8:]
         state.recent_questions = [*state.recent_questions, normalize_text(turn.task.scenario + " " + turn.task.question)][-12:]
         state.next_move = phase
-        return self.save(progress, state, self.delivered(state, self.checkpoint(context, state)))
+        scene = self.checkpoint(context, state)
+        classroom_teaching_turns.labels(move if move in MOVES else "other").inc()
+        return self.save(progress, state, self.delivered(state, scene))
 
     @staticmethod
     def delivered(state, scene):
@@ -495,6 +504,11 @@ class AdaptiveSession:
         state.return_to_checkpoint = False
         unaided = not pending.assisted and not pending.extra_help_used
         declined = option is not None and option.abstains
+        classroom_diagnostics.labels(
+            "abstained" if declined else
+            result.verdict if result.verdict in ("correct", "incorrect", "partial", "clarify")
+            else "unavailable"
+        ).inc()
         self.event(state, "diagnostic", phase="diagnose", target=pending.task.target_index,
                    verdict="declined" if declined else result.verdict, unaided=unaided,
                    response_format=pending.task.response_format, response=response,
@@ -556,6 +570,8 @@ class AdaptiveSession:
             ceiling, entry = None, "orient"
 
         state.diagnostic_ceiling = ceiling
+        state.ceiling_prediction = ceiling
+        state.ceiling_source = "open" if pending.task.response_format != "choice" else "tap"
         state.diagnostic_misconception = "" if declined else (result.misconception or "")
         state.phase = entry
         return entry
@@ -604,6 +620,46 @@ class AdaptiveSession:
         return self.summary(context, state)
 
     @staticmethod
+    def compare_ceiling(state, observed: str, result: str) -> None:
+        if state.ceiling_prediction is None or state.ceiling_assessed:
+            return
+        classroom_ceiling_comparisons.labels(
+            state.ceiling_prediction, observed, result, state.ceiling_source,
+        ).inc()
+        AdaptiveSession.event(state, "ceiling_accuracy", predicted=state.ceiling_prediction,
+                              observed=observed, result=result, source=state.ceiling_source)
+        state.ceiling_assessed = True
+
+    @staticmethod
+    def demonstrated_rung(state) -> str:
+        if state.independent_application:
+            return "independent"
+        if state.faded_targets:
+            return "faded"
+        if state.guided_targets:
+            return "guided"
+        return "none"
+
+    def confirm_ceiling(self, state, pending) -> None:
+        predicted = state.ceiling_prediction
+        if predicted is None or state.ceiling_assessed or pending.task.kind == "explain":
+            return
+        if pending.phase != predicted or pending.extra_help_used:
+            return
+        if predicted in ("independent", "faded") and pending.assisted:
+            # Faded tasks are scaffolded in the state, but an answer without
+            # extra help still demonstrates that rung. Independent is unaided.
+            if predicted == "independent":
+                return
+        if predicted == "independent" and (
+            pending.task.kind != "apply" or not (
+                state.challenge_requested or all(i in state.faded_targets for i in range(len(state.unit.targets)))
+            )
+        ):
+            return
+        self.compare_ceiling(state, pending.phase, "confirmed")
+
+    @staticmethod
     def withdraw_ceiling(state):
         """Drop what the opening tap claimed, once the learner's work disagrees.
 
@@ -618,6 +674,7 @@ class AdaptiveSession:
         reteaching at the error the learner made before the lesson started
         instead of the one they just made — which is the teacher not listening.
         """
+        AdaptiveSession.compare_ceiling(state, AdaptiveSession.demonstrated_rung(state), "contradicted")
         state.diagnostic_ceiling = None
         state.diagnostic_misconception = ""
 
@@ -676,6 +733,9 @@ class AdaptiveSession:
             return
         state.diagnosed = True
         state.diagnostic_ceiling = "independent"
+        state.ceiling_prediction = "independent"
+        state.ceiling_source = "record"
+        classroom_diagnostics.labels("record").inc()
         state.phase = state.next_move = "guided"
         state.last_feedback = self.copy(
             context,
@@ -809,7 +869,8 @@ class AdaptiveSession:
                 state.phase = "independent"
         elif pending.phase == "independent":
             ready = all(i in state.faded_targets for i in range(len(state.unit.targets)))
-            if (ready or state.challenge_requested) and not pending.assisted and pending.task.response_format != "choice":
+            if ((ready or state.challenge_requested) and pending.task.kind == "apply"
+                    and not pending.assisted and pending.task.response_format != "choice"):
                 state.independent_application = True
                 state.completed = sorted(set([*state.completed, state.unit_index]))
                 state.skipped = [i for i in state.skipped if i != state.unit_index]
@@ -821,6 +882,10 @@ class AdaptiveSession:
     @staticmethod
     def reset_unit(state):
         state.diagnostic_ceiling = None
+        state.ceiling_prediction = None
+        state.ceiling_source = "tap"
+        state.ceiling_assessed = False
+        state.unit_outcome_recorded = False
         state.diagnostic_misconception = ""
         state.explained = False
         state.closing_win_asked = False
@@ -844,6 +909,14 @@ class AdaptiveSession:
 
     @staticmethod
     def finish_unit(state):
+        if not state.unit_outcome_recorded:
+            AdaptiveSession.compare_ceiling(
+                state, AdaptiveSession.demonstrated_rung(state), "unresolved"
+            )
+            classroom_unit_outcomes.labels(
+                "completed" if state.independent_application else "needs_practice"
+            ).inc()
+            state.unit_outcome_recorded = True
         state.unit_done = bool(state.remaining_units)
         state.path_done = not state.remaining_units
         state.step_id = str(uuid4())
