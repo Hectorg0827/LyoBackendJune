@@ -249,6 +249,20 @@ async def test_provider_outage_does_not_invent_a_generic_quiz():
 
 
 @pytest.mark.asyncio
+async def test_reopening_an_unavailable_class_retries_the_saved_step():
+    teacher = ScriptedTeacher()
+    teacher.turn.side_effect = TeachingUnavailable("temporary outage")
+    runner, progress, ctx = AdaptiveSession(teacher), {}, context()
+    failed = await runner.run(ctx, progress, action(welcome=True))
+    assert any(getattr(c, "action_intent", None) == ActionIntent.RETRY for c in failed.components)
+    teacher.turn.side_effect = teacher._turn
+    reopened = await runner.run(ctx, progress, action(welcome=True))
+    assert reopened.scene_id != failed.scene_id
+    assert any(isinstance(c, QuizCard) for c in reopened.components)
+    assert state(progress).pending is not None
+
+
+@pytest.mark.asyncio
 async def test_questions_keep_existing_client_types_and_allow_short_answers():
     _, runner, progress, ctx, _ = await start()
     await tap_probe(runner, progress, ctx)

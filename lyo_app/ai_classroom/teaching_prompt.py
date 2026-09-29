@@ -53,7 +53,11 @@ TASK_RULES = (
     "invent a situation or broadly explain the concept. Make response_hint say "
     "what a brief answer should include; do not enforce length. Write criteria "
     "about MEANING, not keywords, only for what question explicitly asks. "
-    "example_answer is private. "
+    "example_answer is private. Give scenario at least 15 characters, "
+    "question at least 10 characters, response_hint at least 5 characters, "
+    "and an example_answer that explicitly answers this situation. For a "
+    "choice task use 2–4 distinct option ids and labels, exactly one correct, "
+    "and no options on an open task. "
 )
 
 #: Only what has been taught may be tested. The original carried this with an

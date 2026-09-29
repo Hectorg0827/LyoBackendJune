@@ -114,7 +114,13 @@ class AdaptiveSession:
             progress["guided_state"] = state.model_dump()
 
         if data.get("welcome") and state.scene:
-            return Scene.model_validate(state.scene)
+            # Reopening after an authoring outage must try the saved move
+            # again, rather than replay an unusable Retry scene forever.
+            retry_on_open = next((c for c in state.scene.get("components", [])
+                                  if c.get("action_intent") == ActionIntent.RETRY), None)
+            if retry_on_open is None:
+                return Scene.model_validate(state.scene)
+            intent = ActionIntent.RETRY
         if intent == ActionIntent.UPDATE_ACTIVITY:
             return self.update_activity(context, progress, state, trigger)
         if trigger.component_id in state.handled and state.scene:

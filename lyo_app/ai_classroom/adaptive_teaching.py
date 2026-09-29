@@ -740,7 +740,12 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     envelope = ("\nReturn ONE JSON object with these root keys: " + root_keys +
                 ". Fill them with authored content. Do not echo the input context or return "
                 "the schema itself. Nested definitions belong only inside their named fields.\n")
-    configured_providers = ["gpt-4o-mini", "gemini-2.5-flash"]
+    # The opening probe is a small but unusually strict four-option contract.
+    # A rejected probe leaves the learner with no class at all, so start it on
+    # the more capable configured model; later turns retain the cheaper route.
+    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-2.5-flash"]
+                            if issubclass(schema, DiagnosticTurn) else
+                            ["gpt-4o-mini", "gemini-2.5-flash"])
     rejected_provider = payload.get("_rejected_provider")
     providers = [p for p in configured_providers if p != rejected_provider]
     if rejected_provider in configured_providers:
@@ -802,12 +807,13 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
 class AdaptiveTeacher:
     def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json,
                  semantic_judge: Callable[..., Awaitable[bool]] | None = None,
-                 package_cache=None):
+                 package_cache=None, fast_start: bool = False):
         self.generate = generate
         # Optional separate review of meaning the deterministic gate cannot
         # infer: distractor plausibility, gap labeling and factual teaching.
         self.semantic_judge = semantic_judge
         self.package_cache = package_cache
+        self.fast_start = fast_start
 
     @staticmethod
     def saved_skill(state: GuidedState, move: str) -> str | None:
@@ -869,6 +875,11 @@ class AdaptiveTeacher:
                     # A broken cached answer must never be shown to a learner.
                     classroom_unit_package_events.labels("invalid").inc()
                     await self.package_cache.evict(key)
+            if package is None and move == "diagnose" and self.fast_start:
+                # A complete multi-target package can take over a minute and
+                # still fail validation. Start with one bounded question; the
+                # ordinary unit package can be prepared for later moves.
+                return None
             if package is None:
                 try:
                     package = await self.build_package(context, unit, key.level_band)
