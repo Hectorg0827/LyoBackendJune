@@ -413,6 +413,26 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
         _SESSION_PROGRESS.pop(key, None)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("move", ["orient", "guided", "faded", "independent", "transfer"])
+async def test_live_cache_miss_authors_only_the_next_scene(db, move):
+    ctx, unit = context(target_duration_minutes=8), plan(1).units[0]
+    skill = (await resolve_skill_plan(db, ctx, LearningPlan(units=[unit]))).unit_ids[0]
+    state = GuidedState(owner=ctx.user_id, plan=LearningPlan(units=[unit]),
+                        skill_ids=[skill], identity_required=True, record_scope="unit")
+    scripted = ScriptedTeacher()
+    generated = AsyncMock(side_effect=lambda _prompt, _payload, _schema:
+                          scripted._turn(ctx, state, move))
+    teacher = AdaptiveTeacher(generate=generated, package_cache=DatabaseUnitPackageCache(db),
+                              fast_start=True)
+    teacher.build_package = AsyncMock(side_effect=AssertionError("Synchronous package build"))
+    turn = await teacher.turn(ctx, state, move)
+    assert turn is not None and generated.await_count == 1
+    assert generated.await_args.args[2] is not UnitPackage
+    teacher.build_package.assert_not_awaited()
+    assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
+
+
 def test_package_rejects_repeated_questions_and_wrong_target():
     ctx, unit = context(), plan(1).units[0]
     package = scripted_package(ctx, unit)

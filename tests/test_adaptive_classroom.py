@@ -208,19 +208,32 @@ async def test_duplicate_or_stale_answer_cannot_grade_another_checkpoint():
 
 
 @pytest.mark.asyncio
-async def test_evaluator_outage_keeps_answer_ungraded_and_retry_reuses_it():
+async def test_evaluator_outage_keeps_answer_ungraded_and_continue_moves_to_a_new_question():
     teacher, runner, progress, ctx, _ = await start()
     await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     teacher.evaluate.return_value = evaluation("unavailable", confidence=0)
+    old_phase = state(progress).pending.phase
     scene = await answer(runner, progress, ctx, "One half")
     assert state(progress).pending.retry_response == "One half"
     assert len(state(progress).outbox) == 1
     assert "not graded" in json.dumps(scene.model_dump(mode="json"))
-    teacher.evaluate.return_value = evaluation()
-    await runner.run(ctx, progress, action(ActionIntent.RETRY))
-    assert teacher.evaluate.await_args.args[-1] == "One half"
-    assert len(state(progress).outbox) == 2
+    button = next(c for c in scene.components if getattr(c, "action_intent", None))
+    assert button.action_intent == ActionIntent.SKIP_QUESTION
+    saved_id = state(progress).pending.id
+    restored = await runner.run(ctx, progress, action(welcome=True))
+    assert restored.scene_id == scene.scene_id
+    next_scene = await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, button.component_id))
+    assert next_scene.scene_id != scene.scene_id
+    assert state(progress).pending.id != saved_id
+    assert state(progress).pending.phase == old_phase
+    assert state(progress).skipped == [] and state(progress).completed == []
+    assert len(state(progress).outbox) == 1
+    assert teacher.evaluate.await_count == 1
+    assert not state(progress).unit_done and not state(progress).path_done
+    repeated = await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, button.component_id))
+    assert repeated.scene_id == next_scene.scene_id
+    assert teacher.turn.await_args.args[2] == old_phase
 
 
 @pytest.mark.asyncio
@@ -333,6 +346,24 @@ async def test_unreliable_grading_never_becomes_a_wrong_answer(invalid):
     pending = PendingTask(task=task(), speech="Equal parts of one whole.", board_title="Halves", board_content="Compare pieces.")
     result = await AdaptiveTeacher(generate).evaluate(context(), pending, "half")
     assert result.verdict == "unavailable"
+    assert generate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_invalid_evaluation_is_repaired_once_against_the_same_saved_answer():
+    pending = PendingTask(task=task(), speech="Equal pieces of one whole.",
+                          board_title="Halves", board_content="Compare pieces.")
+    generate = AsyncMock(side_effect=[
+        evaluation(criteria=[CriterionResult(index=0, met=True, quote="invented")]),
+        evaluation(criteria=[CriterionResult(index=0, met=True, quote="half"),
+                             CriterionResult(index=1, met=False, quote="")],
+                   verdict="partial", follow_up="Why is a half bigger?"),
+    ])
+    result = await AdaptiveTeacher(generate).evaluate(context(), pending, "half")
+    assert result.verdict == "partial"
+    assert generate.await_count == 2
+    assert generate.await_args.args[1]["new_answer"] == "half"
+    assert "repair" in generate.await_args.args[1]
 
 
 @pytest.mark.asyncio

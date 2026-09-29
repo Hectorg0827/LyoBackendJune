@@ -22,6 +22,12 @@ class EmbeddingService:
     MODEL_NAME = "models/gemini-embedding-001"
     DIMENSION = 768
 
+    def __init__(self):
+        # A key reported as leaked cannot recover through retries. Keep the
+        # rest of the lesson responsive until the service is restarted with a
+        # replacement key.
+        self._key_rejected = False
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def embed_text(self, text: str) -> Optional[List[float]]:
         """
@@ -30,7 +36,7 @@ class EmbeddingService:
         """
         if not text:
             return None
-        if not settings.gemini_api_key:
+        if not settings.gemini_api_key or self._key_rejected:
             # No key configured (tests, minimal deploys): embeddings are
             # best-effort, don't attempt network calls that must fail.
             return None
@@ -52,8 +58,12 @@ class EmbeddingService:
                 return None
                 
         except Exception as e:
-            logger.error(f"Error generating embedding: {e}")
-            raise e
+            if "API key was reported as leaked" in str(e):
+                self._key_rejected = True
+                logger.error("Embedding key was rejected; disabling embeddings for this process")
+                return None
+            logger.error("Error generating embedding: %s", type(e).__name__)
+            raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def embed_query(self, query: str) -> Optional[List[float]]:
@@ -63,7 +73,7 @@ class EmbeddingService:
         """
         if not query:
             return None
-        if not settings.gemini_api_key:
+        if not settings.gemini_api_key or self._key_rejected:
             return None
 
         try:
@@ -80,8 +90,12 @@ class EmbeddingService:
             return None
             
         except Exception as e:
-            logger.error(f"Error generating query embedding: {e}")
-            raise e
+            if "API key was reported as leaked" in str(e):
+                self._key_rejected = True
+                logger.error("Embedding key was rejected; disabling embeddings for this process")
+                return None
+            logger.error("Error generating query embedding: %s", type(e).__name__)
+            raise
 
 # Global instance
 embedding_service = EmbeddingService()

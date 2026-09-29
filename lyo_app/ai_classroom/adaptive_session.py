@@ -235,8 +235,14 @@ class AdaptiveSession:
         answer = data.get("answer_data") or {}
         submitting = intent in (ActionIntent.SUBMIT_ANSWER, ActionIntent.SUBMIT_TRANSFER)
         retry_evaluation = (
-            intent in (ActionIntent.CONTINUE, ActionIntent.RETRY) and pending is not None
-            and pending.retry_response is not None and pending.task.response_format != "choice"
+            (recovering or (
+                intent == ActionIntent.CONTINUE and retry_button is not None
+                and trigger.component_id in (
+                    None, "continue", "web_continue", "android_continue",
+                    retry_button["component_id"],
+                )
+            )) and pending is not None and pending.retry_response is not None
+            and pending.task.response_format != "choice"
         )
         if submitting or retry_evaluation:
             if not pending or (not retry_evaluation and trigger.component_id != pending.id):
@@ -361,10 +367,38 @@ class AdaptiveSession:
             learner_input = response
 
         elif intent == ActionIntent.SKIP_QUESTION:
-            if not pending or trigger.component_id != pending.id:
+            ungraded_button = next((c for c in (state.scene or {}).get("components", [])
+                                    if c.get("action_intent") == ActionIntent.SKIP_QUESTION), None)
+            continue_ungraded = (pending is not None and pending.retry_response is not None
+                                 and ungraded_button is not None
+                                 and trigger.component_id == ungraded_button["component_id"])
+            if not pending or (trigger.component_id != pending.id and not continue_ungraded):
                 return self.current_or_retry(context, state)
             self.handled(state, pending.id)
-            if pending.phase == "diagnose":
+            if continue_ungraded:
+                # A provider failure is not a learner skipping or failing a
+                # question. Retire this ungraded checkpoint, keep every earlier
+                # success, and offer a fresh question at the same rung.
+                self.handled(state, ungraded_button["component_id"])
+                self.event(state, "evaluation_unavailable", phase=pending.phase,
+                           target=pending.task.target_index)
+                pending.retry_response = None
+                state.pending = None
+                state.return_to_checkpoint = False
+                state.last_feedback = self.copy(
+                    context, "Your answer was saved but not graded. Let's try a fresh example.",
+                    "Tu respuesta se guardó sin evaluar. Probemos un ejemplo nuevo.")
+                if pending.phase == "transfer":
+                    self.finish_transfer(context, state)
+                    return self.save(progress, state, self.summary(context, state))
+                if pending.phase == "interleave":
+                    move = self.end_interleave(state)
+                elif pending.phase == "diagnose":
+                    state.diagnosed = True
+                    state.phase = move = "orient"
+                else:
+                    state.phase = move = pending.phase
+            elif pending.phase == "diagnose":
                 # Passing on "can you already do this?" is itself an answer: no.
                 # It must not mark the skill for later review the way skipping
                 # practice does — the learner has asked to be taught it now.
@@ -1274,7 +1308,14 @@ class AdaptiveSession:
         return (lead + "\n\n" + material).strip() if material else lead
 
     def unavailable(self, context, state):
-        text = self.paused_notice(context)
+        ungraded = bool(state and state.pending and state.pending.retry_response is not None)
+        text = (self.copy(
+            context,
+            "Your answer couldn't be graded. It's saved and won't count as wrong. "
+            "Continue with a fresh example.",
+            "No pude evaluar tu respuesta. Está guardada y no contará como error. "
+            "Continúa con un ejemplo nuevo.",
+        ) if ungraded else self.paused_notice(context))
         components = [TeacherMessage(text=self.paused_teaching(context, state),
                                      emotion="encouraging", language_code=context.language_code)]
         # Keep the visible example, even after the final modelling beat has
@@ -1306,8 +1347,11 @@ class AdaptiveSession:
         components.append(ExampleBlock(component_id="classroom-recovery/notice",
             title=self.copy(context, "Your lesson is paused", "Tu lección está en pausa"),
             content=text, language_code=context.language_code))
-        components.append(CTAButton(label=self.copy(context, "Retry this step", "Reintentar este paso"),
-                                    action_intent=ActionIntent.RETRY, language_code=context.language_code))
+        components.append(CTAButton(
+            label=self.copy(context, "Continue with a new example", "Continuar con otro ejemplo")
+            if ungraded else self.copy(context, "Retry this step", "Reintentar este paso"),
+            action_intent=ActionIntent.SKIP_QUESTION if ungraded else ActionIntent.RETRY,
+            language_code=context.language_code))
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
 
     def current_or_retry(self, context, state):
