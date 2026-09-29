@@ -4,8 +4,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
-from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField
-from tests.adaptive_fixtures import action, context, engine, evaluation, seed
+from lyo_app.ai_classroom.sdui_models import InputField
+from tests.adaptive_fixtures import (
+    action, context, engine, evaluation, plan, seed, simulated_skill_identity,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +39,8 @@ async def test_a_live_answer_reaches_the_shared_event_stream_at_the_right_rung(c
         await instance.handle_transfer_submission("42", "fractions", component_id, "One half: fewer equal pieces.", 4000)
     log.assert_awaited_once()
     event = log.await_args.args[1]
-    assert event.user_id == 42 and event.concept_id == "compare_fractions"
+    assert event.user_id == 42
+    assert event.concept_id == simulated_skill_identity(ctx, plan()).unit_ids[0]
     assert event.source_surface == "classroom" and event.evidence_type == rung
     assert event.measurable_outcome == 1.0
     assert not event.skill_ids_json  # DKT is updated once directly, not again by the processor.
@@ -45,6 +48,7 @@ async def test_a_live_answer_reaches_the_shared_event_stream_at_the_right_rung(c
     assert "criteria" not in str(event.model_dump())
     assert "example_answer" not in str(event.model_dump())
     dkt.assert_awaited_once()
+    assert dkt.await_args.args[2] == event.concept_id
     assert dkt.await_args.args[4] == 4.0
 
 

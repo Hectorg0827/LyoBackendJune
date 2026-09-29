@@ -63,6 +63,9 @@ class ConceptRecord(BaseModel):
     """Everything this learner has shown about one concept."""
 
     concept_id: str
+    #: Human-readable title for persistent concept IDs. Legacy slug records
+    #: retain their original key and have no inferred title.
+    display_name: Optional[str] = None
     #: NOT_SEEN | EXPOSED | RECOGNIZED | EXPLAINED | APPLIED | TRANSFERRED |
     #: RETAINED | MASTERED — from `derive_mastery_state`, the same function the
     #: mastery projection uses.
@@ -268,7 +271,22 @@ async def learner_record(
             )
         ).all()
 
-        return LearnerRecord(concepts=build_records(rung_rows, misconception_rows))
+        records = build_records(rung_rows, misconception_rows)
+        from .mastery_projection import is_concept_graph_id
+        ids = [record.concept_id for record in records
+               if is_concept_graph_id(record.concept_id)]
+        if ids:
+            from lyo_app.ai_classroom.models import Concept
+            try:
+                async with db.begin_nested():
+                    names = {identity: display or name for identity, display, name in (await db.execute(
+                        select(Concept.id, Concept.display_name, Concept.name).where(Concept.id.in_(ids))
+                    )).all()}
+                for record in records:
+                    record.display_name = names.get(record.concept_id)
+            except Exception:
+                logger.exception("Could not load concept titles for learner %s", user_id)
+        return LearnerRecord(concepts=records)
     except Exception:
         logger.exception("Learner record failed for user %s", user_id)
         return LearnerRecord(unavailable=True)

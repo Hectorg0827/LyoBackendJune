@@ -1,39 +1,44 @@
 """One server-owned teaching sequence for audio, silent, web and native clients."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.adaptive_teaching import (
     AdaptiveTeacher, Evaluation, GuidedState, LearningTurn, PendingTask, TeachingUnavailable,
-    normalize_text, requests_help, validation_summary,
+    classroom_ceiling_comparisons, classroom_diagnostics, classroom_teaching_turns,
+    classroom_unit_outcomes, normalize_text, requests_help, validation_summary,
 )
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
     QuizOption, Scene, SceneType, TeacherMessage,
 )
+from lyo_app.ai_classroom.teaching_prompt import MOVES
 
 logger = logging.getLogger(__name__)
 
 
 class AdaptiveSession:
-    def __init__(self, teacher: AdaptiveTeacher):
+    def __init__(self, teacher: AdaptiveTeacher, skill_resolver=None):
         self.teacher = teacher
+        self.skill_resolver = skill_resolver
 
     @staticmethod
     def record_concept(context, state: GuidedState) -> str | None:
-        """Keep the question's public identity and committed evidence together.
-
-        An authored lesson or a focused study-plan session keeps the canonical
-        lesson/topic key that readiness and Chat already read. A free-topic
-        pathway explicitly opened for unit records names each distinct skill
-        from its saved plan. The scope is immutable for the life of that plan.
-        """
+        """Keep the question, evidence and review on the same saved skill ID."""
+        if state.identity_required:
+            if state.record_scope == "topic":
+                return state.topic_skill_id
+            index = state.active_review_index
+            index = index if index is not None else state.unit_index
+            return state.skill_ids[index] if index < len(state.skill_ids) else None
         if state.record_scope == "unit":
-            return state.unit.title
+            index = state.active_review_index
+            return state.plan.units[index].title if index is not None else state.unit.title
         return context.lesson_title or context.topic
 
     async def run(self, context, progress: dict[str, Any], trigger) -> Scene:
@@ -43,6 +48,33 @@ class AdaptiveSession:
         state = GuidedState.model_validate(raw) if raw else None
         if state and state.owner != context.user_id:
             raise ValueError("Guided session owner mismatch")
+        if state is not None and self.skill_resolver is not None and not state.identity_required:
+            try:
+                identity = await self.skill_resolver(context, state.plan)
+            except Exception as exc:
+                logger.warning("Could not resolve saved classroom skills: %s", type(exc).__name__)
+                return self.unavailable(context, state)
+            state.skill_ids = identity.unit_ids
+            state.topic_skill_id = identity.topic_id
+            state.identity_required = True
+            # Earlier servers could record every unit against one broad
+            # lesson key. Keep historical events unchanged, but bind the
+            # still-open question to the specific taught unit from now on.
+            state.record_scope = "unit"
+            if state.scene:
+                # The question was already shown before the identity upgrade.
+                # Rebind its public component to the same unit without changing
+                # the question, answer key, or any historical outbox entry.
+                concept_id = self.record_concept(context, state)
+                for component in state.scene.get("components", []):
+                    if component.get("type") in ("QuizCard", "InputField"):
+                        component["concept_id"] = concept_id
+                if state.record_scope == "unit":
+                    indices = sorted(set([*state.completed, *state.skipped, state.unit_index]))
+                    state.scene.setdefault("metadata", {})["target_concepts"] = [
+                        state.skill_ids[i] for i in indices if i < len(state.skill_ids)
+                    ]
+            progress["guided_state"] = state.model_dump(mode="json")
         if state is None:
             if intent == ActionIntent.UPDATE_ACTIVITY:
                 return self.unavailable(context, None)
@@ -53,18 +85,31 @@ class AdaptiveSession:
                 plan = await self.teacher.plan(context)
             except TeachingUnavailable:
                 return self.unavailable(context, None)
+            identity = None
+            if self.skill_resolver is not None:
+                try:
+                    identity = await self.skill_resolver(context, plan)
+                except Exception as exc:
+                    logger.warning("Could not resolve classroom skills: %s", type(exc).__name__)
+                    return self.unavailable(context, None)
             challenge = context.classroom_mode.value in ("challenge", "review")
             state = GuidedState(
                 owner=context.user_id, course_id=context.course_id,
                 lesson_id=context.lesson_id, lesson_index=context.lesson_index,
                 plan=plan, mode=context.classroom_mode.value,
-                record_scope=("unit" if progress["record_scope"] == "unit"
-                              and not context.lesson_title and len(plan.units) > 1 else "topic"),
+                record_scope=("unit" if self.skill_resolver is not None or
+                              (not context.lesson_title and progress["record_scope"] == "unit"
+                               and len(plan.units) > 1) else "topic"),
+                skill_ids=identity.unit_ids if identity else [],
+                topic_skill_id=identity.topic_id if identity else None,
+                identity_required=self.skill_resolver is not None,
                 remaining_units=list(range(1, len(plan.units))),
                 challenge_requested=challenge,
                 phase="independent" if challenge else "diagnose",
                 next_move="independent" if challenge else "diagnose",
             )
+            if not challenge:
+                self.open_unit(context, state)
             progress["course_complete"] = False
             progress["guided_state"] = state.model_dump()
 
@@ -91,6 +136,7 @@ class AdaptiveSession:
             ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE,
         ):
             self.reset_unit(state)
+            self.open_unit(context, state)
             state.path_done = False
         if state.path_done and intent == ActionIntent.REQUEST_REVIEW:
             needs_support = bool(state.skipped)
@@ -110,9 +156,11 @@ class AdaptiveSession:
             self.handled(state, state.step_id)
             state.unit_index = state.remaining_units.pop(0)
             self.reset_unit(state)
+            self.open_unit(context, state)
 
         # Demonstrations are paced by explicit, identifiable Continue events.
         # Asking a question may interrupt them without throwing the example away.
+        closing = False
         if state.presentation and intent == ActionIntent.CONTINUE:
             if not self.current_continue(state, trigger):
                 return self.current_or_retry(context, state)
@@ -140,15 +188,37 @@ class AdaptiveSession:
                 # Teaching continues after supported remediation. Record what
                 # needs another visit; do not turn repeated difficulty into a
                 # pass-or-repeat gate or award unearned completion evidence.
-                if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+                #
+                # And do not end here. A learner who has just been wrong three
+                # times leaves with a run of failures as the whole experience of
+                # the skill, which is most of whether they come back. They get
+                # one question at the level of the prerequisite just taught,
+                # whatever they answer with, so the last thing that happens is
+                # something they can do.
+                if not state.closing_win_asked:
+                    state.closing_win_asked = True
+                    state.next_move = "closing_win"
+                    state.phase = state.phase if state.phase in ("guided", "faded") else "guided"
+                    state.last_feedback = self.copy(context,
+                        "We've worked through the tricky step together. One more, on just that step.",
+                        "Revisamos juntos el paso difícil. Una más, solo sobre ese paso.")
+                    closing = True
+                elif state.unit_index not in state.skipped and state.unit_index not in state.completed:
                     state.skipped.append(state.unit_index)
-                self.event(state, "practise_later", phase=state.phase, reason="continued_after_support")
-                state.last_feedback = self.copy(context,
-                    "We've worked through the tricky step together. Let's keep learning and revisit this skill for more practice.",
-                    "Revisamos juntos el paso difícil. Sigamos aprendiendo y volvamos a esta habilidad para practicarla más.")
-                self.finish_unit(state)
-                return self.save(progress, state, self.summary(context, state))
-            state.phase = state.next_move = "guided"
+                if not closing:
+                    # A skill the learner could not do today is the one most
+                    # worth bringing back soonest, so it is scheduled as a
+                    # failed recall rather than left out altogether.
+                    self.schedule_review(context, state, passed=False)
+                    self.event(state, "practise_later", phase=state.phase,
+                               reason="continued_after_support")
+                    state.last_feedback = self.copy(context,
+                        "We've worked through the tricky step together. Let's keep learning and revisit this skill for more practice.",
+                        "Revisamos juntos el paso difícil. Sigamos aprendiendo y volvamos a esta habilidad para practicarla más.")
+                    self.finish_unit(state)
+                    return self.save(progress, state, self.summary(context, state))
+            elif not closing:
+                state.phase = state.next_move = "guided"
         elif state.presentation and intent in (
             ActionIntent.SUBMIT_ANSWER, ActionIntent.SUBMIT_TRANSFER, ActionIntent.RETRY,
         ) and not recovering:
@@ -201,10 +271,22 @@ class AdaptiveSession:
                        verdict=result.verdict, extra_help=pending.extra_help_used,
                        response_format=pending.task.response_format, response=response,
                        feedback=result.feedback, misconception=result.misconception)
+            if state.closing_win_asked and pending.phase != "diagnose":
+                return self.save(progress, state,
+                                 self.close_on_a_success(context, state, pending, result, data))
             if pending.phase == "diagnose":
                 move = self.after_diagnostic(context, state, pending, result, response,
                                              response_time_ms=data.get("response_time_ms"),
                                              option=option if choice else None)
+            elif pending.phase in ("transfer", "interleave") and result.verdict != "clarify":
+                # Neither a transfer nor a revisit is a pass-or-repeat gate.
+                # A partial answer is useful feedback, but proves neither rung.
+                if result.verdict in ("correct", "incorrect"):
+                    self.record_practice(context, state, pending, result, data)
+                if pending.phase == "transfer":
+                    self.finish_transfer(context, state)
+                    return self.save(progress, state, self.summary(context, state))
+                move = self.end_interleave(state)
             elif result.verdict == "partial" and pending.attempts < 3:
                 # Needing a targeted follow-up on supported practice says the
                 # same thing a wrong answer says about a ceiling that claims
@@ -222,22 +304,24 @@ class AdaptiveSession:
                 return self.save(progress, state, self.checkpoint(context, state, follow_up=True))
             else:
                 if result.verdict in ("correct", "incorrect"):
-                    state.outbox.append(dict(
-                        event_id=pending.id, user_id=context.user_id,
-                        concept_id=self.record_concept(context, state),
-                        correct=result.verdict == "correct",
-                        evidence_type=None if choice else "application" if pending.task.kind == "apply" else "explanation",
-                        hints_used=pending.hints_used, hint_level=pending.hint_level,
-                        misconception=result.misconception if result.verdict == "incorrect" else None,
-                        response_time_ms=data.get("response_time_ms"),
-                    ))
+                    self.record_practice(context, state, pending, result, data)
                 if result.verdict == "correct":
                     state.successes += 1
                     state.support_attempts = 0
+                    self.confirm_ceiling(state, pending)
                     if self.after_success(state, pending):
                         state.pending = None
+                        self.schedule_review(context, state, passed=True)
                         return self.save(progress, state, self.summary(context, state))
                     move = state.phase
+                    # Their first success is the moment they have something to
+                    # explain and have just been shown they can do it. The
+                    # ladder keeps its place: `state.phase` is untouched, so
+                    # the next move after this is where practice left off.
+                    if not state.explained and not state.challenge_requested:
+                        move = "explain"
+                    elif self.start_interleave(context, state):
+                        move = "interleave"
                 elif result.verdict == "clarify":
                     # Ambiguous wording and requests for help are not failures.
                     move = "help" if requests_help(response) else "clarify"
@@ -246,6 +330,21 @@ class AdaptiveSession:
                     pending.hints_used += 1
                     if state.return_to_checkpoint:
                         pending.id = str(uuid4())
+                elif pending.task.kind == "explain":
+                    # Asked once, whatever they answer. An explanation is
+                    # beside the ladder, so a shaky one cannot cost the
+                    # learner their ceiling, a support attempt or their rung
+                    # — and above all it must not stay unasked, or their next
+                    # successful answer would ask again and a learner who can
+                    # do the skill but cannot yet say why would go round that
+                    # loop until repeated difficulty ended the unit on them.
+                    # Reteaching is the whole response, and they step down a
+                    # rung the way any reteach leaves a learner — supported,
+                    # having just been shown it again — rather than by the
+                    # failure path, which would take their standing with it.
+                    state.explained = True
+                    move = "reteach"
+                    state.return_to_checkpoint = False
                 else:
                     self.withdraw_ceiling(state)
                     state.support_attempts += 1
@@ -265,6 +364,7 @@ class AdaptiveSession:
                 # practice does — the learner has asked to be taught it now.
                 state.diagnosed = True
                 state.return_to_checkpoint = False
+                classroom_diagnostics.labels("skipped").inc()
                 self.event(state, "diagnostic", phase="diagnose", verdict="declined",
                            target=pending.task.target_index)
                 state.last_feedback = self.copy(
@@ -272,14 +372,21 @@ class AdaptiveSession:
                     "Sin problema: vamos a construirlo desde el principio.")
                 state.phase = move = "orient"
             else:
-                if state.unit_index not in state.skipped and state.unit_index not in state.completed:
-                    state.skipped.append(state.unit_index)
-                self.event(state, "practise_later", phase=state.phase)
-                state.pending = None
-                self.finish_unit(state)
-                state.last_feedback = self.copy(context, "You can return to this skill when you are ready.",
-                                                "Puedes volver a esta habilidad cuando estés listo.")
-                return self.save(progress, state, self.summary(context, state))
+                if pending.phase == "interleave":
+                    move = self.end_interleave(state)
+                elif pending.phase == "transfer":
+                    self.finish_transfer(context, state)
+                    return self.save(progress, state, self.summary(context, state))
+                else:
+                    if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+                        state.skipped.append(state.unit_index)
+                    self.schedule_review(context, state, passed=False)
+                    self.event(state, "practise_later", phase=state.phase)
+                    state.pending = None
+                    self.finish_unit(state)
+                    state.last_feedback = self.copy(context, "You can return to this skill when you are ready.",
+                                                    "Puedes volver a esta habilidad cuando estés listo.")
+                    return self.save(progress, state, self.summary(context, state))
         elif intent in (ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE,
                         ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
             if state.presentation and not state.paused_presentation:
@@ -304,6 +411,7 @@ class AdaptiveSession:
                 # itself the finding: teach the skill.
                 self.handled(state, pending.id)
                 state.diagnosed = True
+                classroom_diagnostics.labels("help").inc()
                 self.event(state, "diagnostic", phase="diagnose", verdict="asked_for_help",
                            target=pending.task.target_index)
                 state.phase = move = "orient"
@@ -349,7 +457,9 @@ class AdaptiveSession:
             # A probe that somehow arrived without a question is an
             # orientation, not a modelling step: there is nothing to model yet.
             state.phase = "orient" if move in ("orient", "diagnose") else "model"
-            return self.save(progress, state, self.presentation_scene(context, state))
+            scene = self.presentation_scene(context, state)
+            classroom_teaching_turns.labels(move if move in MOVES else "other").inc()
+            return self.save(progress, state, self.delivered(state, scene))
 
         state.presentation = None
         if move == "diagnose":
@@ -359,8 +469,8 @@ class AdaptiveSession:
             # can collect: the learner doing it before being shown how.
             phase, supported = "diagnose", False
         else:
-            phase = state.phase if state.phase in ("guided", "faded", "independent") else "guided"
-            supported = phase != "independent"
+            phase = state.phase if state.phase in ("guided", "faded", "independent", "transfer", "interleave") else "guided"
+            supported = phase in ("guided", "faded")
         state.pending = PendingTask(
             task=turn.task, speech=turn.speech, board_title=turn.board_title,
             board_content=turn.board_content, visual=turn.visual, phase=phase,
@@ -370,7 +480,28 @@ class AdaptiveSession:
         state.task_kinds = [*state.task_kinds, turn.task.kind][-8:]
         state.recent_questions = [*state.recent_questions, normalize_text(turn.task.scenario + " " + turn.task.question)][-12:]
         state.next_move = phase
-        return self.save(progress, state, self.checkpoint(context, state))
+        scene = self.checkpoint(context, state)
+        classroom_teaching_turns.labels(move if move in MOVES else "other").inc()
+        return self.save(progress, state, self.delivered(state, scene))
+
+    @staticmethod
+    def delivered(state, scene):
+        """Retire a feedback line once the learner has actually been told it.
+
+        `last_feedback` was written when the answer was graded and read by
+        whichever screen came next, but nothing ever cleared it — so it was
+        read again by the screen after that. A learner who tapped "I'm not sure
+        yet" was told "let's build it from the start", sat through the whole
+        worked example, and then met their first practice question with the
+        same sentence on top of it. The line is right where it is said and
+        wrong four screens later, when it describes a decision already acted
+        on.
+
+        The rendered scene keeps the text — it is saved with it, so a resume
+        shows the learner what they were shown.
+        """
+        state.last_feedback = ""
+        return scene
 
     def after_diagnostic(self, context, state, pending, result, response,
                          response_time_ms=None, option=None) -> str:
@@ -427,6 +558,11 @@ class AdaptiveSession:
         state.return_to_checkpoint = False
         unaided = not pending.assisted and not pending.extra_help_used
         declined = option is not None and option.abstains
+        classroom_diagnostics.labels(
+            "abstained" if declined else
+            result.verdict if result.verdict in ("correct", "incorrect", "partial", "clarify")
+            else "unavailable"
+        ).inc()
         self.event(state, "diagnostic", phase="diagnose", target=pending.task.target_index,
                    verdict="declined" if declined else result.verdict, unaided=unaided,
                    response_format=pending.task.response_format, response=response,
@@ -488,9 +624,94 @@ class AdaptiveSession:
             ceiling, entry = None, "orient"
 
         state.diagnostic_ceiling = ceiling
+        state.ceiling_prediction = ceiling
+        state.ceiling_source = "open" if pending.task.response_format != "choice" else "tap"
         state.diagnostic_misconception = "" if declined else (result.misconception or "")
         state.phase = entry
         return entry
+
+    def close_on_a_success(self, context, state, pending, result, data):
+        """End a hard unit on the closing question, whichever way it went.
+
+        The unit is filed for more practice either way — repeated difficulty
+        never awards completion, and this question is not a retake. What it
+        changes is the last thing that happened to the learner: something at the
+        level of the step just taught, and a teacher who says which part they
+        got. Nothing here loops: one question was offered, and this is its end
+        whatever the answer.
+        """
+        if result.verdict in ("correct", "incorrect"):
+            state.outbox = [*state.outbox, dict(
+                event_id=pending.id, user_id=context.user_id,
+                concept_id=self.record_concept(context, state),
+                correct=result.verdict == "correct",
+                evidence_type=None if pending.task.response_format == "choice"
+                else "application" if pending.task.kind == "apply" else "explanation",
+                hints_used=pending.hints_used, hint_level=pending.hint_level,
+                misconception=result.misconception if result.verdict == "incorrect" else None,
+                response_time_ms=data.get("response_time_ms"),
+            )]
+        if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+            state.skipped.append(state.unit_index)
+        self.schedule_review(context, state, passed=False)
+        self.event(state, "practise_later", phase="closing_win",
+                   reason="closed_on_a_success" if result.verdict == "correct" else "closed_after_support",
+                   verdict=result.verdict)
+        state.last_feedback = self.copy(
+            context,
+            "That's the step that was giving you trouble, and you just did it. "
+            "We'll come back to the rest of this skill with more practice."
+            if result.verdict == "correct" else
+            "Thanks for working through that with me. We'll come back to this skill "
+            "with more support — nothing here counts against you.",
+            "Ese es el paso que te costaba, y acabas de hacerlo. "
+            "Volveremos al resto de esta habilidad con más práctica."
+            if result.verdict == "correct" else
+            "Gracias por trabajarlo conmigo. Volveremos a esta habilidad con más "
+            "apoyo; nada de esto cuenta en tu contra.")
+        state.pending = None
+        self.finish_unit(state)
+        return self.summary(context, state)
+
+    @staticmethod
+    def compare_ceiling(state, observed: str, result: str) -> None:
+        if state.ceiling_prediction is None or state.ceiling_assessed:
+            return
+        classroom_ceiling_comparisons.labels(
+            state.ceiling_prediction, observed, result, state.ceiling_source,
+        ).inc()
+        AdaptiveSession.event(state, "ceiling_accuracy", predicted=state.ceiling_prediction,
+                              observed=observed, result=result, source=state.ceiling_source)
+        state.ceiling_assessed = True
+
+    @staticmethod
+    def demonstrated_rung(state) -> str:
+        if state.independent_application:
+            return "independent"
+        if state.faded_targets:
+            return "faded"
+        if state.guided_targets:
+            return "guided"
+        return "none"
+
+    def confirm_ceiling(self, state, pending) -> None:
+        predicted = state.ceiling_prediction
+        if predicted is None or state.ceiling_assessed or pending.task.kind == "explain":
+            return
+        if pending.phase != predicted or pending.extra_help_used:
+            return
+        if predicted in ("independent", "faded") and pending.assisted:
+            # Faded tasks are scaffolded in the state, but an answer without
+            # extra help still demonstrates that rung. Independent is unaided.
+            if predicted == "independent":
+                return
+        if predicted == "independent" and (
+            pending.task.kind != "apply" or not (
+                state.challenge_requested or all(i in state.faded_targets for i in range(len(state.unit.targets)))
+            )
+        ):
+            return
+        self.compare_ceiling(state, pending.phase, "confirmed")
 
     @staticmethod
     def withdraw_ceiling(state):
@@ -507,11 +728,214 @@ class AdaptiveSession:
         reteaching at the error the learner made before the lesson started
         instead of the one they just made — which is the teacher not listening.
         """
+        AdaptiveSession.compare_ceiling(state, AdaptiveSession.demonstrated_rung(state), "contradicted")
         state.diagnostic_ceiling = None
         state.diagnostic_misconception = ""
 
+    #: How recent a demonstration has to be to stand in for the probe. Past
+    #: this the record describes a learner who may have moved on: skills decay,
+    #: and one cheap question beats assuming they still have it.
+    RECORD_ANSWERS_WITHIN = timedelta(days=14)
+
+    #: And how strong. 0.7 is the line the rest of the product already draws
+    #: between "has met this" and "has this".
+    RECORD_ANSWERS_ABOVE = 0.7
+
+    @staticmethod
+    def _same_skill(key: str | None) -> str | None:
+        """Name a skill the way the writer of the evidence named it.
+
+        Evidence is persisted through `_canonical_concept_id`, which leaves a
+        `Concept` row's UUID alone and slugifies anything else. Comparing a
+        raw title against that store never matches — "Compare Fractions" is
+        not `compare_fractions` — so the probe shortcut silently never fired
+        for any session without a resolved skill identity. Both sides go
+        through the same canonicalisation here.
+        """
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+
+        key = (key or "").strip()
+        if not key:
+            return None
+        return key if is_concept_graph_id(key) else slugify_skill(key)
+
+    def record_answers_the_probe(self, context, state):
+        """Recent, consistent evidence on this unit's own skill, if there is any.
+
+        The probe exists because nothing ever asked where the learner was. Once
+        they have a record on this skill, something already did — and asking
+        again spends their time to learn what the server was told last week.
+        Worse, it reads as a teacher who was not paying attention.
+
+        Deliberately narrow. It wants this unit's skill and not a neighbouring
+        one, evidence strong enough to act on, a history that agrees with it,
+        and a demonstration recent enough to still describe them. Anything
+        short of that and the unit asks, because asking costs one tap.
+
+        "Agrees with it" is a success rate, not a streak. `KnowledgeState`
+        carries `consecutive_incorrect`, and an earlier version of this check
+        read it — but nothing populates it on the canonical mastery path,
+        where it is always zero, and on the legacy path it holds a *lifetime*
+        incorrect count. So it was dead in one direction and permanently
+        disqualifying in the other. Attempts and successes are written on both
+        paths, so they are what this asks about.
+        """
+        concept = self.record_concept(context, state)
+        wanted = self._same_skill(concept)
+        if not wanted:
+            return None
+        for known in context.knowledge_states:
+            if self._same_skill(known.concept_id) != wanted:
+                continue
+            if known.total_attempts < 1 or known.mastery_level < self.RECORD_ANSWERS_ABOVE:
+                return None
+            if known.successes < self.RECORD_ANSWERS_ABOVE * known.total_attempts:
+                return None
+            if known.last_attempt is None:
+                return None
+            seen = known.last_attempt
+            if seen.tzinfo is not None:
+                seen = seen.astimezone(timezone.utc).replace(tzinfo=None)
+            if datetime.utcnow() - seen > self.RECORD_ANSWERS_WITHIN:
+                return None
+            return known
+        return None
+
+    def open_unit(self, context, state) -> None:
+        """Begin a unit: ask the probe, unless the record already answers it.
+
+        Where the record answers it, the unit starts exactly where a correct tap
+        would start it — supported practice, with `independent` as the ceiling.
+        Not higher: a record says the learner could do this once, and one
+        supported question confirms that cheaply, where starting above them on
+        a stale record drops them into work they cannot do.
+        """
+        known = self.record_answers_the_probe(context, state)
+        if known is None:
+            return
+        state.diagnosed = True
+        state.diagnostic_ceiling = "independent"
+        state.ceiling_prediction = "independent"
+        state.ceiling_source = "record"
+        classroom_diagnostics.labels("record").inc()
+        state.phase = state.next_move = "guided"
+        state.last_feedback = self.copy(
+            context,
+            "You've done this recently, so let's pick up where you left off.",
+            "Ya trabajaste esto hace poco, así que retomemos donde lo dejaste.")
+        self.event(state, "diagnostic", phase="diagnose", verdict="answered_by_record",
+                   target=state.target_index, unaided=True, response_format="record",
+                   mastery=round(float(known.mastery_level), 2),
+                   attempts=int(known.total_attempts))
+
+    def schedule_review(self, context, state, passed: bool) -> None:
+        """Put this unit's skill into the learner's review schedule, once.
+
+        Spaced retrieval is the difference between a lesson that went well and
+        a skill the learner still has next month, and the classroom never
+        reached the scheduler. Its only writers were Chat's answer check and
+        the review endpoints — which can update a schedule but not create one —
+        so a learner taught here had nothing ever come due, `review_due_items`
+        stayed empty however much they learned, and the summary's "try a fresh
+        example in a later session" was an invitation with no mechanism behind
+        it.
+
+        One write per unit, at the moment the unit's fate is decided. SM-2
+        counts every write as a separate sitting — `next_schedule` advances
+        `repetitions` on each call — so writing once per checkpoint would
+        inflate the interval as though four days had passed inside one lesson.
+
+        The grade is the pass/fail mapping the chat path already uses, not a
+        finer judgement this engine can support: a unit closed by unaided
+        independent application passes, and one filed for more practice fails,
+        which resets the ladder so the skill comes back tomorrow. `hints_used`
+        on the evidence already records how much help it took.
+        """
+        concept = self.record_concept(context, state)
+        if not concept:
+            return
+        review = dict(
+            user_id=context.user_id, concept_id=concept, passed=passed,
+            decided_at=datetime.now(timezone.utc).isoformat(), unit_index=state.unit_index,
+        )
+        state.review_history = [*state.review_history, review]
+        # The scheduler's interface takes only these four fields.
+        state.review_outbox = [*state.review_outbox, {k: review[k] for k in (
+            "user_id", "concept_id", "passed", "decided_at"
+        )}]
+
+    def record_practice(self, context, state, pending, result, data):
+        evidence_type = None if pending.task.response_format == "choice" else (
+            "transfer" if pending.phase == "transfer" and not pending.assisted
+            and not pending.extra_help_used else
+            "retrieval" if pending.phase == "interleave" and state.review_is_due
+            and not pending.assisted and not pending.extra_help_used else
+            "application" if pending.task.kind == "apply" else "explanation"
+        )
+        state.outbox.append(dict(
+            event_id=pending.id, user_id=context.user_id,
+            concept_id=self.record_concept(context, state),
+            correct=result.verdict == "correct", evidence_type=evidence_type,
+            hints_used=pending.hints_used, hint_level=pending.hint_level,
+            misconception=result.misconception if result.verdict == "incorrect" else None,
+            response_time_ms=data.get("response_time_ms"),
+        ))
+
+    def start_interleave(self, context, state) -> bool:
+        """One earlier skill, inside a later unit, after normal practice starts."""
+        if state.phase == "transfer" or state.active_review_index is not None:
+            return False
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+        key = lambda item: item if is_concept_graph_id(item) else slugify_skill(item)
+        due = {key(item) for item in context.scheduled_due_items}
+        candidates = [item for item in state.review_history
+                      if item["unit_index"] < state.unit_index
+                      and item["unit_index"] not in state.interleaved_units]
+        if not candidates:
+            return False
+        candidates.sort(key=lambda item: (
+            key(item["concept_id"]) not in due, item["unit_index"]
+        ))
+        item = candidates[0]
+        state.active_review_index = item["unit_index"]
+        state.review_return_phase = state.phase
+        # A due schedule only supports a retention claim after a real time gap.
+        # The due item must also name this exact skill. Old topic-scoped
+        # schedules cannot prove retention of a newly scoped unit skill.
+        # Same-sitting review after an independent success is application.
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(item["decided_at"])
+        current_id = self.record_concept(context, state)
+        state.review_is_due = (current_id is not None and
+                               key(item["concept_id"]) == key(current_id) and
+                               key(item["concept_id"]) in due and age >= timedelta(hours=20))
+        state.phase = "interleave"
+        return True
+
+    @staticmethod
+    def end_interleave(state) -> str:
+        if state.active_review_index is not None:
+            state.interleaved_units.append(state.active_review_index)
+        state.active_review_index = None
+        state.review_is_due = False
+        state.phase = state.review_return_phase or "guided"
+        state.review_return_phase = None
+        state.pending = None
+        return state.phase
+
+    def finish_transfer(self, context, state) -> None:
+        state.pending = None
+        self.schedule_review(context, state, passed=state.independent_application)
+        self.finish_unit(state)
+
     @staticmethod
     def after_success(state, pending):
+        # An explanation is not a rung on the scaffolding ladder: it is asked
+        # beside it, once, and moves the learner neither up nor down. Recording
+        # that it happened is all it changes, and its evidence files as
+        # `explanation` because that is what it is.
+        if pending.task.kind == "explain":
+            state.explained = True
+            return False
         target = pending.task.target_index
         if pending.phase == "guided":
             state.guided_targets = sorted(set([*state.guided_targets, target]))
@@ -534,19 +958,26 @@ class AdaptiveSession:
                 state.phase = "independent"
         elif pending.phase == "independent":
             ready = all(i in state.faded_targets for i in range(len(state.unit.targets)))
-            if (ready or state.challenge_requested) and not pending.assisted and pending.task.response_format != "choice":
+            if ((ready or state.challenge_requested) and pending.task.kind == "apply"
+                    and not pending.assisted and pending.task.response_format != "choice"):
                 state.independent_application = True
                 state.completed = sorted(set([*state.completed, state.unit_index]))
                 state.skipped = [i for i in state.skipped if i != state.unit_index]
-                AdaptiveSession.finish_unit(state)
-                return True
+                state.phase = "transfer"
+                return False
             state.phase = "faded" if target in state.guided_targets else "guided"
         return False
 
     @staticmethod
     def reset_unit(state):
         state.diagnostic_ceiling = None
+        state.ceiling_prediction = None
+        state.ceiling_source = "tap"
+        state.ceiling_assessed = False
+        state.unit_outcome_recorded = False
         state.diagnostic_misconception = ""
+        state.explained = False
+        state.closing_win_asked = False
         state.unit_done = False
         state.successes = 0
         state.independent_application = False
@@ -559,11 +990,22 @@ class AdaptiveSession:
         state.faded_targets = []
         state.target_index = state.model_steps_seen = state.support_attempts = 0
         state.return_to_checkpoint = state.challenge_requested = False
+        state.active_review_index = None
+        state.review_return_phase = None
+        state.review_is_due = False
         state.diagnosed = False
         state.step_id = str(uuid4())
 
     @staticmethod
     def finish_unit(state):
+        if not state.unit_outcome_recorded:
+            AdaptiveSession.compare_ceiling(
+                state, AdaptiveSession.demonstrated_rung(state), "unresolved"
+            )
+            classroom_unit_outcomes.labels(
+                "completed" if state.independent_application else "needs_practice"
+            ).inc()
+            state.unit_outcome_recorded = True
         state.unit_done = bool(state.remaining_units)
         state.path_done = not state.remaining_units
         state.step_id = str(uuid4())
@@ -608,7 +1050,11 @@ class AdaptiveSession:
             # encountered so the record panel can place their evidence in this
             # class even when a new device has no earlier board history.
             indices = sorted(set([*state.completed, *state.skipped, state.unit_index]))
-            scene.metadata.target_concepts = [state.plan.units[i].title for i in indices]
+            scene.metadata.target_concepts = [
+                state.skill_ids[i] if state.identity_required and i < len(state.skill_ids)
+                else state.plan.units[i].title for i in indices
+                if not state.identity_required or i < len(state.skill_ids)
+            ]
         state.scene = scene.model_dump(mode="json")
         progress["guided_state"] = state.model_dump(mode="json")
         return scene
@@ -618,10 +1064,12 @@ class AdaptiveSession:
             "diagnose": "Where you're starting",
             "orient": "Our goal", "model": "Watch me", "guided": "Let's do it together",
             "faded": "Finish this step", "independent": "Try it yourself",
+            "transfer": "Use it somewhere new", "interleave": "Revisit an earlier idea",
         }[state.phase], {
             "diagnose": "Dónde empiezas",
             "orient": "Nuestra meta", "model": "Mira cómo", "guided": "Hagámoslo juntos",
             "faded": "Completa este paso", "independent": "Inténtalo tú",
+            "transfer": "Úsalo en otro contexto", "interleave": "Repasa una idea anterior",
         }[state.phase])
 
     def surface(self, context, state, speech, title, content, visual=None, activity_id=None):
@@ -632,7 +1080,9 @@ class AdaptiveSession:
         separate_description = len(example_content) > 1500
         components = [
             ProgressBar(current=len(state.completed), total=len(state.plan.units), label=self.stage(context, state), priority=0),
-            TeacherMessage(text=speech, language_code=context.language_code, concept_tags=[state.unit.title],
+            TeacherMessage(text=speech, language_code=context.language_code,
+                           concept_tags=[state.plan.units[state.active_review_index].title
+                                         if state.active_review_index is not None else state.unit.title],
                            emotion="encouraging", priority=1, source_attributions=context.source_attributions[:5]),
             ExampleBlock(title=title,
                          content=content if separate_description else example_content,
@@ -719,7 +1169,9 @@ class AdaptiveSession:
             components.append(InputField(
                 component_id=pending.id, question=prompt + "\n\n" + task.response_hint, placeholder=task.response_hint,
                 concept_id=self.record_concept(context, state),
-                evidence_type="application" if task.kind == "apply" else "explanation",
+                evidence_type="retrieval" if pending.phase == "interleave" and state.review_is_due
+                else "transfer" if pending.phase == "transfer"
+                else "application" if task.kind == "apply" else "explanation",
                 min_words=1, max_words=200, expected_keywords=[], source_attributions=context.source_attributions[:5],
                 language_code=context.language_code, priority=4,
             ))

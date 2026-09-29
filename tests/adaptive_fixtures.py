@@ -1,6 +1,7 @@
 """Scripted pedagogical collaborators: tests never contact an AI provider."""
 
 from unittest.mock import AsyncMock, MagicMock
+from uuid import NAMESPACE_URL, uuid5
 
 from lyo_app.ai_classroom.adaptive_teaching import (
     Evaluation, GuidedState, LearningPlan, LearningTask, LearningTurn, LearningUnit, PendingTask, TaskOption, TeachingBeat, unit_count,
@@ -8,6 +9,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
     ContextSnapshot, SceneLifecycleEngine, Trigger, TriggerType,
 )
+from lyo_app.ai_classroom.skill_identity import SkillPlanIdentity, identity_scope, normalized_name
 from lyo_app.ai_classroom.sdui_models import ActionIntent
 
 
@@ -23,6 +25,27 @@ def plan(count=3):
         title=f"Fraction skill {i + 1}", objective="Compare equal parts of the same whole.",
         material="Equal parts must come from the same whole. Half a pizza is larger than a third of that pizza.",
     ) for i in range(count)])
+
+
+def simulated_skill_identity(ctx, learning_plan):
+    """Model stable database IDs while the interaction fixture uses a fake DB."""
+    scope = identity_scope(ctx)
+    if scope is None:
+        return SkillPlanIdentity(unit_ids=[], topic_id=None)
+
+    def identity(title, objective):
+        return str(uuid5(NAMESPACE_URL, scope + "\0" + normalized_name(title)
+                         + "\0" + normalized_name(objective)))
+
+    title = ctx.lesson_title or ctx.topic
+    return SkillPlanIdentity(
+        unit_ids=[identity(unit.title, unit.objective) for unit in learning_plan.units],
+        topic_id=identity(title, ctx.learning_objective or title) if title else None,
+    )
+
+
+async def resolve_simulated_skill_identity(ctx, learning_plan):
+    return simulated_skill_identity(ctx, learning_plan)
 
 
 def task(kind="apply", number=1):
@@ -77,6 +100,29 @@ def probe(number=1):
     )
 
 
+def explanation(number=1):
+    """The once-per-unit "why does this work?", asked after a first success."""
+    return LearningTask(
+        kind="explain", response_format="short_answer",
+        scenario=f"In example {number}, you compared one half with one third of the same pizza.",
+        question="Why does cutting the same pizza into more equal pieces make each piece smaller?",
+        response_hint="Two or three sentences in your own words.",
+        criteria=["Relates more equal pieces to a smaller share of the same whole"],
+        example_answer="The whole stays the same size, so sharing it between more pieces leaves less on each.",
+    )
+
+
+def transfer_task(number=1):
+    return LearningTask(
+        kind="apply", response_format="short_answer",
+        scenario=f"In workshop {number}, two equal lengths of ribbon are each cut into 4 or 8 equal pieces.",
+        question="Which ribbon gives a longer single piece, and why?",
+        response_hint="Name the cut and give one reason.",
+        criteria=["Identifies the ribbon cut into 4", "Relates fewer cuts to longer pieces"],
+        example_answer="The ribbon cut into 4; fewer equal cuts of the same length leave longer pieces.",
+    )
+
+
 def evaluation(verdict="correct", **overrides):
     fields = dict(verdict=verdict, confidence=0.96, question_clear=True,
                   feedback="You compared pieces from the same whole.")
@@ -93,17 +139,24 @@ class ScriptedTeacher:
 
     def _turn(self, context, state, move, learner_input=""):
         self.number += 1
-        teaching = move not in ("diagnose", "guided", "faded", "independent")
-        kind = "choose" if move == "guided" else "apply" if move == "independent" else "diagnose"
-        checkpoint = None if teaching else (
-            probe(self.number) if move == "diagnose" else task(kind, self.number)
-        ).model_copy(update={
-            "target_index": state.target_index,
-            **({} if move == "diagnose" else {
-                "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
-                else "short_answer",
-            }),
-        })
+        teaching = move not in ("diagnose", "guided", "faded", "independent", "transfer", "interleave", "explain", "closing_win")
+        kind = "choose" if move in ("guided", "closing_win") else "apply" if move in ("independent", "transfer", "interleave") else "diagnose"
+        if move == "explain":
+            checkpoint = explanation(self.number).model_copy(update={"target_index": state.target_index})
+        elif move in ("transfer", "interleave"):
+            checkpoint = transfer_task(self.number).model_copy(update={
+                "target_index": 0 if move == "interleave" else state.target_index
+            })
+        else:
+            checkpoint = None if teaching else (
+                probe(self.number) if move == "diagnose" else task(kind, self.number)
+            ).model_copy(update={
+                "target_index": state.target_index,
+                **({} if move == "diagnose" else {
+                    "response_format": "choice" if kind == "choose" else "completion" if move == "faded"
+                    else "short_answer",
+                }),
+            })
         beats = [TeachingBeat(speech=speech, board_title="One example, step by step", board_content=board)
                  for speech, board in [
                      ("First compare two identical pizzas. Cut the first into two equal pieces.", "Same-sized pizzas. First pizza: 2 equal pieces. Each is 1/2."),
@@ -117,7 +170,9 @@ class ScriptedTeacher:
                     "Equal pieces are comparable when they come from the same whole. "
                     "More cuts make each piece smaller."),
             board_title="Equal-sized wholes",
-            board_content="One bar cut into 4 equal pieces has larger pieces than an identical bar cut into 8.",
+            board_content=("Two equal ribbons are cut into 4 or 8 equal lengths."
+                           if move in ("transfer", "interleave") else
+                           "One bar cut into 4 equal pieces has larger pieces than an identical bar cut into 8."),
             task=checkpoint, demonstration=beats,
         )
 
@@ -201,6 +256,10 @@ def engine(ctx=None):
     instance.context_assembler.assemble_context = AsyncMock(return_value=ctx)
     instance.context_assembler.db = instance.db
     instance.adaptive_teacher = ScriptedTeacher()
+    # The interaction fixture uses a MagicMock DB, but must still exercise
+    # production-style persistent IDs. SQLite resolver tests exercise real
+    # inserts, foreign keys, and prerequisite edges separately.
+    instance.skill_resolver = resolve_simulated_skill_identity
     instance.session_contexts = {}
     instance.active_scenes = {}
     instance.websocket_manager = None

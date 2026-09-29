@@ -3,7 +3,6 @@ import asyncio
 import json
 import uuid
 import time
-from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,7 +15,7 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
-from lyo_app.ai.schemas.lyo2 import RouterRequest, ConversationTurn, UIBlock, UIBlockType, UnifiedChatResponse, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
+from lyo_app.ai.schemas.lyo2 import RouterRequest, ConversationTurn, UIBlock, UIBlockType, ActionType, PlannedAction, Intent, RouterDecision, LyoPlan
 from lyo_app.ai.multimodal import (
     canonical_message_content,
     load_media_attachments,
@@ -46,9 +45,8 @@ except ModuleNotFoundError as exc:
         async def analyze_test_prep(self, request):
             from types import SimpleNamespace
             return SimpleNamespace(success=True, data=_FallbackTestPrepData())
-from lyo_app.core.config import settings
 from lyo_app.services.proactive_engagement import proactive_engagement_service
-from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer, OptimizationLevel
+from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_optimizer
 from lyo_app.chat.models import ChatMode
 from lyo_app.ai.schemas.block_redaction import redact_blocks, redact_content
 from lyo_app.chat.stores import conversation_store
@@ -401,6 +399,7 @@ class SessionSummaryResponse(BaseModel):
 
 class DueReviewItem(BaseModel):
     skill_id: str
+    skill_name: Optional[str] = None
     days_overdue: int = 0
     mastery_level: Optional[float] = None
     last_misconception: Optional[str] = None
@@ -881,6 +880,7 @@ async def get_due_chat_reviews(
         items=[
             DueReviewItem(
                 skill_id=item["skill_id"],
+                skill_name=item.get("skill_name"),
                 days_overdue=item["days_overdue"],
                 mastery_level=item["mastery_level"],
                 last_misconception=item["last_misconception"],

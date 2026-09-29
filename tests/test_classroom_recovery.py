@@ -143,14 +143,16 @@ async def test_scene_validation_failure_keeps_accepted_evidence_and_retries_the_
     monkeypatch.setattr(runner, "checkpoint", rendering_failure)
     failed = await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, pending.id,
         answer_data={"selected_option_id": "a"}))
-    assert current(progress).next_move == "faded"
+    # Their first success earned the explanation, so that is the move whose
+    # rendering failed and the move the retry re-authors.
+    assert current(progress).next_move == "explain"
     assert [event["event_id"] for event in current(progress).outbox] == [pending.id]
     restored = json.loads(json.dumps(progress))
     recovered_teacher = ScriptedTeacher()
     recovered = AdaptiveSession(recovered_teacher)
     scene = await recovered.run(ctx, restored, retry(failed))
     assert current(restored).pending.phase == "faded"
-    assert recovered_teacher.turn.await_args.args[2] == "faded"
+    assert recovered_teacher.turn.await_args.args[2] == "explain"
     assert [event["event_id"] for event in current(restored).outbox] == [pending.id]
     duplicate = await recovered.run(ctx, restored, action(ActionIntent.SUBMIT_ANSWER, pending.id,
         answer_data={"selected_option_id": "a"}))
@@ -243,6 +245,12 @@ async def test_repeated_difficulty_allows_progress_and_returns_to_teaching_on_re
         await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, pending.id,
                                              answer_data={"selected_option_id": "b"}))
         await advance_to_task(runner, progress, ctx)
+    # Repeated difficulty now ends on one question at the level of the step just
+    # taught, which is answered before the unit is put down.
+    assert current(progress).closing_win_asked and not current(progress).unit_done
+    closing = current(progress).pending
+    await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, closing.id,
+                                           answer_data={"selected_option_id": "b"}))
     assert current(progress).unit_done and current(progress).skipped == [0]
     assert current(progress).completed == [] and not current(progress).independent_application
     # Continuing goes to the next teaching goal without inventing success, and

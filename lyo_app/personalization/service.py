@@ -831,8 +831,8 @@ class PersonalizationEngine:
         `item_id`s (chat check block ids) into `get_next_action`'s generic
         recommendation payload. Resurfacing "you were shaky on this days ago"
         as an actual nudge needs the skill name and what specifically went
-        wrong, not just an id — both already live on `LearnerMastery` (this
-        method reads them, it does not duplicate the write path). One row per
+        wrong, not just an id. The learner's error lives on `LearnerMastery`;
+        scoped classroom skill names live on `Concept`. One row per
         skill, most overdue first, so a repeatedly-missed skill with several
         scheduled items does not crowd out everything else that is due.
         """
@@ -879,12 +879,29 @@ class PersonalizationEngine:
             )
             masteries = {m.skill_id: m for m in mastery_result.scalars().all()}
 
+        # A persisted classroom skill is a UUID, not a human-readable slug.
+        # Keep the identifier stable for review submission, and expose its
+        # actual title separately so clients never have to guess from an ID.
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+        titles = {}
+        concept_ids = [s.skill_id for s in selected if is_concept_graph_id(s.skill_id)]
+        if concept_ids:
+            from lyo_app.ai_classroom.models import Concept
+            try:
+                async with db.begin_nested():
+                    titles = {identity: display or name for identity, display, name in (await db.execute(
+                        select(Concept.id, Concept.display_name, Concept.name).where(Concept.id.in_(concept_ids))
+                    )).all()}
+            except Exception:
+                logger.exception("Could not load due review skill titles for user %s", user_id)
+
         due: List[Dict[str, Any]] = []
         for schedule in selected:
             mastery = masteries.get(schedule.skill_id)
             misconceptions = list(mastery.misconceptions or []) if mastery else []
             due.append({
                 "skill_id": schedule.skill_id,
+                "skill_name": titles.get(schedule.skill_id),
                 "item_id": schedule.item_id,
                 "next_review": schedule.next_review,
                 "days_overdue": max(0, (now - schedule.next_review).days) if schedule.next_review else 0,

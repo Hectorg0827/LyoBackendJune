@@ -7,26 +7,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent,
-    ClassroomMode,
-    HintLevel,
-    InputField,
     TeacherMessage,
-    ExampleBlock,
-    CTAButton,
-    SceneType,
+)
+from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+from lyo_app.ai_classroom.adaptive_teaching import (
+    AdaptiveTeacher, CriterionResult, Evaluation, GuidedState, PendingTask,
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import (
-    ClassroomDirector,
     ContextAssembler,
     ContextSnapshot,
-    SceneCompiler,
     SceneLifecycleEngine,
     Trigger,
     TriggerType,
-    describe_transfer_gap,
     detect_hesitation,
-    expected_transfer_keywords,
-    score_transfer_response,
     _SESSION_PROGRESS,
 )
 from lyo_app.ai_classroom.websocket_routes import canonical_action_intent
@@ -63,17 +56,6 @@ class ClassroomActionContractTests(unittest.TestCase):
             ActionIntent.SKIP_QUESTION,
         )
 
-    def test_transfer_input_carries_a_transparent_server_rubric(self):
-        field = InputField(
-            question="Apply proportional reasoning to a new recipe.",
-            placeholder="Explain your example",
-            concept_id="proportional reasoning",
-            expected_keywords=["ratio", "scale"],
-        )
-        self.assertEqual(field.action_intent, ActionIntent.SUBMIT_TRANSFER.value)
-        self.assertEqual(field.evidence_type, "transfer")
-        self.assertGreater(field.min_words, 1)
-
     def test_neutral_legacy_events_are_valid_analytics_evidence(self):
         from lyo_app.classroom.analytics import LyoAnalyticsEvent
 
@@ -99,70 +81,96 @@ class ClassroomActionContractTests(unittest.TestCase):
         self.assertIn("intent in ADVANCE_INTENTS", source)
 
 
-class TransferEvidenceTests(unittest.TestCase):
-    def test_substantive_application_with_rubric_language_passes(self):
-        correct, coverage, missing = score_transfer_response(
-            "I use the ratio to scale every ingredient by the same factor.",
-            ["ratio", "scale", "factor"],
-            min_words=6,
-            min_score=0.25,
-        )
-        self.assertTrue(correct)
-        self.assertGreaterEqual(coverage, 2 / 3)
-        self.assertEqual(missing, ["factor"] if coverage < 1 else [])
+class LiveTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from tests.adaptive_fixtures import ScriptedTeacher, context, action
+        self.action = action
+        self.teacher = ScriptedTeacher()
+        self.context = context(target_duration_minutes=8)
+        self.progress = {}
+        self.runner = AdaptiveSession(self.teacher)
+        await self.runner.run(self.context, self.progress, action(welcome=True))
 
-    def test_short_or_unrelated_response_fails(self):
-        correct, coverage, missing = score_transfer_response(
-            "I get it.",
-            ["ratio", "scale"],
-            min_words=6,
-            min_score=0.25,
-        )
-        self.assertFalse(correct)
-        self.assertEqual(coverage, 0)
-        self.assertEqual(missing, ["ratio", "scale"])
+    def state(self):
+        return GuidedState.model_validate(self.progress["guided_state"])
 
-    def test_keywords_come_from_authored_objective_and_content(self):
-        keywords = expected_transfer_keywords(
-            "Compare fractions with unlike denominators",
-            "Use a common denominator before comparing numerators.",
-        )
-        self.assertIn("fractions", keywords)
-        self.assertIn("denominators", keywords)
+    async def answer(self, option="a", **extra):
+        pending = self.state().pending
+        intent = (ActionIntent.SUBMIT_ANSWER if pending.task.response_format == "choice"
+                  else ActionIntent.SUBMIT_TRANSFER)
+        return await self.runner.run(self.context, self.progress, self.action(
+            intent, pending.id, answer_data={"selected_option_id": option,
+                                            "response": "Four equal cuts leave a longer piece.", **extra}))
 
+    async def test_correct_tap_starts_practice_but_earns_no_credit(self):
+        from tests.adaptive_fixtures import tap_probe
+        opening = self.state().scene
+        probe = next(c for c in opening["components"] if c["type"] == "QuizCard")
+        self.assertTrue(all(o.get("is_correct") is None for o in probe["options"]))
+        await tap_probe(self.runner, self.progress, self.context)
+        state = self.state()
+        self.assertEqual(state.phase, "guided")
+        self.assertEqual(state.completed, [])
+        self.assertEqual(state.outbox, [])
+        self.assertTrue(any(c["type"] == "QuizCard" for c in state.scene["components"]))
 
-class RubricLeakRegressionTests(unittest.TestCase):
-    """Guards the fix for the internal rubric bleeding into visible chat.
+    async def test_client_correctness_cannot_override_the_server_option(self):
+        from tests.adaptive_fixtures import tap_probe
+        await tap_probe(self.runner, self.progress, self.context)
+        await self.answer(option="b", is_correct=True)
+        state = self.state()
+        self.assertEqual(state.completed, [])
+        self.assertFalse(state.outbox[-1]["correct"])
+        self.assertEqual(state.next_move, "reteach")
 
-    `handle_transfer_submission` used to build learner-facing feedback by
-    joining the Evaluator's raw `missing` keyword list directly into text
-    (e.g. "Add the missing reasoning link around ratio, scale"), handing the
-    learner the exact words the grader was scoring for. `describe_transfer_gap`
-    replaces that: it must describe the *category* of gap without ever
-    quoting a rubric keyword.
-    """
+    async def test_transfer_is_open_and_private_until_it_is_graded(self):
+        from tests.adaptive_fixtures import tap_probe
+        await tap_probe(self.runner, self.progress, self.context)
+        for _ in range(4):
+            await self.answer()
+        state = self.state()
+        self.assertEqual(state.phase, "transfer")
+        self.assertFalse(state.path_done)
+        self.assertEqual(state.outbox[-1]["evidence_type"], "application")
+        field = next(c for c in state.scene["components"] if c["type"] == "InputField")
+        self.assertEqual(field["evidence_type"], "transfer")
+        self.assertEqual(field["expected_keywords"], [])
+        self.assertNotIn(state.pending.task.example_answer, str(state.scene))
+        await self.answer(is_correct=False)
+        self.assertTrue(self.state().path_done)
+        self.assertEqual(self.state().outbox[-1]["evidence_type"], "transfer")
 
-    def test_gap_description_never_quotes_rubric_keywords(self):
-        keywords = ["ratio", "scale", "factor"]
-        _correct, coverage, missing = score_transfer_response(
-            "I get it.", keywords, min_words=6, min_score=0.25,
-        )
-        self.assertEqual(missing, keywords)  # sanity: evaluator did find gaps
+    async def test_spanish_skip_is_neutral_and_continues(self):
+        from tests.adaptive_fixtures import context, advance_to_task
+        self.context = context(target_duration_minutes=8, language_code="es-MX")
+        self.progress = {}
+        await self.runner.run(self.context, self.progress, self.action(welcome=True))
+        await self.runner.run(self.context, self.progress, self.action(
+            ActionIntent.SKIP_QUESTION, self.state().pending.id))
+        await advance_to_task(self.runner, self.progress, self.context)
+        scene = await self.runner.run(self.context, self.progress, self.action(
+            ActionIntent.SKIP_QUESTION, self.state().pending.id))
+        self.assertEqual(self.state().completed, [])
+        self.assertEqual(self.state().outbox, [])
+        self.assertTrue(self.state().path_done)
+        self.assertIn("Puedes volver", " ".join(c.text for c in scene.components
+                                                if isinstance(c, TeacherMessage)))
 
-        hint = describe_transfer_gap("I get it.", min_words=6, coverage=coverage, min_score=0.25)
-        for keyword in keywords:
-            self.assertNotIn(keyword, hint.lower())
-
-    def test_gap_description_distinguishes_short_from_off_target(self):
-        too_short = describe_transfer_gap("I get it.", min_words=6, coverage=0.0, min_score=0.25)
-        off_target = describe_transfer_gap(
-            "I followed the steps and got an answer that felt right to me.",
-            min_words=6,
-            coverage=0.1,
-            min_score=0.25,
-        )
-        self.assertNotEqual(too_short, off_target)
-        self.assertIn("more", too_short.lower())
+    async def test_short_transfer_uses_grounded_meaning_instead_of_keyword_counts(self):
+        from tests.adaptive_fixtures import transfer_task
+        response = "Four cuts; fewer divisions leave longer pieces."
+        task = transfer_task()
+        pending = PendingTask(task=task, speech="Apply the same principle to ribbons.",
+                              board_title="Ribbons", board_content="Two identical ribbons are cut.",
+                              phase="transfer")
+        verdict = Evaluation(verdict="correct", confidence=0.96, question_clear=True,
+            feedback="You connected equal lengths to the size of each piece.",
+            criteria=[CriterionResult(index=0, met=True, quote="Four cuts"),
+                      CriterionResult(index=1, met=True, quote="fewer divisions leave longer pieces")])
+        generate = AsyncMock(return_value=verdict)
+        result = await AdaptiveTeacher(generate).evaluate(self.context, pending, response)
+        self.assertEqual(result.verdict, "correct")
+        self.assertIn("Never infer missing reasoning", generate.await_args.args[0])
 
 
 class HesitationClassifierTests(unittest.TestCase):
@@ -206,198 +214,7 @@ class SpacedRetrievalContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine._update_repetition_schedule.await_args.args[1], 42)
 
 
-class ClassroomDirectorTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self.director = ClassroomDirector()
-        self.context = ContextSnapshot(
-            user_id="42",
-            session_id="course-1",
-            topic="Fractions",
-            learning_objective="Compare fractions with unlike denominators",
-        )
-
-    def trigger(self, action_intent, **action_data):
-        return Trigger(
-            trigger_type=TriggerType.USER_ACTION,
-            user_id="42",
-            session_id="course-1",
-            action_data={"action_intent": action_intent, **action_data},
-        )
-
-    async def test_continue_checks_understanding_before_advancing(self):
-        decision = await self.director.decide_scene(
-            self.trigger(ActionIntent.CONTINUE),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.CHALLENGE)
-        self.assertTrue(decision.require_interaction)
-
-    async def test_mastered_checkpoint_advances_to_instruction(self):
-        decision = await self.director.decide_scene(
-            self.trigger(ActionIntent.CONTINUE, advanced_after_mastery=True),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.INSTRUCTION)
-
-    async def test_correct_recognition_requires_transfer_evidence(self):
-        decision = await self.director.decide_scene(
-            self.trigger(
-                ActionIntent.SUBMIT_ANSWER,
-                answer_data={"is_correct": True},
-            ),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.REFLECTION)
-        self.assertTrue(decision.require_interaction)
-
-    async def test_correct_transfer_confirms_mastery(self):
-        decision = await self.director.decide_scene(
-            self.trigger(
-                ActionIntent.SUBMIT_TRANSFER,
-                answer_data={"is_correct": True},
-            ),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.CELEBRATION)
-
-    async def test_incorrect_evidence_reteaches(self):
-        recognition = await self.director.decide_scene(
-            self.trigger(
-                ActionIntent.SUBMIT_ANSWER,
-                answer_data={"is_correct": False},
-            ),
-            self.context,
-        )
-        transfer = await self.director.decide_scene(
-            self.trigger(
-                ActionIntent.SUBMIT_TRANSFER,
-                answer_data={"is_correct": False},
-            ),
-            self.context,
-        )
-        self.assertEqual(recognition.selected_scene_type, SceneType.CORRECTION)
-        self.assertEqual(transfer.selected_scene_type, SceneType.CORRECTION)
-        self.assertTrue(transfer.require_interaction)
-
-    async def test_hint_ladder_and_challenge_mode_change_the_move(self):
-        self.context.hint_level = HintLevel.NUDGE
-        hint = await self.director.decide_scene(
-            self.trigger(ActionIntent.REQUEST_HINT),
-            self.context,
-        )
-        stretch = await self.director.decide_scene(
-            self.trigger(ActionIntent.SKIP_AHEAD),
-            self.context,
-        )
-        self.assertEqual(hint.selected_scene_type, SceneType.INSTRUCTION)
-        self.assertLess(hint.difficulty_adjustment, 0)
-        self.assertGreater(stretch.difficulty_adjustment, 0)
-
-    async def test_skip_is_neutral_and_waits_for_explicit_continuation(self):
-        self.context.learner_signal = ActionIntent.SKIP_QUESTION.value
-        decision = await self.director.decide_scene(
-            self.trigger(ActionIntent.SKIP_QUESTION),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.INSTRUCTION)
-        self.assertTrue(decision.require_interaction)
-
-    async def test_hesitant_signal_shifts_from_assessment_to_scaffolding(self):
-        # A hesitant transfer submission would normally score as incorrect
-        # and fall into CORRECTION (which surfaces rubric-derived feedback).
-        # The hesitant state must pre-empt that and route to a plain
-        # scaffolding INSTRUCTION scene instead.
-        self.context.learner_signal = "hesitant"
-        decision = await self.director.decide_scene(
-            self.trigger(
-                ActionIntent.SUBMIT_TRANSFER,
-                answer_data={"is_correct": False, "hesitant": True},
-            ),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.INSTRUCTION)
-        self.assertNotEqual(decision.selected_scene_type, SceneType.CORRECTION)
-
-    async def test_hesitant_signal_overrides_frustration_correction(self):
-        # Even with repeated consecutive failures (which would otherwise force
-        # CORRECTION), a hesitant learner still gets scaffolding, not a
-        # rubric-based correction.
-        self.context.learner_signal = "hesitant"
-        self.context.frustration.frustration_score = 0.9
-        self.context.frustration.consecutive_failures = 5
-        decision = await self.director.decide_scene(
-            self.trigger(
-                ActionIntent.SUBMIT_TRANSFER,
-                answer_data={"is_correct": False, "hesitant": True},
-            ),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.INSTRUCTION)
-
-    async def test_review_mode_opens_with_due_retrieval(self):
-        self.context.classroom_mode = ClassroomMode.REVIEW
-        self.context.review_due_items = ["fraction comparison"]
-        decision = await self.director.decide_scene(
-            Trigger(
-                trigger_type=TriggerType.SYSTEM_TIMEOUT,
-                user_id="42",
-                session_id="course-1",
-            ),
-            self.context,
-        )
-        self.assertEqual(decision.selected_scene_type, SceneType.CHALLENGE)
-
-
-class LearnerGatedTeachingBeatTests(unittest.IsolatedAsyncioTestCase):
-    async def test_instruction_is_one_short_teacher_turn_then_a_checkpoint(self):
-        compiler = SceneCompiler(ai_service=None)
-        context = ContextSnapshot(
-            user_id="42",
-            session_id="spanish-course",
-            topic="Fracciones",
-            lesson_title="Comparar fracciones",
-            lesson_content=(
-                "Para comparar fracciones con denominadores distintos, "
-                "primero usa un denominador común."
-            ),
-            learning_objective="Comparar fracciones",
-            language_code="es-US",
-        )
-
-        components = await compiler._create_instruction_components(context)
-        teacher_messages = [
-            component for component in components
-            if isinstance(component, TeacherMessage)
-        ]
-
-        self.assertEqual(len(teacher_messages), 1)
-        self.assertLessEqual(len(teacher_messages[0].text.split()), 55)
-        self.assertFalse(teacher_messages[0].text.lstrip().startswith("["))
-        self.assertEqual(teacher_messages[0].language_code, "es-US")
-        self.assertTrue(any(isinstance(c, ExampleBlock) for c in components))
-        self.assertIsInstance(components[-1], CTAButton)
-        self.assertEqual(components[-1].action_intent, ActionIntent.CONTINUE.value)
-        self.assertEqual(components[-1].delay_ms, 0)
-
-    async def test_spanish_skip_copy_is_neutral_and_creates_no_fake_answer(self):
-        compiler = SceneCompiler(ai_service=None)
-        context = ContextSnapshot(
-            user_id="42",
-            session_id="spanish-course",
-            topic="Fracciones",
-            learning_objective="Comparar fracciones",
-            language_code="es-MX",
-            learner_signal=ActionIntent.SKIP_QUESTION.value,
-        )
-
-        components = await compiler._create_instruction_components(context)
-
-        self.assertEqual(len(components), 2)
-        self.assertIsInstance(components[0], TeacherMessage)
-        self.assertIn("no cuenta como error", components[0].text)
-        self.assertIsInstance(components[1], CTAButton)
-        self.assertEqual(components[1].action_intent, ActionIntent.CONTINUE.value)
-
+class LearnerPacingTests(unittest.IsolatedAsyncioTestCase):
     async def test_user_action_never_schedules_unattended_continuation(self):
         engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
         engine.trigger_listener = MagicMock()
@@ -437,7 +254,10 @@ class DurableSkipTeachingLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["completed"], [])
         self.assertEqual(state["outbox"], [])
         self.assertTrue(state["unit_done"])
-        self.engine._persist_session_progress.assert_awaited_once()
+        # Skipping writes no correctness, and now owes the learner a revisit:
+        # the unit is queued for spaced review as a failed recall, which is a
+        # second durable write and so a second persist.
+        self.assertEqual(self.engine._persist_session_progress.await_count, 2)
 
     async def test_explicit_continue_advances_after_skip_without_marking_mastery(self):
         from tests.adaptive_fixtures import action

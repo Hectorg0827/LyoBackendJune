@@ -133,9 +133,15 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     teacher.plan.return_value = curriculum
     _, runner, progress, ctx, _ = await begin(teacher)
     await advance_to_task(runner, progress, ctx)
-    for phase, target in [("guided", 0), ("faded", 0), ("guided", 1), ("faded", 1), ("independent", 1)]:
+    # The explanation their first success earns sits beside the ladder rather
+    # than on it: it keeps the rung it was asked at and moves the learner
+    # neither up nor down, so faded practice on target 0 still follows.
+    expected = [("guided", 0, False), ("faded", 0, True), ("faded", 0, False),
+                ("guided", 1, False), ("faded", 1, False), ("independent", 1, False)]
+    for phase, target, explaining in expected:
         pending = state(progress).pending
-        assert (pending.phase, pending.task.target_index) == (phase, target)
+        assert (pending.phase, pending.task.target_index,
+                pending.task.kind == "explain") == (phase, target, explaining)
         assert state(progress).completed == []
         await respond(runner, progress, ctx)
     # What this pins is the phase and target sequence, above. It used to also
@@ -145,10 +151,14 @@ async def test_readiness_covers_each_component_skill_with_faded_support_before_i
     # The demand is still fixed where it matters: independent practice is an
     # application problem, which `test_independent_practice_demands_application`
     # holds separately.
-    assert state(progress).completed == [0] and state(progress).path_done
-    # The opening probe, then five practice events across the unit.
+    assert state(progress).completed == [0]
+    assert state(progress).pending.phase == "transfer" and not state(progress).path_done
+    await respond(runner, progress, ctx)
+    assert state(progress).path_done
+    # The opening probe, then seven answers: familiar practice, the
+    # once-per-unit explanation, and one transfer in a new setting.
     assert [e["kind"] for e in state(progress).practice_events].count("diagnostic") == 1
-    assert len(state(progress).practice_events) == 6
+    assert len(state(progress).practice_events) == 8
 
 
 @pytest.mark.asyncio
@@ -184,10 +194,25 @@ async def test_struggle_reteaches_then_models_a_prerequisite_without_a_pass_or_r
             assert state(progress).pending.task.scenario != old_question
             assert state(progress).phase == "guided"
         else:
+            # The prerequisite is not the end of the unit. A learner who has
+            # just been wrong three times gets one question at the level of the
+            # step just taught, so the last thing that happens is something they
+            # can do — and the unit is already saved for more practice whatever
+            # they answer.
+            closing = state(progress).pending
+            assert closing is not None and state(progress).closing_win_asked
+            assert closing.assisted, "the closing question is supported"
+            assert state(progress).skipped == [] and not state(progress).path_done
+            assert teacher.turn.await_args.args[2] == "closing_win"
+            await respond(runner, progress, ctx, option="a")
             assert state(progress).pending is None
             assert state(progress).skipped == [0] and state(progress).path_done
     assert state(progress).completed == []
-    assert all(not event["correct"] for event in state(progress).outbox)
+    # The closing question was got right, and it still awards no completion:
+    # repeated difficulty is saved for another visit, never converted into a
+    # pass by one easier question.
+    assert [event["correct"] for event in state(progress).outbox] == [False, False, True]
+    assert not state(progress).independent_application
     assert state(progress).unit.objective == "Compare equal parts of the same whole."
 
 
@@ -312,21 +337,68 @@ async def test_independent_practice_demands_application(weaker_kind):
 
 
 @pytest.mark.asyncio
-async def test_an_application_problem_may_be_answered_by_choosing():
-    """The format is free even at the bar: a real application problem answered
-    from genuine competing candidates is still application."""
+async def test_a_feedback_line_is_read_to_the_learner_once():
+    """Said at the right moment, and not again four screens later.
+
+    `last_feedback` was written when the answer was graded and read by whichever
+    screen came next — and never cleared, so the screen after that read it too.
+    A learner who tapped "I'm not sure yet" was told "let's build it from the
+    start", sat through the whole worked example, and then met their first
+    practice question with the same sentence on top of it, describing a decision
+    they had already watched play out.
+    """
+    _, runner, progress, ctx, _ = await open_session()
+    line = "let's build it from the start"
+
+    opening = await runner.run(ctx, progress, action(
+        ActionIntent.SKIP_QUESTION, state(progress).pending.id))
+    assert line in next(c.text for c in opening.components if isinstance(c, TeacherMessage))
+
+    said_again = []
+    for _ in range(4):
+        current = state(progress)
+        if current.presentation is None:
+            break
+        scene = await runner.run(ctx, progress, action(component_id=current.step_id))
+        said_again.append(next((c.text for c in scene.components if isinstance(c, TeacherMessage)), ""))
+
+    assert said_again, "the modelled example should have played"
+    assert not any(line in text for text in said_again), said_again
+    # And the question the example leads to does not reopen with it either.
+    assert any(isinstance(c, QuizCard) for c in Scene.model_validate(state(progress).scene).components)
+    assert state(progress).last_feedback == ""
+
+
+@pytest.mark.asyncio
+async def test_an_application_problem_may_be_answered_by_choosing_except_at_the_bar():
+    """Format stays free through practice, and is not free where the unit closes.
+
+    A real application problem answered from genuine competing candidates is
+    still application, and faded practice may ask for one. The checkpoint that
+    *closes* the unit may not: `after_success` refuses to complete on a tapped
+    answer, because recognising the answer among four is the weakest rung the
+    ladder has. Nothing used to stop the generator offering a tap there anyway,
+    and the two rules disagreeing had a cost a learner pays — answering
+    correctly for ever while the unit silently cannot finish.
+    """
     teacher = ScriptedTeacher()
     _, _, progress, ctx, _ = await begin(teacher)
     current = state(progress)
-    turn = teacher._turn(ctx, current, "independent")
-    assert turn.task.kind == "apply"
     choice = teacher._turn(ctx, current, "guided")
-    turn.task.response_format = "choice"
-    turn.task.options = choice.task.options
-    generate = AsyncMock(return_value=turn)
-    accepted = await AdaptiveTeacher(generate).turn(ctx, current, "independent")
-    assert accepted.task.kind == "apply"
-    assert accepted.task.response_format == "choice"
+
+    faded = teacher._turn(ctx, current, "faded")
+    faded.task.kind = "apply"
+    faded.task.response_format = "choice"
+    faded.task.options = choice.task.options
+    accepted = await AdaptiveTeacher(AsyncMock(return_value=faded)).turn(ctx, current, "faded")
+    assert accepted.task.kind == "apply" and accepted.task.response_format == "choice"
+
+    closing = teacher._turn(ctx, current, "independent")
+    assert closing.task.kind == "apply"
+    closing.task.response_format = "choice"
+    closing.task.options = choice.task.options
+    with pytest.raises(TeachingUnavailable):
+        await AdaptiveTeacher(AsyncMock(return_value=closing)).turn(ctx, current, "independent")
 
 
 @pytest.mark.asyncio

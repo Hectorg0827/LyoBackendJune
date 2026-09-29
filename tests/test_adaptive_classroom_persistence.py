@@ -1,14 +1,17 @@
 """Persistence and authenticated routing, including a real SQLite round trip."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from lyo_app.ai_classroom.adaptive_persistence import learner_session
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningTask
 from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine
 from lyo_app.ai_classroom.sdui_models import ActionIntent, Scene, SceneType, TeacherMessage, UserActionPayload
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager
@@ -16,6 +19,93 @@ from lyo_app.ai_classroom.websocket_routes import _register_lifecycle_handlers
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
 from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation, decline_probe, past_the_probe
 from tests.export_guided_fixtures import FixtureTeacher
+
+
+@pytest.mark.asyncio
+async def test_this_build_reads_a_session_saved_by_a_later_one():
+    """Tolerance for unknown fields, stated in the direction it actually works.
+
+    This does not make an *older* build read a session saved here. That build
+    still has `extra="forbid"` and will refuse the fields added since; nothing
+    committed now can change a binary already deployed. What it does is make
+    every future field safe: once a build carrying this tolerance is the one
+    being rolled back to, a session written above it is readable rather than
+    refused — which is the whole of the guarantee, and the previous version
+    of this test claimed more than that.
+
+    Until then, the case that matters is a session this build cannot read at
+    all, which must not cost the learner their turn. That is
+    `test_an_unreadable_saved_session_costs_the_learner_nothing_but_the_session`
+    below.
+
+    The generation contracts keep refusing unknown fields, because there the
+    strictness is what makes a model that echoes its input or invents a field
+    get rejected and asked again.
+    """
+    progress, ctx = {}, context(target_duration_minutes=8)
+    runner = AdaptiveSession(ScriptedTeacher())
+    await runner.run(ctx, progress, action(welcome=True))
+    saved = json.loads(json.dumps(progress["guided_state"]))
+    saved["confidence_weighting"] = {"from": "a later release"}
+    saved["review_cadence_days"] = 3
+
+    restored = GuidedState.model_validate(saved)
+    assert restored.owner == "42" and restored.phase == "diagnose"
+    assert restored.pending is not None and restored.pending.phase == "diagnose"
+    assert not hasattr(restored, "confidence_weighting")
+
+    # The learner carries on from the restored session rather than losing it.
+    progress["guided_state"] = saved
+    scene = await AdaptiveSession(ScriptedTeacher()).run(ctx, progress, action(welcome=True))
+    assert any(isinstance(c, TeacherMessage) for c in scene.components)
+
+    with pytest.raises(ValidationError):
+        LearningTask(
+            kind="apply", response_format="short_answer",
+            scenario="Two identical pies are cut into 3 and 6 equal slices.",
+            question="Which slice is larger, and why?", response_hint="Name it and say why.",
+            criteria=["Names the third"], example_answer="A third.",
+            invented_by_the_model="not a field",
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_saved_session_costs_the_learner_nothing_but_the_session():
+    """The case unknown-field tolerance cannot reach.
+
+    A session can be unreadable for reasons no `extra=` setting helps with: a
+    field whose type has moved, a value no longer in an enum, a rollback into
+    a build that predates a field, a hand-edited row. Hydration used to raise
+    straight through the learner's turn, so they opened their lesson and got
+    an error where the teaching was.
+
+    It is set aside instead. The blob is kept in `guided_history` so nothing
+    is destroyed and it can be looked at, and the classroom starts them again
+    rather than handing them a failure.
+    """
+    engine = SceneLifecycleEngine(AsyncMock())
+    progress = {"guided_state": {"owner": "42", "phase": "a phase that no longer exists"}}
+
+    state = engine._read_guided_state(progress, progress["guided_state"])
+
+    assert state is None, "an unreadable session is not silently half-read"
+    assert "guided_state" not in progress, "it is cleared, or the next turn fails the same way"
+    assert progress["guided_history"] == [{"owner": "42", "phase": "a phase that no longer exists"}]
+
+
+@pytest.mark.asyncio
+async def test_a_readable_session_is_left_exactly_where_it_was():
+    """The guard must not become a way to lose a session that was fine."""
+    progress, ctx = {}, context(target_duration_minutes=8)
+    await AdaptiveSession(ScriptedTeacher()).run(ctx, progress, action(welcome=True))
+    saved = json.loads(json.dumps(progress["guided_state"]))
+
+    engine = SceneLifecycleEngine(AsyncMock())
+    state = engine._read_guided_state(progress, saved)
+
+    assert state is not None and state.owner == "42"
+    assert progress["guided_state"] == saved
+    assert "guided_history" not in progress
 
 
 @pytest.mark.asyncio

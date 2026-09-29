@@ -9,7 +9,6 @@ behind it supports.
 
 import unittest
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from lyo_app.personalization.recommendations import (
@@ -76,6 +75,16 @@ class OrderingTests(unittest.TestCase):
 # ─── The reason is the point ─────────────────────────────────────────────────
 
 class ReasonTests(unittest.TestCase):
+    def test_persistent_skill_title_is_kept_separate_from_its_id(self):
+        from uuid import uuid4
+        skill_id = str(uuid4())
+        result = build_recommendations(
+            due_reviews=[{**_due(skill_id), "skill_name": "Compare equal shares"}],
+            weaknesses=[], skills={},
+        )
+        self.assertEqual(result.items[0].concept_id, skill_id)
+        self.assertEqual(result.items[0].skill_name, "Compare equal shares")
+
     def test_a_known_slip_is_named_rather_than_a_generic_nudge(self):
         result = build_recommendations(
             due_reviews=[_due("quadratics", misconception="sign_error")],

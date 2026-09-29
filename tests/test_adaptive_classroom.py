@@ -56,12 +56,18 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
     # this unit, and it is still only a tap: it starts supported practice.
     await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    # Their first success earns the once-per-unit "why does this work?", which
+    # moves the ladder neither up nor down.
+    await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).completed == []
     assert state(progress).phase == "independent"
     await answer(runner, progress, ctx)
     current = state(progress)
     assert current.completed == [0]
+    assert current.phase == "transfer" and not current.unit_done
+    await answer(runner, progress, ctx)
+    current = state(progress)
     assert current.unit_done and not current.path_done
     await runner.run(ctx, progress, action())
     assert state(progress).unit_index == 1
@@ -71,14 +77,21 @@ async def test_topic_session_is_not_completed_by_one_quiz_and_one_written_answer
 @pytest.mark.asyncio
 async def test_full_path_requires_evidence_for_each_unit_and_ends_with_review():
     _, runner, progress, ctx, _ = await start()
+    moves_seen = []
     for index in range(3):
         await tap_probe(runner, progress, ctx)
         await advance_to_task(runner, progress, ctx)
-        await answer(runner, progress, ctx)
-        await answer(runner, progress, ctx)
-        scene = await answer(runner, progress, ctx)
+        for _ in range(8):
+            current = state(progress)
+            if current.unit_done or current.path_done:
+                break
+            moves_seen.append(current.next_move)
+            scene = await answer(runner, progress, ctx)
+        assert state(progress).unit_done or state(progress).path_done
         if index < 2:
             await runner.run(ctx, progress, action())
+    assert moves_seen.count("transfer") == 3
+    assert moves_seen.count("interleave") == 2
     assert state(progress).completed == [0, 1, 2]
     assert state(progress).path_done
     assert any(getattr(c, "action_intent", None) == ActionIntent.REQUEST_REVIEW for c in scene.components)
@@ -157,6 +170,7 @@ async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
     assert state(progress).skipped == [0, 1, 2]
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    await answer(runner, progress, ctx)
     assert state(progress).skipped == [1, 2]
 
 
@@ -215,11 +229,13 @@ async def test_generation_outage_after_grading_never_regrades_the_answer():
     await tap_probe(runner, progress, ctx)
     teacher.turn.side_effect = TeachingUnavailable("offline")
     await answer(runner, progress, ctx)
-    assert state(progress).next_move == "faded"
+    # The move that failed to generate is the one retried, whatever it was —
+    # here the explanation their first success just earned.
+    assert state(progress).next_move == "explain"
     assert len(state(progress).outbox) == 1
     teacher.turn.side_effect = teacher._turn
     await runner.run(ctx, progress, action(ActionIntent.RETRY))
-    assert teacher.turn.await_args.args[2] == "faded"
+    assert teacher.turn.await_args.args[2] == "explain"
     assert len(state(progress).outbox) == 1
 
 
@@ -241,7 +257,8 @@ async def test_questions_keep_existing_client_types_and_allow_short_answers():
     assert "example_answer" not in wire and '"criteria"' not in wire
     field = next(c for c in scene.components if isinstance(c, InputField))
     assert field.min_words == 1 and field.expected_keywords == []
-    assert "give one reason" in field.question  # Expectations remain visible while typing.
+    # Expectations remain visible while typing.
+    assert "in your own words" in field.question
     assert Scene.model_validate_json(wire).scene_id == scene.scene_id
 
 
@@ -405,6 +422,9 @@ async def test_a_finished_step_still_answers_the_learners_question():
     await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
+    await answer(runner, progress, ctx)
+    await answer(runner, progress, ctx)
+    assert state(progress).phase == "transfer"
     await answer(runner, progress, ctx)
     assert state(progress).unit_done
     await runner.run(ctx, progress, action(ActionIntent.ASK_QUESTION, message="What if the pizzas are different sizes?"))

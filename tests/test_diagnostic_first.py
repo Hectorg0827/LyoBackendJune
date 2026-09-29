@@ -405,12 +405,16 @@ async def test_a_confirmed_tap_saves_the_other_component_skills_from_starting_ov
         _, runner, progress, ctx, _ = await open_session(teacher)
         await first_move(runner, progress, ctx)
         seen = []
-        for _ in range(3):
+        for _ in range(5):
             await advance_to_task(runner, progress, ctx)
             pending = state(progress).pending
-            if pending is None:
+            if pending is None or len(seen) == 3:
                 break
-            seen.append((pending.phase, pending.task.target_index))
+            # The once-per-unit explanation is answered and stepped over: it is
+            # not a rung, and this is a test about which rung a new component
+            # skill starts at.
+            if pending.task.kind != "explain":
+                seen.append((pending.phase, pending.task.target_index))
             await answer_checkpoint(runner, progress, ctx)
         return seen
 
@@ -495,6 +499,8 @@ async def test_a_fresh_unit_asks_its_own_question_and_inherits_no_ceiling():
         if state(progress).unit_done:
             break
         await answer_checkpoint(runner, progress, ctx)
+    assert state(progress).phase == "transfer" and not state(progress).unit_done
+    await answer_checkpoint(runner, progress, ctx)
     assert state(progress).unit_done and state(progress).diagnostic_ceiling == "independent"
     await runner.run(ctx, progress, action(component_id=state(progress).step_id))
     current = state(progress)

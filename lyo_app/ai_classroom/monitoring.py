@@ -6,12 +6,10 @@ Production-ready monitoring, metrics, and A/B testing for Living Classroom rollo
 Includes performance tracking, error monitoring, and feature flag management.
 """
 
-import asyncio
-import json
 import logging
 import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Callable
+from datetime import datetime
+from typing import Dict, List, Any, Callable
 from enum import Enum
 import os
 
@@ -370,11 +368,16 @@ class HealthChecker:
 
         # Check Scene Lifecycle Engine
         try:
-            from lyo_app.ai_classroom.scene_lifecycle_engine import SceneLifecycleEngine
-            # Basic import test
+            from lyo_app.ai_classroom.scene_lifecycle_engine import (
+                SceneLifecycleEngine, TriggerListener, ContextAssembler,
+            )
+            from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+            from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
+            components = (SceneLifecycleEngine, TriggerListener, ContextAssembler,
+                          AdaptiveSession, AdaptiveTeacher)
             health_status["checks"]["scene_lifecycle"] = {
                 "status": "healthy",
-                "components": ["TriggerListener", "ContextAssembler", "ClassroomDirector", "SceneCompiler"]
+                "components": [component.__name__ for component in components],
             }
         except Exception as e:
             health_status["checks"]["scene_lifecycle"] = {

@@ -52,6 +52,7 @@ class Recommendation(BaseModel):
     """One concrete next thing, and why it was chosen."""
 
     concept_id: str
+    skill_name: Optional[str] = None
     #: One of REASON_DUE / REASON_WEAK.
     reason: str
     #: Human-readable, already assembled server-side so every client says the
@@ -113,6 +114,7 @@ def build_recommendations(
         items.append(
             Recommendation(
                 concept_id=concept_id,
+                skill_name=(entry or {}).get("skill_name"),
                 reason=REASON_DUE,
                 detail=detail,
                 mastery=(entry or {}).get("mastery_level"),
@@ -169,4 +171,20 @@ async def recommendations_for_user(
         logger.exception("Mastery profile unavailable for user %s", user_id)
         weaknesses, skills = [], {}
 
-    return build_recommendations(due, weaknesses, skills, limit=limit)
+    result = build_recommendations(due, weaknesses, skills, limit=limit)
+    from lyo_app.events.mastery_projection import is_concept_graph_id
+    ids = [item.concept_id for item in result.items
+           if item.skill_name is None and is_concept_graph_id(item.concept_id)]
+    if ids:
+        try:
+            from sqlalchemy import select
+            from lyo_app.ai_classroom.models import Concept
+            async with db.begin_nested():
+                names = {identity: display or name for identity, display, name in (await db.execute(
+                    select(Concept.id, Concept.display_name, Concept.name).where(Concept.id.in_(ids))
+                )).all()}
+            for item in result.items:
+                item.skill_name = item.skill_name or names.get(item.concept_id)
+        except Exception:
+            logger.exception("Could not load recommendation skill titles for user %s", user_id)
+    return result
