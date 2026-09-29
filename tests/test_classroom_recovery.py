@@ -112,9 +112,8 @@ async def test_failed_guided_transition_survives_database_restart_and_retry():
             restored = await ContextAssembler(db)._load_persisted_session_progress(action(welcome=True))
         recovered_teacher = ScriptedTeacher()
         recovered = AdaptiveSession(recovered_teacher)
-        assert await recovered.run(ctx, restored, action(welcome=True)) == failed
-        recovered_teacher.turn.assert_not_awaited()
-        question = await recovered.run(ctx, restored, retry(failed))
+        # A reopened class now retries a saved unavailable step immediately.
+        question = await recovered.run(ctx, restored, action(welcome=True))
         assert any(isinstance(c, QuizCard) for c in question.components)
         assert recovered_teacher.turn.await_args.args[2] == "guided"
         assert not current(restored).outbox and not current(restored).completed
