@@ -1463,7 +1463,7 @@ class SceneLifecycleEngine:
 
         runner = AdaptiveSession(
             getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(
-                package_cache=DatabaseUnitPackageCache(self.db)),
+                package_cache=DatabaseUnitPackageCache(self.db), fast_start=True),
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
         )

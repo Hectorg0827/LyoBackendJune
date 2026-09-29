@@ -114,6 +114,7 @@ async def websocket_endpoint(
 
     connection = None
     lifecycle_engine = None
+    heartbeat_task = None
 
     try:
         # Extract authentication from query parameters
@@ -157,6 +158,11 @@ async def websocket_endpoint(
         if connection.state != ConnectionState.ACTIVE:
             connection.state = ConnectionState.ACTIVE
             logger.info(f"🔓 Connection promoted to ACTIVE: {connection.connection_id}")
+
+        # Generating a plan or a teaching turn can exceed a proxy's idle
+        # WebSocket timeout. Keep the wire active while the background teacher
+        # works, without creating a fake lesson scene or learner action.
+        heartbeat_task = asyncio.create_task(_classroom_heartbeat(ws_manager, connection))
 
         # Initialize Scene Lifecycle Engine for this connection
         lifecycle_engine = None
@@ -236,9 +242,34 @@ async def websocket_endpoint(
             await websocket.close(code=4000, reason=f"Server error: {str(e)}")
 
     finally:
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
         # Clean up connection
         if connection and ws_manager:
             await ws_manager.disconnect_client(connection.connection_id)
+
+
+async def _classroom_heartbeat(ws_manager: WebSocketManager, connection, interval: float = 15):
+    """Keep an idle classroom socket alive during slow, validated authoring."""
+    from lyo_app.ai_classroom.websocket_manager import WebSocketPayload, WebSocketEventType
+
+    while connection.connection_id in ws_manager.connections:
+        await asyncio.sleep(interval)
+        if connection.connection_id not in ws_manager.connections:
+            break
+        await ws_manager.send_to_connection(
+            connection.connection_id,
+            WebSocketPayload(
+                event_type=WebSocketEventType.SYSTEM_STATE,
+                session_id=connection.session_id,
+                user_id=connection.user_id,
+                data={"heartbeat": True},
+            ),
+        )
 
 
 async def _register_lifecycle_handlers(

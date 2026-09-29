@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import (
-    AdaptiveTeacher, GuidedState, LearningPlan, TeachingUnavailable, UnitPackage,
+    AdaptiveTeacher, DiagnosticTurn, GuidedState, LearningPlan, TeachingUnavailable, UnitPackage,
     UnitTargetPackage, model_json, select_package_turn, validate_unit_package,
 )
 from lyo_app.ai_classroom.models import (
@@ -49,6 +49,19 @@ def scripted_package(ctx, unit):
                           interleave=teacher._turn(ctx, state, "interleave").model_dump())
     validate_unit_package(package, unit)
     return package
+
+
+@pytest.mark.asyncio
+async def test_first_live_diagnostic_uses_the_stronger_configured_model(monkeypatch):
+    ctx, unit = context(), plan(1).units[0]
+    diagnostic = scripted_package(ctx, unit).diagnostic
+    completion = AsyncMock(return_value={
+        "content": diagnostic.model_dump_json(), "model_used": "gpt-4o",
+    })
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    response = await model_json("Author one opening question", {"unit": unit.model_dump()}, DiagnosticTurn)
+    assert response == diagnostic
+    assert completion.await_args.kwargs["provider_order"][0] == "gpt-4o"
 
 
 @pytest.fixture
@@ -368,17 +381,19 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
     ctx, unit_plan = context(target_duration_minutes=8), plan(1)
     original_teacher = adaptive_teaching.AdaptiveTeacher
     installed = []
+    calls = []
 
     async def generate(_prompt, _payload, schema):
+        calls.append(schema.__name__)
         if schema is LearningPlan:
             return unit_plan
-        if schema is UnitPackage:
-            return scripted_package(ctx, unit_plan.units[0])
-        raise AssertionError("The opening does not need another generated screen")
+        if schema.__name__ == "DiagnosticTurn":
+            return ScriptedTeacher()._turn(ctx, GuidedState(owner=ctx.user_id, plan=unit_plan), "diagnose")
+        raise AssertionError("The opening should author only its first question")
 
-    def teacher_factory(*, package_cache):
+    def teacher_factory(*, package_cache, fast_start):
         installed.append(package_cache)
-        return original_teacher(generate=generate, package_cache=package_cache)
+        return original_teacher(generate=generate, package_cache=package_cache, fast_start=fast_start)
 
     monkeypatch.setattr(adaptive_teaching, "AdaptiveTeacher", teacher_factory)
     instance = classroom_engine(ctx)
@@ -390,8 +405,9 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
         scene = await instance.process_trigger(action(welcome=True))
         state = GuidedState.model_validate(_SESSION_PROGRESS[key]["guided_state"])
         assert len(installed) == 1 and isinstance(installed[0], DatabaseUnitPackageCache)
+        assert calls == ["LearningPlan", "DiagnosticTurn"]
         assert next(c for c in scene.components if isinstance(c, QuizCard)).concept_id == state.skill_ids[0]
-        assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 1
+        assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
         assert len((await db.execute(select(ClassroomQuestionExposure))).scalars().all()) == 1
     finally:
         _SESSION_PROGRESS.pop(key, None)
