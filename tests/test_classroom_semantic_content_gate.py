@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lyo_app.ai_classroom.adaptive_teaching import (
-    AdaptiveTeacher, GuidedState, LearningTask, TeachingUnavailable,
-    validate_semantic_content,
+    AdaptiveTeacher, GuidedState, LearningTask, TeachingContractError,
+    TeachingUnavailable, validate_semantic_content,
 )
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, probe, task
 from tests.export_guided_fixtures import visuals
@@ -88,3 +88,103 @@ def test_a_short_numeric_answer_in_the_scenario_is_data_not_answer_leakage():
     turn.task.example_answer = "4"
     turn.board_content = "Four equal cuts in the first bar and eight in the second."
     validate_semantic_content(turn)
+
+
+# ─── The hint is shown, so the hint is checked ───────────────────────────────
+
+def test_the_response_hint_may_not_work_the_answer_out():
+    """`response_hint` reaches the learner twice and was not being checked.
+
+    `InputField` appends it to the question *and* uses it as the placeholder,
+    so a hint that states the answer gives it away exactly as the board would.
+    Every other visible field was already covered; this one was missed because
+    it reads like internal guidance and is not.
+    """
+    open_task = task("apply").model_dump()
+    open_task["response_hint"] = f"Say {open_task['example_answer']}"
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "guided")
+    bad = turn.model_copy(update={"task": LearningTask.model_validate(open_task)})
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(bad)
+
+
+def test_a_hint_that_only_says_how_to_answer_is_still_fine():
+    """The check must not make hints useless — it targets the answer, not help."""
+    open_task = task("apply").model_dump()
+    open_task["response_hint"] = "Name the larger piece and say why."
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "guided")
+    validate_semantic_content(turn.model_copy(
+        update={"task": LearningTask.model_validate(open_task)}))
+
+
+# ─── Filler options ─────────────────────────────────────────────────────────
+
+def test_two_options_cannot_share_one_piece_of_feedback():
+    """Identical feedback is the signature of an option nobody authored.
+
+    A learner who taps a filler distractor is answered with text written about
+    a different option — which reads as a teacher who did not look at what
+    they chose, and teaches them nothing about their actual mistake.
+    """
+    choice = task("choose").model_dump()
+    choice["options"][1]["feedback"] = choice["options"][0]["feedback"]
+    with pytest.raises(ValueError, match="feedback about that option"):
+        LearningTask.model_validate(choice)
+
+
+def test_punctuation_does_not_disguise_duplicated_feedback():
+    choice = task("choose").model_dump()
+    choice["options"][1]["feedback"] = choice["options"][0]["feedback"].upper() + "!!"
+    with pytest.raises(ValueError, match="feedback about that option"):
+        LearningTask.model_validate(choice)
+
+
+def test_a_misconception_that_only_restates_the_option_diagnoses_nothing():
+    """The reteaching reads this field. Restating the wrong answer gives it nothing."""
+    diagnostic = probe().model_dump()
+    label = diagnostic["options"][2]["label"]
+    diagnostic["options"][2]["misconception"] = f"They said {label}"
+    with pytest.raises(ValueError, match="not repeat the option"):
+        LearningTask.model_validate(diagnostic)
+
+
+@pytest.mark.parametrize("restatement", [
+    "They said {label}",
+    "{label} is wrong",
+    "The learner chose {label} instead",
+    "{label}",
+])
+def test_every_shape_of_restatement_is_caught(restatement):
+    diagnostic = probe().model_dump()
+    label = diagnostic["options"][2]["label"]
+    diagnostic["options"][2]["misconception"] = restatement.format(label=label)
+    with pytest.raises(ValueError, match="not repeat the option"):
+        LearningTask.model_validate(diagnostic)
+
+
+@pytest.mark.parametrize("terse", [
+    "Counts pieces, ignores size",
+    "Inverts numerator and denominator",
+    "Adds denominators",          # two words, and a complete diagnosis
+    "Cuenta las piezas",          # and it must not be an English-only gate
+])
+def test_a_terse_but_real_diagnosis_is_accepted(terse):
+    """The test is substance, not length, and it was length in the first cut.
+
+    A word count would have rejected "Adds denominators" — a complete
+    diagnosis — while accepting "They said 14 rolls", which is none. It would
+    also have pushed the generator toward padding this field to clear a bar,
+    which is the opposite of what the field is for.
+    """
+    diagnostic = probe().model_dump()
+    diagnostic["options"][2]["misconception"] = terse
+    assert LearningTask.model_validate(diagnostic).options[2].misconception == terse
+
+
+def test_ordinary_practice_may_still_leave_a_misconception_unset():
+    """Only probes are required to diagnose; practice options may not need to."""
+    choice = task("choose").model_dump()
+    for option in choice["options"]:
+        option["misconception"] = None
+        option["gap"] = None
+    assert LearningTask.model_validate(choice).options

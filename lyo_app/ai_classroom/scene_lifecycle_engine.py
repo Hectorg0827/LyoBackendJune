@@ -22,7 +22,7 @@ from sqlalchemy import select, func as sa_func, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.ai_classroom.sdui_models import (
-    Scene, SceneType, Component, ComponentType,
+    Scene, SceneType, Component,
     TeacherMessage, CTAButton, InputField, ExampleBlock,
     AudioMood, ActionIntent, ClassroomMode, HintLevel,
 )
@@ -1123,30 +1123,6 @@ class ContextAssembler:
         return 1.0
 
 
-# ═══════════════════════════════════════════════════════════════════════════════════
-# Compatibility decision schema used by agent_integration
-# ═══════════════════════════════════════════════════════════════════════════════════
-
-class DirectorDecision(BaseModel):
-    """Decision made by the Classroom Director"""
-
-    selected_scene_type: SceneType
-    reasoning: str
-    confidence: float = Field(ge=0.0, le=1.0)
-
-    # Scene parameters
-    estimated_duration_seconds: int = Field(default=30, ge=5, le=600)
-    difficulty_adjustment: float = Field(default=0.0, ge=-0.5, le=0.5)
-
-    # Component hints for older integrations
-    suggested_components: List[ComponentType] = Field(default_factory=list)
-    require_audio: bool = False
-    require_interaction: bool = False
-
-    # Timing
-    decision_time_ms: float = 0.0
-
-
 def session_concept(context: Optional["ContextSnapshot"]) -> Optional[str]:
     """Use the lesson/topic identity, never the prose learning objective."""
     if context is None:
@@ -1461,9 +1437,15 @@ class SceneLifecycleEngine:
         async def resolve_skills(classroom_context, plan):
             return await resolve_skill_plan(self.db, classroom_context, plan)
 
+        # Off unless CLASSROOM_SEMANTIC_JUDGE=true. It adds a model call per
+        # authored turn and reviews meaning no schema can check; see
+        # semantic_review for why that default is deliberate rather than timid.
+        from lyo_app.ai_classroom.semantic_review import judge_enabled, model_semantic_judge
+
         runner = AdaptiveSession(
             getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(
-                package_cache=DatabaseUnitPackageCache(self.db), fast_start=True),
+                package_cache=DatabaseUnitPackageCache(self.db), fast_start=True,
+                semantic_judge=model_semantic_judge if judge_enabled() else None),
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
         )
@@ -2087,5 +2069,5 @@ __all__ = [
     "SceneLifecycleEngine",
     "TriggerType", "Trigger", "TriggerListener",
     "ContextSnapshot", "ContextAssembler",
-    "DirectorDecision", "session_concept",
+    "session_concept",
 ]
