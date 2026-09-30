@@ -854,6 +854,7 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
 
         print("\n10. Visual teaching stays structured, persistent and video-free")
         from pydantic import ValidationError
+        from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
         from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, VisualItem
 
         flow_visual = TeachingVisual(
