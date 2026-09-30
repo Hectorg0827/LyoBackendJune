@@ -30,7 +30,11 @@ CORE = (
     "Use the supplied teaching_strategy as the representation for this move. "
     "board_memory contains a few prior anchors that remain conceptually on the "
     "classroom board; connect to one naturally when it helps, and never claim "
-    "something is on the board unless it appears there. learner_signals and "
+    "something is on the board unless it appears there. Within one unit, prefer "
+    "to extend the most recent concrete example through orientation, guided and "
+    "faded work so the lesson has one intellectual thread; change context on "
+    "purpose for transfer/interleave, or change representation for remediation. "
+    "learner_signals and "
     "misconceptions are observations, not labels about ability. "
 )
 
