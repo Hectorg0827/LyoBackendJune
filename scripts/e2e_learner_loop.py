@@ -852,6 +852,44 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         check("the learner receives a fresh transfer question after the outage",
               any(isinstance(c, (QuizCard, InputField)) for c in fresh.components))
 
+        print("\n10. Visual teaching stays structured, persistent and video-free")
+        from pydantic import ValidationError
+        from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, VisualItem
+
+        flow_visual = TeachingVisual(
+            kind="process_flow",
+            title="Input to output",
+            caption="Follow what changes at each stage before answering.",
+            description="An input moves through a transformation and becomes an output.",
+            entries=[
+                VisualItem(label="Input", detail="Raw material enters."),
+                VisualItem(label="Transform", detail="The process changes the material."),
+                VisualItem(label="Output", detail="The result leaves the process."),
+            ],
+            value=1,
+        )
+        check("the richer process-flow visual validates", flow_visual.kind == "process_flow")
+        check("visuals receive a durable server-side identity", len(flow_visual.visual_id) >= 8)
+
+        visual_policy = AdaptiveTeacher.visual_policy_for("orient", "worked_example")
+        check("worked teaching explicitly prefers a useful visual",
+              visual_policy.get("mode") == "preferred")
+        check("the classroom visual vocabulary contains no video or YouTube",
+              "video" not in visual_policy.get("allowed", [])
+              and "youtube" not in visual_policy.get("allowed", []))
+
+        rejected_video = False
+        try:
+            TeachingVisual(
+                kind="video",
+                title="Not supported",
+                caption="This should never become a classroom teaching visual.",
+                description="Video is deliberately excluded from this implementation.",
+            )
+        except ValidationError:
+            rejected_video = True
+        check("a model cannot emit a video teaching visual", rejected_video)
+
     print(f"\n{len(CHECKS) - len(FAILURES)}/{len(CHECKS)} checks passed")
     if FAILURES:
         print("FAILED:")
