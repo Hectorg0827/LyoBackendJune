@@ -182,3 +182,5 @@ async def test_fast_start_warms_the_validated_unit_only_after_the_immediate_move
     assert teacher.build_package.await_count == 1
     assert teacher._prefetched_packages[key.cache_key] is warmed_package
     assert key.cache_key not in teacher._fast_cache_misses
+
+# CI validation branch marker.
