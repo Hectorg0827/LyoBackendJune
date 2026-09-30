@@ -381,6 +381,7 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
     ctx, unit_plan = context(target_duration_minutes=8), plan(1)
     original_teacher = adaptive_teaching.AdaptiveTeacher
     installed = []
+    reviewed = []
     calls = []
 
     async def generate(_prompt, _payload, schema):
@@ -391,9 +392,15 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
             return ScriptedTeacher()._turn(ctx, GuidedState(owner=ctx.user_id, plan=unit_plan), "diagnose")
         raise AssertionError("The opening should author only its first question")
 
-    def teacher_factory(*, package_cache, fast_start):
+    def teacher_factory(*, package_cache, fast_start, semantic_judge):
         installed.append(package_cache)
-        return original_teacher(generate=generate, package_cache=package_cache, fast_start=fast_start)
+        reviewed.append(semantic_judge)
+        return original_teacher(
+            generate=generate,
+            package_cache=package_cache,
+            fast_start=fast_start,
+            semantic_judge=semantic_judge,
+        )
 
     monkeypatch.setattr(adaptive_teaching, "AdaptiveTeacher", teacher_factory)
     instance = classroom_engine(ctx)
@@ -405,7 +412,8 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
         scene = await instance.process_trigger(action(welcome=True))
         state = GuidedState.model_validate(_SESSION_PROGRESS[key]["guided_state"])
         assert len(installed) == 1 and isinstance(installed[0], DatabaseUnitPackageCache)
-        assert calls == ["LearningPlan", "DiagnosticTurn"]
+        assert reviewed == [None], "semantic review must remain opt-in by default"
+        assert calls[:2] == ["LearningPlan", "DiagnosticTurn"]
         assert next(c for c in scene.components if isinstance(c, QuizCard)).concept_id == state.skill_ids[0]
         assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
         assert len((await db.execute(select(ClassroomQuestionExposure))).scalars().all()) == 1
