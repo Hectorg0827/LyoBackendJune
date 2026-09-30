@@ -8,6 +8,7 @@ text description for accessibility and degraded/offline clients.
 
 import ast
 import asyncio
+import html
 import math
 import re
 from typing import Any, Literal
@@ -202,7 +203,11 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
     }
     resolved: tuple[str, str, str] | None = None
     try:
-        async with httpx.AsyncClient(timeout=2.5, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=2.5,
+            follow_redirects=True,
+            headers={"User-Agent": "LyoAI-Classroom/1.0 educational-visual-resolver"},
+        ) as client:
             response = await client.get("https://commons.wikimedia.org/w/api.php", params=params)
             response.raise_for_status()
             pages = (response.json().get("query") or {}).get("pages") or {}
@@ -214,7 +219,17 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
             if not source_url and page and page.get("title"):
                 from urllib.parse import quote
                 source_url = "https://commons.wikimedia.org/wiki/" + quote(page["title"].replace(" ", "_"))
-            attribution = (page or {}).get("title") or "Wikimedia Commons"
+            metadata = image.get("extmetadata") or {}
+            def plain_meta(name: str) -> str:
+                raw = str((metadata.get(name) or {}).get("value") or "")
+                raw = re.sub(r"<[^>]+>", " ", raw)
+                return " ".join(html.unescape(raw).split())
+
+            author = plain_meta("Artist") or plain_meta("Credit")
+            license_name = plain_meta("LicenseShortName")
+            title = (page or {}).get("title") or "Wikimedia Commons"
+            attribution_parts = [part for part in (title, author, license_name) if part]
+            attribution = " · ".join(dict.fromkeys(attribution_parts)) or "Wikimedia Commons"
             if _trusted_https(image_url) and _trusted_https(source_url):
                 resolved = (image_url, source_url, attribution[:240])
     except Exception:
