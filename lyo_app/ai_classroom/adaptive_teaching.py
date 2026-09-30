@@ -19,7 +19,7 @@ from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
-from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
+from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, hydrate_turn_visuals
 
 logger = logging.getLogger(__name__)
 
@@ -673,7 +673,7 @@ class GuidedState(StrictModel):
     strategy_history: list[str] = Field(default_factory=list, max_length=12)
     misconceptions: list[str] = Field(default_factory=list, max_length=12)
     learner_signals: list[str] = Field(default_factory=list, max_length=12)
-    board_memory: list[dict[str, str]] = Field(default_factory=list, max_length=6)
+    board_memory: list[dict[str, Any]] = Field(default_factory=list, max_length=6)
     open_question: str = Field(default="", max_length=2000)
     unit_done: bool = False
     path_done: bool = False
@@ -1085,6 +1085,29 @@ class AdaptiveTeacher:
             return "confidence_rebuild"
         return "direct_explanation"
 
+    @staticmethod
+    def visual_policy_for(move: str, strategy: str) -> dict[str, Any]:
+        """Tell the authoring model when sight is pedagogically better than prose.
+
+        The model still chooses the concrete representation because it reads
+        the subject matter, but the server defines the instructional priority
+        and the bounded vocabulary. There is intentionally no video kind.
+        """
+        preferred = {"orient", "reteach", "prerequisite", "guided"}
+        avoid = {"diagnose"}
+        return {
+            "mode": "none" if move in avoid else "preferred" if move in preferred else "optional",
+            "strategy": strategy,
+            "allowed": [
+                "fraction_bar", "comparison", "sequence", "graph",
+                "process_flow", "timeline", "number_line", "annotated_image",
+            ],
+            "rule": (
+                "Use a visual only when seeing structure, change, order, scale, "
+                "location, or a real object clarifies the current teaching move."
+            ),
+        }
+
     async def turn(self, context, state: GuidedState, move: str, learner_input: str = "") -> LearningTurn:
         # A near miss earns the compressed example; everything else that
         # reaches `orient` gets the whole thing. A learner working from a
@@ -1099,7 +1122,7 @@ class AdaptiveTeacher:
         state.strategy_history = [*state.strategy_history, strategy][-12:]
         packaged = await self.cached_turn(context, state, move, unit, target_index)
         if packaged is not None:
-            return packaged
+            return await hydrate_turn_visuals(packaged)
         payload = {
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
@@ -1120,6 +1143,7 @@ class AdaptiveTeacher:
             "diagnostic_ceiling": state.diagnostic_ceiling,
             "diagnosed_misconception": state.diagnostic_misconception,
             "teaching_strategy": strategy,
+            "visual_policy": self.visual_policy_for(move, strategy),
             "strategy_history": state.strategy_history[-6:],
             "misconceptions": state.misconceptions[-6:],
             "learner_signals": state.learner_signals[-8:],
@@ -1206,6 +1230,11 @@ class AdaptiveTeacher:
                         raise TeachingContractError("Demonstrate the missing step before another attempt")
                 if turn.task is not None and not await self.claim_question(context, state, move, turn.task):
                     raise TeachingContractError("Previously seen checkpoint; ask a new question")
+                # Resolve any real-image request through the trusted server
+                # resolver only after the pedagogical content has passed all
+                # validation. Failure to find media degrades to text; it never
+                # blocks the learner's next step.
+                turn = await hydrate_turn_visuals(turn)
                 # Only now—after the exact move the learner is waiting for has
                 # passed validation—spend spare listening/answering time
                 # preparing the rest of the unit.
