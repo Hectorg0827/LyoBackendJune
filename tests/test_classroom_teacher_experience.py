@@ -1,3 +1,6 @@
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
 import pytest
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
@@ -8,6 +11,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
     TeachingBeat,
 )
 from lyo_app.ai_classroom.sdui_models import ExampleBlock
+from lyo_app.ai_classroom.unit_package_cache import package_key
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan
 
 
@@ -154,3 +158,27 @@ async def test_answer_question_generation_receives_the_exact_open_question_and_t
     assert captured["teaching_strategy"] == "direct_answer"
     assert captured["learner_signals"] == ["learner_question"]
     assert captured["board_memory"][0]["title"] == "Equal wholes"
+
+
+@pytest.mark.asyncio
+async def test_fast_start_warms_the_validated_unit_only_after_the_immediate_move():
+    ctx = context()
+    state = state_for_class()
+    state.skill_ids = [str(uuid4()), str(uuid4())]
+    state.identity_required = True
+    cache = object()
+    teacher = AdaptiveTeacher(package_cache=cache, fast_start=True)
+    key = package_key(ctx, state.unit, state.skill_ids[0])
+    assert key is not None
+
+    warmed_package = object()
+    teacher.build_package = AsyncMock(return_value=warmed_package)
+    teacher._fast_cache_misses.add(key.cache_key)
+
+    teacher.schedule_package_prefetch(ctx, state, state.unit)
+    task = teacher._package_prefetch_tasks[key.cache_key]
+    await task
+
+    assert teacher.build_package.await_count == 1
+    assert teacher._prefetched_packages[key.cache_key] is warmed_package
+    assert key.cache_key not in teacher._fast_cache_misses
