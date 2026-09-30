@@ -382,23 +382,24 @@ class AdaptiveSession:
             self.handled(state, pending.id)
             if continue_ungraded:
                 # A provider failure is not a learner skipping or failing a
-                # question. Retire this ungraded checkpoint, keep every earlier
-                # success, and offer a fresh question at the same rung.
+                # question. Preserve exactly what they submitted as a durable,
+                # non-evidence event, then retire this checkpoint and author a
+                # fresh question at the same rung. Transfer and interleave must
+                # stay on their current rung too: an evaluator outage cannot
+                # complete a unit or consume a scheduled retrieval attempt.
                 self.handled(state, ungraded_button["component_id"])
+                ungraded_response = pending.retry_response
                 self.event(state, "evaluation_unavailable", phase=pending.phase,
-                           target=pending.task.target_index)
+                           target=pending.task.target_index,
+                           response_format=pending.task.response_format,
+                           response=ungraded_response)
                 pending.retry_response = None
                 state.pending = None
                 state.return_to_checkpoint = False
                 state.last_feedback = self.copy(
                     context, "Your answer was saved but not graded. Let's try a fresh example.",
                     "Tu respuesta se guardó sin evaluar. Probemos un ejemplo nuevo.")
-                if pending.phase == "transfer":
-                    self.finish_transfer(context, state)
-                    return self.save(progress, state, self.summary(context, state))
-                if pending.phase == "interleave":
-                    move = self.end_interleave(state)
-                elif pending.phase == "diagnose":
+                if pending.phase == "diagnose":
                     state.diagnosed = True
                     state.phase = move = "orient"
                 else:
