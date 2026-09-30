@@ -237,6 +237,68 @@ async def test_evaluator_outage_keeps_answer_ungraded_and_continue_moves_to_a_ne
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["transfer", "interleave"])
+async def test_ungraded_transfer_or_interleave_keeps_response_and_retries_same_rung(phase):
+    teacher = ScriptedTeacher()
+    runner, ctx = AdaptiveSession(teacher), context()
+    learning_plan = plan(2)
+    unit_index = 0 if phase == "transfer" else 1
+    state_value = GuidedState(
+        owner=ctx.user_id,
+        plan=learning_plan,
+        unit_index=unit_index,
+        remaining_units=[1] if phase == "transfer" else [],
+        completed=[0],
+        phase=phase,
+        next_move=phase,
+        independent_application=phase == "transfer",
+    )
+    if phase == "interleave":
+        state_value.active_review_index = 0
+        state_value.review_return_phase = "faded"
+    open_task = task("apply", 77).model_copy(update={
+        "response_format": "short_answer",
+        "options": [],
+    })
+    state_value.pending = PendingTask(
+        task=open_task,
+        speech="Use the idea in this fresh situation.",
+        board_title="Fresh application",
+        board_content="Compare equal parts from the same whole in a new setting.",
+        phase=phase,
+        retry_response="The four-part ribbon gives the longer piece.",
+    )
+    failed = runner.unavailable(ctx, state_value)
+    state_value.scene = failed.model_dump(mode="json")
+    progress = {"guided_state": state_value.model_dump(mode="json"), "record_scope": "topic"}
+    old_id = state_value.pending.id
+    button = next(
+        component for component in failed.components
+        if getattr(component, "action_intent", None) == ActionIntent.SKIP_QUESTION
+    )
+
+    next_scene = await runner.run(
+        ctx, progress, action(ActionIntent.SKIP_QUESTION, button.component_id)
+    )
+    recovered = state(progress)
+
+    assert recovered.pending is not None
+    assert recovered.pending.phase == phase
+    assert recovered.pending.id != old_id
+    assert not recovered.unit_done and not recovered.path_done
+    saved = [event for event in recovered.practice_events
+             if event.get("kind") == "evaluation_unavailable"]
+    assert saved[-1]["response"] == "The four-part ribbon gives the longer piece."
+    assert saved[-1]["response_format"] == "short_answer"
+    if phase == "interleave":
+        assert recovered.active_review_index == 0
+        assert recovered.review_return_phase == "faded"
+        assert 0 not in recovered.interleaved_units
+    assert next_scene.scene_id != failed.scene_id
+    assert teacher.turn.await_args.args[2] == phase
+
+
+@pytest.mark.asyncio
 async def test_generation_outage_after_grading_never_regrades_the_answer():
     teacher, runner, progress, ctx, _ = await start()
     await tap_probe(runner, progress, ctx)
