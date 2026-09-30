@@ -174,6 +174,20 @@ def comparable_text(value: str) -> str:
     return " ".join(re.findall(r"\w+", value.casefold().replace("_", " "), flags=re.UNICODE))
 
 
+#: Words that can wrap an option's own label without diagnosing anything, used
+#: to tell "They said 14 rolls" from a real, terse diagnosis. Deliberately only
+#: the scaffolding of a restatement — a diagnosis in any language clears this
+#: the moment it names one thing the learner actually did, and a list that
+#: guessed at content words would start rejecting real diagnoses instead.
+RESTATEMENT_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "it", "this", "that",
+    "they", "learner", "student", "student's", "answer", "answered", "said",
+    "says", "chose", "chooses", "picked", "picks", "selected", "selects",
+    "thinks", "thought", "believes", "not", "no", "wrong", "incorrect",
+    "mistake", "error", "and", "or", "of", "to", "instead", "rather", "than",
+})
+
+
 class LearningTask(StrictModel):
     # Private authoring object, never serialized directly to a client.
     kind: Literal["predict", "choose", "apply", "diagnose", "explain"]
@@ -220,6 +234,30 @@ class LearningTask(StrictModel):
                 raise ValueError("Distractors must diagnose distinct misconceptions")
             if sum(option.abstains for option in self.options) > 1:
                 raise ValueError("One option is enough for saying 'not sure yet'")
+            # Two options cannot honestly share one explanation. Identical
+            # feedback is the signature of a filler option: the author wrote
+            # one real answer and padded the rest, so the learner who taps a
+            # distractor is told something that was not about their choice.
+            replies = [comparable_text(option.feedback) for option in self.options]
+            if len(set(replies)) != len(replies):
+                raise ValueError("Each option needs feedback about that option")
+            for option in self.options:
+                if option.correct or option.abstains or not option.misconception:
+                    continue
+                # A misconception that only restates the wrong answer diagnoses
+                # nothing, and the reteaching that reads this field has nothing
+                # to work from. The test is whether anything of substance is
+                # added, not how much: "Inverts numerator and denominator" is a
+                # complete diagnosis in three words, while "They said 14 rolls"
+                # is none in four. So this asks for one word that is neither the
+                # option nor scaffolding around it.
+                label_words = set(comparable_text(option.label).split())
+                said = {word for word in comparable_text(option.misconception).split()
+                        if word not in label_words}
+                if not said - RESTATEMENT_WORDS:
+                    raise ValueError(
+                        "A distractor's misconception must say what the learner did, "
+                        "not repeat the option")
         elif self.options:
             raise ValueError("Open tasks cannot carry choice options")
         return self
@@ -334,11 +372,19 @@ class TransferPracticeTurn(PracticeTurn):
 def validate_semantic_content(turn: LearningTurn) -> None:
     """Reject mechanically detectable meaning failures before a learner sees them.
 
-    This cannot establish whether a distractor is plausible, whether a
-    near_miss/fundamental gap is correctly labeled, or whether the teaching is
-    fluent but wrong. `AdaptiveTeacher.semantic_judge` is the integration hook
-    for a separate model review of those remaining cases; a future judge must
-    inspect the complete turn and unit, not trust the authoring model's claim.
+    What is checked here and in `LearningTask.actionable_task`: the answer
+    appearing in anything the learner can read before answering, two options
+    with the same visible answer, two distractors claiming the same
+    misconception, two options sharing one piece of feedback, and a
+    misconception that only restates its own option.
+
+    What cannot be checked by any amount of string comparison, and so is left
+    to `AdaptiveTeacher.semantic_judge`: whether a distractor is *plausible*
+    rather than merely distinct, whether a `near_miss`/`fundamental` gap is
+    labeled correctly, and whether the teaching is fluent but wrong. Those are
+    where teaching quality actually lives. The hook takes the move, the unit
+    and the whole turn precisely because a judge must read the content itself
+    and must not be handed the authoring model's own claim about it.
     """
     task = turn.task
     if task is None:
@@ -350,7 +396,12 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     # the scenario. Reject a full answer phrase, not a necessary operand.
     if len(normalized) < 7 or len(normalized.split()) < 2:
         return
-    visible = [turn.speech, turn.board_title, turn.board_content, task.scenario, task.question]
+    # `response_hint` is shown twice — appended to the question and used as the
+    # input placeholder — so a hint that works the answer out for the learner
+    # gives it away exactly as the board would. `criteria` is deliberately
+    # absent: it is the grading rubric and never reaches the client.
+    visible = [turn.speech, turn.board_title, turn.board_content,
+               task.scenario, task.question, task.response_hint]
     if turn.visual:
         visible.extend([turn.visual.caption, turn.visual.description])
     if any(f" {normalized} " in f" {comparable_text(item)} " for item in visible):
