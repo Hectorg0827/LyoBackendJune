@@ -1147,7 +1147,18 @@ class AdaptiveTeacher:
             "strategy_history": state.strategy_history[-6:],
             "misconceptions": state.misconceptions[-6:],
             "learner_signals": state.learner_signals[-8:],
-            "board_memory": state.board_memory[-4:],
+            "board_memory": [
+                {
+                    "title": item.get("title", ""),
+                    "content": item.get("content", ""),
+                    "visual": ({
+                        "kind": item["visual"].get("kind"),
+                        "title": item["visual"].get("title"),
+                        "description": item["visual"].get("description"),
+                    } if item.get("visual") else None),
+                }
+                for item in state.board_memory[-4:]
+            ],
             "open_question": state.open_question[:2000],
             "compress_demonstration": focused,
         }
