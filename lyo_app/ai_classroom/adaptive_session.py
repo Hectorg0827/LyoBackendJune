@@ -181,6 +181,7 @@ class AdaptiveSession:
             state.presentation = None
             if state.paused_presentation:
                 paused = state.paused_presentation
+                state.open_question = ""
                 state.presentation = LearningTurn.model_validate(paused["presentation"])
                 state.beat_index, state.phase = paused["beat_index"], paused["phase"]
                 state.paused_presentation = None
@@ -188,6 +189,7 @@ class AdaptiveSession:
                 return self.save(progress, state, self.presentation_scene(context, state))
             if state.return_to_checkpoint and state.pending:
                 state.return_to_checkpoint = False
+                state.open_question = ""
                 state.phase = state.pending.phase
                 return self.save(progress, state, self.checkpoint(context, state))
             if state.next_move in ("reteach", "prerequisite") and state.support_attempts >= 2:
@@ -272,6 +274,9 @@ class AdaptiveSession:
                 result = await self.teacher.evaluate(context, pending, response)
             pending.retry_response = None
             state.last_feedback = result.feedback
+            self.signal(state, f"answer:{result.verdict}:{pending.phase}")
+            if result.misconception:
+                self.remember_misconception(state, result.misconception)
             if result.verdict == "unavailable":
                 pending.retry_response = response
                 return self.save(progress, state, self.unavailable(context, state))
@@ -429,6 +434,11 @@ class AdaptiveSession:
                     return self.save(progress, state, self.summary(context, state))
         elif intent in (ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE,
                         ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
+            if intent in (ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
+                state.open_question = learner_input
+                self.signal(state, "learner_question")
+            else:
+                self.signal(state, "asked_for_help")
             if state.presentation and not state.paused_presentation:
                 state.paused_presentation = dict(presentation=state.presentation.model_dump(),
                                                 beat_index=state.beat_index, phase=state.phase)
@@ -460,6 +470,7 @@ class AdaptiveSession:
                         else "reteach" if intent == ActionIntent.REQUEST_EXAMPLE else "help")
             self.event(state, "help", phase=state.phase, intent=str(intent))
         elif intent == ActionIntent.SKIP_AHEAD:
+            self.signal(state, "asked_for_challenge")
             # A learner explicitly asking for a challenge may demonstrate prior
             # knowledge. Normal practice can never take this shortcut.
             state.challenge_requested = True
@@ -1078,6 +1089,23 @@ class AdaptiveSession:
         if beat.visual:
             content += "\n" + beat.visual.description
         state.taught_steps = [*state.taught_steps, content][-16:]
+        anchor = {"title": beat.board_title.strip(), "content": beat.board_content.strip()}
+        if anchor["title"] and anchor["content"]:
+            previous = [item for item in state.board_memory if item != anchor]
+            state.board_memory = [*previous, anchor][-6:]
+
+    @staticmethod
+    def signal(state, signal: str):
+        signal = signal.strip()[:120]
+        if signal:
+            state.learner_signals = [*state.learner_signals, signal][-12:]
+
+    @staticmethod
+    def remember_misconception(state, misconception: str):
+        misconception = misconception.strip()[:250]
+        if misconception:
+            previous = [item for item in state.misconceptions if item != misconception]
+            state.misconceptions = [*previous, misconception][-12:]
 
     @staticmethod
     def current_beat(state):
