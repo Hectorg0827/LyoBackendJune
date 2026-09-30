@@ -7,6 +7,7 @@ text description for accessibility and degraded/offline clients.
 """
 
 import ast
+import asyncio
 import math
 import re
 from typing import Any, Literal
@@ -230,10 +231,17 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
 
 
 async def hydrate_turn_visuals(turn: Any) -> Any:
-    """Resolve every visual in one learner-paced turn before it is persisted."""
+    """Resolve every visual in one learner-paced turn before it is persisted.
+
+    Multiple demonstration beats are resolved concurrently so adding a real
+    image does not multiply the post-generation wait by the number of beats.
+    """
     beats = [turn, *getattr(turn, "demonstration", [])]
-    for beat in beats:
-        visual = getattr(beat, "visual", None)
-        if visual is not None:
-            beat.visual = await resolve_visual_media(visual)
+    targets = [(beat, getattr(beat, "visual", None)) for beat in beats]
+    targets = [(beat, visual) for beat, visual in targets if visual is not None]
+    if not targets:
+        return turn
+    resolved = await asyncio.gather(*(resolve_visual_media(visual) for _, visual in targets))
+    for (beat, _), visual in zip(targets, resolved):
+        beat.visual = visual
     return turn
