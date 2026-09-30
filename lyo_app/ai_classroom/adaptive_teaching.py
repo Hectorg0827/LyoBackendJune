@@ -894,6 +894,12 @@ class AdaptiveTeacher:
                     await self.package_cache.evict(key)
                     package = None
             if package is None and self.fast_start:
+                # If the learner reached the next move before warm-up finished,
+                # live instruction wins. Never let speculative preparation
+                # compete with the turn they are waiting for.
+                warming = self._package_prefetch_tasks.get(key.cache_key)
+                if warming is not None and not warming.done():
+                    warming.cancel()
                 # The immediate move still uses bounded single-move authoring.
                 # Mark this unit for safe pre-authoring *after* that move is
                 # ready, so package generation never competes with the response
@@ -933,6 +939,13 @@ class AdaptiveTeacher:
         except Exception as exc:
             logger.warning("Classroom unit package unavailable: %s", type(exc).__name__)
             raise TeachingUnavailable("Could not load a validated unit package") from exc
+
+    def cancel_package_prefetch(self) -> None:
+        """Give current learner work priority over speculative unit preparation."""
+        for task in list(self._package_prefetch_tasks.values()):
+            if not task.done():
+                task.cancel()
+        self._package_prefetch_tasks.clear()
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
@@ -1175,6 +1188,7 @@ class AdaptiveTeacher:
         raise TeachingUnavailable("Could not author a clear checkpoint")
 
     async def evaluate(self, context, pending: PendingTask, response: str) -> Evaluation:
+        self.cancel_package_prefetch()
         is_es = context.language_code.lower().startswith("es")
         fallback = Evaluation(
             verdict="unavailable", confidence=0, question_clear=True,
