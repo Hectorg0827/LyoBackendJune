@@ -636,6 +636,15 @@ class GuidedState(StrictModel):
     handled: list[str] = Field(default_factory=list)
     scene: dict[str, Any] | None = None
     last_feedback: str = ""
+    # Compact, durable teacher state. These fields make the model aware of the
+    # instructional situation without making it authoritative over mastery.
+    # They survive reconnects because GuidedState is the server-owned save file.
+    active_strategy: str = "direct_explanation"
+    strategy_history: list[str] = Field(default_factory=list, max_length=12)
+    misconceptions: list[str] = Field(default_factory=list, max_length=12)
+    learner_signals: list[str] = Field(default_factory=list, max_length=12)
+    board_memory: list[dict[str, str]] = Field(default_factory=list, max_length=6)
+    open_question: str = Field(default="", max_length=2000)
     unit_done: bool = False
     path_done: bool = False
     mode: str = "solo"
@@ -956,6 +965,43 @@ class AdaptiveTeacher:
                 payload["repair"] = "Return the exact unit_count, distinct skills and real teaching material."
         raise TeachingUnavailable("Could not build a validated pathway")
 
+    @staticmethod
+    def strategy_for(state: GuidedState, move: str, learner_input: str = "") -> str:
+        """Choose an instructional representation from learner state, not at random."""
+        if move == "diagnose":
+            return "diagnostic_question"
+        if move == "orient":
+            return "focused_worked_example" if state.diagnostic_ceiling == "faded" else "worked_example"
+        if move == "answer_question":
+            return "direct_answer"
+        if move == "help":
+            return "socratic_nudge" if state.support_attempts == 0 else "worked_step"
+        if move == "clarify":
+            return "clarify_language"
+        if move == "prerequisite":
+            return "prerequisite_bridge"
+        if move == "reteach":
+            # Repeating the same explanation after a miss is not adaptation.
+            # Rotate representation while keeping the same learning objective.
+            candidates = ("analogy", "counterexample", "worked_example")
+            recent = set(state.strategy_history[-2:])
+            return next((strategy for strategy in candidates if strategy not in recent), candidates[0])
+        if move == "guided":
+            return "guided_decision"
+        if move == "faded":
+            return "faded_example"
+        if move == "independent":
+            return "independent_application"
+        if move == "transfer":
+            return "transfer_application"
+        if move == "interleave":
+            return "retrieval_practice"
+        if move == "explain":
+            return "learner_explanation"
+        if move == "closing_win":
+            return "confidence_rebuild"
+        return "direct_explanation"
+
     async def turn(self, context, state: GuidedState, move: str, learner_input: str = "") -> LearningTurn:
         # A near miss earns the compressed example; everything else that
         # reaches `orient` gets the whole thing. A learner working from a
@@ -965,6 +1011,9 @@ class AdaptiveTeacher:
         unit = (state.plan.units[state.active_review_index]
                 if move == "interleave" and state.active_review_index is not None else state.unit)
         target_index = 0 if move == "interleave" else state.target_index
+        strategy = self.strategy_for(state, move, learner_input)
+        state.active_strategy = strategy
+        state.strategy_history = [*state.strategy_history, strategy][-12:]
         packaged = await self.cached_turn(context, state, move, unit, target_index)
         if packaged is not None:
             return packaged
@@ -987,6 +1036,12 @@ class AdaptiveTeacher:
             "support_attempts": state.support_attempts,
             "diagnostic_ceiling": state.diagnostic_ceiling,
             "diagnosed_misconception": state.diagnostic_misconception,
+            "teaching_strategy": strategy,
+            "strategy_history": state.strategy_history[-6:],
+            "misconceptions": state.misconceptions[-6:],
+            "learner_signals": state.learner_signals[-8:],
+            "board_memory": state.board_memory[-4:],
+            "open_question": state.open_question[:2000],
             "compress_demonstration": focused,
         }
         for attempt in range(2):
