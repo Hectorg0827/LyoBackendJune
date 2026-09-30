@@ -1461,9 +1461,19 @@ class SceneLifecycleEngine:
         async def resolve_skills(classroom_context, plan):
             return await resolve_skill_plan(self.db, classroom_context, plan)
 
+        adaptive_teacher = getattr(self, "adaptive_teacher", None)
+        if adaptive_teacher is None:
+            # Keep one teacher for the lifetime of this classroom engine. Its
+            # durable pedagogical state still lives in GuidedState; retaining
+            # the object only lets validated unit prefetch survive from one
+            # learner turn to the next without sharing DB work in a background
+            # task.
+            adaptive_teacher = AdaptiveTeacher(
+                package_cache=DatabaseUnitPackageCache(self.db), fast_start=True
+            )
+            self.adaptive_teacher = adaptive_teacher
         runner = AdaptiveSession(
-            getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(
-                package_cache=DatabaseUnitPackageCache(self.db), fast_start=True),
+            adaptive_teacher,
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
         )
