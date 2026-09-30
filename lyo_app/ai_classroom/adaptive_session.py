@@ -1036,6 +1036,7 @@ class AdaptiveSession:
         state.pending = state.presentation = state.paused_presentation = None
         state.last_feedback = ""
         state.generation_input = ""
+        state.open_question = ""
         state.phase = state.next_move = "diagnose"
         state.guided_targets = []
         state.faded_targets = []
@@ -1141,7 +1142,8 @@ class AdaptiveSession:
         }[state.phase])
 
     def surface(self, context, state, speech, title, content, visual=None, activity_id=None):
-        title = self.stage(context, state) + " · " + title
+        raw_title = title.strip()
+        title = self.stage(context, state) + " · " + raw_title
         if len(title) > 100:
             title = title[:99].rstrip() + "…"
         example_content = content + "\n\n" + visual.description if visual else content
@@ -1152,10 +1154,38 @@ class AdaptiveSession:
                            concept_tags=[state.plan.units[state.active_review_index].title
                                          if state.active_review_index is not None else state.unit.title],
                            emotion="encouraging", priority=1, source_attributions=context.source_attributions[:5]),
+        ]
+
+        # Keep a compact classroom board across scene boundaries. The current
+        # beat is already in board_memory because accept_turn calls
+        # remember_beat before rendering; exclude it and re-emit the latest
+        # prior anchors through ExampleBlock, which every client already
+        # renders. This gives the learner stable reference points without
+        # inventing a web-only board protocol.
+        current_anchor = {"title": raw_title, "content": content.strip()}
+        prior_anchors = [item for item in state.board_memory if item != current_anchor][-3:]
+        if prior_anchors:
+            memory_lines = []
+            for item in prior_anchors:
+                anchor_title = item.get("title", "").strip()
+                anchor_content = item.get("content", "").strip()
+                if not anchor_title or not anchor_content:
+                    continue
+                memory_lines.append(f"{anchor_title}\n{anchor_content[:360]}")
+            if memory_lines:
+                components.append(ExampleBlock(
+                    component_id="classroom-board-memory",
+                    title=self.copy(context, "Keep in view", "Mantén a la vista"),
+                    content="\n\n".join(memory_lines)[:1500],
+                    language_code=context.language_code,
+                    priority=2,
+                ))
+
+        components.append(
             ExampleBlock(title=title,
                          content=content if separate_description else example_content,
-                         language_code=context.language_code, priority=2),
-        ]
+                         language_code=context.language_code, priority=2)
+        )
         if separate_description:
             # Preserve both full explanations instead of truncating teaching
             # to satisfy a limit on a single legacy component.
@@ -1271,11 +1301,36 @@ class AdaptiveSession:
             ProgressBar(current=len(state.completed), total=len(state.plan.units), label=title),
             TeacherMessage(text=text, emotion="encouraging", language_code=context.language_code),
             ExampleBlock(title=state.unit.title, content=recap[:1400], language_code=context.language_code),
-            ExampleBlock(title=title, content="\n".join(
-                f"• {u.title} — " + self.copy(context, "practised" if i in state.completed else "still to practise",
-                    "practicada" if i in state.completed else "pendiente de práctica") for i, u in enumerate(state.plan.units)
-            ), language_code=context.language_code),
         ]
+        if state.board_memory:
+            key_ideas = "\n\n".join(
+                f"• {item.get('title', '').strip()}: {item.get('content', '').strip()[:320]}"
+                for item in state.board_memory[-3:]
+                if item.get("title", "").strip() and item.get("content", "").strip()
+            )
+            if key_ideas:
+                components.append(ExampleBlock(
+                    component_id="classroom-summary/key-ideas",
+                    title=self.copy(context, "Key ideas to keep", "Ideas clave para recordar"),
+                    content=key_ideas[:1500],
+                    language_code=context.language_code,
+                ))
+        components.append(ExampleBlock(title=title, content="\n".join(
+            f"• {u.title} — " + self.copy(context, "practised" if i in state.completed else "still to practise",
+                "practicada" if i in state.completed else "pendiente de práctica") for i, u in enumerate(state.plan.units)
+        ), language_code=context.language_code))
+        needs_revisit = [u.title for i, u in enumerate(state.plan.units) if i in state.skipped]
+        if needs_revisit:
+            components.append(ExampleBlock(
+                component_id="classroom-summary/next-class",
+                title=self.copy(context, "Next class", "Próxima clase"),
+                content=self.copy(
+                    context,
+                    "We'll revisit: " + ", ".join(needs_revisit) + ".",
+                    "Volveremos a: " + ", ".join(needs_revisit) + ".",
+                )[:1500],
+                language_code=context.language_code,
+            ))
         if not state.path_done or context.lesson_index + 1 < context.total_lessons:
             components.append(CTAButton(component_id=state.step_id, label=self.copy(context, "Continue learning", "Seguir aprendiendo"),
                                         action_intent=ActionIntent.CONTINUE, language_code=context.language_code))
