@@ -1433,19 +1433,26 @@ class SceneLifecycleEngine:
                 progress["lesson_id"] = context.lesson_id
         from lyo_app.ai_classroom.skill_identity import resolve_skill_plan
         from lyo_app.ai_classroom.unit_package_cache import DatabaseUnitPackageCache
+        from lyo_app.ai_classroom.semantic_review import judge_enabled, model_semantic_judge
 
         async def resolve_skills(classroom_context, plan):
             return await resolve_skill_plan(self.db, classroom_context, plan)
 
-        # Off unless CLASSROOM_SEMANTIC_JUDGE=true. It adds a model call per
-        # authored turn and reviews meaning no schema can check; see
-        # semantic_review for why that default is deliberate rather than timid.
-        from lyo_app.ai_classroom.semantic_review import judge_enabled, model_semantic_judge
-
+        adaptive_teacher = getattr(self, "adaptive_teacher", None)
+        if adaptive_teacher is None:
+            # Keep one teacher for the lifetime of this classroom engine. Its
+            # durable pedagogical state still lives in GuidedState; retaining
+            # the object only lets validated unit prefetch survive from one
+            # learner turn to the next without sharing DB work in a background
+            # task.
+            adaptive_teacher = AdaptiveTeacher(
+                package_cache=DatabaseUnitPackageCache(self.db),
+                fast_start=True,
+                semantic_judge=model_semantic_judge if judge_enabled() else None,
+            )
+            self.adaptive_teacher = adaptive_teacher
         runner = AdaptiveSession(
-            getattr(self, "adaptive_teacher", None) or AdaptiveTeacher(
-                package_cache=DatabaseUnitPackageCache(self.db), fast_start=True,
-                semantic_judge=model_semantic_judge if judge_enabled() else None),
+            adaptive_teacher,
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
         )

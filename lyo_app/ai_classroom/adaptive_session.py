@@ -181,6 +181,7 @@ class AdaptiveSession:
             state.presentation = None
             if state.paused_presentation:
                 paused = state.paused_presentation
+                state.open_question = ""
                 state.presentation = LearningTurn.model_validate(paused["presentation"])
                 state.beat_index, state.phase = paused["beat_index"], paused["phase"]
                 state.paused_presentation = None
@@ -188,6 +189,7 @@ class AdaptiveSession:
                 return self.save(progress, state, self.presentation_scene(context, state))
             if state.return_to_checkpoint and state.pending:
                 state.return_to_checkpoint = False
+                state.open_question = ""
                 state.phase = state.pending.phase
                 return self.save(progress, state, self.checkpoint(context, state))
             if state.next_move in ("reteach", "prerequisite") and state.support_attempts >= 2:
@@ -235,8 +237,14 @@ class AdaptiveSession:
         answer = data.get("answer_data") or {}
         submitting = intent in (ActionIntent.SUBMIT_ANSWER, ActionIntent.SUBMIT_TRANSFER)
         retry_evaluation = (
-            intent in (ActionIntent.CONTINUE, ActionIntent.RETRY) and pending is not None
-            and pending.retry_response is not None and pending.task.response_format != "choice"
+            (recovering or (
+                intent == ActionIntent.CONTINUE and retry_button is not None
+                and trigger.component_id in (
+                    None, "continue", "web_continue", "android_continue",
+                    retry_button["component_id"],
+                )
+            )) and pending is not None and pending.retry_response is not None
+            and pending.task.response_format != "choice"
         )
         if submitting or retry_evaluation:
             if not pending or (not retry_evaluation and trigger.component_id != pending.id):
@@ -266,6 +274,9 @@ class AdaptiveSession:
                 result = await self.teacher.evaluate(context, pending, response)
             pending.retry_response = None
             state.last_feedback = result.feedback
+            self.signal(state, f"answer:{result.verdict}:{pending.phase}")
+            if result.misconception:
+                self.remember_misconception(state, result.misconception)
             if result.verdict == "unavailable":
                 pending.retry_response = response
                 return self.save(progress, state, self.unavailable(context, state))
@@ -361,10 +372,39 @@ class AdaptiveSession:
             learner_input = response
 
         elif intent == ActionIntent.SKIP_QUESTION:
-            if not pending or trigger.component_id != pending.id:
+            ungraded_button = next((c for c in (state.scene or {}).get("components", [])
+                                    if c.get("action_intent") == ActionIntent.SKIP_QUESTION), None)
+            continue_ungraded = (pending is not None and pending.retry_response is not None
+                                 and ungraded_button is not None
+                                 and trigger.component_id == ungraded_button["component_id"])
+            if not pending or (trigger.component_id != pending.id and not continue_ungraded):
                 return self.current_or_retry(context, state)
             self.handled(state, pending.id)
-            if pending.phase == "diagnose":
+            if continue_ungraded:
+                # A provider failure is not a learner skipping or failing a
+                # question. Preserve exactly what they submitted as a durable,
+                # non-evidence event, then retire this checkpoint and author a
+                # fresh question at the same rung. Transfer and interleave must
+                # stay on their current rung too: an evaluator outage cannot
+                # complete a unit or consume a scheduled retrieval attempt.
+                self.handled(state, ungraded_button["component_id"])
+                ungraded_response = pending.retry_response
+                self.event(state, "evaluation_unavailable", phase=pending.phase,
+                           target=pending.task.target_index,
+                           response_format=pending.task.response_format,
+                           response=ungraded_response)
+                pending.retry_response = None
+                state.pending = None
+                state.return_to_checkpoint = False
+                state.last_feedback = self.copy(
+                    context, "Your answer was saved but not graded. Let's try a fresh example.",
+                    "Tu respuesta se guardó sin evaluar. Probemos un ejemplo nuevo.")
+                if pending.phase == "diagnose":
+                    state.diagnosed = True
+                    state.phase = move = "orient"
+                else:
+                    state.phase = move = pending.phase
+            elif pending.phase == "diagnose":
                 # Passing on "can you already do this?" is itself an answer: no.
                 # It must not mark the skill for later review the way skipping
                 # practice does — the learner has asked to be taught it now.
@@ -395,6 +435,11 @@ class AdaptiveSession:
                     return self.save(progress, state, self.summary(context, state))
         elif intent in (ActionIntent.REQUEST_HINT, ActionIntent.REQUEST_EXAMPLE,
                         ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
+            if intent in (ActionIntent.ASK_QUESTION, ActionIntent.USER_MESSAGE):
+                state.open_question = learner_input
+                self.signal(state, "learner_question")
+            else:
+                self.signal(state, "asked_for_help")
             if state.presentation and not state.paused_presentation:
                 state.paused_presentation = dict(presentation=state.presentation.model_dump(),
                                                 beat_index=state.beat_index, phase=state.phase)
@@ -426,6 +471,7 @@ class AdaptiveSession:
                         else "reteach" if intent == ActionIntent.REQUEST_EXAMPLE else "help")
             self.event(state, "help", phase=state.phase, intent=str(intent))
         elif intent == ActionIntent.SKIP_AHEAD:
+            self.signal(state, "asked_for_challenge")
             # A learner explicitly asking for a challenge may demonstrate prior
             # knowledge. Normal practice can never take this shortcut.
             state.challenge_requested = True
@@ -991,6 +1037,7 @@ class AdaptiveSession:
         state.pending = state.presentation = state.paused_presentation = None
         state.last_feedback = ""
         state.generation_input = ""
+        state.open_question = ""
         state.phase = state.next_move = "diagnose"
         state.guided_targets = []
         state.faded_targets = []
@@ -1044,6 +1091,33 @@ class AdaptiveSession:
         if beat.visual:
             content += "\n" + beat.visual.description
         state.taught_steps = [*state.taught_steps, content][-16:]
+        anchor = {
+            "title": beat.board_title.strip(),
+            "content": beat.board_content.strip(),
+            "visual": beat.visual.model_dump(mode="json") if beat.visual else None,
+        }
+        if anchor["title"] and anchor["content"]:
+            # Deduplicate by the human-visible anchor, not by a generated
+            # visual_id, so regenerating the same board does not create a
+            # second memory card.
+            previous = [
+                item for item in state.board_memory
+                if item.get("title") != anchor["title"] or item.get("content") != anchor["content"]
+            ]
+            state.board_memory = [*previous, anchor][-6:]
+
+    @staticmethod
+    def signal(state, signal: str):
+        signal = signal.strip()[:120]
+        if signal:
+            state.learner_signals = [*state.learner_signals, signal][-12:]
+
+    @staticmethod
+    def remember_misconception(state, misconception: str):
+        misconception = misconception.strip()[:250]
+        if misconception:
+            previous = [item for item in state.misconceptions if item != misconception]
+            state.misconceptions = [*previous, misconception][-12:]
 
     @staticmethod
     def current_beat(state):
@@ -1079,7 +1153,8 @@ class AdaptiveSession:
         }[state.phase])
 
     def surface(self, context, state, speech, title, content, visual=None, activity_id=None):
-        title = self.stage(context, state) + " · " + title
+        raw_title = title.strip()
+        title = self.stage(context, state) + " · " + raw_title
         if len(title) > 100:
             title = title[:99].rstrip() + "…"
         example_content = content + "\n\n" + visual.description if visual else content
@@ -1090,10 +1165,62 @@ class AdaptiveSession:
                            concept_tags=[state.plan.units[state.active_review_index].title
                                          if state.active_review_index is not None else state.unit.title],
                            emotion="encouraging", priority=1, source_attributions=context.source_attributions[:5]),
+        ]
+
+        # Keep a compact classroom board across scene boundaries. The current
+        # beat is already in board_memory because accept_turn calls
+        # remember_beat before rendering; exclude it and re-emit the latest
+        # prior anchors through ExampleBlock, which every client already
+        # renders. This gives the learner stable reference points without
+        # inventing a web-only board protocol.
+        current_anchor = {
+            "title": raw_title,
+            "content": content.strip(),
+            "visual": visual.model_dump(mode="json") if visual else None,
+        }
+        prior_anchors = [
+            item for item in state.board_memory
+            if item.get("title") != current_anchor["title"]
+            or item.get("content") != current_anchor["content"]
+        ][-3:]
+        if prior_anchors:
+            memory_lines = []
+            for item in prior_anchors:
+                anchor_title = item.get("title", "").strip()
+                anchor_content = item.get("content", "").strip()
+                if not anchor_title or not anchor_content:
+                    continue
+                memory_lines.append(f"{anchor_title}\n{anchor_content[:360]}")
+            if memory_lines:
+                components.append(ExampleBlock(
+                    component_id="classroom-board-memory",
+                    title=self.copy(context, "Keep in view", "Mantén a la vista"),
+                    content="\n\n".join(memory_lines)[:1500],
+                    language_code=context.language_code,
+                    priority=2,
+                ))
+            # Keep the latest useful visual on the board as a reference. It is
+            # read-only here: update_activity only accepts the active visual's
+            # component id, so manipulating a remembered visual cannot grade or
+            # mutate the current checkpoint.
+            remembered_visual = next(
+                (item.get("visual") for item in reversed(prior_anchors) if item.get("visual")),
+                None,
+            )
+            if remembered_visual:
+                remembered_id = str(remembered_visual.get("visual_id") or "recent")
+                components.append(LessonBlock(
+                    component_id="memory-visual:" + remembered_id,
+                    block_type="teaching_visual",
+                    block=remembered_visual,
+                    priority=2,
+                ))
+
+        components.append(
             ExampleBlock(title=title,
                          content=content if separate_description else example_content,
-                         language_code=context.language_code, priority=2),
-        ]
+                         language_code=context.language_code, priority=2)
+        )
         if separate_description:
             # Preserve both full explanations instead of truncating teaching
             # to satisfy a limit on a single legacy component.
@@ -1209,11 +1336,36 @@ class AdaptiveSession:
             ProgressBar(current=len(state.completed), total=len(state.plan.units), label=title),
             TeacherMessage(text=text, emotion="encouraging", language_code=context.language_code),
             ExampleBlock(title=state.unit.title, content=recap[:1400], language_code=context.language_code),
-            ExampleBlock(title=title, content="\n".join(
-                f"• {u.title} — " + self.copy(context, "practised" if i in state.completed else "still to practise",
-                    "practicada" if i in state.completed else "pendiente de práctica") for i, u in enumerate(state.plan.units)
-            ), language_code=context.language_code),
         ]
+        if state.board_memory:
+            key_ideas = "\n\n".join(
+                f"• {item.get('title', '').strip()}: {item.get('content', '').strip()[:320]}"
+                for item in state.board_memory[-3:]
+                if item.get("title", "").strip() and item.get("content", "").strip()
+            )
+            if key_ideas:
+                components.append(ExampleBlock(
+                    component_id="classroom-summary/key-ideas",
+                    title=self.copy(context, "Key ideas to keep", "Ideas clave para recordar"),
+                    content=key_ideas[:1500],
+                    language_code=context.language_code,
+                ))
+        components.append(ExampleBlock(title=title, content="\n".join(
+            f"• {u.title} — " + self.copy(context, "practised" if i in state.completed else "still to practise",
+                "practicada" if i in state.completed else "pendiente de práctica") for i, u in enumerate(state.plan.units)
+        ), language_code=context.language_code))
+        needs_revisit = [u.title for i, u in enumerate(state.plan.units) if i in state.skipped]
+        if needs_revisit:
+            components.append(ExampleBlock(
+                component_id="classroom-summary/next-class",
+                title=self.copy(context, "Next class", "Próxima clase"),
+                content=self.copy(
+                    context,
+                    "We'll revisit: " + ", ".join(needs_revisit) + ".",
+                    "Volveremos a: " + ", ".join(needs_revisit) + ".",
+                )[:1500],
+                language_code=context.language_code,
+            ))
         if not state.path_done or context.lesson_index + 1 < context.total_lessons:
             components.append(CTAButton(component_id=state.step_id, label=self.copy(context, "Continue learning", "Seguir aprendiendo"),
                                         action_intent=ActionIntent.CONTINUE, language_code=context.language_code))
@@ -1274,7 +1426,14 @@ class AdaptiveSession:
         return (lead + "\n\n" + material).strip() if material else lead
 
     def unavailable(self, context, state):
-        text = self.paused_notice(context)
+        ungraded = bool(state and state.pending and state.pending.retry_response is not None)
+        text = (self.copy(
+            context,
+            "Your answer couldn't be graded. It's saved and won't count as wrong. "
+            "Continue with a fresh example.",
+            "No pude evaluar tu respuesta. Está guardada y no contará como error. "
+            "Continúa con un ejemplo nuevo.",
+        ) if ungraded else self.paused_notice(context))
         components = [TeacherMessage(text=self.paused_teaching(context, state),
                                      emotion="encouraging", language_code=context.language_code)]
         # Keep the visible example, even after the final modelling beat has
@@ -1306,8 +1465,11 @@ class AdaptiveSession:
         components.append(ExampleBlock(component_id="classroom-recovery/notice",
             title=self.copy(context, "Your lesson is paused", "Tu lección está en pausa"),
             content=text, language_code=context.language_code))
-        components.append(CTAButton(label=self.copy(context, "Retry this step", "Reintentar este paso"),
-                                    action_intent=ActionIntent.RETRY, language_code=context.language_code))
+        components.append(CTAButton(
+            label=self.copy(context, "Continue with a new example", "Continuar con otro ejemplo")
+            if ungraded else self.copy(context, "Retry this step", "Reintentar este paso"),
+            action_intent=ActionIntent.SKIP_QUESTION if ungraded else ActionIntent.RETRY,
+            language_code=context.language_code))
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
 
     def current_or_retry(self, context, state):

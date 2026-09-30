@@ -27,20 +27,44 @@ CORE = (
     "a teaching beat is not automatically a test. Each speech is 20–55 words. "
     "Board content is a concrete example, comparison, equation or short steps "
     "that remain visible beside the learner's task. Keep one useful goal. "
+    "Use the supplied teaching_strategy as the representation for this move. "
+    "board_memory contains a few prior anchors that remain conceptually on the "
+    "classroom board; connect to one naturally when it helps, and never claim "
+    "something is on the board unless it appears there. Within one unit, prefer "
+    "to extend the most recent concrete example through orientation, guided and "
+    "faded work so the lesson has one intellectual thread; change context on "
+    "purpose for transfer/interleave, or change representation for remediation. "
+    "learner_signals and "
+    "misconceptions are observations, not labels about ability. "
 )
 
 #: True of any beat that may carry a teaching visual.
 VISUALS = (
-    "A visual may accompany any beat when useful. Use fraction_bar for equal "
-    "parts/percentages (parts, whole, value, unit), comparison for 2–6 contrasting "
-    "examples (entries with label/detail), sequence for 2–6 connected steps, or "
-    "graph for a simple mathematical relationship with 1–3 bounded parameters. "
-    "Set fixed x_min/x_max and y_min/y_max to keep the important changes visible. "
-    "Choose a visual that explains this actual idea, not decoration. Its caption "
-    "guides exploration and its description conveys equivalent information in "
-    "text. During guided practice invite a prediction or observation using it; "
-    "manipulation alone is never a graded answer. Prefer a useful visual in the "
-    "demonstration and guided phase when this subject permits one. "
+    "visual_policy is the server's decision about visual priority. If mode=none, "
+    "set visual=null. If mode=preferred, use one when the current idea has useful "
+    "structure, change, order, scale, location, or a real object to inspect; do "
+    "not force a decorative visual when prose is clearer. If mode=optional, use "
+    "your judgement. Only use a kind listed in visual_policy.allowed. "
+    "Use fraction_bar for equal parts/percentages (parts, whole, value, unit); "
+    "comparison for contrasting examples; sequence for connected steps; graph "
+    "for a mathematical relationship with 1–3 bounded parameters; process_flow "
+    "for causes, systems or transformations; timeline for chronological change; "
+    "number_line for ordered quantities using entries with numeric position; and "
+    "annotated_image when a real object, artwork, place, organism, instrument or "
+    "physical feature is genuinely better seen than described. "
+    "For process_flow/timeline use 2–8 entries in the intended order. For "
+    "number_line set x_min/x_max and give each entry a position within the range. "
+    "For annotated_image provide a concise image_query naming the real subject and "
+    "optional entries with normalized x/y coordinates for features worth noticing. "
+    "Never provide image_url, source_url or attribution; the server resolves those "
+    "from a trusted source. There is no video visual type. "
+    "Set fixed graph x/y bounds so changes remain visible. Every visual needs a "
+    "caption that tells the learner what to look at or manipulate and a description "
+    "that conveys equivalent information in text. During guided practice, invite "
+    "a prediction or observation using the visual when that deepens reasoning; "
+    "manipulation alone is never a graded answer. Reuse the same underlying "
+    "representation across adjacent beats when continuity helps, rather than "
+    "swapping visuals for novelty. "
 )
 
 #: True of any move that asks the learner something.
@@ -197,7 +221,9 @@ RETEACH = (
     "previous_task, previous_answers and feedback, and explain WHY that step does "
     "not work. Do not invent a reason the learner has not given or merely announce "
     "'wrong'. Explicitly model the missing step with a DIFFERENT representation or "
-    "example; for prerequisite teach the particular prerequisite the learner is "
+    "example; follow teaching_strategy so a repeated miss changes representation "
+    "(analogy, counterexample, or worked example) instead of repeating the same "
+    "explanation. For prerequisite teach the particular prerequisite the learner is "
     "missing, then bridge back to the original goal. After repeated difficulty, "
     "this is a teaching conversation before moving on with the skill saved for "
     "review, not an exam the learner must pass to continue. Do not keep asking "
@@ -212,7 +238,10 @@ HELP = (
 
 ANSWER_QUESTION = (
     "This move is answer_question: task=null; answer the learner's actual "
-    "question first. Do not create another checkpoint. "
+    "question first. Do not create another checkpoint. If open_question is "
+    "present, answer that exact question and connect the answer to the current "
+    "goal. The lesson will resume its saved example/checkpoint afterwards, so "
+    "do not silently advance the curriculum or replace the interrupted task. "
 )
 
 #: Which block each move is given, and whether it carries a question.

@@ -208,19 +208,94 @@ async def test_duplicate_or_stale_answer_cannot_grade_another_checkpoint():
 
 
 @pytest.mark.asyncio
-async def test_evaluator_outage_keeps_answer_ungraded_and_retry_reuses_it():
+async def test_evaluator_outage_keeps_answer_ungraded_and_continue_moves_to_a_new_question():
     teacher, runner, progress, ctx, _ = await start()
     await tap_probe(runner, progress, ctx)
     await answer(runner, progress, ctx)
     teacher.evaluate.return_value = evaluation("unavailable", confidence=0)
+    old_phase = state(progress).pending.phase
     scene = await answer(runner, progress, ctx, "One half")
     assert state(progress).pending.retry_response == "One half"
     assert len(state(progress).outbox) == 1
     assert "not graded" in json.dumps(scene.model_dump(mode="json"))
-    teacher.evaluate.return_value = evaluation()
-    await runner.run(ctx, progress, action(ActionIntent.RETRY))
-    assert teacher.evaluate.await_args.args[-1] == "One half"
-    assert len(state(progress).outbox) == 2
+    button = next(c for c in scene.components if getattr(c, "action_intent", None))
+    assert button.action_intent == ActionIntent.SKIP_QUESTION
+    saved_id = state(progress).pending.id
+    restored = await runner.run(ctx, progress, action(welcome=True))
+    assert restored.scene_id == scene.scene_id
+    next_scene = await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, button.component_id))
+    assert next_scene.scene_id != scene.scene_id
+    assert state(progress).pending.id != saved_id
+    assert state(progress).pending.phase == old_phase
+    assert state(progress).skipped == [] and state(progress).completed == []
+    assert len(state(progress).outbox) == 1
+    assert teacher.evaluate.await_count == 1
+    assert not state(progress).unit_done and not state(progress).path_done
+    repeated = await runner.run(ctx, progress, action(ActionIntent.SKIP_QUESTION, button.component_id))
+    assert repeated.scene_id == next_scene.scene_id
+    assert teacher.turn.await_args.args[2] == old_phase
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["transfer", "interleave"])
+async def test_ungraded_transfer_or_interleave_keeps_response_and_retries_same_rung(phase):
+    teacher = ScriptedTeacher()
+    runner, ctx = AdaptiveSession(teacher), context()
+    learning_plan = plan(2)
+    unit_index = 0 if phase == "transfer" else 1
+    state_value = GuidedState(
+        owner=ctx.user_id,
+        plan=learning_plan,
+        unit_index=unit_index,
+        remaining_units=[1] if phase == "transfer" else [],
+        completed=[0],
+        phase=phase,
+        next_move=phase,
+        independent_application=phase == "transfer",
+    )
+    if phase == "interleave":
+        state_value.active_review_index = 0
+        state_value.review_return_phase = "faded"
+    open_task = task("apply", 77).model_copy(update={
+        "response_format": "short_answer",
+        "options": [],
+    })
+    state_value.pending = PendingTask(
+        task=open_task,
+        speech="Use the idea in this fresh situation.",
+        board_title="Fresh application",
+        board_content="Compare equal parts from the same whole in a new setting.",
+        phase=phase,
+        retry_response="The four-part ribbon gives the longer piece.",
+    )
+    failed = runner.unavailable(ctx, state_value)
+    state_value.scene = failed.model_dump(mode="json")
+    progress = {"guided_state": state_value.model_dump(mode="json"), "record_scope": "topic"}
+    old_id = state_value.pending.id
+    button = next(
+        component for component in failed.components
+        if getattr(component, "action_intent", None) == ActionIntent.SKIP_QUESTION
+    )
+
+    next_scene = await runner.run(
+        ctx, progress, action(ActionIntent.SKIP_QUESTION, button.component_id)
+    )
+    recovered = state(progress)
+
+    assert recovered.pending is not None
+    assert recovered.pending.phase == phase
+    assert recovered.pending.id != old_id
+    assert not recovered.unit_done and not recovered.path_done
+    saved = [event for event in recovered.practice_events
+             if event.get("kind") == "evaluation_unavailable"]
+    assert saved[-1]["response"] == "The four-part ribbon gives the longer piece."
+    assert saved[-1]["response_format"] == "short_answer"
+    if phase == "interleave":
+        assert recovered.active_review_index == 0
+        assert recovered.review_return_phase == "faded"
+        assert 0 not in recovered.interleaved_units
+    assert next_scene.scene_id != failed.scene_id
+    assert teacher.turn.await_args.args[2] == phase
 
 
 @pytest.mark.asyncio
@@ -333,6 +408,24 @@ async def test_unreliable_grading_never_becomes_a_wrong_answer(invalid):
     pending = PendingTask(task=task(), speech="Equal parts of one whole.", board_title="Halves", board_content="Compare pieces.")
     result = await AdaptiveTeacher(generate).evaluate(context(), pending, "half")
     assert result.verdict == "unavailable"
+    assert generate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_invalid_evaluation_is_repaired_once_against_the_same_saved_answer():
+    pending = PendingTask(task=task(), speech="Equal pieces of one whole.",
+                          board_title="Halves", board_content="Compare pieces.")
+    generate = AsyncMock(side_effect=[
+        evaluation(criteria=[CriterionResult(index=0, met=True, quote="invented")]),
+        evaluation(criteria=[CriterionResult(index=0, met=True, quote="half"),
+                             CriterionResult(index=1, met=False, quote="")],
+                   verdict="partial", follow_up="Why is a half bigger?"),
+    ])
+    result = await AdaptiveTeacher(generate).evaluate(context(), pending, "half")
+    assert result.verdict == "partial"
+    assert generate.await_count == 2
+    assert generate.await_args.args[1]["new_answer"] == "half"
+    assert "repair" in generate.await_args.args[1]
 
 
 @pytest.mark.asyncio

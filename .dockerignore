@@ -38,7 +38,8 @@ build
 .flaskenv
 *.log
 tests/
-scripts/
+scripts/*
+!scripts/e2e_learner_loop.py
 docs/
 artifacts/
 temp/

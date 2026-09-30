@@ -537,6 +537,7 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         )
         seeded = GuidedState(
             owner=ctx.user_id,
+            explained=True,
             plan=LearningPlan(units=[
                 LearningUnit(title="Divide by a two-digit number",
                              objective="Share a total evenly between equal groups.",
@@ -613,6 +614,282 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
                 and 0.0 < (taught[0]["mastery"] or 0.0) < 0.75,
                 str(taught),
             )
+
+        print("\n9. The Classroom behaves like one continuous teacher")
+        # This final pass exercises the teacher-experience state machine itself
+        # with a deterministic collaborator: no model keys, no prompt variance.
+        # The HTTP/data loop above proves the real app wiring; this proves the
+        # exact pedagogical continuity the learner experiences between scenes.
+        from lyo_app.ai_classroom.adaptive_teaching import (
+            Evaluation, LearningTurn, TeachingBeat,
+        )
+        from lyo_app.ai_classroom.sdui_models import CTAButton, ExampleBlock, InputField, QuizCard
+
+        teacher_ctx = ContextSnapshot(
+            user_id=str(learner.id),
+            session_id="e2e-teacher-experience",
+            topic="Fractions",
+            learning_objective="Compare equal parts of the same whole",
+        )
+        teacher_plan = LearningPlan(units=[
+            LearningUnit(
+                title="Compare halves and thirds",
+                objective="Compare equal parts from the same whole.",
+                material="A half is larger than a third when both come from the same whole.",
+            ),
+            LearningUnit(
+                title="Apply fraction size",
+                objective="Use fraction size in a new setting.",
+                material="The same whole split into fewer equal parts makes larger pieces.",
+            ),
+        ])
+
+        number = 0
+
+        async def authored_turn(_context, state, move, learner_input=""):
+            nonlocal number
+            number += 1
+            if move == "answer_question":
+                return LearningTurn(
+                    speech="The wholes must match because the denominator compares how one same-sized whole is divided.",
+                    board_title="Same whole",
+                    board_content="Compare 1/2 and 1/3 only after confirming both fractions describe the same whole.",
+                )
+            if move in ("orient", "reteach", "prerequisite"):
+                return LearningTurn(
+                    speech="Use one pizza all the way through this example.",
+                    board_title="One pizza",
+                    board_content="Cut the same pizza into 2 equal pieces, then imagine that same-sized pizza cut into 3.",
+                    demonstration=[
+                        TeachingBeat(
+                            speech="First keep the whole fixed.",
+                            board_title="Same-sized whole",
+                            board_content="Both pizzas are the same size before any cuts.",
+                        ),
+                        TeachingBeat(
+                            speech="Now compare the size of one equal piece.",
+                            board_title="Piece size",
+                            board_content="With the same whole, fewer equal cuts make each piece larger: 1/2 > 1/3.",
+                        ),
+                    ],
+                )
+            if move == "diagnose":
+                return LearningTurn(
+                    speech="Show me where you are before we start.",
+                    board_title="Quick check",
+                    board_content="Two same-sized pizzas are cut into 2 or 3 equal pieces.",
+                    task=LearningTask(
+                        kind="diagnose",
+                        response_format="choice",
+                        scenario="Two identical pizzas are cut into 2 or 3 equal pieces.",
+                        question="Which single piece is larger?",
+                        response_hint="Choose the larger piece.",
+                        criteria=["Chooses the half"],
+                        example_answer="The half.",
+                        options=[
+                            TaskOption(id="a", label="The half", correct=True,
+                                       feedback="Fewer equal cuts make the piece larger."),
+                            TaskOption(id="b", label="The third", correct=False,
+                                       misconception="more_pieces_means_more_each",
+                                       gap="fundamental",
+                                       feedback="More equal cuts make each piece smaller."),
+                            TaskOption(id="c", label="They are equal", correct=False,
+                                       misconception="equal_wholes_means_equal_pieces",
+                                       gap="near_miss",
+                                       feedback="The wholes match, but the cut count changes piece size."),
+                            TaskOption(id="d", label="I'm not sure yet", correct=False,
+                                       abstains=True, feedback="Teach from the start."),
+                        ],
+                    ),
+                )
+            task_kind = "apply" if move in ("independent", "transfer", "interleave") else "choose"
+            response_format = "short_answer" if task_kind == "apply" else "choice"
+            task_options = [] if response_format == "short_answer" else [
+                TaskOption(id="a", label="One half", correct=True,
+                           feedback="Right: fewer equal cuts make a larger piece."),
+                TaskOption(id="b", label="One third", correct=False,
+                           misconception="more_pieces_means_more_each",
+                           feedback="More equal cuts make a smaller piece."),
+            ]
+            return LearningTurn(
+                speech="Use the same idea yourself now.",
+                board_title="Keep the whole fixed",
+                board_content="The whole stays the same; only the number of equal parts changes.",
+                task=LearningTask(
+                    kind=task_kind,
+                    response_format=response_format,
+                    scenario="Two equal ribbons are cut into halves and thirds.",
+                    question="Which single piece is longer, and why?",
+                    response_hint="Name the piece and explain why.",
+                    criteria=["Chooses the half", "Relates fewer equal cuts to larger pieces"],
+                    example_answer="The half, because the same whole was cut into fewer equal parts.",
+                    options=task_options,
+                ),
+            )
+
+        teacher = type("E2ETeacher", (), {})()
+        teacher.plan = AsyncMock(return_value=teacher_plan)
+        teacher.turn = AsyncMock(side_effect=authored_turn)
+        teacher.evaluate = AsyncMock(return_value=Evaluation(
+            verdict="correct",
+            confidence=0.95,
+            question_clear=True,
+            feedback="You kept the whole fixed and compared the equal parts.",
+        ))
+
+        def teacher_trigger(intent=None, component_id=None, **payload):
+            data = dict(payload)
+            if intent is not None:
+                data["action_intent"] = intent
+            return Trigger(
+                trigger_type=TriggerType.USER_ACTION,
+                user_id=teacher_ctx.user_id,
+                session_id=teacher_ctx.session_id,
+                component_id=component_id,
+                action_data=data,
+            )
+
+        teacher_runner = AdaptiveSession(teacher)
+        teacher_progress = {}
+        first = await teacher_runner.run(
+            teacher_ctx, teacher_progress, teacher_trigger(welcome=True)
+        )
+        teacher_state = GuidedState.model_validate(teacher_progress["guided_state"])
+        opening = next(c for c in first.components if isinstance(c, QuizCard))
+        await teacher_runner.run(
+            teacher_ctx,
+            teacher_progress,
+            teacher_trigger(ActionIntent.SKIP_QUESTION, opening.component_id),
+        )
+        teacher_state = GuidedState.model_validate(teacher_progress["guided_state"])
+        interrupted_presentation = teacher_state.presentation.model_dump(mode="json")
+
+        asked = await teacher_runner.run(
+            teacher_ctx,
+            teacher_progress,
+            teacher_trigger(
+                ActionIntent.ASK_QUESTION,
+                "question",
+                message="Why do both pizzas need to be the same size?",
+            ),
+        )
+        teacher_state = GuidedState.model_validate(teacher_progress["guided_state"])
+        check("a learner question pauses rather than replaces the lesson",
+              teacher_state.paused_presentation is not None)
+        check("the exact learner question is retained while it is answered",
+              teacher_state.open_question == "Why do both pizzas need to be the same size?")
+        check("the teacher answers without creating a surprise quiz",
+              not any(isinstance(c, QuizCard) for c in asked.components))
+
+        answer_continue = next(
+            c for c in asked.components
+            if isinstance(c, CTAButton) and c.action_intent == ActionIntent.CONTINUE
+        )
+        resumed = await teacher_runner.run(
+            teacher_ctx,
+            teacher_progress,
+            teacher_trigger(ActionIntent.CONTINUE, answer_continue.component_id),
+        )
+        teacher_state = GuidedState.model_validate(teacher_progress["guided_state"])
+        check("the interrupted worked example resumes exactly where it left off",
+              teacher_state.presentation is not None
+              and teacher_state.presentation.model_dump(mode="json") == interrupted_presentation)
+
+        visible_board = "\n".join(
+            c.content for c in resumed.components if isinstance(c, ExampleBlock)
+        )
+        check("prior classroom board anchors survive scene changes",
+              "same" in visible_board.lower() and bool(teacher_state.board_memory))
+
+        # Force the evaluator-down recovery at a transfer rung. The response is
+        # not evidence, but it must be durable and the learner must receive a
+        # new transfer task rather than having the unit silently completed.
+        transfer_task = LearningTask(
+            kind="apply",
+            response_format="short_answer",
+            scenario="Two equal ribbons are cut into 4 or 8 equal pieces.",
+            question="Which ribbon gives the longer piece, and why?",
+            response_hint="Name the cut and explain.",
+            criteria=["Chooses 4", "Relates fewer cuts to longer pieces"],
+            example_answer="The ribbon cut into 4, because fewer equal cuts make longer pieces.",
+        )
+        transfer_pending = PendingTask(
+            task=transfer_task,
+            speech="Apply the idea in a new setting.",
+            board_title="Transfer",
+            board_content="Same ribbon length, different numbers of equal cuts.",
+            phase="transfer",
+            retry_response="The ribbon cut into 4 gives longer pieces.",
+        )
+        teacher_state.pending = transfer_pending
+        teacher_state.presentation = None
+        teacher_state.phase = teacher_state.next_move = "transfer"
+        failed_scene = teacher_runner.unavailable(teacher_ctx, teacher_state)
+        teacher_state.scene = failed_scene.model_dump(mode="json")
+        teacher_progress["guided_state"] = teacher_state.model_dump(mode="json")
+        ungraded = next(
+            c for c in failed_scene.components
+            if isinstance(c, CTAButton) and c.action_intent == ActionIntent.SKIP_QUESTION
+        )
+        fresh = await teacher_runner.run(
+            teacher_ctx,
+            teacher_progress,
+            teacher_trigger(ActionIntent.SKIP_QUESTION, ungraded.component_id),
+        )
+        teacher_state = GuidedState.model_validate(teacher_progress["guided_state"])
+        saved_ungraded = [
+            event for event in teacher_state.practice_events
+            if event.get("kind") == "evaluation_unavailable"
+        ]
+        check("an ungraded transfer answer is retained without becoming evidence",
+              bool(saved_ungraded)
+              and saved_ungraded[-1].get("response") == "The ribbon cut into 4 gives longer pieces.")
+        check("an evaluator outage keeps transfer on the same rung",
+              teacher_state.pending is not None
+              and teacher_state.pending.phase == "transfer"
+              and not teacher_state.unit_done
+              and not teacher_state.path_done)
+        check("the learner receives a fresh transfer question after the outage",
+              any(isinstance(c, (QuizCard, InputField)) for c in fresh.components))
+
+        print("\n10. Visual teaching stays structured, persistent and video-free")
+        from pydantic import ValidationError
+        from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
+        from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, VisualItem
+
+        flow_visual = TeachingVisual(
+            kind="process_flow",
+            title="Input to output",
+            caption="Follow what changes at each stage before answering.",
+            description="An input moves through a transformation and becomes an output.",
+            entries=[
+                VisualItem(label="Input", detail="Raw material enters."),
+                VisualItem(label="Transform", detail="The process changes the material."),
+                VisualItem(label="Output", detail="The result leaves the process."),
+            ],
+            value=1,
+        )
+        check("the richer process-flow visual validates", flow_visual.kind == "process_flow")
+        check("visuals receive a durable server-side identity", len(flow_visual.visual_id) >= 8)
+
+        visual_policy = AdaptiveTeacher.visual_policy_for("orient", "worked_example")
+        check("worked teaching explicitly prefers a useful visual",
+              visual_policy.get("mode") == "preferred")
+        check("the classroom visual vocabulary contains no video or YouTube",
+              "video" not in visual_policy.get("allowed", [])
+              and "youtube" not in visual_policy.get("allowed", []))
+
+        rejected_video = False
+        try:
+            TeachingVisual(
+                kind="video",
+                title="Not supported",
+                caption="This should never become a classroom teaching visual.",
+                description="Video is deliberately excluded from this implementation.",
+            )
+        except ValidationError:
+            rejected_video = True
+        check("a model cannot emit a video teaching visual", rejected_video)
 
     print(f"\n{len(CHECKS) - len(FAILURES)}/{len(CHECKS)} checks passed")
     if FAILURES:

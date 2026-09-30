@@ -381,6 +381,7 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
     ctx, unit_plan = context(target_duration_minutes=8), plan(1)
     original_teacher = adaptive_teaching.AdaptiveTeacher
     installed = []
+    reviewed = []
     calls = []
 
     async def generate(_prompt, _payload, schema):
@@ -391,15 +392,15 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
             return ScriptedTeacher()._turn(ctx, GuidedState(owner=ctx.user_id, plan=unit_plan), "diagnose")
         raise AssertionError("The opening should author only its first question")
 
-    reviewed = []
-
     def teacher_factory(*, package_cache, fast_start, semantic_judge):
         installed.append(package_cache)
-        # Reviewing meaning costs a model call per authored turn, so production
-        # must not switch it on by itself; `CLASSROOM_SEMANTIC_JUDGE` does.
         reviewed.append(semantic_judge)
-        return original_teacher(generate=generate, package_cache=package_cache,
-                                fast_start=fast_start, semantic_judge=semantic_judge)
+        return original_teacher(
+            generate=generate,
+            package_cache=package_cache,
+            fast_start=fast_start,
+            semantic_judge=semantic_judge,
+        )
 
     monkeypatch.setattr(adaptive_teaching, "AdaptiveTeacher", teacher_factory)
     instance = classroom_engine(ctx)
@@ -411,13 +412,33 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
         scene = await instance.process_trigger(action(welcome=True))
         state = GuidedState.model_validate(_SESSION_PROGRESS[key]["guided_state"])
         assert len(installed) == 1 and isinstance(installed[0], DatabaseUnitPackageCache)
-        assert reviewed == [None], "the semantic review must stay opt-in"
-        assert calls == ["LearningPlan", "DiagnosticTurn"]
+        assert reviewed == [None], "semantic review must remain opt-in by default"
+        assert calls[:2] == ["LearningPlan", "DiagnosticTurn"]
         assert next(c for c in scene.components if isinstance(c, QuizCard)).concept_id == state.skill_ids[0]
         assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
         assert len((await db.execute(select(ClassroomQuestionExposure))).scalars().all()) == 1
     finally:
         _SESSION_PROGRESS.pop(key, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("move", ["orient", "guided", "faded", "independent", "transfer"])
+async def test_live_cache_miss_authors_only_the_next_scene(db, move):
+    ctx, unit = context(target_duration_minutes=8), plan(1).units[0]
+    skill = (await resolve_skill_plan(db, ctx, LearningPlan(units=[unit]))).unit_ids[0]
+    state = GuidedState(owner=ctx.user_id, plan=LearningPlan(units=[unit]),
+                        skill_ids=[skill], identity_required=True, record_scope="unit")
+    scripted = ScriptedTeacher()
+    generated = AsyncMock(side_effect=lambda _prompt, _payload, _schema:
+                          scripted._turn(ctx, state, move))
+    teacher = AdaptiveTeacher(generate=generated, package_cache=DatabaseUnitPackageCache(db),
+                              fast_start=True)
+    teacher.build_package = AsyncMock(side_effect=AssertionError("Synchronous package build"))
+    turn = await teacher.turn(ctx, state, move)
+    assert turn is not None and generated.await_count == 1
+    assert generated.await_args.args[2] is not UnitPackage
+    teacher.build_package.assert_not_awaited()
+    assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
 
 
 def test_package_rejects_repeated_questions_and_wrong_target():

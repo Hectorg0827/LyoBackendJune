@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lyo_app.ai_classroom.adaptive_teaching import (
-    AdaptiveTeacher, GuidedState, TeachingUnavailable, turn_schema,
+    AdaptiveTeacher, CriterionResult, Evaluation, GuidedState, PendingTask,
+    TeachingUnavailable, turn_schema,
 )
-from tests.adaptive_fixtures import ScriptedTeacher, context, plan
+from tests.adaptive_fixtures import ScriptedTeacher, context, plan, task
 
 
 @pytest.mark.asyncio
@@ -65,6 +66,32 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     assert repair["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
     sent = json.loads(repair["messages"][1]["content"])
     assert "_rejected_provider" not in sent
+
+
+@pytest.mark.asyncio
+async def test_rejected_evaluation_tries_stronger_model_before_pausing_class(monkeypatch):
+    pending = PendingTask(task=task(), speech="Compare equal wholes.",
+                          board_title="Fractions", board_content="Half is larger than a third.")
+    invalid = Evaluation(
+        verdict="partial", confidence=0.95, question_clear=True,
+        feedback="You have identified the first part.", follow_up="Why is it bigger?",
+        criteria=[CriterionResult(index=0, met=True, quote="invented"),
+                  CriterionResult(index=1, met=False, quote="")],
+    )
+    repaired = invalid.model_copy(update={
+        "criteria": [CriterionResult(index=0, met=True, quote="half"),
+                     CriterionResult(index=1, met=False, quote="")]
+    })
+    completion = AsyncMock(side_effect=[
+        {"content": invalid.model_dump_json(), "model_used": "gpt-4o-mini"},
+        {"content": repaired.model_dump_json(), "model_used": "gpt-4o"},
+    ])
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    result = await AdaptiveTeacher().evaluate(context(), pending, "half")
+    assert result.verdict == "partial"
+    assert completion.await_count == 2
+    assert completion.await_args_list[0].kwargs["provider_order"][0] == "gpt-4o-mini"
+    assert completion.await_args_list[1].kwargs["provider_order"][0] == "gpt-4o"
 
 
 @pytest.mark.asyncio
