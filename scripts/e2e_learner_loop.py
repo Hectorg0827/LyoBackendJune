@@ -537,6 +537,7 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         )
         seeded = GuidedState(
             owner=ctx.user_id,
+            explained=True,
             plan=LearningPlan(units=[
                 LearningUnit(title="Divide by a two-digit number",
                              objective="Share a total evenly between equal groups.",
@@ -622,7 +623,7 @@ async def _walk_the_loop(app, session, learner, conversation, check_block, lesso
         from lyo_app.ai_classroom.adaptive_teaching import (
             Evaluation, LearningTurn, TeachingBeat,
         )
-        from lyo_app.ai_classroom.sdui_models import CTAButton, ExampleBlock, QuizCard
+        from lyo_app.ai_classroom.sdui_models import CTAButton, ExampleBlock, InputField, QuizCard
 
         teacher_ctx = ContextSnapshot(
             user_id=str(learner.id),
