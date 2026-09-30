@@ -27,6 +27,11 @@ CORE = (
     "a teaching beat is not automatically a test. Each speech is 20–55 words. "
     "Board content is a concrete example, comparison, equation or short steps "
     "that remain visible beside the learner's task. Keep one useful goal. "
+    "Use the supplied teaching_strategy as the representation for this move. "
+    "board_memory contains a few prior anchors that remain conceptually on the "
+    "classroom board; connect to one naturally when it helps, and never claim "
+    "something is on the board unless it appears there. learner_signals and "
+    "misconceptions are observations, not labels about ability. "
 )
 
 #: True of any beat that may carry a teaching visual.
@@ -197,7 +202,9 @@ RETEACH = (
     "previous_task, previous_answers and feedback, and explain WHY that step does "
     "not work. Do not invent a reason the learner has not given or merely announce "
     "'wrong'. Explicitly model the missing step with a DIFFERENT representation or "
-    "example; for prerequisite teach the particular prerequisite the learner is "
+    "example; follow teaching_strategy so a repeated miss changes representation "
+    "(analogy, counterexample, or worked example) instead of repeating the same "
+    "explanation. For prerequisite teach the particular prerequisite the learner is "
     "missing, then bridge back to the original goal. After repeated difficulty, "
     "this is a teaching conversation before moving on with the skill saved for "
     "review, not an exam the learner must pass to continue. Do not keep asking "
@@ -212,7 +219,10 @@ HELP = (
 
 ANSWER_QUESTION = (
     "This move is answer_question: task=null; answer the learner's actual "
-    "question first. Do not create another checkpoint. "
+    "question first. Do not create another checkpoint. If open_question is "
+    "present, answer that exact question and connect the answer to the current "
+    "goal. The lesson will resume its saved example/checkpoint afterwards, so "
+    "do not silently advance the curriculum or replace the interrupted task. "
 )
 
 #: Which block each move is given, and whether it carries a question.
