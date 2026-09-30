@@ -824,6 +824,13 @@ class AdaptiveTeacher:
         self.semantic_judge = semantic_judge
         self.package_cache = package_cache
         self.fast_start = fast_start
+        # Fast-start authors the immediate move first. Once that move is ready,
+        # the rest of the unit can be prepared while the learner is reading,
+        # listening or answering. Keep the warm package in this teacher
+        # instance so background generation never shares an AsyncSession.
+        self._fast_cache_misses: set[str] = set()
+        self._prefetched_packages: dict[str, UnitPackage] = {}
+        self._package_prefetch_tasks: dict[str, asyncio.Task] = {}
 
     @staticmethod
     def saved_skill(state: GuidedState, move: str) -> str | None:
@@ -875,8 +882,8 @@ class AdaptiveTeacher:
         if key is None:
             return None
         try:
-            stored = await self.package_cache.get(key)
-            package = None
+            package = self._prefetched_packages.get(key.cache_key)
+            stored = None if package is not None else await self.package_cache.get(key)
             if stored is not None:
                 try:
                     package = UnitPackage.model_validate(stored)
@@ -885,11 +892,13 @@ class AdaptiveTeacher:
                     # A broken cached answer must never be shown to a learner.
                     classroom_unit_package_events.labels("invalid").inc()
                     await self.package_cache.evict(key)
+                    package = None
             if package is None and self.fast_start:
-                # A complete multi-target package can take over a minute and
-                # still fail validation. Every live turn must use the bounded
-                # single-move authoring path on a cache miss, not only the
-                # opening diagnostic. An already cached package remains usable.
+                # The immediate move still uses bounded single-move authoring.
+                # Mark this unit for safe pre-authoring *after* that move is
+                # ready, so package generation never competes with the response
+                # the learner is currently waiting for.
+                self._fast_cache_misses.add(key.cache_key)
                 return None
             if package is None:
                 try:
@@ -924,6 +933,37 @@ class AdaptiveTeacher:
         except Exception as exc:
             logger.warning("Classroom unit package unavailable: %s", type(exc).__name__)
             raise TeachingUnavailable("Could not load a validated unit package") from exc
+
+    def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
+        """Prepare a validated unit only after the learner's immediate move is ready."""
+        if not self.fast_start or self.package_cache is None:
+            return
+        from lyo_app.ai_classroom.unit_package_cache import package_key
+        key = package_key(context, unit, self.saved_skill(state, state.next_move))
+        if key is None or key.cache_key not in self._fast_cache_misses:
+            return
+        if key.cache_key in self._prefetched_packages or key.cache_key in self._package_prefetch_tasks:
+            return
+
+        task = asyncio.create_task(self._prefetch_package(context, unit, key))
+        self._package_prefetch_tasks[key.cache_key] = task
+
+        def finished(_task):
+            self._package_prefetch_tasks.pop(key.cache_key, None)
+
+        task.add_done_callback(finished)
+
+    async def _prefetch_package(self, context, unit: LearningUnit, key) -> None:
+        """Generate only; database persistence remains on the serial request path."""
+        try:
+            package = await self.build_package(context, unit, key.level_band)
+            self._prefetched_packages[key.cache_key] = package
+            self._fast_cache_misses.discard(key.cache_key)
+            classroom_unit_package_events.labels("prefetched").inc()
+        except Exception as exc:
+            # Prefetch is an optimization. A failure cannot pause a live class;
+            # the next move simply takes the normal bounded authoring path.
+            logger.info("Classroom package prefetch skipped: %s", type(exc).__name__)
 
     async def plan(self, context) -> LearningPlan:
         count = unit_count(context.target_duration_minutes, context.total_lessons)
@@ -1123,6 +1163,10 @@ class AdaptiveTeacher:
                         raise TeachingContractError("Demonstrate the missing step before another attempt")
                 if turn.task is not None and not await self.claim_question(context, state, move, turn.task):
                     raise TeachingContractError("Previously seen checkpoint; ask a new question")
+                # Only now—after the exact move the learner is waiting for has
+                # passed validation—spend spare listening/answering time
+                # preparing the rest of the unit.
+                self.schedule_package_prefetch(context, state, unit)
                 return turn
             except Exception as exc:
                 logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
