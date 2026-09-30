@@ -1091,9 +1091,19 @@ class AdaptiveSession:
         if beat.visual:
             content += "\n" + beat.visual.description
         state.taught_steps = [*state.taught_steps, content][-16:]
-        anchor = {"title": beat.board_title.strip(), "content": beat.board_content.strip()}
+        anchor = {
+            "title": beat.board_title.strip(),
+            "content": beat.board_content.strip(),
+            "visual": beat.visual.model_dump(mode="json") if beat.visual else None,
+        }
         if anchor["title"] and anchor["content"]:
-            previous = [item for item in state.board_memory if item != anchor]
+            # Deduplicate by the human-visible anchor, not by a generated
+            # visual_id, so regenerating the same board does not create a
+            # second memory card.
+            previous = [
+                item for item in state.board_memory
+                if item.get("title") != anchor["title"] or item.get("content") != anchor["content"]
+            ]
             state.board_memory = [*previous, anchor][-6:]
 
     @staticmethod
@@ -1163,8 +1173,16 @@ class AdaptiveSession:
         # prior anchors through ExampleBlock, which every client already
         # renders. This gives the learner stable reference points without
         # inventing a web-only board protocol.
-        current_anchor = {"title": raw_title, "content": content.strip()}
-        prior_anchors = [item for item in state.board_memory if item != current_anchor][-3:]
+        current_anchor = {
+            "title": raw_title,
+            "content": content.strip(),
+            "visual": visual.model_dump(mode="json") if visual else None,
+        }
+        prior_anchors = [
+            item for item in state.board_memory
+            if item.get("title") != current_anchor["title"]
+            or item.get("content") != current_anchor["content"]
+        ][-3:]
         if prior_anchors:
             memory_lines = []
             for item in prior_anchors:
@@ -1179,6 +1197,22 @@ class AdaptiveSession:
                     title=self.copy(context, "Keep in view", "Mantén a la vista"),
                     content="\n\n".join(memory_lines)[:1500],
                     language_code=context.language_code,
+                    priority=2,
+                ))
+            # Keep the latest useful visual on the board as a reference. It is
+            # read-only here: update_activity only accepts the active visual's
+            # component id, so manipulating a remembered visual cannot grade or
+            # mutate the current checkpoint.
+            remembered_visual = next(
+                (item.get("visual") for item in reversed(prior_anchors) if item.get("visual")),
+                None,
+            )
+            if remembered_visual:
+                remembered_id = str(remembered_visual.get("visual_id") or "recent")
+                components.append(LessonBlock(
+                    component_id="memory-visual:" + remembered_id,
+                    block_type="teaching_visual",
+                    block=remembered_visual,
                     priority=2,
                 ))
 
