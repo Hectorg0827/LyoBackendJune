@@ -174,6 +174,20 @@ def comparable_text(value: str) -> str:
     return " ".join(re.findall(r"\w+", value.casefold().replace("_", " "), flags=re.UNICODE))
 
 
+#: Words that can wrap an option's own label without diagnosing anything, used
+#: to tell "They said 14 rolls" from a real, terse diagnosis. Deliberately only
+#: the scaffolding of a restatement — a diagnosis in any language clears this
+#: the moment it names one thing the learner actually did, and a list that
+#: guessed at content words would start rejecting real diagnoses instead.
+RESTATEMENT_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "it", "this", "that",
+    "they", "learner", "student", "student's", "answer", "answered", "said",
+    "says", "chose", "chooses", "picked", "picks", "selected", "selects",
+    "thinks", "thought", "believes", "not", "no", "wrong", "incorrect",
+    "mistake", "error", "and", "or", "of", "to", "instead", "rather", "than",
+})
+
+
 class LearningTask(StrictModel):
     # Private authoring object, never serialized directly to a client.
     kind: Literal["predict", "choose", "apply", "diagnose", "explain"]
@@ -220,6 +234,21 @@ class LearningTask(StrictModel):
                 raise ValueError("Distractors must diagnose distinct misconceptions")
             if sum(option.abstains for option in self.options) > 1:
                 raise ValueError("One option is enough for saying 'not sure yet'")
+            # Two options cannot honestly share one explanation. Identical
+            # feedback is the signature of a filler option.
+            replies = [comparable_text(option.feedback) for option in self.options]
+            if len(set(replies)) != len(replies):
+                raise ValueError("Each option needs feedback about that option")
+            for option in self.options:
+                if option.correct or option.abstains or not option.misconception:
+                    continue
+                label_words = set(comparable_text(option.label).split())
+                said = {word for word in comparable_text(option.misconception).split()
+                        if word not in label_words}
+                if not said - RESTATEMENT_WORDS:
+                    raise ValueError(
+                        "A distractor's misconception must say what the learner did, "
+                        "not repeat the option")
         elif self.options:
             raise ValueError("Open tasks cannot carry choice options")
         return self
@@ -334,11 +363,10 @@ class TransferPracticeTurn(PracticeTurn):
 def validate_semantic_content(turn: LearningTurn) -> None:
     """Reject mechanically detectable meaning failures before a learner sees them.
 
-    This cannot establish whether a distractor is plausible, whether a
-    near_miss/fundamental gap is correctly labeled, or whether the teaching is
-    fluent but wrong. `AdaptiveTeacher.semantic_judge` is the integration hook
-    for a separate model review of those remaining cases; a future judge must
-    inspect the complete turn and unit, not trust the authoring model's claim.
+    String-level checks cover leaked answers, duplicated visible choices and
+    non-diagnostic distractor metadata. Plausibility, gap severity and fluent
+    but incorrect teaching remain the semantic judge's job because those
+    require reading the meaning of the whole turn.
     """
     task = turn.task
     if task is None:
@@ -350,7 +378,9 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     # the scenario. Reject a full answer phrase, not a necessary operand.
     if len(normalized) < 7 or len(normalized.split()) < 2:
         return
-    visible = [turn.speech, turn.board_title, turn.board_content, task.scenario, task.question]
+    # response_hint is learner-visible as both guidance and input placeholder.
+    visible = [turn.speech, turn.board_title, turn.board_content,
+               task.scenario, task.question, task.response_hint]
     if turn.visual:
         visible.extend([turn.visual.caption, turn.visual.description])
     if any(f" {normalized} " in f" {comparable_text(item)} " for item in visible):
