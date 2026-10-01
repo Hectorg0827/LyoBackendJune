@@ -1165,7 +1165,6 @@ async def stream_lyo2_chat(
                     "id": str(uuid.uuid4()),
                     "title": _topic.title() if _topic else "Your Course",
                     "topic": _topic,
-                    "duration": "~30 min",
                     "objectives": [
                         f"Understand the core concepts of {_topic}",
                         "Apply your knowledge with guided exercises",
@@ -1187,7 +1186,14 @@ async def stream_lyo2_chat(
                     },
                 )
 
-                oc_event_data = {'type': 'open_classroom', 'block': {'type': 'OpenClassroomBlock', 'content': {'type': 'OPEN_CLASSROOM', **_preview_oc}}}
+                oc_event_data = {
+                    'type': 'open_classroom',
+                    'preview': True,
+                    'block': {
+                        'type': 'OpenClassroomBlock',
+                        'content': {'type': 'OPEN_CLASSROOM', **_preview_oc},
+                    },
+                }
                 yield yield_safe_sse_event("open_classroom_preview", oc_event_data)
                 
                 # v2: emit lyo_command for iOS v2 pipeline
