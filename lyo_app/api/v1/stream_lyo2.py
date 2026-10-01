@@ -1506,6 +1506,15 @@ async def stream_lyo2_chat(
                     else []
                 )
                 _lesson_count = len(_generated_lessons) if isinstance(_generated_lessons, list) else 0
+                _outline = []
+                if isinstance(_generated_lessons, list):
+                    for lesson in _generated_lessons:
+                        if not isinstance(lesson, dict):
+                            continue
+                        _outline.append({
+                            "title": str(lesson.get("title") or "Lesson"),
+                            "description": str(lesson.get("description") or ""),
+                        })
                 yield yield_safe_sse_event(
                     "course_generation",
                     {
@@ -1515,6 +1524,7 @@ async def stream_lyo2_chat(
                         "message": "Course outline created",
                         "completed_lessons": _lesson_count,
                         "total_lessons": _lesson_count,
+                        "outline": _outline,
                     },
                 )
             
