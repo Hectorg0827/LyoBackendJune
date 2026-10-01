@@ -352,6 +352,57 @@ def _extract_course_level(user_text: str) -> Optional[str]:
         return "beginner"
     return None
 
+
+def _resolve_course_topic(
+    user_text: str, history: Optional[List[ConversationTurn]] = None
+) -> str:
+    """Resolve the subject of a new course or a short live-course revision.
+
+    A revision such as "make it advanced" should keep the subject the learner
+    was already building, not create a course literally titled "Make It
+    Advanced". Explicit topic replacements win; otherwise we recover the most
+    recent explicit course request from canonical conversation history.
+    """
+    text = (user_text or "").strip()
+
+    adjust_match = _re.match(
+        r"^adjust this course to\s+(.+?)(?:\.|$)",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    if adjust_match:
+        return adjust_match.group(1).strip()
+
+    topic_change = _re.search(
+        r"\b(?:change|switch)\s+(?:the\s+)?(?:course\s+)?(?:topic\s+)?to\s+"
+        r"(.+?)(?:[.!?]|$)",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    if topic_change:
+        return topic_change.group(1).strip()
+
+    explicit_course_request = _re.match(
+        r"^(?:create|make|build|give me|i want)\b.*\bcourse\b",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    if explicit_course_request:
+        return _extract_course_topic(text)
+
+    for turn in reversed(history or []):
+        if (turn.role or "").lower() != "user":
+            continue
+        prior = (turn.content or "").strip()
+        if _re.match(
+            r"^(?:create|make|build|give me|i want)\b.*\bcourse\b",
+            prior,
+            flags=_re.IGNORECASE,
+        ):
+            return _extract_course_topic(prior)
+
+    return _extract_course_topic(text)
+
 router = APIRouter()
 
 router_agent = MultimodalRouter()
@@ -1158,9 +1209,16 @@ async def stream_lyo2_chat(
                 yield "data: [DONE]\n\n"
                 return
 
+            course_effective_text = request.text or ""
             if decision.intent == Intent.COURSE:
-                _topic = _extract_course_topic(request.text or "")
+                _topic = _resolve_course_topic(
+                    request.text or "", request.conversation_history
+                )
                 _explicit_level = _extract_course_level(request.text or "")
+                course_effective_text = (
+                    f'Create or revise a course on "{_topic}". '
+                    f'Apply this learner request: "{request.text or ""}".'
+                )
                 _preview_course = {
                     "id": str(uuid.uuid4()),
                     "title": _topic.title() if _topic else "Your Course",
@@ -1347,7 +1405,14 @@ async def stream_lyo2_chat(
                         )
                     ])
                 else:
-                    plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=25.0)
+                    planning_request = (
+                        request.model_copy(update={"text": course_effective_text})
+                        if decision.intent == Intent.COURSE
+                        else request
+                    )
+                    plan = await asyncio.wait_for(
+                        planner_agent.plan(planning_request, decision), timeout=25.0
+                    )
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 25s")
                 # Fallback plan
@@ -1414,7 +1479,11 @@ async def stream_lyo2_chat(
                     executor.execute(
                         user_id=str(current_user.id),
                         plan=plan,
-                        original_request=request.text or "",
+                        original_request=(
+                            course_effective_text
+                            if decision.intent == Intent.COURSE
+                            else request.text or ""
+                        ),
                         conversation_history=history,
                         intent=decision.intent.value if decision.intent else None,
                         media_attachments=media_attachments,
@@ -1526,7 +1595,9 @@ async def stream_lyo2_chat(
                 execution_response.open_classroom_payload is None
                 and decision.intent == Intent.COURSE
             ):
-                topic_text = _extract_course_topic(request.text or "")
+                topic_text = _resolve_course_topic(
+                    request.text or "", request.conversation_history
+                )
                 fallback_oc = {
                     "course": {
                         "id": str(uuid.uuid4()),
