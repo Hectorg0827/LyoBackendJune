@@ -1183,14 +1183,22 @@ class AdaptiveSession:
             if item.get("title") != current_anchor["title"]
             or item.get("content") != current_anchor["content"]
         ][-3:]
-        # The active teaching object comes before remembered context. This keeps
-        # the learner's immediate example/question visually dominant while the
-        # persistent board remains available just below it.
+        # The active teaching group comes before remembered context. Current
+        # explanation + current visual are one pedagogical object and must remain
+        # ahead of board memory even on clients that sort by component priority.
         components.append(
             ExampleBlock(title=title,
                          content=content if separate_description else example_content,
                          language_code=context.language_code, priority=2)
         )
+        if separate_description:
+            # Preserve both full explanations instead of truncating teaching
+            # to satisfy a limit on a single legacy component.
+            components.append(ExampleBlock(title=visual.title, content=visual.description,
+                                           language_code=context.language_code, priority=2))
+        if visual:
+            components.append(LessonBlock(component_id="visual:" + activity_id, block_type="teaching_visual",
+                                          block=visual.model_dump(mode="json"), priority=3))
 
         if prior_anchors:
             memory_lines = []
@@ -1206,7 +1214,7 @@ class AdaptiveSession:
                     title=self.copy(context, "Keep in view", "Mantén a la vista"),
                     content="\n\n".join(memory_lines)[:1500],
                     language_code=context.language_code,
-                    priority=2,
+                    priority=4,
                 ))
             # Keep the latest useful visual on the board as a reference. It is
             # read-only here: update_activity only accepts the active visual's
@@ -1222,16 +1230,8 @@ class AdaptiveSession:
                     component_id="memory-visual:" + remembered_id,
                     block_type="teaching_visual",
                     block=remembered_visual,
-                    priority=2,
+                    priority=4,
                 ))
-        if separate_description:
-            # Preserve both full explanations instead of truncating teaching
-            # to satisfy a limit on a single legacy component.
-            components.append(ExampleBlock(title=visual.title, content=visual.description,
-                                           language_code=context.language_code, priority=2))
-        if visual:
-            components.append(LessonBlock(component_id="visual:" + activity_id, block_type="teaching_visual",
-                                          block=visual.model_dump(mode="json"), priority=3))
         return components
 
     def presentation_scene(self, context, state):
