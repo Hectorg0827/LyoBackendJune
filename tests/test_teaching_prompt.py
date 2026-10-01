@@ -290,6 +290,11 @@ def test_diagnose_does_not_pay_for_visual_rules_it_cannot_use():
     prompt = teaching_prompt("diagnose")
     assert "visual_policy is the server's decision" not in prompt
     assert "annotated_image" not in prompt
+    # Teaching moves that may actually show a visual still receive the full
+    # bounded contract; the optimization is scoped to the answer-leak probe.
+    guided = teaching_prompt("guided")
+    assert "visual_policy is the server's decision" in guided
+    assert "annotated_image" in guided
 
 
 def test_a_move_no_longer_pays_for_the_other_nine():
