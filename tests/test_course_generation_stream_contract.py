@@ -18,6 +18,7 @@ def test_short_course_revision_keeps_the_existing_subject():
     ]
     assert _resolve_course_topic("make it advanced", history) == "math"
     assert _resolve_course_topic("focus more on geometry", history) == "math"
+    assert _resolve_course_topic("make it advanced", [], "Geometry") == "Geometry"
 
 
 def test_explicit_course_topic_change_wins_over_history():
