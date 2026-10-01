@@ -354,7 +354,9 @@ def _extract_course_level(user_text: str) -> Optional[str]:
 
 
 def _resolve_course_topic(
-    user_text: str, history: Optional[List[ConversationTurn]] = None
+    user_text: str,
+    history: Optional[List[ConversationTurn]] = None,
+    active_topic: Optional[str] = None,
 ) -> str:
     """Resolve the subject of a new course or a short live-course revision.
 
@@ -389,6 +391,9 @@ def _resolve_course_topic(
     )
     if explicit_course_request:
         return _extract_course_topic(text)
+
+    if active_topic and active_topic.strip():
+        return active_topic.strip()
 
     for turn in reversed(history or []):
         if (turn.role or "").lower() != "user":
@@ -1211,10 +1216,31 @@ async def stream_lyo2_chat(
 
             course_effective_text = request.text or ""
             if decision.intent == Intent.COURSE:
+                _active_course = (
+                    request.state_summary.get("active_course", {})
+                    if isinstance(request.state_summary, dict)
+                    else {}
+                )
+                _active_topic = (
+                    _active_course.get("topic")
+                    if isinstance(_active_course, dict)
+                    and isinstance(_active_course.get("topic"), str)
+                    else None
+                )
+                _active_level = (
+                    _active_course.get("difficulty")
+                    if isinstance(_active_course, dict)
+                    and isinstance(_active_course.get("difficulty"), str)
+                    else None
+                )
                 _topic = _resolve_course_topic(
-                    request.text or "", request.conversation_history
+                    request.text or "", request.conversation_history, _active_topic
                 )
                 _explicit_level = _extract_course_level(request.text or "")
+                if not _explicit_level and _active_level:
+                    normalized_active_level = _active_level.lower().strip()
+                    if normalized_active_level in {"beginner", "intermediate", "advanced"}:
+                        _explicit_level = normalized_active_level
                 course_effective_text = (
                     f'Create or revise a course on "{_topic}". '
                     f'Apply this learner request: "{request.text or ""}".'
@@ -1606,7 +1632,14 @@ async def stream_lyo2_chat(
                 and decision.intent == Intent.COURSE
             ):
                 topic_text = _resolve_course_topic(
-                    request.text or "", request.conversation_history
+                    request.text or "",
+                    request.conversation_history,
+                    (
+                        request.state_summary.get("active_course", {}).get("topic")
+                        if isinstance(request.state_summary, dict)
+                        and isinstance(request.state_summary.get("active_course"), dict)
+                        else None
+                    ),
                 )
                 fallback_oc = {
                     "course": {
