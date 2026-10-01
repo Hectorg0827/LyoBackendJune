@@ -41,6 +41,7 @@ def test_course_stream_exposes_real_pipeline_milestones():
         assert progress in source
     assert '"completed_lessons": _lesson_count' in source
     assert '"total_lessons": _lesson_count' in source
+    assert '"outline": _outline' in source
     assert "'preview': True" in source
     preview_section = source[source.index("_preview_course = {"):source.index("_preview_oc =")]
     assert '"duration"' not in preview_section
