@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from lyo_app.api.v1.stream_lyo2 import _extract_course_level
+from lyo_app.api.v1.stream_lyo2 import _extract_course_level, _resolve_course_topic
+from lyo_app.ai.schemas.lyo2 import ConversationTurn
 
 
 def test_fast_course_preview_reflects_only_explicit_level():
@@ -8,6 +9,21 @@ def test_fast_course_preview_reflects_only_explicit_level():
     assert _extract_course_level("Hazme un curso intermedio de geometría") == "intermediate"
     assert _extract_course_level("I want a beginner marketing course") == "beginner"
     assert _extract_course_level("Create a course on geometry") is None
+
+
+def test_short_course_revision_keeps_the_existing_subject():
+    history = [
+        ConversationTurn(role="user", content="Create a course on math"),
+        ConversationTurn(role="assistant", content="I built your course."),
+    ]
+    assert _resolve_course_topic("make it advanced", history) == "math"
+    assert _resolve_course_topic("focus more on geometry", history) == "math"
+
+
+def test_explicit_course_topic_change_wins_over_history():
+    history = [ConversationTurn(role="user", content="Create a course on math")]
+    assert _resolve_course_topic("Adjust this course to Geometry. Make it advanced.", history) == "Geometry"
+    assert _resolve_course_topic("change the topic to geometry", history) == "geometry"
 
 
 def test_internal_proactive_context_never_mutates_learner_text():
