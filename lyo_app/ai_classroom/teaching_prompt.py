@@ -319,6 +319,10 @@ def teaching_prompt(move: str, *, focused: bool = False) -> str:
         parts.append(TASK_RULES)
     if move in TAUGHT_ONLY_MOVES:
         parts.append(TAUGHT_ONLY)
-    parts.append(VISUALS)
+    # Diagnostics intentionally carry no visual-authoring contract: the server
+    # sets visual_policy=none there, so spending prompt budget on eight visual
+    # types can only distract the model from a clean prior-knowledge probe.
+    if move != "diagnose":
+        parts.append(VISUALS)
     parts.append(CLOSING)
     return "".join(parts)
