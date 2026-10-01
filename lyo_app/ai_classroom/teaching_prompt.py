@@ -221,10 +221,10 @@ RETEACH = (
     "previous_task, previous_answers and feedback, and explain WHY that step does "
     "not work. Do not invent a reason the learner has not given or merely announce "
     "'wrong'. Explicitly model the missing step with a DIFFERENT representation or "
-    "example; follow teaching_strategy so a repeated miss changes representation "
-    "(analogy, counterexample, or worked example) instead of repeating the same "
-    "explanation. For prerequisite teach the particular prerequisite the learner is "
-    "missing, then bridge back to the original goal. After repeated difficulty, "
+    "example; for prerequisite teach the particular prerequisite the learner is "
+    "missing, then bridge back to the original goal. Follow teaching_strategy so a "
+    "repeated miss changes representation (analogy, counterexample, or worked "
+    "example) instead of repeating the same explanation. After repeated difficulty, "
     "this is a teaching conversation before moving on with the skill saved for "
     "review, not an exam the learner must pass to continue. Do not keep asking "
     "Socratic questions when the learner needs an explanation. Never label the "
@@ -319,6 +319,11 @@ def teaching_prompt(move: str, *, focused: bool = False) -> str:
         parts.append(TASK_RULES)
     if move in TAUGHT_ONLY_MOVES:
         parts.append(TAUGHT_ONLY)
-    parts.append(VISUALS)
+    # Diagnose deliberately carries no visual authoring contract: its
+    # visual_policy is "none" because an explanatory diagram can leak the
+    # answer before the learner has shown what they know. Omitting ~180 dead
+    # words here also keeps the highest-frequency first turn lean.
+    if move != "diagnose":
+        parts.append(VISUALS)
     parts.append(CLOSING)
     return "".join(parts)
