@@ -1282,7 +1282,38 @@ class SceneLifecycleEngine:
                     is_correct=is_correct,
                     word_count=len(response.split()) if response else None,
                 ))
+            intervention = progress.get("_pending_teaching_intervention")
+            if (
+                record_interaction
+                and isinstance(intervention, dict)
+                and intervention.get("action")
+            ):
+                from lyo_app.events.models import EventType, LearningEvent
+
+                concept_id = intervention.get("concept_id")
+                if concept_id is not None:
+                    concept_id = str(concept_id)[:80]
+                self.db.add(
+                    LearningEvent(
+                        user_id=user_id,
+                        event_type=EventType.AI_SESSION,
+                        concept_id=concept_id,
+                        source_surface="classroom",
+                        metadata_json={
+                            "event_kind": "teaching_policy_decision",
+                            "session_id": trigger.session_id,
+                            "scene_id": intervention.get("scene_id"),
+                            "action": intervention.get("action"),
+                            "target_evidence_type": intervention.get(
+                                "target_evidence_type"
+                            ),
+                            "policy_version": intervention.get("policy_version"),
+                        },
+                    )
+                )
+
             await self.db.commit()
+            progress.pop("_pending_teaching_intervention", None)
             return True
         except (ValueError, TypeError):
             return False
@@ -1457,6 +1488,19 @@ class SceneLifecycleEngine:
                             else self.skill_resolver),
         )
         scene = await runner.run(context, progress, trigger)
+        # Keep intervention telemetry separate from learner evidence. This
+        # pending record is committed atomically with the same classroom turn.
+        progress["_pending_teaching_intervention"] = {
+            "scene_id": scene.scene_id,
+            "action": scene.metadata.teaching_action,
+            "target_evidence_type": scene.metadata.target_evidence_type,
+            "policy_version": scene.metadata.teaching_policy_version,
+            "concept_id": (
+                scene.metadata.target_concepts[0]
+                if scene.metadata.target_concepts
+                else None
+            ),
+        }
         state_data = progress.get("guided_state")
         state = self._read_guided_state(progress, state_data) if state_data else None
         if state is not None:
