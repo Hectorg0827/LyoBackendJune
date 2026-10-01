@@ -1183,6 +1183,15 @@ class AdaptiveSession:
             if item.get("title") != current_anchor["title"]
             or item.get("content") != current_anchor["content"]
         ][-3:]
+        # The active teaching object comes before remembered context. This keeps
+        # the learner's immediate example/question visually dominant while the
+        # persistent board remains available just below it.
+        components.append(
+            ExampleBlock(title=title,
+                         content=content if separate_description else example_content,
+                         language_code=context.language_code, priority=2)
+        )
+
         if prior_anchors:
             memory_lines = []
             for item in prior_anchors:
@@ -1215,12 +1224,6 @@ class AdaptiveSession:
                     block=remembered_visual,
                     priority=2,
                 ))
-
-        components.append(
-            ExampleBlock(title=title,
-                         content=content if separate_description else example_content,
-                         language_code=context.language_code, priority=2)
-        )
         if separate_description:
             # Preserve both full explanations instead of truncating teaching
             # to satisfy a limit on a single legacy component.
