@@ -337,20 +337,72 @@ def _extract_course_topic(user_text: str) -> str:
 
 
 def _extract_course_level(user_text: str) -> Optional[str]:
-    """Return only a level the learner explicitly named.
+    """Return one unambiguous difficulty level explicitly named by the learner.
 
-    The fast preview must not invent a beginner level while the final course
-    is still being generated. Explicit level words are safe to reflect
-    immediately; otherwise the course architect remains the source of truth.
+    Level tokens are matched as whole words so unrelated text such as
+    "basically" cannot be mistaken for "basic". Requests that name more than
+    one distinct level are intentionally treated as ambiguous and left for the
+    course architect to resolve.
     """
-    lowered = (user_text or "").lower()
-    if any(token in lowered for token in ("advanced", "avanzado", "avanzada")):
-        return "advanced"
-    if any(token in lowered for token in ("intermediate", "intermedio", "intermedia")):
-        return "intermediate"
-    if any(token in lowered for token in ("beginner", "beginning", "principiante", "basic", "básico", "basico")):
-        return "beginner"
-    return None
+    normalized = (user_text or "").casefold()
+    level_tokens = {
+        "advanced": ("advanced", "avanzado", "avanzada"),
+        "intermediate": ("intermediate", "intermedio", "intermedia"),
+        "beginner": (
+            "beginner",
+            "beginning",
+            "principiante",
+            "basic",
+            "básico",
+            "basico",
+        ),
+    }
+    matched_levels = {
+        level
+        for level, tokens in level_tokens.items()
+        if any(
+            _re.search(rf"\b{_re.escape(token)}\b", normalized)
+            for token in tokens
+        )
+    }
+    return next(iter(matched_levels)) if len(matched_levels) == 1 else None
+
+
+def _normalize_course_payload_for_stream(
+    payload: Optional[Dict[str, Any]],
+    topic: str,
+) -> Dict[str, Any]:
+    """Normalize executor course output to the same payload clients receive.
+
+    Executor implementations may return the course under a course key or
+    directly as the payload. Missing or unusable payloads are replaced with the
+    existing deterministic fallback before progress counts are calculated.
+    """
+    if isinstance(payload, dict):
+        nested_course = payload.get("course")
+        if isinstance(nested_course, dict):
+            return payload
+        if payload and any(
+            key in payload
+            for key in ("id", "title", "topic", "lessons", "objectives")
+        ):
+            return {"course": payload}
+
+    return {
+        "course": {
+            "id": str(uuid.uuid4()),
+            "title": topic.title() if topic else "Your Course",
+            "topic": topic,
+            "level": "beginner",
+            "duration": "4 weeks",
+            "objectives": [
+                f"Understand the fundamentals of {topic}",
+                f"Apply key concepts of {topic} in practice",
+                f"Build confidence with {topic}",
+            ],
+            "lessons": [],
+        }
+    }
 
 
 def _resolve_course_topic(
@@ -1485,9 +1537,9 @@ async def stream_lyo2_chat(
                     "course_generation",
                     {
                         "type": "course_generation",
-                        "phase": "lessons",
+                        "phase": "execution",
                         "progress": 45,
-                        "message": "Creating the course outline",
+                        "message": "Starting course generation",
                     },
                 )
             logger.info(f"⚡ [STREAM][{trace_id}] Starting Execution...")
@@ -1523,24 +1575,48 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             if decision.intent == Intent.COURSE:
-                _generated_course = execution_response.open_classroom_payload or {}
-                if isinstance(_generated_course, dict) and "course" in _generated_course:
-                    _generated_course = _generated_course.get("course") or {}
-                _generated_lessons = (
-                    _generated_course.get("lessons", [])
-                    if isinstance(_generated_course, dict)
-                    else []
+                topic_text = _resolve_course_topic(
+                    request.text or "",
+                    request.conversation_history,
+                    (
+                        request.state_summary.get("active_course", {}).get("topic")
+                        if isinstance(request.state_summary, dict)
+                        and isinstance(request.state_summary.get("active_course"), dict)
+                        else None
+                    ),
                 )
-                _lesson_count = len(_generated_lessons) if isinstance(_generated_lessons, list) else 0
+                _raw_course_payload = execution_response.open_classroom_payload
+                _normalized_course_payload = _normalize_course_payload_for_stream(
+                    _raw_course_payload,
+                    topic_text,
+                )
+                if _normalized_course_payload is not _raw_course_payload:
+                    execution_response = execution_response.model_copy(
+                        update={"open_classroom_payload": _normalized_course_payload}
+                    )
+                    if not (
+                        isinstance(_raw_course_payload, dict)
+                        and _raw_course_payload
+                    ):
+                        logger.warning(
+                            f"⚠️ [STREAM][{trace_id}] COURSE intent but no usable "
+                            "open_classroom_payload — using synthesised fallback "
+                            f"for topic: '{topic_text[:60]}'"
+                        )
+
+                _generated_course = _normalized_course_payload["course"]
+                _generated_lessons = _generated_course.get("lessons", [])
+                if not isinstance(_generated_lessons, list):
+                    _generated_lessons = []
+                _lesson_count = len(_generated_lessons)
                 _outline = []
-                if isinstance(_generated_lessons, list):
-                    for lesson in _generated_lessons:
-                        if not isinstance(lesson, dict):
-                            continue
-                        _outline.append({
-                            "title": str(lesson.get("title") or "Lesson"),
-                            "description": str(lesson.get("description") or ""),
-                        })
+                for lesson in _generated_lessons:
+                    if not isinstance(lesson, dict):
+                        continue
+                    _outline.append({
+                        "title": str(lesson.get("title") or "Lesson"),
+                        "description": str(lesson.get("description") or ""),
+                    })
                 yield yield_safe_sse_event(
                     "course_generation",
                     {
@@ -1626,43 +1702,9 @@ async def stream_lyo2_chat(
                     {"type": "smart_blocks", "blocks": redact_blocks(smart_blocks)},
                 )
 
-            # Send open_classroom payload (course creation trigger)
-            if (
-                execution_response.open_classroom_payload is None
-                and decision.intent == Intent.COURSE
-            ):
-                topic_text = _resolve_course_topic(
-                    request.text or "",
-                    request.conversation_history,
-                    (
-                        request.state_summary.get("active_course", {}).get("topic")
-                        if isinstance(request.state_summary, dict)
-                        and isinstance(request.state_summary.get("active_course"), dict)
-                        else None
-                    ),
-                )
-                fallback_oc = {
-                    "course": {
-                        "id": str(uuid.uuid4()),
-                        "title": topic_text.title() if topic_text else "Your Course",
-                        "topic": topic_text,
-                        "level": "beginner",
-                        "duration": "4 weeks",
-                        "objectives": [
-                            f"Understand the fundamentals of {topic_text}",
-                            f"Apply key concepts of {topic_text} in practice",
-                            f"Build confidence with {topic_text}",
-                        ],
-                    }
-                }
-                execution_response = execution_response.model_copy(
-                    update={"open_classroom_payload": fallback_oc}
-                )
-                logger.warning(
-                    f"⚠️ [STREAM][{trace_id}] COURSE intent but no open_classroom_payload — "
-                    f"using synthesised fallback for topic: '{topic_text[:60]}'"
-                )
-
+            # Send the normalized open_classroom payload (course creation trigger).
+            # COURSE payloads were normalized immediately after execution so the
+            # lesson milestone and the client consume the exact same data.
             if execution_response.open_classroom_payload:
                 try:
                     from lyo_app.ai_classroom.conversation_flow import get_conversation_manager, ConversationSession
