@@ -1,0 +1,35 @@
+name: PR70 Focused Backend Verification
+
+on:
+  push:
+    branches:
+      - course-generation-events-20261001
+
+permissions:
+  contents: read
+
+jobs:
+  focused-course-stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TESTING: "true"
+      SECRET_KEY: test-secret-key-for-pr70-focused-ci-at-least-32-characters
+      ENVIRONMENT: development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/requirements-pr70.txt
+          python -m pip install --ignore-installed packaging -r /tmp/requirements-pr70.txt
+          python -m pip install pytest pytest-asyncio flake8
+      - name: Syntax check
+        run: python -m py_compile lyo_app/api/v1/stream_lyo2.py
+      - name: Focused course stream tests
+        run: python -m pytest -q tests/test_course_generation_stream_contract.py
