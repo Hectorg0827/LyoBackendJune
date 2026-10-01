@@ -253,6 +253,7 @@ async def _try_compose_lesson(
     user_text: str,
     topic: Optional[str] = None,
     source_surface: str = "chat",
+    force_mode: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[ChatLesson]]:
     """Compose a structured lesson, or ([], None) to fall back to prose.
 
@@ -267,7 +268,11 @@ async def _try_compose_lesson(
     if not topic:
         return [], None
 
-    mode = "teach" if await _has_prior_mastery(db, user_id, slugify_skill(topic)) else "probe"
+    mode = force_mode or (
+        "teach" if await _has_prior_mastery(db, user_id, slugify_skill(topic)) else "probe"
+    )
+    if mode not in {"probe", "teach"}:
+        mode = "probe"
     lesson = await compose_lesson(topic, db=db, user_id=user_id, mode=mode)
     if lesson is None:
         return [], None
@@ -1250,6 +1255,48 @@ async def stream_lyo2_chat(
                     return
                 
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
+
+            # Shared Learning OS policy. Routing says what the learner wants;
+            # this deterministic layer says what pedagogical move should happen
+            # next. It reads the same durable evidence the Classroom receives.
+            from lyo_app.ai.lesson_composer import slugify_skill
+            from lyo_app.teaching_runtime import (
+                TeachingAction,
+                TeachingSurface,
+                decide_for_chat,
+                record_policy_decision,
+            )
+
+            _teaching_concept_id = None
+            if decision.intent == Intent.EXPLAIN and request.text:
+                _policy_topic = _extract_course_topic(request.text or "")
+                if _policy_topic:
+                    _teaching_concept_id = slugify_skill(_policy_topic)
+
+            teaching_decision = await decide_for_chat(
+                db=db,
+                user_id=authenticated_user_id,
+                user_text=request.text or "",
+                intent=decision.intent.value if decision.intent else "GENERAL",
+                concept_id=_teaching_concept_id,
+                history=request.conversation_history,
+                state_summary=request.state_summary,
+            )
+            await record_policy_decision(
+                db,
+                user_id=authenticated_user_id,
+                trace_id=trace_id,
+                surface=TeachingSurface.CHAT,
+                decision=teaching_decision,
+                concept_id=_teaching_concept_id,
+            )
+            yield yield_safe_sse_event(
+                "teaching_policy",
+                {
+                    "type": "teaching_policy",
+                    **teaching_decision.model_dump(mode="json"),
+                },
+            )
             
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats
@@ -1441,8 +1488,21 @@ async def stream_lyo2_chat(
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
             if decision.intent == Intent.EXPLAIN and request.text:
+                _force_lesson_mode = None
+                if teaching_decision.action == TeachingAction.DIAGNOSE:
+                    _force_lesson_mode = "probe"
+                elif teaching_decision.action in {
+                    TeachingAction.EXPLAIN,
+                    TeachingAction.REMEDIATE,
+                    TeachingAction.DEMONSTRATE,
+                    TeachingAction.GUIDE,
+                }:
+                    _force_lesson_mode = "teach"
                 lesson_blocks, lesson = await _try_compose_lesson(
-                    db, authenticated_user_id, request.text
+                    db,
+                    authenticated_user_id,
+                    request.text,
+                    force_mode=_force_lesson_mode,
                 )
                 if lesson is not None:
                     async for event in _emit_composed_lesson(
@@ -1565,6 +1625,7 @@ async def stream_lyo2_chat(
                         conversation_history=history,
                         intent=decision.intent.value if decision.intent else None,
                         media_attachments=media_attachments,
+                        teaching_decision=teaching_decision.model_dump(mode="json"),
                     ),
                     timeout=60.0 # Execution can take longer
                 )
