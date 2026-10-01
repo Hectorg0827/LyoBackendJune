@@ -113,9 +113,26 @@ class LyoExecutor:
             history_text = "\n\n--- CONVERSATION HISTORY ---\n"
             for turn in conversation_history:
                 role = turn.get("role", "user").upper()
-                content = turn.get("content", "")
-                history_text += f"{role}: {content}\n"
+                turn_content = turn.get("content", "")
+                history_text += f"{role}: {turn_content}\n"
             history_text += "--- END HISTORY ---\n"
+
+        teaching_decision = context.get("teaching_decision") or {}
+        teaching_policy_text = ""
+        if teaching_decision:
+            directives = teaching_decision.get("directives") or []
+            directive_text = "\n".join(f"- {item}" for item in directives)
+            teaching_policy_text = f"""
+--- TEACHING POLICY (SERVER-AUTHORITATIVE) ---
+Action: {teaching_decision.get("action", "answer")}
+Reason: {teaching_decision.get("reason_code", "unspecified")}
+Maximum exposition before learner control: {teaching_decision.get("max_exposition_words", 120)} words
+Preferred instrument: {teaching_decision.get("preferred_instrument") or "none"}
+Target evidence: {teaching_decision.get("target_evidence_type") or "none"}
+{directive_text}
+Do not override this action with a different pedagogical sequence. The policy chooses what to do; you only realize it clearly and naturally.
+--- END TEACHING POLICY ---
+"""
 
         prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
 Answer the user's question with warmth, curiosity, and clarity.
@@ -149,7 +166,7 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling. When you introduce something new, lead with a question, a guess-first prompt, or one small piece of the puzzle rather than the full worked answer — let the user reach for it. Save the complete explanation for after their attempt, or for when they're genuinely stuck and ask directly.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}
+{rag_text}{history_text}{teaching_policy_text}
 
 USER QUESTION:
 {original_request}
@@ -202,6 +219,7 @@ USER QUESTION:
         conversation_history: list = None,
         intent: str = None,
         media_attachments: list = None,
+        teaching_decision: Optional[Dict[str, Any]] = None,
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
@@ -215,6 +233,7 @@ USER QUESTION:
             "open_classroom_payload": None,
             "conversation_history": conversation_history or [],
             "media_attachments": media_attachments or [],
+            "teaching_decision": teaching_decision or {},
         }
         
         for step in plan.steps:
@@ -318,7 +337,10 @@ USER QUESTION:
             artifact_block=artifact_block,
             next_actions=self._contextual_actions(intent),
             open_classroom_payload=execution_context.get("open_classroom_payload"),
-            metadata={"latency_ms": 100}
+            metadata={
+                "latency_ms": 100,
+                "teaching_policy": teaching_decision or None,
+            }
         )
 
     def _contextual_actions(self, intent: str = None) -> list:
