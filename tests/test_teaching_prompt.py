@@ -136,6 +136,33 @@ REWORDED = {
     "When diagnosed_misconception is present, teach against that specific error "
     "rather than the topic in general, and never name the learner as having it.":
         ("aim that beat at diagnosed_misconception",),
+    # The visual system expanded from four decorative-capable primitives into
+    # a server-directed teaching vocabulary. These old sentences are preserved
+    # semantically by the new policy rather than verbatim.
+    "A visual may accompany any beat when useful.":
+        ("visual_policy is the server's decision about visual priority.",),
+    "Use fraction_bar for equal parts/percentages (parts, whole, value, unit), "
+    "comparison for 2–6 contrasting examples (entries with label/detail), "
+    "sequence for 2–6 connected steps, or graph for a simple mathematical "
+    "relationship with 1–3 bounded parameters.":
+        ("Use fraction_bar for equal parts/percentages",
+         "process_flow for causes, systems or transformations",
+         "annotated_image when a real object"),
+    "Set fixed x_min/x_max and y_min/y_max to keep the important changes visible.":
+        ("Set fixed graph x/y bounds so changes remain visible.",),
+    "Choose a visual that explains this actual idea, not decoration.":
+        ("do not force a decorative visual when prose is clearer.",),
+    "Its caption guides exploration and its description conveys equivalent "
+    "information in text.":
+        ("Every visual needs a caption that tells the learner what to look at or manipulate",
+         "a description that conveys equivalent information in text."),
+    "During guided practice invite a prediction or observation using it; "
+    "manipulation alone is never a graded answer.":
+        ("During guided practice, invite a prediction or observation using the visual",
+         "manipulation alone is never a graded answer."),
+    "Prefer a useful visual in the demonstration and guided phase when this "
+    "subject permits one.":
+        ("If mode=preferred, use one when the current idea has useful structure",),
     # Two distractors revealing the same misconception diagnose nothing, which
     # the original left implicit in "every option a position a real learner holds".
     "Make every option a position a real learner holds; never filler, and never "
