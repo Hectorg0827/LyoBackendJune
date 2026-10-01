@@ -18,6 +18,7 @@ from lyo_app.ai_classroom.sdui_models import (
     QuizOption, Scene, SceneType, TeacherMessage,
 )
 from lyo_app.ai_classroom.teaching_prompt import MOVES
+from lyo_app.teaching_runtime import POLICY_VERSION, canonical_action_for_classroom_move
 
 logger = logging.getLogger(__name__)
 
@@ -1125,6 +1126,26 @@ class AdaptiveSession:
 
     @staticmethod
     def save(progress, state, scene):
+        # Classroom keeps ownership of progression, but publishes the same
+        # canonical pedagogical action vocabulary as Chat. This is a one-way
+        # adapter: no LLM or client can use these descriptive fields to advance
+        # the state machine.
+        canonical_action = canonical_action_for_classroom_move(
+            state.next_move, state.phase
+        )
+        scene.metadata.teaching_action = canonical_action.value
+        scene.metadata.teaching_policy_version = POLICY_VERSION
+        evidence_targets = {
+            "diagnose": "recognition",
+            "guided": "application",
+            "faded": "application",
+            "independent": "application",
+            "transfer": "transfer",
+            "interleave": "retention",
+        }
+        scene.metadata.target_evidence_type = evidence_targets.get(
+            (state.next_move or state.phase or "").lower()
+        )
         if state.record_scope == "unit":
             # Scene start travels on every reconnect. List the skills already
             # encountered so the record panel can place their evidence in this
