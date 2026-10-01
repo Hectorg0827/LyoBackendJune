@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, DateTime, Boolean, JSON, ForeignKey, Numeric, Date
+    Column, Integer, String, DateTime, Boolean, JSON, ForeignKey, Numeric, Date, Time
 )
 from lyo_app.core.database import Base
 
@@ -22,6 +22,11 @@ class TestProfile(Base):
     # Core test info
     subject = Column(String(100), nullable=False)
     test_date = Column(Date, nullable=False)
+    # Nullable on purpose. A learner sitting one exam on a date never needs to
+    # give a time — the date alone orders their revision. It earns its place
+    # only when two exams share a date and something has to decide which comes
+    # first, so it is asked for then and left unset otherwise.
+    test_time = Column(Time, nullable=True)
     test_format = Column(String(50))  # multiple_choice, essay, oral, mixed
     
     # Content scope

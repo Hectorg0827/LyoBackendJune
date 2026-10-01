@@ -1113,13 +1113,23 @@ async def stream_lyo2_chat(
             # must never be hijacked by an unfinished exam elsewhere.
             if authenticated_user_id and not cancelled_prep and decision.intent == Intent.TEST_PREP:
                 from lyo_app.study_plans.chat import process_chat_turn
-                text = await process_chat_turn(request, current_user, db)
+                result = await process_chat_turn(request, current_user, db)
+                text = result.text
                 if persistent_conversation:
                     await conversation_store.add_message(db, persistent_conversation.id,
                         role="assistant", content=text, mode_used=ChatMode.TEST_PREP.value,
                         client_message_id=assistant_client_message_id)
                 yield yield_safe_sse_event("answer", {"type": "answer", "block": {
                     "type": "TutorMessageBlock", "content": {"text": text}, "priority": 0}})
+                # Emitted only once a plan exists, so a client can offer opening
+                # Test Prep or starting the next session without asking the
+                # learner anything they have already answered. Mirrors the
+                # open_classroom event below rather than inventing a channel.
+                if result.handoff:
+                    yield yield_safe_sse_event("test_prep_ready", {
+                        "type": "test_prep_ready",
+                        "block": {"type": "TestPrepReadyBlock", "content": result.handoff},
+                    })
                 yield "data: [DONE]\n\n"
                 return
 

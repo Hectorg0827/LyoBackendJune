@@ -1,7 +1,7 @@
 """HTTP routes for the "I Have a Test" prep and study plans system."""
 import json
 import logging
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, time as dt_time, timedelta, timezone
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -170,6 +170,164 @@ def safe_parse_date(date_str: str) -> Optional[date]:
         except Exception:
             return None
 
+
+#: Asked when the learner already has a finished plan and says something else.
+#:
+#: Kept deliberately narrow. The question is not "what do they want" — it is
+#: only whether this sentence is about a *different* exam from the one already
+#: planned. Anything less certain than yes is treated as no, because inventing
+#: a second exam nobody sits is worse than answering about the first.
+_NEW_TEST_CLASSIFIER = (
+    "You decide one thing: does the learner's message describe a DIFFERENT "
+    "exam from the one already planned?\n"
+    "Already planned: {subject} on {test_date}.\n"
+    "Answer with JSON only: {{\"different_test\": true|false}}.\n"
+    "true only when they name or clearly imply another exam — another "
+    "subject, or the same subject on a different date. Mentioning the planned "
+    "exam, asking about it, correcting its details, greetings, thanks, or "
+    "anything ambiguous is false. A learner may sit more than one exam on the "
+    "same date, so a matching date is not by itself a reason to answer false."
+)
+
+
+async def describes_a_different_test(user_message: str, profile):
+    """Is this turn about another exam, or the one already planned?
+
+    Three answers, not two:
+
+      True  — a different exam; start its intake.
+      False — the planned exam, or not an exam at all; answer as before.
+      None  — could not ask. The model was unreachable or gave nothing usable.
+
+    `None` exists because collapsing it into `False` hides an outage behind a
+    confident sentence. Running the eval against a box with no provider
+    configured returned `False` for every case, including "No i have also a
+    social studies test" — which is the reported bug, silently back, any time
+    the provider is down. The caller keeps the learner's existing exam either
+    way, but a turn we could not read should not be answered as though we did.
+
+    A wrong `True` invents an exam nobody sits and interrogates the learner
+    about it; a wrong `False` leaves them where they already were. Those are
+    not equally bad, so anything short of a clear yes is never `True`.
+    """
+    text = (user_message or "").strip()
+    if not text:
+        return False
+    try:
+        reply = await ai_resilience_manager.chat_completion(
+            messages=[
+                {"role": "system", "content": _NEW_TEST_CLASSIFIER.format(
+                    subject=profile.subject, test_date=profile.test_date)},
+                {"role": "user", "content": text[:2000]},
+            ],
+            temperature=0.0,
+            use_cache=False,
+            response_format={"type": "json_object"},
+        )
+        if reply.get("is_fallback"):
+            return None
+        answer = json.loads(reply.get("content", "{}")).get("different_test")
+        if answer is True:
+            return True
+        # A missing key, a string, a number: the model did not answer the
+        # question, which is not the same as answering "no".
+        return False if answer is False else None
+    except Exception:
+        logger.exception("New-test classification unavailable")
+        return None
+
+
+
+#: Minutes left between two study blocks when one has to move.
+#:
+#: Back-to-back blocks are not a collision, but they are not a schedule a
+#: person keeps either. A gap is what makes the second one attendable.
+SESSION_GAP_MINUTES = 15
+
+#: How far a block may be pushed before the search gives up.
+_MAX_SHIFT_MINUTES = 12 * 60
+
+
+def first_free_slot(start, minutes, busy, not_after=None):
+    """Move `start` later until a block of `minutes` fits between `busy` slots.
+
+    `busy` is an iterable of (start, end) datetimes — every study block the
+    learner already has, from every plan. Until this existed, a plan was built
+    from one exam's profile with no knowledge of the others, so a learner
+    sitting two exams could be scheduled to study two subjects at once. More
+    than one exam on a date is ordinary; being in two places at 6pm is not.
+
+    `not_after` is the last moment the block is still worth having — the exam.
+    `normalize_schedule` has already checked every block against the exam date
+    and the daily budget, and this runs afterwards, so moving one without a
+    bound would quietly undo that check and schedule revision for after the
+    paper is sat. When nothing fits in time, the original slot is returned and
+    the clash is left standing: a visible double-booking is a thing a learner
+    can move, and studying after the exam is not.
+    """
+    if not busy or minutes <= 0:
+        return start
+    ordered = sorted((b for b in busy if b[0] and b[1]), key=lambda b: b[0])
+    moved = start
+    shifted = 0
+    while shifted <= _MAX_SHIFT_MINUTES:
+        finish = moved + timedelta(minutes=minutes)
+        if not_after is not None and finish > not_after:
+            return start
+        clash = next((b for b in ordered if b[0] < finish and moved < b[1]), None)
+        if clash is None:
+            return moved
+        nxt = clash[1] + timedelta(minutes=SESSION_GAP_MINUTES)
+        shifted += max(1, int((nxt - moved).total_seconds() // 60))
+        moved = nxt
+    return start
+
+
+async def busy_slots(db, user_id, exclude_plan_id=None):
+    """Every study block this learner already owes time to."""
+    stmt = select(StudySession.scheduled_at, StudySession.duration_minutes).where(
+        StudySession.user_id == user_id,
+        StudySession.status.in_(["scheduled", "in_progress"]),
+    )
+    if exclude_plan_id:
+        stmt = stmt.where(StudySession.study_plan_id != exclude_plan_id)
+    rows = (await db.execute(stmt)).all()
+    return [
+        (row[0], row[0] + timedelta(minutes=int(row[1] or 0)))
+        for row in rows if row[0] is not None
+    ]
+
+
+
+async def exams_sharing_a_date(db, user_id, test_date, exclude_profile_id=None):
+    """The learner's other exams on this date.
+
+    A date alone orders a learner's revision perfectly well, so the time of day
+    is not asked for and not stored. It becomes necessary exactly when a second
+    exam lands on the same date and something has to decide which is sat first
+    — which is the only question the time answers.
+    """
+    if not test_date:
+        return []
+    stmt = select(TestProfile).where(
+        TestProfile.user_id == user_id, TestProfile.test_date == test_date)
+    if exclude_profile_id:
+        stmt = stmt.where(TestProfile.id != exclude_profile_id)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+def needs_a_time(profile, same_day):
+    """Should this intake ask what time the exam starts?
+
+    Only when the learner has another exam on the day and at least one of the
+    two has no time yet. Asking otherwise is a question whose answer changes
+    nothing, which is the kind of question that makes a form feel like a form.
+    """
+    if not same_day:
+        return False
+    return profile.test_time is None or any(other.test_time is None for other in same_day)
+
+
 @router.post(
     "/intake/turn",
     response_model=IntakeResponse,
@@ -212,9 +370,46 @@ async def intake_turn(
         profile.materials = list(by_uri.values())[-20:]
     existing = await profile_plan(db, current_user.id, profile.id)
     if existing:
-        await db.commit()
-        return IntakeResponse(test_profile_id=profile.id, intake_complete=True, plan_id=existing.id,
-            message_to_user=f"Your {profile.subject} test plan is saved. Open Test Prep to see your schedule, continue a lesson, or edit your test details.")
+        # A finished plan used to end the conversation: every later turn
+        # returned this same sentence without the learner's message ever
+        # reaching the model. Saying "I also have a social studies test" got
+        # the biology plan read back, forever — a learner could not add an
+        # exam, correct one, or be heard at all.
+        #
+        # A second exam now starts its own intake. Exams are already one row
+        # each; only this lookup assumed a learner sits one.
+        verdict = None if body.test_profile_id else await describes_a_different_test(
+            body.user_message, profile)
+        if verdict is True:
+            workflow = dict(profile.workflow_state or {})
+            profile = TestProfile(
+                user_id=current_user.id,
+                subject="Pending Test",
+                test_date=date.today() + timedelta(days=30),
+                intake_transcript=[],
+                # Carry the timezone forward: it is a fact about the learner,
+                # not about the exam, and re-asking for it is friction.
+                workflow_state={"timezone": workflow.get("timezone", "UTC"),
+                                "known_fields": [], "revision": 0},
+            )
+            db.add(profile)
+            await db.flush()
+            existing = None
+        else:
+            await db.commit()
+            saved = (f"Your {profile.subject} test plan is saved. Open Test Prep to see "
+                     "your schedule, continue a lesson, or edit your test details.")
+            if verdict is None and not body.test_profile_id:
+                # We could not read the turn. Saying only the line above would
+                # answer a question we never understood — and if they were
+                # telling us about a second exam, this is exactly where that
+                # gets swallowed. Say so, and leave a way through.
+                # Names no surface: the link is already in the sentence above,
+                # and repeating it is the duplication this reply just lost.
+                saved += (" I couldn't tell whether that was about a different exam —"
+                          " if you have another one, you can add it there.")
+            return IntakeResponse(test_profile_id=profile.id, intake_complete=True,
+                                  plan_id=existing.id, message_to_user=saved)
     if profile.intake_complete:
         await db.commit()
         return IntakeResponse(test_profile_id=profile.id, intake_complete=True,
@@ -232,7 +427,20 @@ async def intake_turn(
         if field not in known:
             context.pop(field, None)
     # 3. Call resilient LLM
-    messages = [{"role": "system", "content": INTAKE_SYSTEM_PROMPT +
+    # Two exams on one date is the only case where the time of day matters.
+    same_day = await exams_sharing_a_date(db, current_user.id, profile.test_date, profile.id)
+    clash_note = ""
+    if needs_a_time(profile, same_day):
+        others = ", ".join(sorted({other.subject for other in same_day}))
+        clash_note = (
+            f"\nThis learner already has another exam on {profile.test_date}: {others}. "
+            "Ask what time each exam starts, so the two can be told apart and "
+            "revision scheduled around them. Two exams on one date is normal — "
+            "do not treat it as a mistake or ask them to change the date. "
+            "Report a time you are told as profile_update.test_time in 24-hour "
+            "HH:MM. Never guess one."
+        )
+    messages = [{"role": "system", "content": INTAKE_SYSTEM_PROMPT + clash_note +
         f"\nToday is {datetime.now(ZoneInfo(workflow.get('timezone', 'UTC'))).date()}. "
         f"Learner timezone: {workflow.get('timezone', 'UTC')}. "
         "Never invent the test date or availability. Study days per week may default to 5 if the learner has no preference. "
@@ -276,7 +484,14 @@ async def intake_turn(
     # LLM output is untrusted. Invalid fields do not destroy a recoverable intake.
     validated = {}
     for key, value in updates.items():
-        if key in {"subject", "test_date", "topics", "daily_minutes_available", "study_days_per_week"}:
+        if key == "test_time":
+            # Only meaningful against another exam on the day, and only ever
+            # the learner's own words — never inferred from a date.
+            try:
+                validated[key] = dt_time.fromisoformat(str(value)[:5]) if value else None
+            except (ValueError, TypeError):
+                pass
+        elif key in {"subject", "test_date", "topics", "daily_minutes_available", "study_days_per_week"}:
             try:
                 checked = TestProfileUpdate(expected_revision=0, **{key: value})
                 if value is not None:
@@ -294,6 +509,8 @@ async def intake_turn(
     if updates:
         if "subject" in updates and updates["subject"]:
             profile.subject = str(updates["subject"])
+        if updates.get("test_time") is not None:
+            profile.test_time = updates["test_time"]
         if "test_date" in updates and updates["test_date"]:
             p_date = updates["test_date"]
             if p_date:
@@ -412,6 +629,14 @@ async def generate_plan(
         "current_time": datetime.now(timezone.utc).isoformat(),
         "materials": profile.materials,
     }
+    # What this learner already owes time to, from their other exams. Given to
+    # the planner so it schedules around them, and enforced below regardless of
+    # whether it listens.
+    already_booked = await busy_slots(db, current_user.id)
+    profile_ctx["unavailable_slots"] = [
+        {"start": slot[0].isoformat(), "end": slot[1].isoformat()}
+        for slot in sorted(already_booked)[:60]
+    ]
 
     # 2. Call resilient LLM Planner
     try:
@@ -456,17 +681,28 @@ async def generate_plan(
     sessions_to_insert = []
     reminders_to_insert = []
     
+    # Grows as blocks are placed, so this plan does not collide with itself
+    # either — the planner is a language model and repeats times.
+    booked = list(already_booked)
     for s_item in plan_data.get("sessions", []):
         try:
             sched_dt = s_item["scheduled_at"]
         except Exception:
             sched_dt = datetime.utcnow() + timedelta(days=1)
-            
+
+        minutes = int(s_item.get("duration_minutes", profile.daily_minutes_available))
+        # End of the exam day, in UTC to match the naive UTC times
+        # normalize_schedule produces. A block may be moved out of a clash but
+        # never past the exam it is revision for.
+        sits_at = datetime.combine(profile.test_date, dt_time.max)
+        sched_dt = first_free_slot(sched_dt, minutes, booked, not_after=sits_at)
+        booked.append((sched_dt, sched_dt + timedelta(minutes=minutes)))
+
         session = StudySession(
             study_plan_id=plan.id,
             user_id=current_user.id,
             scheduled_at=sched_dt,
-            duration_minutes=int(s_item.get("duration_minutes", profile.daily_minutes_available)),
+            duration_minutes=minutes,
             topic=s_item.get("topic", "Study Block"),
             session_type=s_item.get("session_type", "learn")
         )
