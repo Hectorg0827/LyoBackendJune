@@ -182,14 +182,13 @@ Generate only the transition script.
             title=curriculum.course_title,
             description=curriculum.course_description,
             subject=self._extract_subject(curriculum),
-            estimated_duration_minutes=int(curriculum.total_estimated_hours * 60),
-            difficulty_level=self._map_difficulty(curriculum),
-            prerequisites=json.dumps(self._extract_prerequisites(curriculum)),
-            learning_objectives=json.dumps(self._extract_objectives(curriculum)),
-            tags=json.dumps(self._extract_tags(curriculum)),
+            grade_band="general",
+            estimated_minutes=max(1, int(curriculum.total_estimated_hours * 60)),
+            difficulty=self._map_difficulty(curriculum),
+            prerequisites=self._extract_prerequisites(curriculum),
+            learning_objectives=self._extract_objectives(curriculum),
             created_by=creator_id,
-            version=1,
-            is_published=False
+            is_published=False,
         )
         
         db.add(course)
@@ -773,25 +772,34 @@ Generate only the transition script.
             for outcome in module.learning_outcomes:
                 concept_name = self._extract_concept_name(outcome)
                 if concept_name and concept_name not in seen_concepts:
-                    concept = Concept(
-                        id=str(uuid4()),
-                        name=concept_name,
-                        description=outcome,
-                        course_id=course.id,
-                        difficulty_weight=1.0
-                    )
-                    db.add(concept)
+                    existing = (
+                        await db.execute(
+                            select(Concept).where(
+                                Concept.subject == course.subject,
+                                Concept.name == concept_name,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        concept = Concept(
+                            id=str(uuid4()),
+                            name=concept_name,
+                            display_name=concept_name,
+                            description=outcome,
+                            subject=course.subject,
+                            grade_band=course.grade_band,
+                            priority=5,
+                        )
+                        db.add(concept)
+                        concepts_created += 1
                     seen_concepts.add(concept_name)
-                    concepts_created += 1
         
         return concepts_created
     
     async def _count_edges(self, db: AsyncSession, course_id: str) -> int:
         """Count edges for the course"""
         result = await db.execute(
-            select(LearningEdge)
-            .join(LearningNode, LearningEdge.source_node_id == LearningNode.id)
-            .where(LearningNode.course_id == course_id)
+            select(LearningEdge).where(LearningEdge.course_id == course_id)
         )
         return len(result.scalars().all())
     
