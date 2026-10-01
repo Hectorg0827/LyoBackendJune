@@ -13,6 +13,8 @@ on:
       - "lyo_app/ai_classroom/adaptive_session.py"
       - "lyo_app/ai_classroom/sdui_models.py"
       - "tests/test_teaching_runtime_policy.py"
+      - "tests/test_teaching_runtime_model_router.py"
+      - "lyo_app/ai_classroom/scene_lifecycle_engine.py"
       - ".github/workflows/learning-os-ci.yml"
 
 permissions:
@@ -47,8 +49,9 @@ jobs:
         run: |
           python -m flake8             lyo_app/teaching_runtime             lyo_app/ai/executor.py             lyo_app/api/v1/chat_lyo2.py             lyo_app/api/v1/stream_lyo2.py             lyo_app/ai_classroom/adaptive_session.py             lyo_app/ai_classroom/sdui_models.py             tests/test_teaching_runtime_policy.py             --count --select=E9,F63,F7,F82 --show-source --statistics
 
-      - name: Teaching policy contract
-        run: python -m pytest -q tests/test_teaching_runtime_policy.py
+      - name: Teaching policy and model-routing contracts
+        run: |
+          python -m pytest -q             tests/test_teaching_runtime_policy.py             tests/test_teaching_runtime_model_router.py
 
       - name: Cross-surface learning regressions
         run: |
