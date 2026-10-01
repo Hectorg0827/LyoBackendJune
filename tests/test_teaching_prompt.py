@@ -136,6 +136,12 @@ REWORDED = {
     "When diagnosed_misconception is present, teach against that specific error "
     "rather than the topic in general, and never name the learner as having it.":
         ("aim that beat at diagnosed_misconception",),
+    "Explicitly model the missing step with a DIFFERENT representation or example; "
+    "for prerequisite teach the particular prerequisite the learner is missing, "
+    "then bridge back to the original goal.":
+        ("Explicitly model the missing step with a DIFFERENT representation or example;",
+         "For prerequisite teach the particular prerequisite the learner is missing, "
+         "then bridge back to the original goal."),
     # The visual system expanded from four decorative-capable primitives into
     # a server-directed teaching vocabulary. These old sentences are preserved
     # semantically by the new policy rather than verbatim.
