@@ -179,6 +179,8 @@ USER QUESTION:
                 await ai_resilience_manager.initialize()
                 
             media_attachments = context.get("media_attachments", [])
+            from lyo_app.teaching_runtime.model_router import provider_order_for_tier
+
             if media_attachments:
                 messages = [{
                     "role": "user",
@@ -187,10 +189,13 @@ USER QUESTION:
                         *media_attachments,
                     ],
                 }]
-                provider_order = ["gemini-2.5-flash"]
             else:
                 messages = [{"role": "user", "content": prompt}]
-                provider_order = ["gemini-2.5-flash", "gpt-4o-mini"]
+
+            provider_order = provider_order_for_tier(
+                str(teaching_decision.get("model_tier") or "teaching"),
+                has_media=bool(media_attachments),
+            )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
