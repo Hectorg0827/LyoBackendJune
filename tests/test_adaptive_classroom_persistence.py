@@ -17,6 +17,8 @@ from lyo_app.ai_classroom.sdui_models import ActionIntent, Scene, SceneType, Tea
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager
 from lyo_app.ai_classroom.websocket_routes import _register_lifecycle_handlers
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
+from lyo_app.events.concept_record import learner_record
+from lyo_app.events.models import EventType, LearningEvent
 from tests.adaptive_fixtures import ScriptedTeacher, action, context, evaluation, decline_probe, past_the_probe
 from tests.export_guided_fixtures import FixtureTeacher
 
@@ -177,6 +179,67 @@ async def test_database_restores_the_exact_partial_question_and_rejects_another_
         assert len(restored["guided_state"]["outbox"]) == 1
         offline.plan.assert_not_awaited()
         offline.turn.assert_not_awaited()
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_classroom_intervention_is_durable_but_never_counts_as_mastery_evidence():
+    database = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with database.begin() as connection:
+            await connection.run_sync(
+                ClassroomSession.__table__.create
+            )
+            await connection.run_sync(
+                ClassroomInteraction.__table__.create
+            )
+            await connection.run_sync(
+                LearningEvent.__table__.create
+            )
+
+        progress = {
+            "_pending_teaching_intervention": {
+                "scene_id": "scene-guide-1",
+                "action": "guide",
+                "target_evidence_type": "application",
+                "policy_version": "learning-os-v1",
+                "concept_id": "compare-fractions",
+            }
+        }
+        ctx = context()
+        turn = action(ActionIntent.CONTINUE)
+
+        async with AsyncSession(database) as db:
+            instance = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+            instance.db = db
+            assert await instance._persist_session_progress(turn, ctx, progress)
+
+        async with AsyncSession(database) as db:
+            events = (
+                await db.execute(
+                    select(LearningEvent).where(
+                        LearningEvent.user_id == 42,
+                        LearningEvent.event_type == EventType.AI_SESSION,
+                    )
+                )
+            ).scalars().all()
+            assert len(events) == 1
+            event = events[0]
+            assert event.source_surface == "classroom"
+            assert event.concept_id == "compare-fractions"
+            assert event.evidence_type is None
+            assert event.evidence_confidence is None
+            assert event.measurable_outcome is None
+            assert event.metadata_json["event_kind"] == "teaching_policy_decision"
+            assert event.metadata_json["action"] == "guide"
+            assert event.metadata_json["target_evidence_type"] == "application"
+
+            record = await learner_record(db, 42)
+            assert record.unavailable is False
+            assert record.concepts == []
+
+        assert "_pending_teaching_intervention" not in progress
     finally:
         await database.dispose()
 
