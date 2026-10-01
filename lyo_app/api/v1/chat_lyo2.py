@@ -157,6 +157,27 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             media_attachments=media_attachments,
         )
         decision = routing_response.decision
+
+        from lyo_app.teaching_runtime import (
+            TeachingSurface,
+            decide_for_chat,
+            record_policy_decision,
+        )
+        teaching_decision = await decide_for_chat(
+            db=db,
+            user_id=authenticated_user_id,
+            user_text=request.text or "",
+            intent=decision.intent.value if decision.intent else "GENERAL",
+            history=request.conversation_history,
+            state_summary=request.state_summary,
+        )
+        await record_policy_decision(
+            db,
+            user_id=authenticated_user_id,
+            trace_id=trace_id,
+            surface=TeachingSurface.CHAT,
+            decision=teaching_decision,
+        )
         
         # Check for clarification gate
         if decision.needs_clarification:
@@ -198,6 +219,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 for turn in request.conversation_history
             ],
             media_attachments=media_attachments,
+            teaching_decision=teaching_decision.model_dump(mode="json"),
         )
         
         # Add trace metadata
@@ -208,6 +230,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "intent": decision.intent,
             "tier": decision.suggested_tier,
             "conversation_id": request.conversation_id,
+            "teaching_policy": teaching_decision.model_dump(mode="json"),
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")
