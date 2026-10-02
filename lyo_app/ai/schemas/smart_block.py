@@ -204,14 +204,12 @@ class SmartBlock(BaseModel):
             type=SmartBlockType.interactive,
             subtype="explorable",
             content={"kind": kind, "prompt": prompt, "points": points},
+            # An explorable is a representation, never an assessment. Keep
+            # evidence/grading fields completely absent so no client or later
+            # analytics path can mistake interaction with a visual for proof.
             metadata={
                 **({"concept_id": concept_id} if concept_id else {}),
-                "evidence_contract": EvidenceContract(
-                    target_evidence_type="exposure",
-                    grading="none",
-                    award_condition="interaction",
-                    confidence_cap=0.0,
-                ).model_dump(mode="json"),
+                "instructional_role": "representation",
             },
         )
 
