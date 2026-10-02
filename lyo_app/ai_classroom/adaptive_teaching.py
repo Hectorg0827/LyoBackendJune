@@ -1050,7 +1050,11 @@ class AdaptiveTeacher:
             logger.info("Classroom package prefetch skipped: %s", type(exc).__name__)
 
     async def plan(self, context) -> LearningPlan:
-        count = unit_count(context.target_duration_minutes, context.total_lessons)
+        count = (
+            1
+            if getattr(getattr(context, "classroom_mode", None), "value", None) == "review"
+            else unit_count(context.target_duration_minutes, context.total_lessons)
+        )
         payload = {
             "topic": context.topic, "goal": context.learning_objective,
             "lesson": context.lesson_title, "material": (context.lesson_content or "")[:12000],
