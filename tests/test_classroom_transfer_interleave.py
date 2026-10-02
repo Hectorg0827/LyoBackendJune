@@ -52,6 +52,39 @@ def test_transfer_and_revisit_contract_demand_an_open_application():
 
 
 @pytest.mark.asyncio
+async def test_fresh_due_review_files_retention_and_ends_after_one_success():
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = lambda _ctx: __import__(
+        "tests.adaptive_fixtures", fromlist=["plan"]
+    ).plan(1)
+    ctx = context(
+        classroom_mode="review",
+        review_concept_id="fraction_skill_1",
+        scheduled_due_items=["fraction_skill_1"],
+        target_duration_minutes=10,
+    )
+    progress = {}
+    runner = AdaptiveSession(teacher)
+
+    await runner.run(ctx, progress, action(welcome=True))
+    state = current(progress)
+    assert state.phase == "independent"
+    assert state.review_is_due
+    assert state.pending is not None
+    assert state.pending.task.response_format != "choice"
+
+    scene = await answer(runner, progress, ctx)
+    state = current(progress)
+
+    assert state.path_done
+    assert state.outbox[-1]["evidence_type"] == "retrieval"
+    assert state.outbox[-1]["correct"] is True
+    assert state.review_outbox[-1]["passed"] is True
+    assert not any(entry["evidence_type"] == "transfer" for entry in state.outbox)
+    assert scene.metadata.target_evidence_type in (None, "retention")
+
+
+@pytest.mark.asyncio
 async def test_transfer_is_earned_only_after_open_correct_answer_and_does_not_gate_completion():
     teacher, runner, progress, ctx = ScriptedTeacher(), None, {}, context(target_duration_minutes=8)
     runner = AdaptiveSession(teacher)
