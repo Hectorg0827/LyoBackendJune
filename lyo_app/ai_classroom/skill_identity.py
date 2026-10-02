@@ -136,7 +136,16 @@ async def resolve_skill_plan(db: AsyncSession, context, plan) -> SkillPlanIdenti
     if mode == "review" and review_concept_id:
         if len(plan.units) != 1:
             raise ValueError("A due review must target exactly one concept")
-        reviewed = await db.get(Concept, str(review_concept_id))
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+
+        review_id = str(review_concept_id)
+        if not is_concept_graph_id(review_id):
+            # Legacy Chat/personalization rows predate the UUID Concept graph.
+            # Their schedule identity is still authoritative; preserve it
+            # exactly rather than inventing a lookalike Concept.
+            return SkillPlanIdentity(unit_ids=[review_id], topic_id=review_id)
+
+        reviewed = await db.get(Concept, review_id)
         if reviewed is None:
             raise ValueError("Due review concept no longer exists")
         return SkillPlanIdentity(unit_ids=[reviewed.id], topic_id=reviewed.id)
