@@ -1,5 +1,6 @@
 from lyo_app.teaching_runtime.models import (
     LearnerSnapshot,
+    PrerequisiteGap,
     SessionSnapshot,
     TeachingAction,
     TeachingContext,
@@ -22,6 +23,7 @@ def context(
     strongest=None,
     next_rung=None,
     misconception=None,
+    prerequisite_gaps=None,
     attempts=0,
     checks=0,
     explanations=0,
@@ -36,6 +38,7 @@ def context(
             strongest_rung=strongest,
             next_rung=next_rung,
             misconception=misconception,
+            prerequisite_gaps=prerequisite_gaps or [],
             attempts=attempts,
         ),
         session=SessionSnapshot(
@@ -76,6 +79,30 @@ def test_confusion_or_misconception_repairs_before_advancing():
     assert decision.action is TeachingAction.REMEDIATE
     assert decision.model_tier == "deliberation"
     assert decision.target_evidence_type == "application"
+
+
+def test_prerequisite_gap_bridges_before_target_practice():
+    decision = TeachingPolicy.decide(
+        context(
+            mastery=0.88,
+            evidence_state="APPLIED",
+            strongest="application",
+            attempts=5,
+            prerequisite_gaps=[
+                PrerequisiteGap(
+                    concept_id="equivalent-fractions",
+                    display_name="Equivalent fractions",
+                    evidence_state="RECOGNIZED",
+                    strongest_rung="recognition",
+                )
+            ],
+        )
+    )
+    assert decision.action is TeachingAction.REMEDIATE
+    assert decision.reason_code == "prerequisite_gap"
+    assert decision.preferred_instrument == "prerequisite_bridge"
+    assert decision.target_evidence_type == "application"
+    assert "Equivalent fractions" in " ".join(decision.directives)
 
 
 def test_two_checks_force_modality_change():
