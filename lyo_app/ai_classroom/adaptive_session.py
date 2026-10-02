@@ -334,6 +334,17 @@ class AdaptiveSession:
                     if self.after_success(state, pending):
                         state.pending = None
                         self.schedule_review(context, state, passed=True)
+                        # A due-review session is one delayed retrieval, not a
+                        # miniature course. Once the learner succeeds on the
+                        # fresh, open application that is allowed to file
+                        # retention, close the review session immediately.
+                        # Keeping planner leftovers here would show a summary
+                        # with path_done=False and then ask for another unit,
+                        # even though the scheduled retrieval has already been
+                        # satisfied.
+                        if state.mode == "review" and state.review_is_due:
+                            state.remaining_units = []
+                        self.finish_unit(state)
                         return self.save(progress, state, self.summary(context, state))
                     move = state.phase
                     # Their first success is the moment they have something to
