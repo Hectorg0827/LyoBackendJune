@@ -155,6 +155,7 @@ def _lesson_to_smart_blocks(
     lesson: "ChatLesson",
     source_surface: str = "chat",
     target_evidence_type: Optional[str] = None,
+    teaching_intervention: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Render a composed lesson into the block vocabulary clients consume.
 
@@ -237,6 +238,11 @@ def _lesson_to_smart_blocks(
             "is_probe": lesson.is_probe,
             "source_surface": source_surface,
             "requested_evidence_type": requested_evidence,
+            **(
+                {"teaching_intervention": teaching_intervention}
+                if teaching_intervention
+                else {}
+            ),
         }
         blocks.append(block.model_dump())
 
@@ -283,6 +289,7 @@ async def _try_compose_lesson(
     source_surface: str = "chat",
     force_mode: Optional[str] = None,
     target_evidence_type: Optional[str] = None,
+    teaching_intervention: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[ChatLesson]]:
     """Compose a structured lesson, or ([], None) to fall back to prose.
 
@@ -315,6 +322,7 @@ async def _try_compose_lesson(
         lesson,
         source_surface=source_surface,
         target_evidence_type=target_evidence_type,
+        teaching_intervention=teaching_intervention,
     ), lesson
 
 
@@ -625,6 +633,28 @@ def _surface_of(block: Optional[Dict[str, Any]]) -> str:
     return surface if surface in SOURCE_SURFACES else "chat"
 
 
+def _teaching_intervention_of(
+    block: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, str]]:
+    raw = ((block or {}).get("metadata") or {}).get("teaching_intervention")
+    if not isinstance(raw, dict):
+        return None
+    allowed = {
+        "action": 48,
+        "reason_code": 80,
+        "target_evidence_type": 32,
+        "preferred_instrument": 48,
+        "model_tier": 32,
+        "policy_version": 48,
+    }
+    cleaned: Dict[str, str] = {}
+    for key, limit in allowed.items():
+        value = raw.get(key)
+        if value is not None:
+            cleaned[key] = str(value)[:limit]
+    return cleaned or None
+
+
 def _check_evidence_contract(block: Optional[Dict[str, Any]]) -> EvidenceContract:
     """Read the server-authored evidence contract from a persisted check.
 
@@ -916,7 +946,17 @@ async def check_lyo2_answer(
             evidence_type=evidence_contract.target_evidence_type,
             base_confidence=evidence_contract.confidence_cap,
         )
+        intervention = _teaching_intervention_of(block)
         if evidence is not None:
+            from lyo_app.teaching_runtime.models import TeachingSurface
+            from lyo_app.teaching_runtime.service import record_policy_outcome
+
+            record_policy_outcome(
+                surface=TeachingSurface.CHAT,
+                intervention=intervention,
+                evidence_type=evidence["kind"],
+                succeeded=correct,
+            )
             await log_learning_event(
                 db,
                 LearningEventCreate(
@@ -929,6 +969,11 @@ async def check_lyo2_answer(
                     hints_used=1 if request.hint_used else 0,
                     misconception=misconception,
                     source_surface=_surface_of(block),
+                    metadata_json=(
+                        {"teaching_intervention": intervention}
+                        if intervention
+                        else None
+                    ),
                 ),
             )
     except Exception as e:
@@ -1572,12 +1617,19 @@ async def stream_lyo2_chat(
                     TeachingAction.GUIDE,
                 }:
                     _force_lesson_mode = "teach"
+                from lyo_app.teaching_runtime.service import (
+                    bounded_intervention_metadata,
+                )
+
                 lesson_blocks, lesson = await _try_compose_lesson(
                     db,
                     authenticated_user_id,
                     request.text,
                     force_mode=_force_lesson_mode,
                     target_evidence_type=teaching_decision.target_evidence_type,
+                    teaching_intervention=bounded_intervention_metadata(
+                        teaching_decision
+                    ),
                 )
                 if lesson is not None:
                     async for event in _emit_composed_lesson(
