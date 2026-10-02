@@ -8,7 +8,7 @@ The iOS client decodes these directly via SmartBlock.swift.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -102,6 +102,26 @@ class MasteryMapBlockContent(BaseModel):
     nodes: List[MasteryNode]
 
 
+class EvidenceContract(BaseModel):
+    """What a block is allowed to prove about the learner.
+
+    Stored with the server-authored block, not supplied by the client. The
+    grading endpoint reads this contract back from persistence, so a device
+    cannot promote a recognition question into application or transfer
+    evidence.
+    """
+
+    version: int = 1
+    target_evidence_type: Literal[
+        "exposure", "recognition", "explanation",
+        "application", "transfer", "retention",
+    ]
+    grading: Literal["server", "none"]
+    award_condition: Literal["correct", "interaction", "none"]
+    wrong_evidence_type: Literal["exposure"] = "exposure"
+    confidence_cap: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
 # ---------------------------------------------------------------------------
 # SmartBlock (top-level)
 # ---------------------------------------------------------------------------
@@ -129,8 +149,31 @@ class SmartBlock(BaseModel):
         return cls(type=SmartBlockType.code, subtype="snippet", content=CodeBlockContent(code=code, language=language, **kwargs).model_dump())
 
     @classmethod
-    def quiz(cls, question: str, options: List[QuizOption], correct_index: int, **kwargs) -> "SmartBlock":
-        return cls(type=SmartBlockType.quiz, subtype="mcq", content=QuizBlockContent(question=question, options=options, correct_index=correct_index, **kwargs).model_dump())
+    def quiz(
+        cls,
+        question: str,
+        options: List[QuizOption],
+        correct_index: int,
+        *,
+        evidence_contract: Optional[EvidenceContract] = None,
+        **kwargs,
+    ) -> "SmartBlock":
+        metadata = (
+            {"evidence_contract": evidence_contract.model_dump(mode="json")}
+            if evidence_contract is not None
+            else None
+        )
+        return cls(
+            type=SmartBlockType.quiz,
+            subtype="mcq",
+            content=QuizBlockContent(
+                question=question,
+                options=options,
+                correct_index=correct_index,
+                **kwargs,
+            ).model_dump(),
+            metadata=metadata,
+        )
 
     @classmethod
     def flashcard(cls, front: str, back: str, **kwargs) -> "SmartBlock":
@@ -161,7 +204,15 @@ class SmartBlock(BaseModel):
             type=SmartBlockType.interactive,
             subtype="explorable",
             content={"kind": kind, "prompt": prompt, "points": points},
-            metadata={"concept_id": concept_id} if concept_id else None,
+            metadata={
+                **({"concept_id": concept_id} if concept_id else {}),
+                "evidence_contract": EvidenceContract(
+                    target_evidence_type="exposure",
+                    grading="none",
+                    award_condition="interaction",
+                    confidence_cap=0.0,
+                ).model_dump(mode="json"),
+            },
         )
 
     @classmethod
