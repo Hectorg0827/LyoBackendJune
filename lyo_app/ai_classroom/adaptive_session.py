@@ -106,6 +106,10 @@ class AdaptiveSession:
                 identity_required=self.skill_resolver is not None,
                 remaining_units=list(range(1, len(plan.units))),
                 challenge_requested=challenge,
+                review_is_due=bool(
+                    context.classroom_mode.value == "review"
+                    and context.review_concept_id
+                ),
                 phase="independent" if challenge else "diagnose",
                 next_move="independent" if challenge else "diagnose",
             )
@@ -919,6 +923,14 @@ class AdaptiveSession:
 
     def record_practice(self, context, state, pending, result, data):
         evidence_type = None if pending.task.response_format == "choice" else (
+            "retrieval" if (
+                state.review_is_due
+                and state.mode == "review"
+                and pending.phase == "independent"
+                and pending.task.kind == "apply"
+                and not pending.assisted
+                and not pending.extra_help_used
+            ) else
             "transfer" if pending.phase == "transfer" and not pending.assisted
             and not pending.extra_help_used else
             "retrieval" if pending.phase == "interleave" and state.review_is_due
@@ -1016,6 +1028,12 @@ class AdaptiveSession:
                 state.independent_application = True
                 state.completed = sorted(set([*state.completed, state.unit_index]))
                 state.skipped = [i for i in state.skipped if i != state.unit_index]
+                # A due review is itself the delayed retrieval check. Once
+                # the learner produces a correct open application without
+                # help, asking a second transfer question would turn a
+                # retrieval nudge into a mini-exam and add no stronger claim.
+                if state.mode == "review" and state.review_is_due:
+                    return True
                 state.phase = "transfer"
                 return False
             state.phase = "faded" if target in state.guided_targets else "guided"
@@ -1143,8 +1161,12 @@ class AdaptiveSession:
             "transfer": "transfer",
             "interleave": "retention",
         }
-        scene.metadata.target_evidence_type = evidence_targets.get(
-            (state.next_move or state.phase or "").lower()
+        scene.metadata.target_evidence_type = (
+            "retention"
+            if state.mode == "review"
+            and state.review_is_due
+            and (state.next_move or state.phase or "").lower() == "independent"
+            else evidence_targets.get((state.next_move or state.phase or "").lower())
         )
         if state.record_scope == "unit":
             # Scene start travels on every reconnect. List the skills already
