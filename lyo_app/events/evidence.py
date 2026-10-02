@@ -244,6 +244,7 @@ def evidence_from_graded_answer(
     hints_used: int = 0,
     hint_level: Optional[str] = None,
     evidence_type: Optional[str] = None,
+    base_confidence: float = 1.0,
 ) -> Optional[Dict]:
     """Turn a server-graded answer into one piece of evidence.
 
@@ -281,7 +282,7 @@ def evidence_from_graded_answer(
     return {
         "kind": kind,
         "confidence": confidence_after_hints(
-            1.0, hint_level=hint_level, hints_used=hints_used
+            base_confidence, hint_level=hint_level, hints_used=hints_used
         ),
         "misconception": misconception,
     }
