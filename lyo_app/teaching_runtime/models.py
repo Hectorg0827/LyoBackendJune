@@ -41,6 +41,13 @@ class TeachingAction(str, Enum):
     PAUSE = "pause"
 
 
+class PrerequisiteGap(StrictModel):
+    concept_id: str
+    display_name: Optional[str] = None
+    evidence_state: str = "NOT_SEEN"
+    strongest_rung: Optional[str] = None
+
+
 class LearnerSnapshot(StrictModel):
     concept_id: Optional[str] = None
     mastery_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
@@ -52,6 +59,7 @@ class LearnerSnapshot(StrictModel):
     hints_used: int = Field(default=0, ge=0)
     uncertainty: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     last_seen: Optional[str] = None
+    prerequisite_gaps: List[PrerequisiteGap] = Field(default_factory=list)
 
 
 class SessionSnapshot(StrictModel):
