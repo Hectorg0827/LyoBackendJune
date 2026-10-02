@@ -11,7 +11,12 @@ from lyo_app.teaching_runtime.policy import (
     TeachingPolicy,
     canonical_action_for_classroom_move,
 )
-from lyo_app.teaching_runtime.service import session_snapshot
+from lyo_app.teaching_runtime.service import (
+    bounded_intervention_metadata,
+    record_policy_outcome,
+    session_snapshot,
+    teaching_policy_outcomes,
+)
 
 
 def context(
@@ -229,3 +234,47 @@ def test_classroom_state_maps_to_same_action_vocabulary():
     assert canonical_action_for_classroom_move("guided") is TeachingAction.GUIDE
     assert canonical_action_for_classroom_move("reteach") is TeachingAction.REMEDIATE
     assert canonical_action_for_classroom_move("transfer") is TeachingAction.CHECK_TRANSFER
+
+
+def test_intervention_metadata_contains_only_bounded_policy_identity():
+    decision = TeachingPolicy.decide(
+        context(
+            mastery=0.5,
+            evidence_state="EXPLAINED",
+            strongest="explanation",
+            attempts=3,
+        )
+    )
+    metadata = bounded_intervention_metadata(decision)
+    assert set(metadata) == {
+        "action",
+        "reason_code",
+        "target_evidence_type",
+        "preferred_instrument",
+        "model_tier",
+        "policy_version",
+    }
+    assert "teach me fractions" not in str(metadata)
+
+
+def test_policy_outcome_counter_uses_measured_result_not_learner_text():
+    intervention = {
+        "action": "guide",
+        "reason_code": "developing_mastery",
+        "policy_version": POLICY_VERSION,
+    }
+    before = teaching_policy_outcomes.labels(
+        "chat", "guide", "developing_mastery",
+        "application", "correct", POLICY_VERSION,
+    )._value.get()
+    record_policy_outcome(
+        surface=TeachingSurface.CHAT,
+        intervention=intervention,
+        evidence_type="application",
+        succeeded=True,
+    )
+    after = teaching_policy_outcomes.labels(
+        "chat", "guide", "developing_mastery",
+        "application", "correct", POLICY_VERSION,
+    )._value.get()
+    assert after == before + 1
