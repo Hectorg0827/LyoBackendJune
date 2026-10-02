@@ -44,7 +44,11 @@ async def test_a_live_answer_reaches_the_shared_event_stream_at_the_right_rung(c
     assert event.source_surface == "classroom" and event.evidence_type == rung
     assert event.measurable_outcome == 1.0
     assert not event.skill_ids_json  # DKT is updated once directly, not again by the processor.
-    assert event.metadata_json == {"classroom_checkpoint_id": component_id}
+    assert event.metadata_json["classroom_checkpoint_id"] == component_id
+    intervention = event.metadata_json["teaching_intervention"]
+    assert intervention["action"] in {"diagnose", "guide", "check_application", "check_transfer"}
+    assert intervention["policy_version"] == "learning-os-v1"
+    assert "response" not in intervention
     assert "criteria" not in str(event.model_dump())
     assert "example_answer" not in str(event.model_dump())
     dkt.assert_awaited_once()
@@ -136,3 +140,30 @@ async def test_existing_event_vocabulary_is_preserved(capture, wire, stored):
     await instance._log_classroom_evidence(user_id="42", concept_id="fractions",
         correct=True, hints_used=0, evidence_type=wire)
     assert log.await_args.args[1].evidence_type == stored
+
+
+@pytest.mark.asyncio
+async def test_classroom_evidence_preserves_bounded_intervention_identity(capture):
+    log, _ = capture
+    instance = engine()
+    intervention = {
+        "action": "check_transfer",
+        "reason_code": "classroom_transfer",
+        "target_evidence_type": "transfer",
+        "model_tier": "teaching",
+        "policy_version": "learning-os-v1",
+    }
+    await instance._log_classroom_evidence(
+        user_id="42",
+        concept_id="fractions",
+        correct=True,
+        hints_used=0,
+        evidence_type="transfer",
+        teaching_intervention=intervention,
+        event_id="transfer-1",
+    )
+    event = log.await_args.args[1]
+    assert event.metadata_json == {
+        "classroom_checkpoint_id": "transfer-1",
+        "teaching_intervention": intervention,
+    }
