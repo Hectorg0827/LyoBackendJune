@@ -122,6 +122,23 @@ class TeachingPolicy:
                 ],
             )
 
+        if learner.prerequisite_gaps:
+            gap = learner.prerequisite_gaps[0]
+            gap_name = gap.display_name or gap.concept_id
+            return _decision(
+                TeachingAction.REMEDIATE,
+                "prerequisite_gap",
+                interaction=True,
+                words=95,
+                instrument="prerequisite_bridge",
+                evidence="application",
+                directives=[
+                    f"Bridge the missing prerequisite '{gap_name}' before pushing the target concept.",
+                    "Keep the bridge narrow: teach only the prerequisite step needed for the current goal.",
+                    "End with one application that verifies the prerequisite can now support the target.",
+                ],
+            )
+
         # Anti-quiz-loop and anti-monologue rules. These are policy constraints,
         # not prompt preferences, so callers can inspect and test them.
         if session.consecutive_checks >= 2:
