@@ -29,6 +29,31 @@ class AdaptiveSession:
         self.skill_resolver = skill_resolver
 
     @staticmethod
+    def teaching_intervention_for_phase(phase: str) -> dict[str, str]:
+        """Bounded attribution copied onto the evidence event.
+
+        Classroom's own state machine remains authoritative; this only maps
+        the phase onto the shared Learning OS vocabulary for measurement.
+        """
+        action = canonical_action_for_classroom_move(phase)
+        targets = {
+            "diagnose": "recognition",
+            "guided": "application",
+            "faded": "application",
+            "independent": "application",
+            "transfer": "transfer",
+            "interleave": "retention",
+            "closing_win": "application",
+        }
+        return {
+            "action": action.value,
+            "reason_code": f"classroom_{phase}",
+            "target_evidence_type": targets.get(phase, ""),
+            "model_tier": "teaching",
+            "policy_version": POLICY_VERSION,
+        }
+
+    @staticmethod
     def record_concept(context, state: GuidedState) -> str | None:
         """Keep the question, evidence and review on the same saved skill ID."""
         if state.identity_required:
@@ -655,6 +680,7 @@ class AdaptiveSession:
                 correct=True, evidence_type="explanation",
                 hints_used=0, hint_level=None, misconception=None,
                 response_time_ms=response_time_ms,
+                teaching_intervention=self.teaching_intervention_for_phase(pending.phase),
             ))
             state.last_feedback = (result.feedback + " " + self.copy(
                 context,
@@ -718,6 +744,7 @@ class AdaptiveSession:
                 hints_used=pending.hints_used, hint_level=pending.hint_level,
                 misconception=result.misconception if result.verdict == "incorrect" else None,
                 response_time_ms=data.get("response_time_ms"),
+                teaching_intervention=self.teaching_intervention_for_phase(pending.phase),
             )]
         if state.unit_index not in state.skipped and state.unit_index not in state.completed:
             state.skipped.append(state.unit_index)
@@ -955,6 +982,7 @@ class AdaptiveSession:
             hints_used=pending.hints_used, hint_level=pending.hint_level,
             misconception=result.misconception if result.verdict == "incorrect" else None,
             response_time_ms=data.get("response_time_ms"),
+            teaching_intervention=self.teaching_intervention_for_phase(pending.phase),
         ))
 
     def start_interleave(self, context, state) -> bool:
