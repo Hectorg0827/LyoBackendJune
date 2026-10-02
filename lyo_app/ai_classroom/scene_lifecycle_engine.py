@@ -216,6 +216,9 @@ class ContextSnapshot(BaseModel):
     source_attributions: List[str] = Field(default_factory=list)
     review_due_items: List[str] = Field(default_factory=list)
     scheduled_due_items: List[str] = Field(default_factory=list)
+    # Set only when the client names a concept that the canonical spaced-
+    # repetition schedule says is actually due for this learner.
+    review_concept_id: Optional[str] = None
 
     # Current learner input + durable personalization context
     learner_signal: Optional[str] = None
@@ -507,6 +510,18 @@ class ContextAssembler:
         context.review_due_items = list(dict.fromkeys(
             item for item in [*context.review_due_items, *context.scheduled_due_items] if item
         ))
+        requested_review_concept = (
+            action_data.get("review_concept_id")
+            or progress.get("review_concept_id")
+        )
+        if requested_review_concept:
+            progress["review_concept_id"] = str(requested_review_concept)
+        context.review_concept_id = (
+            str(requested_review_concept)
+            if context.classroom_mode == ClassroomMode.REVIEW
+            and str(requested_review_concept) in set(context.scheduled_due_items)
+            else None
+        )
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)
@@ -878,13 +893,14 @@ class ContextAssembler:
         )
 
     async def _get_due_review_items(self, user_id: str) -> List[str]:
-        """Return scheduled retrieval items without blocking guest sessions."""
+        """Return canonical skill IDs that are genuinely due for retrieval."""
         try:
             user_id_int = int(user_id)
             from lyo_app.personalization.service import PersonalizationEngine
-            return await PersonalizationEngine()._get_due_repetitions(
-                self.db, user_id_int
+            due = await PersonalizationEngine().get_due_reviews(
+                self.db, user_id_int, limit=10
             )
+            return [str(item["skill_id"]) for item in due if item.get("skill_id")]
         except (ValueError, TypeError):
             return []
         except Exception as exc:
