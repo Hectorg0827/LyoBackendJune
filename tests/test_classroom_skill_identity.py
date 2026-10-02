@@ -80,6 +80,20 @@ async def test_due_review_reuses_the_exact_existing_concept_id(db):
 
 
 @pytest.mark.asyncio
+async def test_due_review_preserves_legacy_slug_identity_without_minting_a_concept(db):
+    review_ctx = context(
+        topic="Linear equations",
+        classroom_mode="review",
+        review_concept_id="linear_equations",
+    )
+    reviewed = await resolve_skill_plan(db, review_ctx, plan("Fresh retrieval check"))
+
+    assert reviewed.unit_ids == ["linear_equations"]
+    assert reviewed.topic_id == "linear_equations"
+    assert (await db.execute(select(Concept))).scalars().all() == []
+
+
+@pytest.mark.asyncio
 async def test_same_display_title_in_two_topics_never_shares_a_skill_id(db):
     unit = plan("Compare equal shares")
     fractions = await resolve_skill_plan(db, context(topic="Fractions"), unit)
