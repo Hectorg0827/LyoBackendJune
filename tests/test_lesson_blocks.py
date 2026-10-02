@@ -124,6 +124,24 @@ def test_unsupported_quiz_contract_fails_safe_to_recognition():
     assert contract.target_evidence_type == "application"
 
 
+def test_check_block_carries_bounded_teaching_intervention():
+    intervention = {
+        "action": "guide",
+        "reason_code": "developing_mastery",
+        "target_evidence_type": "application",
+        "preferred_instrument": "guided_attempt",
+        "model_tier": "teaching",
+        "policy_version": "learning-os-v1",
+    }
+    blocks = _lesson_to_smart_blocks(
+        _lesson(),
+        target_evidence_type="recognition",
+        teaching_intervention=intervention,
+    )
+    check = [b for b in blocks if b["type"] == "quiz"][0]
+    assert check["metadata"]["teaching_intervention"] == intervention
+
+
 def test_check_block_preserves_distractor_reveals_and_bailout():
     blocks = _lesson_to_smart_blocks(_lesson())
     content = [b for b in blocks if b["type"] == "quiz"][0]["content"]
