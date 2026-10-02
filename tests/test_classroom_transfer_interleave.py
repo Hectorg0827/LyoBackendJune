@@ -85,6 +85,32 @@ async def test_fresh_due_review_files_retention_and_ends_after_one_success():
 
 
 @pytest.mark.asyncio
+async def test_due_review_success_does_not_continue_into_extra_planner_units():
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = lambda _ctx: __import__(
+        "tests.adaptive_fixtures", fromlist=["plan"]
+    ).plan(2)
+    ctx = context(
+        classroom_mode="review",
+        review_concept_id="fraction_skill_1",
+        scheduled_due_items=["fraction_skill_1"],
+        target_duration_minutes=16,
+    )
+    progress = {}
+    runner = AdaptiveSession(teacher)
+
+    await runner.run(ctx, progress, action(welcome=True))
+    assert len(current(progress).plan.units) == 2
+    await answer(runner, progress, ctx)
+    state = current(progress)
+
+    assert state.path_done
+    assert state.remaining_units == []
+    assert state.outbox[-1]["evidence_type"] == "retrieval"
+    assert state.review_outbox[-1]["passed"] is True
+
+
+@pytest.mark.asyncio
 async def test_transfer_is_earned_only_after_open_correct_answer_and_does_not_gate_completion():
     teacher, runner, progress, ctx = ScriptedTeacher(), None, {}, context(target_duration_minutes=8)
     runner = AdaptiveSession(teacher)
