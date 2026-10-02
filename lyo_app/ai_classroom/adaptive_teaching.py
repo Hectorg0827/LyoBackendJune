@@ -996,6 +996,47 @@ class AdaptiveTeacher:
 
         task.add_done_callback(finished)
 
+    def schedule_next_unit_prefetch(
+        self, context, state: GuidedState, move: str
+    ) -> None:
+        """Warm one validated unit ahead during late-stage learner work.
+
+        Only independent/transfer work gets lookahead: by then the current unit
+        is stable, the learner has meaningful dwell time, and the next unit is
+        known. At most one speculative provider task runs at once, so lookahead
+        never creates a generation fan-out. If the learner answers before it
+        finishes, the existing evaluation path may cancel it and live work wins.
+        """
+        if (
+            not self.fast_start
+            or self.package_cache is None
+            or move not in {"independent", "transfer"}
+            or self._package_prefetch_tasks
+        ):
+            return
+        next_index = state.unit_index + 1
+        if next_index >= len(state.plan.units):
+            return
+        if not state.identity_required or next_index >= len(state.skill_ids):
+            return
+
+        from lyo_app.ai_classroom.unit_package_cache import package_key
+
+        next_unit = state.plan.units[next_index]
+        key = package_key(context, next_unit, state.skill_ids[next_index])
+        if key is None:
+            return
+        if key.cache_key in self._prefetched_packages or key.cache_key in self._package_prefetch_tasks:
+            return
+
+        task = asyncio.create_task(self._prefetch_package(context, next_unit, key))
+        self._package_prefetch_tasks[key.cache_key] = task
+
+        def finished(_task):
+            self._package_prefetch_tasks.pop(key.cache_key, None)
+
+        task.add_done_callback(finished)
+
     async def _prefetch_package(self, context, unit: LearningUnit, key) -> None:
         """Generate only; database persistence remains on the serial request path."""
         try:
@@ -1122,7 +1163,9 @@ class AdaptiveTeacher:
         state.strategy_history = [*state.strategy_history, strategy][-12:]
         packaged = await self.cached_turn(context, state, move, unit, target_index)
         if packaged is not None:
-            return await hydrate_turn_visuals(packaged)
+            hydrated = await hydrate_turn_visuals(packaged)
+            self.schedule_next_unit_prefetch(context, state, move)
+            return hydrated
         payload = {
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
@@ -1250,6 +1293,7 @@ class AdaptiveTeacher:
                 # passed validation—spend spare listening/answering time
                 # preparing the rest of the unit.
                 self.schedule_package_prefetch(context, state, unit)
+                self.schedule_next_unit_prefetch(context, state, move)
                 return turn
             except Exception as exc:
                 logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
