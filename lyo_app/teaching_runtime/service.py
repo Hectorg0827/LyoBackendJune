@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import (
     LearnerSnapshot,
+    PrerequisiteGap,
     SessionSnapshot,
     TeachingAction,
     TeachingContext,
@@ -114,6 +115,7 @@ async def load_learner_snapshot(
 
     # Evidence first: unlike a single score it tells us what the learner has
     # actually demonstrated (recognition/application/transfer/retention).
+    record = None
     try:
         from lyo_app.events.concept_record import learner_record
 
@@ -128,6 +130,56 @@ async def load_learner_snapshot(
                 snapshot.last_seen = match.last_seen
     except Exception as exc:
         logger.warning("Teaching runtime could not read evidence record: %s", type(exc).__name__)
+
+    # Persistent classroom concepts carry explicit prerequisite edges. A weak
+    # prerequisite is a different pedagogical problem from weakness on the
+    # target concept itself, so surface it separately instead of collapsing
+    # both into one mastery score. Legacy slug concepts simply have no graph
+    # edges and skip this branch.
+    try:
+        from lyo_app.events.mastery_projection import is_concept_graph_id
+
+        if is_concept_graph_id(concept_id):
+            from lyo_app.ai_classroom.models import Concept, ConceptPrerequisite
+
+            prereq_rows = (
+                await db.execute(
+                    select(
+                        ConceptPrerequisite.prerequisite_id,
+                        Concept.display_name,
+                        Concept.name,
+                    )
+                    .join(
+                        Concept,
+                        Concept.id == ConceptPrerequisite.prerequisite_id,
+                    )
+                    .where(ConceptPrerequisite.concept_id == concept_id)
+                )
+            ).all()
+            evidence_by_id = {
+                item.concept_id: item
+                for item in (record.concepts if record and not record.unavailable else [])
+            }
+            demonstrated = {"application", "transfer", "retention"}
+            gaps = []
+            for prereq_id, display_name, name in prereq_rows:
+                prior = evidence_by_id.get(prereq_id)
+                strongest = prior.best_rung if prior is not None else None
+                if strongest not in demonstrated:
+                    gaps.append(
+                        PrerequisiteGap(
+                            concept_id=prereq_id,
+                            display_name=display_name or name,
+                            evidence_state=prior.state if prior is not None else "NOT_SEEN",
+                            strongest_rung=strongest,
+                        )
+                    )
+            snapshot.prerequisite_gaps = gaps
+    except Exception as exc:
+        logger.warning(
+            "Teaching runtime could not read prerequisite graph: %s",
+            type(exc).__name__,
+        )
 
     try:
         from lyo_app.personalization.models import LearnerMastery
