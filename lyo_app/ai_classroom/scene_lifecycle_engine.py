@@ -1989,6 +1989,7 @@ class SceneLifecycleEngine:
         hint_level: Optional[str] = None,
         evidence_type: Optional[str] = None,
         misconception: Optional[str] = None,
+        teaching_intervention: Optional[dict[str, Any]] = None,
         event_id: Optional[str] = None,
     ) -> bool:
         """Record what the learner just demonstrated on the shared event stream.
@@ -2033,6 +2034,8 @@ class SceneLifecycleEngine:
             from lyo_app.events.models import EventType
             from lyo_app.events.processor import log_learning_event
             from lyo_app.events.schemas import LearningEventCreate
+            from lyo_app.teaching_runtime.models import TeachingSurface
+            from lyo_app.teaching_runtime.service import record_policy_outcome
 
             evidence = evidence_from_graded_answer(
                 correct=correct,
@@ -2056,8 +2059,25 @@ class SceneLifecycleEngine:
                     hints_used=hints_used,
                     misconception=misconception,
                     source_surface="classroom",
-                    metadata_json={"classroom_checkpoint_id": event_id} if event_id else None,
+                    metadata_json={
+                        **(
+                            {"classroom_checkpoint_id": event_id}
+                            if event_id
+                            else {}
+                        ),
+                        **(
+                            {"teaching_intervention": teaching_intervention}
+                            if teaching_intervention
+                            else {}
+                        ),
+                    } or None,
                 ),
+            )
+            record_policy_outcome(
+                surface=TeachingSurface.CLASSROOM,
+                intervention=teaching_intervention,
+                evidence_type=evidence["kind"],
+                succeeded=correct,
             )
             return True
         except Exception as exc:
