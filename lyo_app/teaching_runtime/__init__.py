@@ -7,6 +7,7 @@ mastery, completion, or session state.
 
 from .models import (
     LearnerSnapshot,
+    PrerequisiteGap,
     SessionSnapshot,
     TeachingAction,
     TeachingContext,
@@ -18,6 +19,7 @@ from .service import decide_for_chat, record_policy_decision
 
 __all__ = [
     "LearnerSnapshot",
+    "PrerequisiteGap",
     "SessionSnapshot",
     "TeachingAction",
     "TeachingContext",
