@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any, Iterable, Mapping, Optional
 
+from prometheus_client import Counter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,17 @@ from .models import (
 from .policy import TeachingPolicy
 
 logger = logging.getLogger(__name__)
+
+teaching_policy_decisions = Counter(
+    "lyo_teaching_policy_decisions_total",
+    "Deterministic teaching-policy decisions by bounded runtime attributes",
+    ["surface", "action", "reason", "policy_version"],
+)
+teaching_policy_outcomes = Counter(
+    "lyo_teaching_policy_outcomes_total",
+    "Measured learner outcomes attributable to a teaching-policy intervention",
+    ["surface", "action", "reason", "evidence_type", "outcome", "policy_version"],
+)
 
 _QUESTION_RE = re.compile(r"[?？]\s*$")
 _DIRECT_RE = re.compile(
@@ -240,6 +252,49 @@ async def decide_for_chat(
     return TeachingPolicy.decide(context)
 
 
+def bounded_intervention_metadata(
+    decision: TeachingDecision,
+) -> dict[str, Optional[str]]:
+    """Serializable, low-cardinality intervention identity.
+
+    No learner text, concept title, prompt, or free-form directive enters this
+    object. It is safe to persist on an assessment block and later copy onto
+    the resulting evidence event.
+    """
+    return {
+        "action": decision.action.value,
+        "reason_code": decision.reason_code,
+        "target_evidence_type": decision.target_evidence_type,
+        "preferred_instrument": decision.preferred_instrument,
+        "model_tier": decision.model_tier,
+        "policy_version": decision.policy_version,
+    }
+
+
+def record_policy_outcome(
+    *,
+    surface: TeachingSurface,
+    intervention: Optional[Mapping[str, Any]],
+    evidence_type: Optional[str],
+    succeeded: bool,
+) -> None:
+    """Prometheus projection for intervention -> measured learner outcome."""
+    if not isinstance(intervention, Mapping):
+        return
+    action = str(intervention.get("action") or "unknown")[:48]
+    reason = str(intervention.get("reason_code") or "unknown")[:80]
+    version = str(intervention.get("policy_version") or "unknown")[:48]
+    evidence = str(evidence_type or "none")[:32]
+    teaching_policy_outcomes.labels(
+        surface.value,
+        action,
+        reason,
+        evidence,
+        "correct" if succeeded else "incorrect",
+        version,
+    ).inc()
+
+
 async def record_policy_decision(
     db: Optional[AsyncSession],
     *,
@@ -255,6 +310,13 @@ async def record_policy_decision(
     event records what Lyo chose to do immediately before that result, creating
     the intervention -> outcome trail needed for later policy evaluation.
     """
+    teaching_policy_decisions.labels(
+        surface.value,
+        decision.action.value,
+        decision.reason_code,
+        decision.policy_version,
+    ).inc()
+
     if db is None or user_id in (None, "", 0, "0"):
         return
     try:
@@ -276,12 +338,7 @@ async def record_policy_decision(
                 metadata_json={
                     "event_kind": "teaching_policy_decision",
                     "trace_id": str(trace_id),
-                    "action": decision.action.value,
-                    "reason_code": decision.reason_code,
-                    "target_evidence_type": decision.target_evidence_type,
-                    "preferred_instrument": decision.preferred_instrument,
-                    "model_tier": decision.model_tier,
-                    "policy_version": decision.policy_version,
+                    **bounded_intervention_metadata(decision),
                 },
             ),
         )
