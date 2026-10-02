@@ -127,6 +127,20 @@ async def resolve_skill_plan(db: AsyncSession, context, plan) -> SkillPlanIdenti
     Edges inform teaching and future sequencing. They never prove a learner
     passed the prerequisite and never block completion of a harder unit.
     """
+    # Review entry carries the canonical concept ID. It is populated by
+    # ContextAssembler only after checking the learner's real due schedule,
+    # so reusing it cannot be used by a client to mint retention on an
+    # arbitrary concept. One due concept is one retrieval unit.
+    review_concept_id = getattr(context, "review_concept_id", None)
+    mode = getattr(getattr(context, "classroom_mode", None), "value", None)
+    if mode == "review" and review_concept_id:
+        if len(plan.units) != 1:
+            raise ValueError("A due review must target exactly one concept")
+        reviewed = await db.get(Concept, str(review_concept_id))
+        if reviewed is None:
+            raise ValueError("Due review concept no longer exists")
+        return SkillPlanIdentity(unit_ids=[reviewed.id], topic_id=reviewed.id)
+
     scope = identity_scope(context)
     if scope is None:
         return SkillPlanIdentity(unit_ids=[], topic_id=None)
