@@ -120,6 +120,32 @@ def test_messages_without_blocks_are_skipped_safely():
     assert found is None
 
 
+def test_legacy_check_without_contract_defaults_to_recognition():
+    from lyo_app.api.v1.stream_lyo2 import _check_evidence_contract
+
+    block = _check_block()
+    block["metadata"].pop("evidence_contract", None)
+    contract = _check_evidence_contract(block)
+    assert contract.target_evidence_type == "recognition"
+    assert contract.grading == "server"
+
+
+def test_malformed_contract_cannot_award_retention():
+    from lyo_app.api.v1.stream_lyo2 import _check_evidence_contract
+
+    block = _check_block()
+    block["metadata"]["evidence_contract"] = {
+        "version": 1,
+        "target_evidence_type": "retention",
+        "grading": "server",
+        "award_condition": "correct",
+        "wrong_evidence_type": "exposure",
+        "confidence_cap": 1.0,
+    }
+    contract = _check_evidence_contract(block)
+    assert contract.target_evidence_type == "recognition"
+
+
 # --- verdict persistence ----------------------------------------------------
 
 def test_locate_check_block_returns_the_owning_message():
