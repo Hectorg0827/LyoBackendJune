@@ -12,7 +12,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField
 from tests.adaptive_fixtures import (
-    ScriptedTeacher, action, advance_to_task, context, evaluation, tap_probe,
+    ScriptedTeacher, action, advance_to_task, context, evaluation, plan as fixture_plan, tap_probe,
 )
 
 
@@ -54,9 +54,7 @@ def test_transfer_and_revisit_contract_demand_an_open_application():
 @pytest.mark.asyncio
 async def test_fresh_due_review_files_retention_and_ends_after_one_success():
     teacher = ScriptedTeacher()
-    teacher.plan.side_effect = lambda _ctx: __import__(
-        "tests.adaptive_fixtures", fromlist=["plan"]
-    ).plan(1)
+    teacher.plan.side_effect = lambda _ctx: fixture_plan(1)
     ctx = context(
         classroom_mode="review",
         review_concept_id="fraction_skill_1",
