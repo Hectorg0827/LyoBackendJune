@@ -182,3 +182,42 @@ async def test_fast_start_warms_the_validated_unit_only_after_the_immediate_move
     assert teacher.build_package.await_count == 1
     assert teacher._prefetched_packages[key.cache_key] is warmed_package
     assert key.cache_key not in teacher._fast_cache_misses
+
+
+@pytest.mark.asyncio
+async def test_late_stage_practice_warms_exactly_one_next_unit():
+    ctx = context()
+    state = state_for_class()
+    state.skill_ids = [str(uuid4()), str(uuid4())]
+    state.identity_required = True
+    teacher = AdaptiveTeacher(package_cache=object(), fast_start=True)
+
+    next_unit = state.plan.units[1]
+    next_key = package_key(ctx, next_unit, state.skill_ids[1])
+    assert next_key is not None
+
+    warmed = object()
+    teacher.build_package = AsyncMock(return_value=warmed)
+    teacher.schedule_next_unit_prefetch(ctx, state, "independent")
+
+    assert list(teacher._package_prefetch_tasks) == [next_key.cache_key]
+    await teacher._package_prefetch_tasks[next_key.cache_key]
+    assert teacher.build_package.await_count == 1
+    assert teacher.build_package.await_args.args[1] == next_unit
+    assert teacher._prefetched_packages[next_key.cache_key] is warmed
+
+
+@pytest.mark.asyncio
+async def test_early_practice_does_not_spend_next_unit_generation():
+    ctx = context()
+    state = state_for_class()
+    state.skill_ids = [str(uuid4()), str(uuid4())]
+    state.identity_required = True
+    teacher = AdaptiveTeacher(package_cache=object(), fast_start=True)
+    teacher.build_package = AsyncMock()
+
+    teacher.schedule_next_unit_prefetch(ctx, state, "guided")
+    await __import__("asyncio").sleep(0)
+
+    teacher.build_package.assert_not_awaited()
+    assert teacher._package_prefetch_tasks == {}
