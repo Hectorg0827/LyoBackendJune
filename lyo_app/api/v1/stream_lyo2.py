@@ -1482,7 +1482,11 @@ async def stream_lyo2_chat(
             # must never be hijacked by an unfinished exam elsewhere.
             if authenticated_user_id and not cancelled_prep and decision.intent == Intent.TEST_PREP:
                 from lyo_app.study_plans.chat import process_chat_turn
-                text = await process_chat_turn(request, current_user, db)
+                # The authenticated intake/plan path returns before the generic
+                # Test Prep block below. Bind attribution here so intake and
+                # generate_plan model calls join the learner's Test Prep session.
+                with _model_usage_scope("teaching", "test_prep"):
+                    text = await process_chat_turn(request, current_user, db)
                 if persistent_conversation:
                     await conversation_store.add_message(db, persistent_conversation.id,
                         role="assistant", content=text, mode_used=ChatMode.TEST_PREP.value,
