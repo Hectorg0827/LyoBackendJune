@@ -171,6 +171,88 @@ def choose_option(quiz: dict[str, Any], want_correct: bool) -> tuple[Optional[st
     return None, "missing"
 
 
+def choose_fraction_option(
+    quiz: dict[str, Any], want_correct: bool
+) -> tuple[Optional[str], str]:
+    """Choose from a hidden-key fractions card using learner-visible math only."""
+    question = str(quiz.get("question") or "")
+    lowered = question.casefold()
+    options = [o for o in quiz.get("options", []) if isinstance(o, dict)]
+    if not options:
+        return None, "missing"
+
+    pairs = [
+        (int(a), int(b))
+        for a, b in re.findall(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)", question)
+        if int(b) != 0
+    ]
+
+    expected: set[str] = set()
+    if len(pairs) >= 2:
+        (a, b), (c, d) = pairs[0], pairs[1]
+        left, right = Fraction(a, b), Fraction(c, d)
+        lcd = math.lcm(b, d)
+        if "common denominator" in lowered or "least common denominator" in lowered:
+            expected.add(str(lcd))
+        if (
+            "which fraction" in lowered
+            or "larger fraction" in lowered
+            or "which is larger" in lowered
+            or "compare" in lowered
+        ):
+            if left > right:
+                expected.add(f"{a}/{b}")
+            elif right > left:
+                expected.add(f"{c}/{d}")
+            else:
+                expected.update({"equal", "they are equal", "the fractions are equal"})
+
+    if len(pairs) == 1:
+        a, b = pairs[0]
+        target = re.search(
+            r"(?:denominator|denom(?:inator)?)[^\d]{0,15}(\d+)", lowered
+        )
+        if target:
+            target_den = int(target.group(1))
+            if target_den and target_den % b == 0:
+                expected.add(f"{a * (target_den // b)}/{target_den}")
+
+    def normal(value: str) -> str:
+        return re.sub(r"\s+", "", value.casefold()).strip(" .,:;!?")
+
+    expected_norm = {normal(value) for value in expected}
+    correct_index: Optional[int] = None
+    for index, option in enumerate(options):
+        if normal(str(option.get("label") or "")) in expected_norm:
+            correct_index = index
+            break
+
+    if correct_index is None:
+        return None, "unknown"
+
+    chosen_index = correct_index
+    if not want_correct:
+        chosen_index = next(
+            (index for index in range(len(options)) if index != correct_index),
+            correct_index,
+        )
+        if chosen_index == correct_index:
+            return None, "unknown"
+
+    option_id = options[chosen_index].get("id")
+    return (str(option_id), "computed") if option_id is not None else (None, "missing")
+
+
+def choose_scripted_option(
+    quiz: dict[str, Any], want_correct: bool
+) -> tuple[Optional[str], str]:
+    """Prefer declared practice feedback; otherwise solve learner-visible fractions."""
+    option_id, certainty = choose_option(quiz, want_correct)
+    if option_id is not None and certainty == "declared":
+        return option_id, certainty
+    return choose_fraction_option(quiz, want_correct)
+
+
 def scripted_fraction_response(question: str) -> str:
     """Act as a deterministic learner for the one live fractions baseline.
 
@@ -647,7 +729,7 @@ class LiveLyo:
                     continue
 
                 if quiz is not None and not forced_wrong:
-                    option_id, certainty = choose_option(quiz, want_correct=False)
+                    option_id, certainty = choose_scripted_option(quiz, want_correct=False)
                     if option_id:
                         await send(
                             ws,
@@ -655,16 +737,16 @@ class LiveLyo:
                             quiz,
                             {"selected_option_id": option_id},
                         )
-                        forced_wrong = certainty == "declared"
-                        if certainty != "declared":
+                        forced_wrong = certainty in {"declared", "computed"}
+                        if certainty not in {"declared", "computed"}:
                             report.notes.append(
-                                "First quiz withheld its key; submitted an option but did not claim it was wrong."
+                                "Could not determine a wrong option from learner-visible fraction math."
                             )
                         continue
 
                 if quiz is not None and forced_wrong and not corrected:
-                    option_id, certainty = choose_option(quiz, want_correct=True)
-                    if option_id and certainty == "declared":
+                    option_id, certainty = choose_scripted_option(quiz, want_correct=True)
+                    if option_id and certainty in {"declared", "computed"}:
                         await send(
                             ws,
                             "submit_answer",
@@ -678,8 +760,8 @@ class LiveLyo:
                 # competent learner on any later practice choice whose client
                 # contract explicitly exposes correctness.
                 if quiz is not None and corrected:
-                    option_id, certainty = choose_option(quiz, want_correct=True)
-                    if option_id and certainty == "declared":
+                    option_id, certainty = choose_scripted_option(quiz, want_correct=True)
+                    if option_id and certainty in {"declared", "computed"}:
                         await send(
                             ws,
                             "submit_answer",
@@ -796,7 +878,7 @@ class LiveLyo:
         report.check(
             "wrong_answer_scenario_forced",
             forced_wrong if hint_requested else None,
-            "only true when the live card declared a wrong option to the client",
+            "true when the card declared correctness or the scripted learner computed it from visible fraction math",
         )
         report.check(
             "remediation_observed",
