@@ -146,7 +146,13 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 )
 
         if not media_attachments:
-            historical_media = recent_media_refs(request.conversation_history)
+            from lyo_app.chat.experience import should_reuse_historical_media
+
+            historical_media = (
+                recent_media_refs(request.conversation_history)
+                if should_reuse_historical_media(request.text or "")
+                else []
+            )
             media_attachments = await load_media_attachments(
                 historical_media, missing_ok=True
             )
