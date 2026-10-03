@@ -1647,6 +1647,9 @@ class SceneLifecycleEngine:
         """Deduplicate evidence; only use measured response time for legacy DKT."""
         event_id = evidence.pop("event_id")
         response_time_ms = evidence.pop("response_time_ms", None)
+        response_time_seconds = None
+        if isinstance(response_time_ms, (int, float)) and 0 < response_time_ms < 3_600_000:
+            response_time_seconds = response_time_ms / 1000.0
         try:
             learner_id = int(evidence["user_id"])
         except (TypeError, ValueError):
@@ -1662,7 +1665,11 @@ class SceneLifecycleEngine:
             ).limit(1))
             if prior.scalar_one_or_none() is not None:
                 return True
-            if not await self._log_classroom_evidence(**evidence, event_id=event_id):
+            if not await self._log_classroom_evidence(
+                **evidence,
+                event_id=event_id,
+                response_time_seconds=response_time_seconds,
+            ):
                 return False
             concept_id = self._canonical_concept_id(evidence.get("concept_id"))
             # Missing timing is unknown, not a fictional one-second answer.
@@ -1994,6 +2001,8 @@ class SceneLifecycleEngine:
         misconception: Optional[str] = None,
         teaching_intervention: Optional[dict[str, Any]] = None,
         event_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        response_time_seconds: Optional[float] = None,
     ) -> bool:
         """Record what the learner just demonstrated on the shared event stream.
 
@@ -2066,6 +2075,17 @@ class SceneLifecycleEngine:
                         **(
                             {"classroom_checkpoint_id": event_id}
                             if event_id
+                            else {}
+                        ),
+                        **(
+                            {"session_id": str(session_id)[:128]}
+                            if session_id
+                            else {}
+                        ),
+                        **(
+                            {"response_time_seconds": round(float(response_time_seconds), 3)}
+                            if isinstance(response_time_seconds, (int, float))
+                            and 0 < float(response_time_seconds) < 3600
                             else {}
                         ),
                         **(
