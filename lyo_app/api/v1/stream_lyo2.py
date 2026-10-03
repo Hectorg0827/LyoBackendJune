@@ -1577,7 +1577,11 @@ async def stream_lyo2_chat(
                     
                 logger.info(f"🏫 [STREAM][{trace_id}] Fast course preview sent for: '{_topic[:60]}'")
             
-            if decision.needs_clarification and decision.confidence > 0.3:
+            if (
+                decision.needs_clarification
+                and decision.confidence > 0.3
+                and teaching_decision.reason_code != "attachment_information_request"
+            ):
                 # Only ask for clarification if the router is reasonably confident
                 # that it truly cannot understand. Low-confidence clarifications
                 # from fallback routing should not block the pipeline.
@@ -1721,8 +1725,28 @@ async def stream_lyo2_chat(
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
             try:
-                # OPTIMIZATION: Fast Path for simple intents
-                if decision.intent in [Intent.GREETING, Intent.CHAT] and decision.confidence > 0.7:
+                # OPTIMIZATION: Attachment information requests are already
+                # resolved by the deterministic teaching policy. Sending them
+                # through the planner adds latency and gives a second model a
+                # chance to manufacture an assessment the learner never asked
+                # for, so execute one grounded generation step directly.
+                if (
+                    media_attachments
+                    and teaching_decision.action == TeachingAction.ANSWER
+                    and teaching_decision.reason_code == "attachment_information_request"
+                ):
+                    logger.info(
+                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
+                        "skipping planner"
+                    )
+                    plan = LyoPlan(steps=[
+                        PlannedAction(
+                            action_type=ActionType.GENERATE_TEXT,
+                            description="Inspect the attachment and answer the learner directly",
+                            parameters={"content": None},
+                        )
+                    ])
+                elif decision.intent in [Intent.GREETING, Intent.CHAT] and decision.confidence > 0.7:
                     logger.info(f"⚡ [STREAM][{trace_id}] Fast Path: Skipping Planner for {decision.intent}")
                     plan = LyoPlan(steps=[
                         PlannedAction(
