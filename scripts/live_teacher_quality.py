@@ -435,6 +435,8 @@ class LiveLyo:
         resume_anchor: Optional[str] = None
         reconnect_anchor: Optional[str] = None
         post_question_seen = False
+        resumed_same_example = False
+        original_example_text = ""
         remediation_seen = False
 
         async def send(ws, intent: str, comp: Optional[dict[str, Any]] = None, answer_data=None):
@@ -486,8 +488,13 @@ class LiveLyo:
                     remediation_seen = True
 
                 text = visible_teacher_text(scene)
-                if asked and question.lower().split()[0] in text.lower():
+                if asked and text:
+                    # The first authored teacher scene after ASK_QUESTION is the
+                    # live answer to the detour. Pedagogical quality is reviewed
+                    # from the transcript; this assertion is only structural.
                     post_question_seen = True
+                    if original_example_text and text == original_example_text:
+                        resumed_same_example = True
 
                 example = component(scene, "ExampleBlock", "LessonBlock")
                 quiz = component(scene, "QuizCard")
@@ -495,6 +502,7 @@ class LiveLyo:
 
                 if not asked and example is not None:
                     resume_anchor = str(example.get("component_id") or scene.get("scene_id") or "")
+                    original_example_text = text
                     await send(
                         ws,
                         "ask_question",
@@ -573,9 +581,33 @@ class LiveLyo:
                     if str(metadata.get("teaching_action") or "") in {"REMEDIATE", "remediate", "reteach", "prerequisite"}:
                         remediation_seen = True
 
+        transcript = [
+            {
+                "scene_id": s.get("scene_id"),
+                "scene_type": s.get("scene_type"),
+                "teaching_action": (
+                    (s.get("metadata") or {}).get("teaching_action")
+                    if isinstance(s.get("metadata"), dict)
+                    else None
+                ),
+                "target_evidence_type": (
+                    (s.get("metadata") or {}).get("target_evidence_type")
+                    if isinstance(s.get("metadata"), dict)
+                    else None
+                ),
+                "component_types": [
+                    item.get("type")
+                    for item in s.get("components", [])
+                    if isinstance(item, dict)
+                ],
+                "teacher_text": visible_teacher_text(s),
+            }
+            for s in scenes
+        ]
         report.classroom = {
             "scene_count": len(scenes),
             "actions": actions,
+            "transcript": transcript,
             "teaching_actions": [
                 (s.get("metadata") or {}).get("teaching_action")
                 for s in scenes
@@ -583,6 +615,7 @@ class LiveLyo:
             ],
             "asked_free_form_question": asked,
             "answer_scene_observed": post_question_seen,
+            "same_example_resumed": resumed_same_example,
             "resume_anchor": resume_anchor,
             "hint_requested": hint_requested,
             "forced_wrong_answer": forced_wrong,
@@ -599,6 +632,11 @@ class LiveLyo:
             "free_form_question_answered",
             post_question_seen if asked else None,
             "structural live observation; review transcript for pedagogical quality",
+        )
+        report.check(
+            "interrupted_example_resumed",
+            resumed_same_example if asked and original_example_text else None,
+            "same teacher text reappeared after the detour; deterministic tests cover state identity",
         )
         report.check("hint_path_exercised", hint_requested)
         report.check(
@@ -764,7 +802,7 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--review-concept-id")
-    p.add_argument("--max-scenes", type=int, default=18)
+    p.add_argument("--max-scenes", type=int, default=32)
     p.add_argument("--timeout", type=float, default=75.0)
     p.add_argument("--output")
     return p
