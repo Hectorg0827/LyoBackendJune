@@ -202,3 +202,40 @@ def test_multimodal_teaching_has_more_than_one_provider() -> None:
     assert order[0] == "gpt-4o-mini"
     assert "gemini-2.5-flash" in order
     assert len(order) >= 2
+
+
+
+@pytest.mark.asyncio
+async def test_pdf_extraction_preserves_page_provenance(tmp_path, monkeypatch) -> None:
+    from pypdf import PdfWriter
+
+    monkeypatch.setattr(
+        multimodal,
+        "settings",
+        SimpleNamespace(upload_dir=str(tmp_path)),
+    )
+    media_dir = tmp_path / "media" / "chat"
+    media_dir.mkdir(parents=True)
+    path = media_dir / "source.pdf"
+
+    # Blank pages still prove page identity/count without relying on a font or
+    # PDF text-generation dependency in the test environment.
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_blank_page(width=72, height=72)
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    parts = await load_media_attachments(
+        [
+            MediaRef(
+                modality=InputModality.DOCUMENT,
+                uri="/api/v1/media/file/chat/source.pdf",
+                mime_type="application/pdf",
+                name="source.pdf",
+            )
+        ]
+    )
+
+    assert parts[0]["page_count"] == 2
+    assert [page["page"] for page in parts[0]["source_pages"]] == [1, 2]
