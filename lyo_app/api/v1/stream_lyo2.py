@@ -1628,13 +1628,14 @@ async def stream_lyo2_chat(
                     # "cellular respiration" beats "Biology".
                     prep_topic = _preferred_prep_topic(data.subject, data.topics)
                     if prep_topic:
-                        prep_blocks, prep_lesson = await _try_compose_lesson(
-                            db,
-                            authenticated_user_id,
-                            request.text,
-                            topic=prep_topic,
-                            source_surface="test_prep",
-                        )
+                        with _model_usage_scope("teaching"):
+                            prep_blocks, prep_lesson = await _try_compose_lesson(
+                                db,
+                                authenticated_user_id,
+                                request.text,
+                                topic=prep_topic,
+                                source_surface="test_prep",
+                            )
                         if prep_lesson is not None:
                             async for event in _emit_composed_lesson(
                                 db,
@@ -1675,16 +1676,17 @@ async def stream_lyo2_chat(
                         bounded_intervention_metadata,
                     )
 
-                    lesson_blocks, lesson = await _try_compose_lesson(
-                        db,
-                        authenticated_user_id,
-                        request.text,
-                        force_mode=_force_lesson_mode,
-                        target_evidence_type=teaching_decision.target_evidence_type,
-                        teaching_intervention=bounded_intervention_metadata(
-                            teaching_decision
-                        ),
-                    )
+                    with _model_usage_scope(teaching_decision.model_tier):
+                        lesson_blocks, lesson = await _try_compose_lesson(
+                            db,
+                            authenticated_user_id,
+                            request.text,
+                            force_mode=_force_lesson_mode,
+                            target_evidence_type=teaching_decision.target_evidence_type,
+                            teaching_intervention=bounded_intervention_metadata(
+                                teaching_decision
+                            ),
+                        )
                     if lesson is not None:
                         async for event in _emit_composed_lesson(
                             db,
