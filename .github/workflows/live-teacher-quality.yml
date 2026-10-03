@@ -4,6 +4,9 @@ name: Live teacher-quality validation
 # run on an ordinary push/PR. Configure LYO_TEACHER_QUALITY_TOKEN as an Actions
 # secret belonging to a dedicated non-production-person learner account.
 on:
+  push:
+    branches:
+      - ops-teacher-quality-postfix-20261003
   workflow_dispatch:
     inputs:
       phase:
@@ -43,13 +46,13 @@ jobs:
     env:
       LYO_BASE_URL: https://api.lyoai.app
       LYO_ACCESS_TOKEN: ${{ secrets.LYO_TEACHER_QUALITY_TOKEN }}
-      VALIDATION_PHASE: ${{ inputs.phase }}
+      VALIDATION_PHASE: ${{ inputs.phase || 'seed' }}
       # This workflow intentionally validates one coherent baseline scenario.
       # Other subjects require matching prompt/question/transfer fixtures and
       # should use the CLI until profile presets are added.
       VALIDATION_TOPIC: comparing fractions
-      REVIEW_CONCEPT_ID: ${{ inputs.review_concept_id }}
-      MAX_SCENES: ${{ inputs.max_scenes }}
+      REVIEW_CONCEPT_ID: ${{ inputs.review_concept_id || '' }}
+      MAX_SCENES: ${{ inputs.max_scenes || 32 }}
 
     steps:
       - name: Checkout exact revision
@@ -96,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: teacher-quality-${{ inputs.phase }}-${{ github.run_id }}
+          name: teacher-quality-${{ inputs.phase || 'seed' }}-${{ github.run_id }}
           path: artifacts/teacher-quality/*.json
           if-no-files-found: warn
           retention-days: 30
