@@ -78,6 +78,7 @@ class InteractionContract(BaseModel):
     )
     suggested_actions: list[str] = Field(default_factory=list)
     explicit_user_control: bool = False
+    depth_explicit: bool = False
     reason_code: str = "router_default"
 
     def prompt_directives(self) -> list[str]:
@@ -367,6 +368,7 @@ def resolve_interaction_contract(
         memory_scopes=memory_scopes,
         suggested_actions=suggested_actions,
         explicit_user_control=explicit_user_control,
+        depth_explicit=explicit_depth,
         reason_code=reason,
     )
 
