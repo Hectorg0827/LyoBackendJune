@@ -206,6 +206,16 @@ USER QUESTION:
                 timeout=30.0
             )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Received AIResilience response", flush=True)
+            if ai_response.get("is_fallback"):
+                logger.warning("AI providers unavailable during tutor generation")
+                if media_attachments:
+                    return (
+                        "I couldn't analyze that attachment just now. "
+                        "Your file is still attached, so please retry."
+                    )
+                return static_content or (
+                    "I'm having trouble responding right now. Please try again."
+                )
             generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
             if generated:
                 return generated

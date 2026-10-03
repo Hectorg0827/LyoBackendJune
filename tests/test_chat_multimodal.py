@@ -11,6 +11,8 @@ from lyo_app.ai.multimodal import (
     recent_media_refs,
 )
 from lyo_app.ai.schemas.lyo2 import InputModality, MediaRef, RouterRequest
+from lyo_app.core.ai_resilience import _openai_compatible_messages
+from lyo_app.teaching_runtime.model_router import provider_order_for_tier
 
 
 def _image_ref(uri: str = "/api/v1/media/file/chat/example.png") -> MediaRef:
@@ -127,3 +129,76 @@ async def test_missing_historical_attachment_is_skipped(tmp_path, monkeypatch) -
     )
 
     assert await load_media_attachments([_image_ref()], missing_ok=True) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("folder", ["test-prep", "classroom"])
+async def test_shared_learning_surfaces_can_load_their_uploaded_documents(
+    tmp_path, monkeypatch, folder
+) -> None:
+    monkeypatch.setattr(
+        multimodal,
+        "settings",
+        SimpleNamespace(upload_dir=str(tmp_path)),
+    )
+    media_dir = tmp_path / "media" / folder
+    media_dir.mkdir(parents=True)
+    payload = b"Chapter 4: cellular respiration"
+    (media_dir / "notes.txt").write_bytes(payload)
+
+    parts = await load_media_attachments(
+        [
+            MediaRef(
+                modality=InputModality.DOCUMENT,
+                uri=f"/api/v1/media/file/{folder}/notes.txt",
+                mime_type="text/plain",
+                name="notes.txt",
+            )
+        ]
+    )
+
+    assert len(parts) == 1
+    assert parts[0]["mime_type"] == "text/plain"
+    assert parts[0]["extracted_text"] == payload.decode()
+
+
+def test_openai_adapter_preserves_images_and_uses_extracted_document_text() -> None:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze these."},
+                {
+                    "type": "media_base64",
+                    "mime_type": "image/png",
+                    "data": "ZmFrZS1wbmc=",
+                    "name": "graph.png",
+                },
+                {
+                    "type": "media_base64",
+                    "mime_type": "application/pdf",
+                    "data": "ZmFrZS1wZGY=",
+                    "name": "lease.pdf",
+                    "extracted_text": "Monthly rent is $2,100.",
+                },
+            ],
+        }
+    ]
+
+    normalized = _openai_compatible_messages(messages)
+    parts = normalized[0]["content"]
+
+    assert parts[0] == {"type": "text", "text": "Analyze these."}
+    assert parts[1]["type"] == "image_url"
+    assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[2]["type"] == "text"
+    assert "lease.pdf" in parts[2]["text"]
+    assert "Monthly rent is $2,100." in parts[2]["text"]
+
+
+def test_multimodal_teaching_has_more_than_one_provider() -> None:
+    order = provider_order_for_tier("teaching", has_media=True)
+
+    assert order[0] == "gpt-4o-mini"
+    assert "gemini-2.5-flash" in order
+    assert len(order) >= 2

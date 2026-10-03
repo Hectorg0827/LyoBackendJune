@@ -57,6 +57,7 @@ moviepy==1.0.3
 boto3>=1.28.0
 aiofiles==23.2.1
 python-magic==0.4.27
+pypdf>=5.0.0,<7.0.0
 
 # Async Redis client (legacy module name; some routes still import `aioredis`)
 aioredis==2.0.1

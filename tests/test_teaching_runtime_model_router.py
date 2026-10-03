@@ -21,9 +21,11 @@ def test_deliberation_spends_stronger_model_before_fast_fallback():
     assert order[-2:] == ["gemini-2.5-flash", "gpt-4o-mini"]
 
 
-def test_media_never_routes_to_text_only_models():
+def test_media_has_redundant_multimodal_provider_fallbacks():
     assert provider_order_for_tier("deliberation", has_media=True) == [
-        "gemini-2.5-flash"
+        "gpt-4o-mini",
+        "gemini-2.5-flash",
+        "gpt-4o",
     ]
 
 

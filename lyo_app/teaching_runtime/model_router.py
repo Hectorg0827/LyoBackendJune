@@ -13,13 +13,13 @@ from typing import List
 def provider_order_for_tier(tier: str, *, has_media: bool = False) -> List[str]:
     """Return a bounded fallback order for one teaching turn.
 
-    Multimodal chat currently has one configured model whose declared
-    capability includes multimodal input, so it remains on that safe path.
-    Text-only deliberation can spend a stronger model; ordinary and reflex
-    turns prefer the lower-latency/cost models.
+    Multimodal turns use the same bounded fallback principle as text. Lyo
+    normalizes images for OpenAI and extracts document text for its fallback,
+    while Gemini can still consume the original bytes. No attachment should
+    make the whole product depend on a single provider.
     """
     if has_media:
-        return ["gemini-2.5-flash"]
+        return ["gpt-4o-mini", "gemini-2.5-flash", "gpt-4o"]
 
     normalized = (tier or "teaching").strip().lower()
     if normalized == "deliberation":
