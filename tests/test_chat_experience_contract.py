@@ -151,3 +151,59 @@ def test_learner_memory_is_used_for_teaching_and_progress():
 
     assert MemoryScope.LEARNER in teaching.memory_scopes
     assert MemoryScope.LEARNER in progress.memory_scopes
+
+
+
+@pytest.mark.asyncio
+async def test_explicit_explain_contract_prevents_first_contact_probe():
+    from lyo_app.teaching_runtime.models import TeachingAction
+    from lyo_app.teaching_runtime.service import decide_for_chat
+
+    contract = resolve_interaction_contract(
+        user_text="Explain photosynthesis",
+        router_intent=Intent.EXPLAIN,
+    )
+    decision = await decide_for_chat(
+        db=None,
+        user_id=None,
+        user_text="Explain photosynthesis",
+        intent="EXPLAIN",
+        concept_id="photosynthesis",
+        interaction_contract={
+            **contract.model_dump(mode="json"),
+            "directives": contract.prompt_directives(),
+        },
+    )
+
+    assert decision.action is TeachingAction.EXPLAIN
+    assert decision.interaction_required is False
+    assert decision.reason_code == "interaction_contract_explain"
+
+
+def test_source_manifest_keeps_document_pages_and_web_urls():
+    from lyo_app.ai.executor import _source_manifest
+
+    sources = _source_manifest(
+        [
+            {
+                "name": "notes.pdf",
+                "mime_type": "application/pdf",
+                "source_pages": [
+                    {"page": 1, "has_text": True},
+                    {"page": 2, "has_text": True},
+                ],
+            }
+        ],
+        [
+            {
+                "title": "Example source",
+                "url": "https://example.com/reference",
+                "snippet": "Current fact",
+            }
+        ],
+    )
+
+    assert sources[0]["name"] == "notes.pdf"
+    assert sources[0]["pages"] == [1, 2]
+    assert sources[1]["kind"] == "web"
+    assert sources[1]["url"] == "https://example.com/reference"
