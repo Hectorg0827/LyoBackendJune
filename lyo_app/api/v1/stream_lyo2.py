@@ -1428,6 +1428,32 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
+            # Product-level interaction contract. This is resolved once, before
+            # pedagogy or planning, so downstream layers cannot silently change
+            # "answer/explain/compare/search" into a different interaction.
+            from lyo_app.chat.experience import (
+                effective_intent,
+                fast_lane_plan,
+                resolve_interaction_contract,
+            )
+
+            interaction_contract = resolve_interaction_contract(
+                user_text=request.text or "",
+                router_intent=decision.intent,
+                has_media=bool(media_attachments),
+                has_current_media=bool(request.media),
+                state_summary=request.state_summary,
+            )
+            contracted_intent = effective_intent(interaction_contract, decision.intent)
+            if contracted_intent != decision.intent:
+                decision = decision.model_copy(
+                    update={
+                        "intent": contracted_intent,
+                        "needs_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+
             # Shared Learning OS policy. Routing says what the learner wants;
             # this deterministic layer says what pedagogical move should happen
             # next. It reads the same durable evidence the Classroom receives.
@@ -1462,6 +1488,10 @@ async def stream_lyo2_chat(
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
+                interaction_contract={
+                    **interaction_contract.model_dump(mode="json"),
+                    "directives": interaction_contract.prompt_directives(),
+                },
             )
             await record_policy_decision(
                 db,
@@ -1477,6 +1507,22 @@ async def stream_lyo2_chat(
                     "type": "teaching_policy",
                     **teaching_decision.model_dump(mode="json"),
                 },
+            )
+            yield yield_safe_sse_event(
+                "interaction_contract",
+                {
+                    "type": "interaction_contract",
+                    **interaction_contract.model_dump(mode="json"),
+                },
+            )
+
+            from lyo_app.chat.context_broker import build_context_bundle
+            chat_context_bundle = await build_context_bundle(
+                db=db,
+                user_id=authenticated_user_id,
+                contract=interaction_contract,
+                concept_id=_teaching_concept_id,
+                topic=_policy_topic,
             )
             
             # Chat is an adapter onto the same account-owned intake as Test Prep.
@@ -1677,7 +1723,11 @@ async def stream_lyo2_chat(
             # A self-contained "explain X" is taught right here as a lesson
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
-            if decision.intent == Intent.EXPLAIN and request.text:
+            if (
+                decision.intent == Intent.EXPLAIN
+                and request.text
+                and not interaction_contract.fast_lane
+            ):
                 _force_lesson_mode = _lesson_mode_for_teaching_action(
                     teaching_decision.action
                 )
@@ -1725,27 +1775,19 @@ async def stream_lyo2_chat(
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
             try:
-                # OPTIMIZATION: Attachment information requests are already
-                # resolved by the deterministic teaching policy. Sending them
-                # through the planner adds latency and gives a second model a
-                # chance to manufacture an assessment the learner never asked
-                # for, so execute one grounded generation step directly.
-                if (
-                    media_attachments
-                    and teaching_decision.action == TeachingAction.ANSWER
-                    and teaching_decision.reason_code == "attachment_information_request"
-                ):
+                # Generalized Chat fast lane: once the interaction contract
+                # already identifies a single grounded operation, skip the LLM
+                # planner entirely. SEARCH still uses this lane; its deterministic
+                # plan runs live search before generation.
+                if interaction_contract.fast_lane:
                     logger.info(
-                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
-                        "skipping planner"
+                        f"⚡ [STREAM][{trace_id}] Chat fast lane: "
+                        f"{interaction_contract.mode.value}"
                     )
-                    plan = LyoPlan(steps=[
-                        PlannedAction(
-                            action_type=ActionType.GENERATE_TEXT,
-                            description="Inspect the attachment and answer the learner directly",
-                            parameters={"content": None},
-                        )
-                    ])
+                    plan = fast_lane_plan(
+                        interaction_contract,
+                        request.text or "",
+                    )
                 elif decision.intent in [Intent.GREETING, Intent.CHAT] and decision.confidence > 0.7:
                     logger.info(f"⚡ [STREAM][{trace_id}] Fast Path: Skipping Planner for {decision.intent}")
                     plan = LyoPlan(steps=[
@@ -1841,6 +1883,11 @@ async def stream_lyo2_chat(
                             intent=decision.intent.value if decision.intent else None,
                             media_attachments=media_attachments,
                             teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract={
+                                **interaction_contract.model_dump(mode="json"),
+                                "directives": interaction_contract.prompt_directives(),
+                            },
+                            context_bundle=chat_context_bundle,
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -2031,6 +2078,12 @@ async def stream_lyo2_chat(
                 collected_bricks.append(oc_brick)
                 yield f"data: {json.dumps(oc_brick)}\n\n"
                 
+            sources = execution_response.metadata.get("sources") or []
+            if sources:
+                sources_brick = {"type": "sources", "sources": sources}
+                collected_bricks.append(sources_brick)
+                yield yield_safe_sse_event("sources", sources_brick)
+
             # Emit v1 actions event
             action_labels = []
             for action_block in execution_response.next_actions:
