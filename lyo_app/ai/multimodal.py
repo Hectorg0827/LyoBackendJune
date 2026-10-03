@@ -1,14 +1,17 @@
-"""Validation and model preparation for Lyo chat attachments.
+"""Validation and model preparation for Lyo AI attachments.
 
 Only files uploaded through Lyo's own authenticated ``/api/v1/media/upload``
-route are accepted.  Resolving those URLs to local storage avoids arbitrary
-server-side URL fetching and keeps the multimodal path SSRF-safe.
+route are accepted. Resolving those URLs to server-owned storage avoids
+arbitrary URL fetching and keeps the multimodal path SSRF-safe.
+
+The same loader is shared by Chat, Test Prep, and Classroom entry points.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -22,6 +25,7 @@ from lyo_app.core.config import settings
 MAX_CHAT_ATTACHMENTS = 4
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_EXTRACTED_DOCUMENT_CHARS = 120_000
 
 ALLOWED_CHAT_MIME_TYPES = {
     "image/jpeg",
@@ -34,6 +38,12 @@ ALLOWED_CHAT_MIME_TYPES = {
     "text/csv",
     "application/json",
 }
+
+# These are the only upload namespaces that may ever be resolved back to local
+# bytes for AI inference. Keeping this allow-list explicit preserves the SSRF
+# and path-traversal boundary while allowing the three learning surfaces to
+# share one attachment pipeline.
+AI_MEDIA_FOLDERS = {"chat", "test-prep", "classroom"}
 
 _FOLDER_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._ -]+")
@@ -68,7 +78,7 @@ def _local_media_path(uri: str) -> Path:
     if not path.startswith(_MEDIA_PREFIX):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Chat attachments must be uploaded through Lyo before sending.",
+            detail="AI attachments must be uploaded through Lyo before sending.",
         )
 
     relative = path[len(_MEDIA_PREFIX):]
@@ -78,7 +88,7 @@ def _local_media_path(uri: str) -> Path:
     folder, filename = pieces
     if (
         not _FOLDER_RE.fullmatch(folder)
-        or folder != "chat"
+        or folder not in AI_MEDIA_FOLDERS
         or not filename
         or filename.startswith(".")
         or "/" in filename
@@ -91,6 +101,30 @@ def _local_media_path(uri: str) -> Path:
     if root not in candidate.parents:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment path")
     return candidate
+
+
+def _extract_document_text(data: bytes, mime_type: str) -> str:
+    """Extract bounded text for providers that cannot consume raw documents.
+
+    Gemini still receives the original file bytes. The extracted copy is
+    carried as metadata so OpenAI can be used as a real fallback instead of
+    rejecting Lyo's internal `media_base64` part.
+    """
+    text = ""
+    if mime_type in {"text/plain", "text/markdown", "text/csv", "application/json"}:
+        text = data.decode("utf-8", errors="replace")
+    elif mime_type == "application/pdf":
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(data))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except Exception:
+            # A scanned/image-only PDF can still be handled by a native
+            # multimodal provider such as Gemini. Do not reject it here.
+            text = ""
+
+    return text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS]
 
 
 def canonical_message_content(text: str | None, media: Iterable[MediaRef]) -> str:
@@ -110,12 +144,7 @@ def canonical_message_content(text: str | None, media: Iterable[MediaRef]) -> st
 
 
 def recent_media_refs(conversation_history: Iterable[Any]) -> List[MediaRef]:
-    """Recover the latest attachment-bearing user turn for follow-up questions.
-
-    The database stores portable Markdown rather than base64.  Re-resolving only
-    Lyo-owned ``chat`` URLs lets a learner ask "what about question 2?" on a
-    later turn or another device without allowing arbitrary URL fetches.
-    """
+    """Recover the latest attachment-bearing Chat turn for follow-up questions."""
     turns = list(conversation_history)[-8:]
     for turn in reversed(turns):
         role = turn.get("role") if isinstance(turn, dict) else getattr(turn, "role", None)
@@ -129,6 +158,8 @@ def recent_media_refs(conversation_history: Iterable[Any]) -> List[MediaRef]:
             image_uri, file_uri = match.group(2), match.group(4)
             uri = image_uri or file_uri or ""
             parsed = urlparse(uri)
+            # Conversation history only owns the Chat namespace. Test Prep and
+            # Classroom references are supplied explicitly by those workflows.
             if not parsed.path.startswith(f"{_MEDIA_PREFIX}chat/") or uri in seen:
                 continue
             seen.add(uri)
@@ -156,7 +187,7 @@ def recent_media_refs(conversation_history: Iterable[Any]) -> List[MediaRef]:
 async def load_media_attachments(
     media: List[MediaRef], *, missing_ok: bool = False
 ) -> List[Dict[str, Any]]:
-    """Return Gemini inline-data parts after validating every local attachment."""
+    """Return provider-neutral inline-data parts after validating attachments."""
     if not media:
         return []
     if len(media) > MAX_CHAT_ATTACHMENTS:
@@ -172,7 +203,7 @@ async def load_media_attachments(
         if mime_type not in ALLOWED_CHAT_MIME_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported chat attachment type '{mime_type}'.",
+                detail=f"Unsupported AI attachment type '{mime_type}'.",
             )
 
         path = _local_media_path(item.uri)
@@ -189,22 +220,25 @@ async def load_media_attachments(
         if stat.st_size > MAX_ATTACHMENT_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Each chat attachment must be 10MB or smaller.",
+                detail="Each AI attachment must be 10MB or smaller.",
             )
         total_size += stat.st_size
         if total_size > MAX_TOTAL_ATTACHMENT_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Chat attachments may total at most 20MB per message.",
+                detail="AI attachments may total at most 20MB per message.",
             )
 
         data = await asyncio.to_thread(path.read_bytes)
-        prepared.append(
-            {
-                "type": "media_base64",
-                "mime_type": mime_type,
-                "data": base64.b64encode(data).decode("ascii"),
-                "name": _clean_label(item.name or path.name),
-            }
-        )
+        part: Dict[str, Any] = {
+            "type": "media_base64",
+            "mime_type": mime_type,
+            "data": base64.b64encode(data).decode("ascii"),
+            "name": _clean_label(item.name or path.name),
+        }
+        if not mime_type.startswith("image/"):
+            extracted_text = await asyncio.to_thread(_extract_document_text, data, mime_type)
+            if extracted_text:
+                part["extracted_text"] = extracted_text
+        prepared.append(part)
     return prepared
