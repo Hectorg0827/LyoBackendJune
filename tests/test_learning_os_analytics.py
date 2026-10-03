@@ -330,3 +330,32 @@ def test_cross_surface_continuity_ignores_attempts_more_than_30_days_apart():
     assert continuity["max_gap_days"] == 30
     assert continuity["cross_surface"]["attempts"] == 0
     assert continuity["same_surface"]["attempts"] == 0
+
+
+
+def test_same_surface_retention_is_available_as_cross_surface_control():
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    rows = [
+        event(
+            start,
+            correct=True,
+            kind="transfer",
+            surface="classroom",
+            action="check_transfer",
+            target="transfer",
+        ),
+        event(
+            start + timedelta(days=8),
+            correct=True,
+            kind="retention",
+            surface="classroom",
+            action="review",
+            target="retention",
+        ),
+    ]
+
+    report = aggregate_learning_os_events(rows, since=start)
+    same = report["cross_surface_continuity"]["same_surface"]
+    assert same["retention_attempts"] == 1
+    assert same["retention_successes"] == 1
+    assert same["retention_success_rate"] == 1.0
