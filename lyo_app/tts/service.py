@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import hashlib
 import logging
 import os
@@ -177,6 +178,7 @@ class TTSService:
         self._session: Optional[aiohttp.ClientSession] = None
         self._initialized = False
         self._key_locks: Dict[str, asyncio.Lock] = {}
+        self._key_users: Dict[str, int] = {}
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -461,32 +463,44 @@ class TTSService:
         if cached is not None:
             return cached
 
-        lock = self._key_locks.setdefault(cache_key, asyncio.Lock())
+        async with self._render_lock(cache_key):
+            cached = self._get_cached_audio(cache_key, audio_format)
+            if cached is not None:
+                return cached
+            audio_data = await self._synthesize_uncached(
+                normalized_text,
+                resolved,
+                audio_format,
+                speed,
+                model=model,
+            )
+            if not audio_data:
+                raise RuntimeError("TTS provider returned empty audio")
+            self._cache_audio(cache_key, audio_format, audio_data)
+            logger.info(
+                "TTS rendered %s bytes provider=%s locale=%s voice=%s",
+                len(audio_data),
+                resolved.provider,
+                resolved.language_code,
+                resolved.provider_voice,
+            )
+            return audio_data
+
+    @asynccontextmanager
+    async def _render_lock(self, key: str):
+        # Keep the same lock until the last owner/waiter leaves. Removing it
+        # when only the first renderer finishes lets a third request duplicate
+        # work while a second request still owns the original lock.
+        lock = self._key_locks.setdefault(key, asyncio.Lock())
+        self._key_users[key] = self._key_users.get(key, 0) + 1
         try:
             async with lock:
-                cached = self._get_cached_audio(cache_key, audio_format)
-                if cached is not None:
-                    return cached
-                audio_data = await self._synthesize_uncached(
-                    normalized_text,
-                    resolved,
-                    audio_format,
-                    speed,
-                    model=model,
-                )
-                if not audio_data:
-                    raise RuntimeError("TTS provider returned empty audio")
-                self._cache_audio(cache_key, audio_format, audio_data)
-                logger.info(
-                    "TTS rendered %s bytes provider=%s locale=%s voice=%s",
-                    len(audio_data),
-                    resolved.provider,
-                    resolved.language_code,
-                    resolved.provider_voice,
-                )
-                return audio_data
+                yield
         finally:
-            self._key_locks.pop(cache_key, None)
+            self._key_users[key] -= 1
+            if self._key_users[key] == 0:
+                self._key_users.pop(key, None)
+                self._key_locks.pop(key, None)
 
     async def _synthesize_uncached(
         self,
@@ -579,19 +593,61 @@ class TTSService:
         speed: float = 1.0,
         language: Optional[str] = None,
         chunk_size: int = 8192,
+        content_type: Optional[str] = None,
     ) -> AsyncGenerator[bytes, None]:
-        # Render once so streaming and base64 clients share the same cache and
-        # never trigger duplicate metered synthesis for the same sentence.
-        audio_data = await self.synthesize(
-            text=text,
-            voice=voice,
-            model=model,
-            format=format,
-            speed=speed,
-            language=language,
-        )
-        for offset in range(0, len(audio_data), chunk_size):
-            yield audio_data[offset:offset + chunk_size]
+        """Deliver provider bytes immediately; cache only complete recordings.
+
+        Google REST returns base64 audio as one JSON response and therefore
+        keeps the buffered path. Kokoro/OpenAI can deliver binary progressively.
+        The same render lock/cache is shared with the native base64 endpoint.
+        """
+        if not self._initialized:
+            await self.initialize()
+        if not self.provider_available:
+            raise TTSUnavailableError("The configured TTS provider is unavailable")
+        text = " ".join(text.split())
+        if not text or len(text) > self.config.max_text_length:
+            raise ValueError("Invalid speech text length")
+        if not 0.75 <= speed <= 1.25 or chunk_size <= 0:
+            raise ValueError("Invalid speech speed or chunk size")
+        resolved = self.resolve_voice(text, voice, language, content_type)
+        if resolved.provider == "google":
+            data = await self.synthesize(text, voice, model, format, speed, content_type, language)
+            for offset in range(0, len(data), chunk_size):
+                yield data[offset:offset + chunk_size]
+            return
+        key = self._get_cache_key(text, resolved, format, speed)
+        async with self._render_lock(key):
+            cached = self._get_cached_audio(key, format)
+            if cached is not None:
+                for offset in range(0, len(cached), chunk_size):
+                    yield cached[offset:offset + chunk_size]
+                return
+            headers = None
+            url = f"{self.config.kokoro_base_url}/v1/audio/speech"
+            provider_model = resolved.provider_model
+            if resolved.provider == "openai":
+                url = "https://api.openai.com/v1/audio/speech"
+                provider_model = model or self.config.default_model
+                headers = {"Authorization": f"Bearer {self.config.openai_api_key}"}
+            payload = {
+                "model": provider_model, "input": text,
+                "voice": resolved.provider_voice, "response_format": format,
+                "speed": speed,
+            }
+            if not self._session:
+                raise TTSUnavailableError("TTS HTTP session is not initialized")
+            async with self._session.post(url, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"TTS provider returned {response.status}")
+                chunks = []
+                async for chunk in response.content.iter_chunked(chunk_size):
+                    if chunk:
+                        chunks.append(chunk)
+                        yield chunk
+                if not chunks:
+                    raise RuntimeError("TTS provider returned empty audio")
+                self._cache_audio(key, format, b"".join(chunks))
 
     async def synthesize_lesson_audio(
         self,

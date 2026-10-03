@@ -338,7 +338,7 @@ class SceneStreamer:
         """Stream components with natural delays"""
         for i, component in enumerate(scene.components):
             # Calculate natural delay based on component type
-            delay_ms = component.delay_ms or self._calculate_natural_delay(component)
+            delay_ms = component.delay_ms
 
             if delay_ms > 0:
                 await asyncio.sleep(delay_ms / 1000.0)
@@ -356,11 +356,10 @@ class SceneStreamer:
 
     async def _stream_adaptive(self, scene: Scene, connection: ClientConnection):
         """Adapt streaming based on connection performance"""
-        # Use progressive if low latency, instant if high latency
-        if connection.latency_ms < 200:
-            await self._stream_progressive(scene, connection)
-        else:
-            await self._stream_instant(scene, connection)
+        # Delivery must not simulate thinking or reading. Clients own narration
+        # and visual pacing; send validated content as soon as it is ready.
+        # Explicit PROGRESSIVE mode still honors authored component delays.
+        await self._stream_instant(scene, connection)
 
     def _calculate_natural_delay(self, component: Component) -> int:
         """Calculate natural delay between components"""

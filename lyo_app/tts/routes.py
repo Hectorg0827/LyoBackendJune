@@ -1,9 +1,10 @@
 """Authenticated REST routes for Lyo's shared classroom voice."""
 
+import asyncio
 import base64
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 import logging
 
@@ -211,48 +212,49 @@ async def synthesize_stream(
     request: SynthesizeRequest,
     _current_user: UserRead = Depends(get_current_user_or_guest),
 ):
-    """
-    Stream synthesized speech
-    
-    Returns the shared cached audio response used by the Web classroom.
-    Teaching turns are deliberately short, so rendering before the response
-    also lets provider errors return a useful HTTP status instead of failing
-    after streaming headers have already been sent.
-    """
+    """Return the first provider audio bytes without waiting for the recording."""
+    stream = None
     try:
         service = await get_tts_service()
-        audio_data = await service.synthesize(
-            text=request.text,
-            voice=request.voice,
-            model=request.model,
-            format=request.format or "mp3",
-            speed=request.speed,
-            content_type=request.content_type,
-            language=request.language,
+        stream = service.synthesize_streaming(
+            text=request.text, voice=request.voice, model=request.model,
+            format=request.format or "mp3", speed=request.speed,
+            content_type=request.content_type, language=request.language,
         )
-                
-        content_type = {
-            "mp3": "audio/mpeg",
-            "opus": "audio/opus",
-            "aac": "audio/aac",
-            "flac": "audio/flac",
-            "wav": "audio/wav",
-            "pcm": "audio/pcm"
-        }.get(request.format, "audio/mpeg")
-        
-        return Response(
-            content=audio_data,
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f"inline; filename=speech.{request.format or 'mp3'}"
-            }
-        )
-        
-    except TTSUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        logger.error("TTS streaming error: %s", type(e).__name__)
+        # Prime before sending headers: initial provider/configuration failures
+        # still produce an actionable HTTP error. Later failures close the
+        # stream and never cache a partial recording.
+        first = await anext(stream)
+    except asyncio.CancelledError:
+        if stream is not None:
+            await stream.aclose()
+        raise
+    except TTSUnavailableError as exc:
+        if stream is not None:
+            await stream.aclose()
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception:
+        if stream is not None:
+            await stream.aclose()
+        logger.exception("TTS stream could not start")
         raise HTTPException(status_code=502, detail="Speech provider failed")
+
+    async def audio_chunks():
+        try:
+            yield first
+            async for chunk in stream:
+                yield chunk
+        finally:
+            await stream.aclose()
+
+    media_type = {
+        "mp3": "audio/mpeg", "opus": "audio/opus", "aac": "audio/aac",
+        "flac": "audio/flac", "wav": "audio/wav", "pcm": "audio/pcm",
+    }.get(request.format, "audio/mpeg")
+    return StreamingResponse(
+        audio_chunks(), media_type=media_type,
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/lesson/audio", response_model=LessonAudioResponse)
