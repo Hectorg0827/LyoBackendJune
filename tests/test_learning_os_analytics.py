@@ -52,6 +52,36 @@ def event(
     )
 
 
+def usage_event(
+    when,
+    *,
+    user_id=42,
+    surface="chat",
+    session="chat-1",
+    model="gpt-4o-mini",
+    tokens=100,
+    cache_hit=False,
+):
+    return SimpleNamespace(
+        user_id=user_id,
+        concept_id=None,
+        measurable_outcome=None,
+        evidence_type=None,
+        source_surface=surface,
+        hints_used=0,
+        misconception=None,
+        metadata_json={
+            "event_kind": "model_usage",
+            "session_id": session,
+            "model": model,
+            "tokens_used": tokens,
+            "latency_ms": 250,
+            "cache_hit": cache_hit,
+        },
+        timestamp=when,
+    )
+
+
 def test_empirical_report_measures_repair_transfer_retention_and_continuity():
     start = datetime(2026, 9, 1, 12, 0, 0)
     rows = [
@@ -140,7 +170,95 @@ def test_empirical_report_measures_repair_transfer_retention_and_continuity():
     assert report["sessions"]["identified_sessions"] == 3
     assert report["sessions"]["successful_sessions"] == 2
     assert report["sessions"]["success_rate"] == 0.6667
+    assert report["model_usage"]["tokens"] == 0
+    assert report["model_usage"]["tokens_per_successful_session"] == 0.0
     assert report["model_cost_per_successful_session"]["available"] is False
+
+
+def test_model_usage_is_joined_to_learning_sessions_without_inventing_cost():
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    rows = [
+        event(
+            start,
+            correct=True,
+            kind="application",
+            surface="chat",
+            action="guide",
+            target="application",
+            session="chat-1",
+        ),
+        event(
+            start + timedelta(minutes=3),
+            concept="ratios",
+            correct=False,
+            kind="application",
+            surface="classroom",
+            action="check_application",
+            target="application",
+            session="class-1",
+        ),
+        usage_event(
+            start + timedelta(seconds=1),
+            surface="chat",
+            session="chat-1",
+            model="gpt-4o-mini",
+            tokens=120,
+        ),
+        usage_event(
+            start + timedelta(minutes=2),
+            surface="chat",
+            session="chat-1",
+            model="gpt-4o-mini",
+            tokens=0,
+            cache_hit=True,
+        ),
+        usage_event(
+            start + timedelta(minutes=3, seconds=1),
+            surface="classroom",
+            session="class-1",
+            model="gemini-2.5-flash",
+            tokens=180,
+        ),
+    ]
+
+    report = aggregate_learning_os_events(rows, since=start)
+
+    usage = report["model_usage"]
+    assert usage["calls"] == 3
+    assert usage["tokens"] == 300
+    assert usage["cache_hits"] == 1
+    assert usage["linked_learning_sessions"] == 2
+    assert usage["session_attribution_rate"] == 1.0
+    # Efficiency denominator is successful learning sessions, while the
+    # numerator includes spend on both successful and unsuccessful sessions.
+    assert usage["tokens_per_successful_session"] == 300.0
+    assert usage["by_model"] == [
+        {"model": "gemini-2.5-flash", "calls": 1, "tokens": 180},
+        {"model": "gpt-4o-mini", "calls": 2, "tokens": 120},
+    ]
+    assert report["model_cost_per_successful_session"]["available"] is False
+    assert "prices are not versioned" in report["model_cost_per_successful_session"]["reason"]
+
+
+def test_model_usage_outside_an_evidence_session_stays_visible_but_unlinked():
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    rows = [
+        event(start, session="chat-1"),
+        usage_event(
+            start + timedelta(seconds=1),
+            session="chat-other",
+            tokens=75,
+        ),
+    ]
+
+    report = aggregate_learning_os_events(rows, since=start)
+    usage = report["model_usage"]
+    assert usage["tokens"] == 75
+    assert usage["sessions_with_usage"] == 1
+    assert usage["linked_learning_sessions"] == 0
+    assert usage["session_attribution_rate"] == 0.0
+    assert usage["linked_tokens"] == 0
+    assert usage["tokens_per_successful_session"] == 0.0
 
 
 def test_hint_dependency_separates_helped_from_unaided_work():
