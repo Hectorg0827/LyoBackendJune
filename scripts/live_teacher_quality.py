@@ -168,6 +168,33 @@ def choose_option(quiz: dict[str, Any], want_correct: bool) -> tuple[Optional[st
     return None, "missing"
 
 
+def select_due_review(
+    items: Iterable[dict[str, Any]],
+    requested_id: Optional[str] = None,
+) -> tuple[Optional[dict[str, Any]], str]:
+    """Select only a review the server says is currently due.
+
+    An explicit ID is a filter, never an override. This prevents a stale,
+    mistyped, or early concept from being labeled as retention evidence when
+    the Classroom correctly declines review mode for it.
+    """
+    due = [item for item in items if isinstance(item, dict)]
+    requested = (requested_id or "").strip()
+    if requested:
+        match = next(
+            (
+                item
+                for item in due
+                if str(item.get("skill_id") or "").strip() == requested
+            ),
+            None,
+        )
+        return match, "requested_due" if match is not None else "requested_not_due"
+    if due:
+        return due[0], "first_due"
+    return None, "none_due"
+
+
 def safe_snapshot(value: Any) -> Any:
     """Bound reports and remove obvious secret-bearing fields."""
     secret_keys = {
@@ -719,18 +746,30 @@ async def run(args) -> int:
                 report.notes.append(f"due review read unavailable: {type(exc).__name__}: {exc}")
 
         else:
-            review_concept_id = args.review_concept_id
+            due = await lyo.due_reviews(client)
+            selected, selection_reason = select_due_review(
+                due, args.review_concept_id
+            )
+            report.chat["due_review_selection"] = selection_reason
+            if selected is not None:
+                report.chat["selected_due_review"] = selected
+
+            review_concept_id = (
+                str(selected.get("skill_id") or "").strip()
+                if selected is not None
+                else ""
+            )
             if not review_concept_id:
-                due = await lyo.due_reviews(client)
-                if due:
-                    review_concept_id = str(due[0].get("skill_id") or "")
-                    report.chat["selected_due_review"] = due[0]
-            if not review_concept_id:
-                report.check(
-                    "due_review_available",
-                    False,
-                    "No due review exists yet. Retention must be measured on a genuinely later run.",
+                requested = (args.review_concept_id or "").strip()
+                detail = (
+                    f"Requested concept {requested!r} is not currently due."
+                    if requested
+                    else (
+                        "No due review exists yet. Retention must be measured "
+                        "on a genuinely later run."
+                    )
                 )
+                report.check("due_review_available", False, detail)
             else:
                 report.check("due_review_available", True, review_concept_id)
                 try:

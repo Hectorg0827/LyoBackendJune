@@ -7,6 +7,7 @@ from scripts.live_teacher_quality import (
     require_https,
     safe_snapshot,
     scene_from_message,
+    select_due_review,
     websocket_url,
 )
 
@@ -69,6 +70,31 @@ def test_forced_answer_only_claims_certainty_when_client_contract_declares_it():
         ]
     }
     assert choose_option(withheld, want_correct=False) == ("a", "unknown")
+
+
+def test_requested_review_must_exist_in_server_due_queue():
+    due = [
+        {"skill_id": "fractions", "display_name": "Fractions"},
+        {"skill_id": "ratios", "display_name": "Ratios"},
+    ]
+    selected, reason = select_due_review(due, "ratios")
+    assert selected == due[1]
+    assert reason == "requested_due"
+
+    selected, reason = select_due_review(due, "not-due-yet")
+    assert selected is None
+    assert reason == "requested_not_due"
+
+
+def test_review_without_override_uses_first_genuinely_due_item():
+    due = [{"skill_id": "fractions"}, {"skill_id": "ratios"}]
+    selected, reason = select_due_review(due)
+    assert selected == due[0]
+    assert reason == "first_due"
+
+    selected, reason = select_due_review([])
+    assert selected is None
+    assert reason == "none_due"
 
 
 def test_reports_redact_bearer_material_recursively():

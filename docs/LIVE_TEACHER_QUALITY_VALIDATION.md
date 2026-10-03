@@ -29,6 +29,30 @@ session.
 5. Structural pass/fail is automated. Pedagogical quality remains a separate
    review of the captured teacher output plus the durable outcome metrics.
 
+## Recommended production run: GitHub Actions
+
+For repeatable production checks, use the manual **Live teacher-quality
+validation** workflow in GitHub Actions rather than copying a bearer token into
+a terminal history.
+
+Before the first run, create an Actions secret named
+`LYO_TEACHER_QUALITY_TOKEN`. It should belong to a dedicated test learner,
+not a staff/admin account and not a real learner. The workflow fixes the target
+to `https://api.lyoai.app`, supplies the token only through the process
+environment, runs the harness safety tests first, and uploads the redacted JSON
+report as a 30-day artifact.
+
+Run **seed** first. The Actions workflow intentionally uses the single
+coherent baseline scenario **comparing fractions**, because its scripted Chat
+prompt, interruption, and transfer response are written for that subject.
+For another domain, use the CLI only when you also supply matching
+`--chat-prompt`, `--question`, and `--transfer-answer` fixtures.
+
+Run **review** later, only after the server reports a concept as genuinely due.
+An explicit review concept ID is treated only as a filter over the live due
+queue; it cannot force an early or stale concept into retention mode. Do not
+schedule review early just to obtain a retention number.
+
 ## Seed run
 
 ```bash
@@ -73,7 +97,8 @@ python scripts/live_teacher_quality.py review
 ```
 
 The runner reads `/api/v1/lyo2/chat/reviews/due` and uses the first due concept.
-You can target a known concept explicitly:
+You can target a known concept explicitly, but it will run only if that exact
+concept is present in the server's current due queue:
 
 ```bash
 python scripts/live_teacher_quality.py review \
