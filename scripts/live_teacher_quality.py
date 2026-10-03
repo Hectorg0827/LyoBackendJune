@@ -213,6 +213,7 @@ class Report:
     classroom: dict[str, Any] = field(default_factory=dict)
     analytics_before: Optional[dict[str, Any]] = None
     analytics_after: Optional[dict[str, Any]] = None
+    analytics_delta: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def check(self, name: str, passed: Optional[bool], detail: str = "") -> None:
@@ -234,9 +235,45 @@ class Report:
                 "classroom": self.classroom,
                 "analytics_before": self.analytics_before,
                 "analytics_after": self.analytics_after,
+                "analytics_delta": self.analytics_delta,
                 "notes": self.notes,
             }
         )
+
+
+def analytics_delta(
+    before: Optional[dict[str, Any]],
+    after: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Small, explicit delta over counters relevant to one live run."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {}
+
+    def number(root: dict[str, Any], *path: str) -> float:
+        value: Any = root
+        for key in path:
+            if not isinstance(value, dict):
+                return 0.0
+            value = value.get(key)
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    metrics = {
+        "evidence_attempts": ("evidence_attempts",),
+        "identified_sessions": ("sessions", "identified_sessions"),
+        "successful_sessions": ("sessions", "successful_sessions"),
+        "model_calls": ("model_usage", "calls"),
+        "model_tokens": ("model_usage", "tokens"),
+        "linked_model_calls": ("model_usage", "linked_calls"),
+        "linked_model_tokens": ("model_usage", "linked_tokens"),
+        "transfer_attempts": ("transfer", "attempts"),
+        "transfer_successes": ("transfer", "successes"),
+        "remediation_followups": ("remediation", "eligible_followups"),
+        "remediation_repairs": ("remediation", "repaired"),
+    }
+    return {
+        label: number(after, *path) - number(before, *path)
+        for label, path in metrics.items()
+    }
 
 
 class LiveLyo:
@@ -283,23 +320,81 @@ class LiveLyo:
         elapsed = round(time.perf_counter() - started, 3)
         events = parse_sse_lines(lines)
 
-        conversation = first_dict(events, lambda d: d.get("type") == "conversation")
+        conversation = first_dict(
+            events,
+            lambda d: bool(d.get("conversation_id")),
+        )
         policy = first_dict(events, lambda d: d.get("type") == "teaching_policy")
         quiz = first_dict(
             events,
-            lambda d: block_type(d) in {"QuizBlock", "quiz"} and isinstance(d.get("options") or d.get("content"), (list, dict)),
+            lambda d: (
+                block_type(d) in {"QuizBlock", "quiz"}
+                and isinstance(d.get("content"), dict)
+                and isinstance(d.get("content", {}).get("options"), list)
+            ),
         )
 
+        conversation_id = str(conversation.get("conversation_id")) if conversation else None
         report.chat["stream_latency_seconds"] = elapsed
         report.chat["event_types"] = [str(e.get("type") or "unknown") for e in events]
         report.chat["teaching_policy"] = policy
-        report.chat["conversation_id"] = conversation.get("conversation_id") if conversation else None
+        report.chat["conversation_id"] = conversation_id
         report.chat["quiz_seen"] = bool(quiz)
         report.check("chat_stream_completed", bool(events), f"{len(events)} SSE events")
         report.check("chat_policy_emitted", policy is not None)
-        report.check("chat_conversation_persisted", bool(report.chat["conversation_id"]))
+        report.check("chat_conversation_persisted", bool(conversation_id))
 
-        return report.chat["conversation_id"]
+        if quiz is None or conversation_id is None:
+            report.check(
+                "chat_smart_block_graded",
+                False,
+                "No persisted conversation + quiz Smart Block pair was emitted.",
+            )
+            return conversation_id
+
+        # The answer key must not be present in the learner-visible stream.
+        content = quiz.get("content") if isinstance(quiz.get("content"), dict) else {}
+        report.check(
+            "chat_answer_key_hidden",
+            "correct_index" not in content,
+            "Learner-visible Smart Blocks must not expose correct_index.",
+        )
+
+        block_id = quiz.get("id") or quiz.get("block_id")
+        if not block_id:
+            report.check("chat_smart_block_graded", False, "Quiz block has no id.")
+            return conversation_id
+
+        grade_started = time.perf_counter()
+        grade = await client.post(
+            f"{self.base_url}/api/v1/lyo2/chat/check",
+            headers=self.headers,
+            json={
+                "conversation_id": conversation_id,
+                "block_id": str(block_id),
+                "selected_index": 0,
+                "time_taken_ms": 1800,
+                "hint_used": False,
+            },
+        )
+        report.chat["check_latency_seconds"] = round(time.perf_counter() - grade_started, 3)
+        report.chat["check_status"] = grade.status_code
+        if grade.status_code != 200:
+            report.check(
+                "chat_smart_block_graded",
+                False,
+                f"status {grade.status_code}: {grade.text[:300]}",
+            )
+            return conversation_id
+
+        verdict = grade.json()
+        report.chat["check_verdict"] = verdict
+        report.check(
+            "chat_smart_block_graded",
+            isinstance(verdict, dict) and isinstance(verdict.get("correct"), bool),
+            "Server returned an explicit correctness verdict.",
+        )
+        return conversation_id
 
     async def classroom(
         self,
@@ -616,6 +711,14 @@ async def run(args) -> int:
             report.analytics_after = await lyo.analytics(client)
         except Exception as exc:
             report.notes.append(f"analytics_after unavailable: {type(exc).__name__}: {exc}")
+
+    report.analytics_delta = analytics_delta(report.analytics_before, report.analytics_after)
+    if args.phase == "seed" and report.analytics_delta:
+        report.check(
+            "chat_or_classroom_evidence_reached_record",
+            report.analytics_delta.get("evidence_attempts", 0) > 0,
+            f"evidence delta={report.analytics_delta.get('evidence_attempts', 0)}",
+        )
 
     report.finished_at = utc_now()
     output = Path(args.output) if args.output else (
