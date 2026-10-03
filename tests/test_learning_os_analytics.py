@@ -1,6 +1,11 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+from fastapi import HTTPException
+
+from lyo_app.api.v1 import learning_os_analytics as analytics_routes
 from lyo_app.teaching_runtime.analytics import aggregate_learning_os_events
 
 
@@ -231,3 +236,62 @@ def test_already_repaired_failure_is_not_credited_to_later_remediation():
     report = aggregate_learning_os_events(rows, since=start)
     assert report["remediation"]["eligible_followups"] == 0
     assert report["remediation"]["repair_rate"] is None
+
+
+
+@pytest.mark.asyncio
+async def test_personal_report_is_scoped_to_authenticated_user(monkeypatch):
+    loader = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(analytics_routes, "load_learning_os_analytics", loader)
+
+    result = await analytics_routes.my_learning_os_analytics(
+        days=14,
+        db=object(),
+        current_user=SimpleNamespace(id=42),
+    )
+
+    assert result == {"ok": True}
+    loader.assert_awaited_once_with(object(), days=14, user_id=42)
+
+
+@pytest.mark.asyncio
+async def test_system_report_requires_durable_rbac_permission(monkeypatch):
+    has_permission = AsyncMock(return_value=False)
+    has_role = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        analytics_routes.RBACService, "user_has_permission", has_permission
+    )
+    monkeypatch.setattr(
+        analytics_routes.RBACService, "user_has_role", has_role
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await analytics_routes.system_learning_os_analytics(
+            days=30,
+            db=object(),
+            current_user=SimpleNamespace(id=42),
+        )
+
+    assert exc.value.status_code == 403
+    has_permission.assert_awaited_once()
+    has_role.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_system_report_returns_only_aggregate_loader_result(monkeypatch):
+    monkeypatch.setattr(
+        analytics_routes.RBACService,
+        "user_has_permission",
+        AsyncMock(return_value=True),
+    )
+    loader = AsyncMock(return_value={"evidence_attempts": 12})
+    monkeypatch.setattr(analytics_routes, "load_learning_os_analytics", loader)
+
+    result = await analytics_routes.system_learning_os_analytics(
+        days=30,
+        db=object(),
+        current_user=SimpleNamespace(id=42),
+    )
+
+    assert result == {"evidence_attempts": 12}
+    loader.assert_awaited_once_with(object(), days=30)
