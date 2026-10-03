@@ -287,3 +287,45 @@ def test_unrelated_turns_do_not_reuse_stale_media(text):
     from lyo_app.chat.experience import should_reuse_historical_media
 
     assert should_reuse_historical_media(text) is False
+
+
+
+def test_study_plan_today_stays_a_study_plan_not_web_search():
+    contract = resolve_interaction_contract(
+        user_text="Create a study plan for today",
+        router_intent=Intent.STUDY_PLAN,
+    )
+
+    assert contract.mode is InteractionMode.CREATE
+    assert contract.workflow_intent is Intent.STUDY_PLAN
+    assert contract.requires_search is False
+    assert contract.fast_lane is False
+
+
+def test_recent_progress_stays_learner_state_not_web_search():
+    contract = resolve_interaction_contract(
+        user_text="Show my recent progress in algebra",
+        router_intent=Intent.REFLECT,
+    )
+
+    assert contract.mode is InteractionMode.ANSWER
+    assert contract.requires_search is False
+    assert MemoryScope.LEARNER in contract.memory_scopes
+
+
+def test_required_search_with_only_document_source_still_warns_unverified():
+    from lyo_app.ai.executor import _experience_prompt
+
+    prompt = _experience_prompt(
+        {
+            "mode": "search",
+            "depth": "standard",
+            "representation": "document",
+            "requires_search": True,
+        },
+        {},
+        [{"kind": "document", "name": "notes.pdf", "pages": [1]}],
+    )
+
+    assert "No live-search sources were returned" in prompt
+    assert "Non-web attachments or references do not satisfy live verification" in prompt
