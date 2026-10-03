@@ -103,28 +103,57 @@ def _local_media_path(uri: str) -> Path:
     return candidate
 
 
-def _extract_document_text(data: bytes, mime_type: str) -> str:
-    """Extract bounded text for providers that cannot consume raw documents.
+def _extract_document_content(
+    data: bytes, mime_type: str
+) -> tuple[str, List[Dict[str, Any]]]:
+    """Extract bounded text plus page provenance for source-aware answers.
 
-    Gemini still receives the original file bytes. The extracted copy is
-    carried as metadata so OpenAI can be used as a real fallback instead of
-    rejecting Lyo's internal `media_base64` part.
+    Gemini still receives the original file bytes.  Text extraction gives
+    OpenAI a real document fallback, while page provenance lets either provider
+    cite a source without inventing a page number.
     """
-    text = ""
     if mime_type in {"text/plain", "text/markdown", "text/csv", "application/json"}:
-        text = data.decode("utf-8", errors="replace")
-    elif mime_type == "application/pdf":
-        try:
-            from pypdf import PdfReader
+        text = data.decode("utf-8", errors="replace").strip()
+        return text[:MAX_EXTRACTED_DOCUMENT_CHARS], []
 
-            reader = PdfReader(io.BytesIO(data))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception:
-            # A scanned/image-only PDF can still be handled by a native
-            # multimodal provider such as Gemini. Do not reject it here.
-            text = ""
+    if mime_type != "application/pdf":
+        return "", []
 
-    return text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS]
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        pages: List[Dict[str, Any]] = []
+        rendered: List[str] = []
+        remaining = MAX_EXTRACTED_DOCUMENT_CHARS
+        for index, page in enumerate(reader.pages, 1):
+            if remaining <= 0:
+                break
+            page_text = (page.extract_text() or "").strip()
+            if not page_text:
+                pages.append({"page": index, "has_text": False})
+                continue
+            bounded = page_text[:remaining]
+            pages.append(
+                {
+                    "page": index,
+                    "has_text": True,
+                    "excerpt": bounded[:700],
+                }
+            )
+            rendered.append(f"[Page {index}]\n{bounded}")
+            remaining -= len(bounded)
+
+        return "\n\n".join(rendered).strip(), pages
+    except Exception:
+        # A scanned/image-only PDF can still be handled by a native
+        # multimodal provider such as Gemini. Do not reject it here.
+        return "", []
+
+
+def _extract_document_text(data: bytes, mime_type: str) -> str:
+    """Compatibility wrapper retained for tests/callers that only need text."""
+    return _extract_document_content(data, mime_type)[0]
 
 
 def canonical_message_content(text: str | None, media: Iterable[MediaRef]) -> str:
@@ -237,8 +266,13 @@ async def load_media_attachments(
             "name": _clean_label(item.name or path.name),
         }
         if not mime_type.startswith("image/"):
-            extracted_text = await asyncio.to_thread(_extract_document_text, data, mime_type)
+            extracted_text, source_pages = await asyncio.to_thread(
+                _extract_document_content, data, mime_type
+            )
             if extracted_text:
                 part["extracted_text"] = extracted_text
+            if source_pages:
+                part["source_pages"] = source_pages
+                part["page_count"] = len(source_pages)
         prepared.append(part)
     return prepared
