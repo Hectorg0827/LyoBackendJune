@@ -293,7 +293,7 @@ def test_unrelated_turns_do_not_reuse_stale_media(text):
 def test_study_plan_today_stays_a_study_plan_not_web_search():
     contract = resolve_interaction_contract(
         user_text="Create a study plan for today",
-        router_intent=Intent.STUDY_PLAN,
+        router_intent=Intent.GENERAL,
     )
 
     assert contract.mode is InteractionMode.CREATE
