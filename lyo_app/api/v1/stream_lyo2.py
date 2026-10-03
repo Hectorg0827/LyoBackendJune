@@ -1188,6 +1188,7 @@ async def stream_lyo2_chat(
         start_time = time.time()
         
         try:
+            current_media_supplied = bool(request.media)
             display_content = canonical_message_content(request.text, request.media)
             media_attachments = await load_media_attachments(request.media)
             if not request.text and request.media:
@@ -1284,10 +1285,21 @@ async def stream_lyo2_chat(
                     return
 
             if not media_attachments:
-                historical_media = recent_media_refs(request.conversation_history)
+                from lyo_app.chat.experience import should_reuse_historical_media
+
+                historical_media = (
+                    recent_media_refs(request.conversation_history)
+                    if should_reuse_historical_media(request.text or "")
+                    else []
+                )
                 media_attachments = await load_media_attachments(
                     historical_media, missing_ok=True
                 )
+                if media_attachments and historical_media:
+                    # Rehydrate the reference as request media so explicit
+                    # Classroom/Test Prep/quiz continuations inherit the exact
+                    # material without leaking it into unrelated turns.
+                    request.media = historical_media
 
             from lyo_app.teaching_runtime.model_usage import (
                 bind_model_usage,
@@ -1428,6 +1440,54 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
+            # Product-level interaction contract. This is resolved once, before
+            # pedagogy or planning, so downstream layers cannot silently change
+            # "answer/explain/compare/search" into a different interaction.
+            from lyo_app.chat.experience import (
+                context_with_response_depth,
+                effective_intent,
+                fast_lane_plan,
+                merged_chat_state,
+                resolve_interaction_contract,
+            )
+
+            contract_state_summary = merged_chat_state(
+                request.state_summary,
+                getattr(persistent_conversation, "context_data", None),
+            )
+            interaction_contract = resolve_interaction_contract(
+                user_text=request.text or "",
+                router_intent=decision.intent,
+                has_media=bool(media_attachments),
+                has_current_media=current_media_supplied,
+                state_summary=contract_state_summary,
+            )
+            if interaction_contract.depth_explicit and persistent_conversation is not None:
+                try:
+                    persistent_conversation.context_data = context_with_response_depth(
+                        getattr(persistent_conversation, "context_data", None),
+                        interaction_contract.depth,
+                    )
+                    await db.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "Could not persist Chat depth preference: %s",
+                        type(exc).__name__,
+                    )
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+            contracted_intent = effective_intent(interaction_contract, decision.intent)
+            if contracted_intent != decision.intent:
+                decision = decision.model_copy(
+                    update={
+                        "intent": contracted_intent,
+                        "needs_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+
             # Shared Learning OS policy. Routing says what the learner wants;
             # this deterministic layer says what pedagogical move should happen
             # next. It reads the same durable evidence the Classroom receives.
@@ -1443,7 +1503,7 @@ async def stream_lyo2_chat(
             _policy_topic = resolve_chat_teaching_topic(
                 intent=decision.intent,
                 user_text=request.text or "",
-                state_summary=request.state_summary,
+                state_summary=contract_state_summary,
                 router_topic=getattr(getattr(decision, "entities", None), "topic", None),
                 router_subject=getattr(getattr(decision, "entities", None), "subject", None),
             )
@@ -1459,9 +1519,13 @@ async def stream_lyo2_chat(
                 concept_id=_teaching_concept_id,
                 topic=_policy_topic,
                 history=request.conversation_history,
-                state_summary=request.state_summary,
+                state_summary=contract_state_summary,
                 has_media=bool(media_attachments),
-                has_current_media=bool(request.media),
+                has_current_media=current_media_supplied,
+                interaction_contract={
+                    **interaction_contract.model_dump(mode="json"),
+                    "directives": interaction_contract.prompt_directives(),
+                },
             )
             await record_policy_decision(
                 db,
@@ -1477,6 +1541,22 @@ async def stream_lyo2_chat(
                     "type": "teaching_policy",
                     **teaching_decision.model_dump(mode="json"),
                 },
+            )
+            yield yield_safe_sse_event(
+                "interaction_contract",
+                {
+                    "type": "interaction_contract",
+                    **interaction_contract.model_dump(mode="json"),
+                },
+            )
+
+            from lyo_app.chat.context_broker import build_context_bundle
+            chat_context_bundle = await build_context_bundle(
+                db=db,
+                user_id=authenticated_user_id,
+                contract=interaction_contract,
+                concept_id=_teaching_concept_id,
+                topic=_policy_topic,
             )
             
             # Chat is an adapter onto the same account-owned intake as Test Prep.
@@ -1517,7 +1597,7 @@ async def stream_lyo2_chat(
                     and isinstance(_active_course.get("difficulty"), str)
                     else None
                 )
-                _topic = _resolve_course_topic(
+                _topic = _policy_topic or _resolve_course_topic(
                     request.text or "", request.conversation_history, _active_topic
                 )
                 _explicit_level = _extract_course_level(request.text or "")
@@ -1580,7 +1660,7 @@ async def stream_lyo2_chat(
             if (
                 decision.needs_clarification
                 and decision.confidence > 0.3
-                and teaching_decision.reason_code != "attachment_information_request"
+                and not interaction_contract.fast_lane
             ):
                 # Only ask for clarification if the router is reasonably confident
                 # that it truly cannot understand. Low-confidence clarifications
@@ -1677,7 +1757,11 @@ async def stream_lyo2_chat(
             # A self-contained "explain X" is taught right here as a lesson
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
-            if decision.intent == Intent.EXPLAIN and request.text:
+            if (
+                decision.intent == Intent.EXPLAIN
+                and request.text
+                and not interaction_contract.fast_lane
+            ):
                 _force_lesson_mode = _lesson_mode_for_teaching_action(
                     teaching_decision.action
                 )
@@ -1725,27 +1809,19 @@ async def stream_lyo2_chat(
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
             try:
-                # OPTIMIZATION: Attachment information requests are already
-                # resolved by the deterministic teaching policy. Sending them
-                # through the planner adds latency and gives a second model a
-                # chance to manufacture an assessment the learner never asked
-                # for, so execute one grounded generation step directly.
-                if (
-                    media_attachments
-                    and teaching_decision.action == TeachingAction.ANSWER
-                    and teaching_decision.reason_code == "attachment_information_request"
-                ):
+                # Generalized Chat fast lane: once the interaction contract
+                # already identifies a single grounded operation, skip the LLM
+                # planner entirely. SEARCH still uses this lane; its deterministic
+                # plan runs live search before generation.
+                if interaction_contract.fast_lane:
                     logger.info(
-                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
-                        "skipping planner"
+                        f"⚡ [STREAM][{trace_id}] Chat fast lane: "
+                        f"{interaction_contract.mode.value}"
                     )
-                    plan = LyoPlan(steps=[
-                        PlannedAction(
-                            action_type=ActionType.GENERATE_TEXT,
-                            description="Inspect the attachment and answer the learner directly",
-                            parameters={"content": None},
-                        )
-                    ])
+                    plan = fast_lane_plan(
+                        interaction_contract,
+                        request.text or "",
+                    )
                 elif decision.intent in [Intent.GREETING, Intent.CHAT] and decision.confidence > 0.7:
                     logger.info(f"⚡ [STREAM][{trace_id}] Fast Path: Skipping Planner for {decision.intent}")
                     plan = LyoPlan(steps=[
@@ -1841,6 +1917,11 @@ async def stream_lyo2_chat(
                             intent=decision.intent.value if decision.intent else None,
                             media_attachments=media_attachments,
                             teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract={
+                                **interaction_contract.model_dump(mode="json"),
+                                "directives": interaction_contract.prompt_directives(),
+                            },
+                            context_bundle=chat_context_bundle,
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -1851,7 +1932,7 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             if decision.intent == Intent.COURSE:
-                topic_text = _resolve_course_topic(
+                topic_text = _policy_topic or _resolve_course_topic(
                     request.text or "",
                     request.conversation_history,
                     (
@@ -2031,6 +2112,12 @@ async def stream_lyo2_chat(
                 collected_bricks.append(oc_brick)
                 yield f"data: {json.dumps(oc_brick)}\n\n"
                 
+            sources = execution_response.metadata.get("sources") or []
+            if sources:
+                sources_brick = {"type": "sources", "sources": sources}
+                collected_bricks.append(sources_brick)
+                yield yield_safe_sse_event("sources", sources_brick)
+
             # Emit v1 actions event
             action_labels = []
             for action_block in execution_response.next_actions:
@@ -2063,6 +2150,14 @@ async def stream_lyo2_chat(
                     logger.warning(f"⚠️ Cache save failed: {e}")
 
             if persistent_conversation and raw_llm_text:
+                experience_metadata = [{
+                    "type": "chat_experience",
+                    "sources": sources,
+                    "interaction_contract": execution_response.metadata.get(
+                        "interaction_contract"
+                    ),
+                    "suggested_actions": action_labels,
+                }]
                 await conversation_store.add_message(
                     db,
                     persistent_conversation.id,
@@ -2070,6 +2165,7 @@ async def stream_lyo2_chat(
                     content=raw_llm_text,
                     mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                     client_message_id=assistant_client_message_id,
+                    ctas=experience_metadata,
                 )
 
             # Completion signal
