@@ -1365,7 +1365,7 @@ class AdaptiveSession:
         # client give immediate feedback. The diagnostic still withholds its
         # key because it is measuring prior knowledge. Independent/transfer
         # evidence is always open-response by contract.
-        evidence_bearing = pending.phase == "diagnose"
+        evidence_bearing = pending.phase == "diagnose" or state.closing_win_asked
         if task.response_format == "choice":
             components.append(QuizCard(
                 component_id=pending.id, question=prompt,
