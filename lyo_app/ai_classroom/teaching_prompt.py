@@ -147,13 +147,13 @@ FOCUSED_ORIENT = (
 )
 
 GUIDED = (
-    "This move is guided: demonstration=[], model the setup and support ONE next "
-    "decision. Use plausible, kind, question-specific distractor feedback. Vary "
-    "response_format from checkpoint to checkpoint so its shape is never predictable "
-    "from the phase. When response_format=choice, use kind=choose or predict — not "
-    "apply — because a scaffolded tap is practice, not durable application evidence. "
-    "When you use choice make every distractor a real misconception. Never put the "
-    "correct option, numeric result, or worked solution in speech, board_content, "
+    "This move is guided: demonstration=[], supply a choice task with 2–4 "
+    "options; model the setup and support ONE next decision. Use plausible, kind, "
+    "question-specific distractor feedback. Consecutive choices are welcome. Vary "
+    "response_format from checkpoint to checkpoint so its shape is never "
+    "predictable from the phase; pick whichever fits THIS question, and when you "
+    "use choice make every distractor a real misconception. Never put the correct "
+    "option, numeric result, or worked solution in speech, board_content, "
     "response_hint or a visual before the learner answers. "
 )
 
@@ -161,8 +161,7 @@ FADED = (
     "This move is faded: demonstration=[], supply a completion, choice or "
     "short_answer task with most of a related worked example already completed. "
     "Ask for ONE missing step or result; never a broad explanation. Only the "
-    "final step is removed. If response_format=choice, use kind=choose or predict "
-    "rather than apply; tapped supported practice is not durable application evidence. "
+    "final step is removed. "
 )
 
 INDEPENDENT = (
