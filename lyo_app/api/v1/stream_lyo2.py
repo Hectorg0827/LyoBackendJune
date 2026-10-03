@@ -983,6 +983,15 @@ async def check_lyo2_answer(
                 evidence_type=evidence["kind"],
                 succeeded=correct,
             )
+            evidence_metadata: Dict[str, Any] = {
+                "conversation_id": str(request.conversation_id)[:128],
+            }
+            if intervention:
+                evidence_metadata["teaching_intervention"] = intervention
+            if 0 < request.time_taken_ms < 3_600_000:
+                evidence_metadata["response_time_seconds"] = round(
+                    request.time_taken_ms / 1000.0, 3
+                )
             await log_learning_event(
                 db,
                 LearningEventCreate(
@@ -995,11 +1004,7 @@ async def check_lyo2_answer(
                     hints_used=1 if request.hint_used else 0,
                     misconception=misconception,
                     source_surface=_surface_of(block),
-                    metadata_json=(
-                        {"teaching_intervention": intervention}
-                        if intervention
-                        else None
-                    ),
+                    metadata_json=evidence_metadata,
                 ),
             )
     except Exception as e:
