@@ -150,12 +150,34 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 historical_media, missing_ok=True
             )
 
+        from lyo_app.teaching_runtime.model_usage import (
+            bind_model_usage,
+            learning_event_usage_recorder,
+        )
+
+        def _model_usage_scope(tier: str):
+            conversation_key = (
+                getattr(persistent_conversation, "id", None)
+                or request.conversation_id
+                or request.session_id
+                or request.device_id
+            )
+            return bind_model_usage(
+                learning_event_usage_recorder(
+                    user_id=authenticated_user_id,
+                    surface="chat",
+                    session_id=conversation_key,
+                    model_tier=tier,
+                )
+            )
+
         # 1. Layer A: Multimodal Routing
         logger.info(f"[{trace_id}] Layer A: Routing request for user {current_user.id}")
-        routing_response = await router_agent.route(
-            request,
-            media_attachments=media_attachments,
-        )
+        with _model_usage_scope("orchestration"):
+            routing_response = await router_agent.route(
+                request,
+                media_attachments=media_attachments,
+            )
         decision = routing_response.decision
 
         from lyo_app.ai.lesson_composer import slugify_skill
@@ -221,22 +243,24 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             
         # 2. Layer B: Planning
         logger.info(f"[{trace_id}] Layer B: Planning execution for intent {decision.intent}")
-        plan = await planner_agent.plan(request, decision)
+        with _model_usage_scope("orchestration"):
+            plan = await planner_agent.plan(request, decision)
         
         # 3. Layer C: Execution
         logger.info(f"[{trace_id}] Layer C: Executing plan")
         executor = LyoExecutor(db)
-        execution_response = await executor.execute(
-            user_id=str(current_user.id),
-            plan=plan,
-            original_request=request.text or "",
-            conversation_history=[
-                {"role": turn.role, "content": turn.content}
-                for turn in request.conversation_history
-            ],
-            media_attachments=media_attachments,
-            teaching_decision=teaching_decision.model_dump(mode="json"),
-        )
+        with _model_usage_scope(teaching_decision.model_tier):
+            execution_response = await executor.execute(
+                user_id=str(current_user.id),
+                plan=plan,
+                original_request=request.text or "",
+                conversation_history=[
+                    {"role": turn.role, "content": turn.content}
+                    for turn in request.conversation_history
+                ],
+                media_attachments=media_attachments,
+                teaching_decision=teaching_decision.model_dump(mode="json"),
+            )
         
         # Add trace metadata
         latency_ms = int((time.time() - start_time) * 1000)
