@@ -71,6 +71,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
     trace_id = str(uuid.uuid4())
     start_time = time.time()
     try:
+        current_media_supplied = bool(request.media)
         display_content = canonical_message_content(request.text, request.media)
         media_attachments = await load_media_attachments(request.media)
         if not request.text and request.media:
@@ -150,6 +151,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             media_attachments = await load_media_attachments(
                 historical_media, missing_ok=True
             )
+            if media_attachments and historical_media:
+                request.media = historical_media
 
         from lyo_app.teaching_runtime.model_usage import (
             bind_model_usage,
@@ -190,7 +193,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             user_text=request.text or "",
             router_intent=decision.intent,
             has_media=bool(media_attachments),
-            has_current_media=bool(request.media),
+            has_current_media=current_media_supplied,
             state_summary=request.state_summary,
         )
         contracted_intent = effective_intent(interaction_contract, decision.intent)
@@ -232,7 +235,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             history=request.conversation_history,
             state_summary=request.state_summary,
             has_media=bool(media_attachments),
-            has_current_media=bool(request.media),
+            has_current_media=current_media_supplied,
             interaction_contract={
                 **interaction_contract.model_dump(mode="json"),
                 "directives": interaction_contract.prompt_directives(),
