@@ -15,6 +15,125 @@ from lyo_app.integrations.calendar_integration import calendar_service, Calendar
 logger = logging.getLogger(__name__)
 
 
+def _source_manifest(media_attachments: List[Dict[str, Any]], retrieved: List[Any]) -> List[Dict[str, Any]]:
+    """Return a bounded, client-safe source list for the completed answer."""
+    sources: List[Dict[str, Any]] = []
+    for item in media_attachments or []:
+        name = str(item.get("name") or "Attachment")
+        mime_type = str(item.get("mime_type") or "")
+        pages = item.get("source_pages") or []
+        source: Dict[str, Any] = {
+            "kind": "document" if not mime_type.startswith("image/") else "image",
+            "name": name,
+        }
+        if isinstance(pages, list) and pages:
+            source["page_count"] = len(pages)
+            source["pages"] = [
+                int(page.get("page"))
+                for page in pages
+                if isinstance(page, dict) and isinstance(page.get("page"), int)
+            ][:40]
+        sources.append(source)
+
+    for index, item in enumerate(retrieved or [], 1):
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        title = item.get("title")
+        if not url and not title:
+            continue
+        sources.append(
+            {
+                "kind": "web" if url else "reference",
+                "name": str(title or f"Source {index}"),
+                "url": str(url) if url else None,
+                "index": index,
+            }
+        )
+    return sources[:12]
+
+
+def _experience_prompt(contract: Dict[str, Any], context_bundle: Dict[str, Any], sources: List[Dict[str, Any]]) -> str:
+    if not contract:
+        return ""
+
+    mode = str(contract.get("mode") or "answer")
+    depth = str(contract.get("depth") or "standard")
+    representation = str(contract.get("representation") or "prose")
+    directives = contract.get("directives") or []
+    depth_rules = {
+        "concise": "Keep the core answer compact: usually under 120 words unless accuracy requires more.",
+        "standard": "Use enough detail to resolve the request clearly without overexplaining.",
+        "deep": "Give a substantially deeper explanation with reasoning, examples, and useful nuance.",
+    }
+    representation_rules = {
+        "table": "A Markdown comparison table should be the main representation when the facts support one.",
+        "timeline": "Use a chronological timeline or ordered sequence as the main representation.",
+        "diagram": "Use a compact text/Markdown diagram or clearly structured visual description when possible.",
+        "worked_example": "Show the reasoning as a worked example with explicit steps.",
+        "document": "Organize the answer around what the attached material actually contains.",
+        "bullets": "Prefer a short, scannable bullet structure.",
+        "prose": "Use concise conversational prose; use lists only when they improve clarity.",
+    }
+
+    memory_lines: List[str] = []
+    learner = context_bundle.get("learner") if isinstance(context_bundle, dict) else None
+    if isinstance(learner, dict) and any(v not in (None, "", 0, "NOT_SEEN") for v in learner.values()):
+        memory_lines.append(
+            "Measured learner state (use only to tune depth, never to override the request): "
+            + json.dumps(learner, default=str)
+        )
+    personal = context_bundle.get("personal") if isinstance(context_bundle, dict) else None
+    if personal:
+        memory_lines.append(
+            "Relevant long-term personal context (use only when it directly helps this request):\n"
+            + str(personal)[:4000]
+        )
+
+    source_lines: List[str] = []
+    for source in sources:
+        if source.get("kind") == "web":
+            source_lines.append(
+                f"[{source.get('index')}] {source.get('name')} — {source.get('url')}"
+            )
+        elif source.get("kind") == "document":
+            if source.get("pages"):
+                source_lines.append(
+                    f"Document: {source.get('name')} — available pages: {source.get('pages')}"
+                )
+            else:
+                source_lines.append(f"Document: {source.get('name')}")
+        else:
+            source_lines.append(f"Source: {source.get('name')}")
+
+    source_rules = ""
+    if source_lines:
+        source_rules = (
+            "\n--- SOURCE GROUNDING ---\n"
+            + "\n".join(source_lines)
+            + "\nWhen a factual claim comes from a document, cite the filename and page when the page is known, "
+              "for example (notes.pdf, p. 3). Never invent page numbers. "
+              "For live web results, cite source numbers like [1] after the claim and do not cite a source you did not use.\n"
+            + "--- END SOURCE GROUNDING ---\n"
+        )
+
+    directive_text = "\n".join(f"- {item}" for item in directives)
+    memory_text = "\n".join(memory_lines)
+    return f"""
+--- CHAT INTERACTION CONTRACT (SERVER-AUTHORITATIVE) ---
+Mode: {mode}
+Depth: {depth}
+Representation: {representation}
+{depth_rules.get(depth, depth_rules["standard"])}
+{representation_rules.get(representation, representation_rules["prose"])}
+{directive_text}
+Do not transform this interaction into a different mode. Optional follow-ups come after the requested task.
+--- END CHAT INTERACTION CONTRACT ---
+{source_rules}
+{memory_text}
+"""
+
+
 def _get_gemini_model():
     """Lazy-initialise a Gemini model for text generation."""
     # Attempt to use the same logic as AIResilienceManager if settings are incomplete
@@ -102,7 +221,15 @@ class LyoExecutor:
             rag_text = "\n\n--- REFERENCE MATERIAL ---\n"
             for i, snippet in enumerate(rag_snippets, 1):
                 if isinstance(snippet, dict):
-                    rag_text += f"\n[{i}] {snippet.get('content', snippet)}\n"
+                    body = snippet.get("content") or snippet.get("snippet") or snippet
+                    title = snippet.get("title")
+                    url = snippet.get("url")
+                    header = f"[{i}]"
+                    if title:
+                        header += f" {title}"
+                    if url:
+                        header += f" — {url}"
+                    rag_text += f"\n{header}\n{body}\n"
                 else:
                     rag_text += f"\n[{i}] {snippet}\n"
 
@@ -133,6 +260,18 @@ Target evidence: {teaching_decision.get("target_evidence_type") or "none"}
 Do not override this action with a different pedagogical sequence. The policy chooses what to do; you only realize it clearly and naturally.
 --- END TEACHING POLICY ---
 """
+
+        interaction_contract = context.get("interaction_contract") or {}
+        context_bundle = context.get("context_bundle") or {}
+        sources = _source_manifest(
+            context.get("media_attachments", []),
+            rag_snippets,
+        )
+        experience_text = _experience_prompt(
+            interaction_contract,
+            context_bundle,
+            sources,
+        )
 
         prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
 Answer the user's question with warmth, curiosity, and clarity.
@@ -166,7 +305,7 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{teaching_policy_text}
+{rag_text}{history_text}{teaching_policy_text}{experience_text}
 
 USER QUESTION:
 {original_request}
@@ -235,6 +374,8 @@ USER QUESTION:
         intent: str = None,
         media_attachments: list = None,
         teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+        context_bundle: Optional[Dict[str, Any]] = None,
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
@@ -249,6 +390,8 @@ USER QUESTION:
             "conversation_history": conversation_history or [],
             "media_attachments": media_attachments or [],
             "teaching_decision": teaching_decision or {},
+            "interaction_contract": interaction_contract or {},
+            "context_bundle": context_bundle or {},
         }
         
         for step in plan.steps:
@@ -259,6 +402,24 @@ USER QUESTION:
                 limit = step.parameters.get("limit", 3)
                 content = await self.rag.retrieve(query, limit=limit)
                 execution_context["retrieved_content"].extend(content)
+
+            elif step.action_type == ActionType.SEARCH_WEB:
+                query = step.parameters.get("query", original_request)
+                limit = int(step.parameters.get("max_results", 5) or 5)
+                try:
+                    from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+                    result = await WebSearchTool().execute(
+                        int(user_id) if str(user_id).isdigit() else 0,
+                        query=query,
+                        max_results=max(1, min(limit, 8)),
+                    )
+                    if result.success and isinstance(result.output, list):
+                        execution_context["retrieved_content"].extend(result.output)
+                    else:
+                        logger.warning("Live search returned no usable results: %s", result.message)
+                except Exception as exc:
+                    logger.warning("Live search failed; continuing without it: %s", type(exc).__name__)
                 
             elif step.action_type == ActionType.CREATE_ARTIFACT:
                 # ... creation logic ...
@@ -347,14 +508,33 @@ USER QUESTION:
                 content=latest_art.get("content"),
                 version_id=f"{latest_art['artifact_id']}_v{latest_art['version']}"
             )
+        contract_actions = []
+        if isinstance(interaction_contract, dict):
+            contract_actions = [
+                str(item)
+                for item in (interaction_contract.get("suggested_actions") or [])
+                if str(item).strip()
+            ]
+        next_actions = (
+            [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": contract_actions})]
+            if contract_actions
+            else self._contextual_actions(intent)
+        )
+        sources = _source_manifest(
+            execution_context.get("media_attachments", []),
+            execution_context.get("retrieved_content", []),
+        )
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=self._contextual_actions(intent),
+            next_actions=next_actions,
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
+                "interaction_contract": interaction_contract or None,
+                "memory_scopes": (context_bundle or {}).get("scopes", []),
+                "sources": sources,
             }
         )
 
