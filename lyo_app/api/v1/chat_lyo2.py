@@ -207,6 +207,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             topic=_policy_topic,
             history=request.conversation_history,
             state_summary=request.state_summary,
+            has_media=bool(media_attachments),
+            has_current_media=bool(request.media),
         )
         await record_policy_decision(
             db,
