@@ -26,3 +26,16 @@ def test_retired_optimization_management_router_is_not_mounted():
     stream = Path("lyo_app/api/v1/stream_lyo2.py").read_text(encoding="utf-8")
     assert "ai_performance_optimizer" in stream
     assert "optimize_request" in stream
+
+
+def test_retired_feed_and_gamification_wrappers_are_not_probed():
+    api_source = Path("lyo_app/api/v1/__init__.py").read_text(encoding="utf-8")
+    main_source = Path("lyo_app/enhanced_main.py").read_text(encoding="utf-8")
+
+    assert "from .feeds import router as feeds_router" not in api_source
+    assert "from .gamification import router as gamification_router" not in api_source
+
+    # Current endpoints remain mounted from the active routers.
+    assert "from lyo_app.feeds.routes import router as basic_feeds_router" in main_source
+    assert "from lyo_app.gamification.routes import router as gamification_router" in main_source
+    assert 'prefix="/api/v1/gamification"' in main_source
