@@ -1626,7 +1626,7 @@ async def stream_lyo2_chat(
             if (
                 decision.needs_clarification
                 and decision.confidence > 0.3
-                and teaching_decision.reason_code != "attachment_information_request"
+                and not interaction_contract.fast_lane
             ):
                 # Only ask for clarification if the router is reasonably confident
                 # that it truly cannot understand. Low-confidence clarifications
