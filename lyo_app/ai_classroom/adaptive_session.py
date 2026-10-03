@@ -1359,7 +1359,13 @@ class AdaptiveSession:
         # Neither may ship its key: the probe because the learner is still
         # deciding what they think, and `apply` because that is the checkpoint
         # whose answer counts.
-        evidence_bearing = task.kind == "apply" or pending.phase == "diagnose"
+        # Choice checkpoints in guided/faded practice never write durable
+        # evidence (record_practice deliberately files evidence_type=None for
+        # choices), so exposing local correctness there is safe and lets the
+        # client give immediate feedback. The diagnostic still withholds its
+        # key because it is measuring prior knowledge. Independent/transfer
+        # evidence is always open-response by contract.
+        evidence_bearing = pending.phase == "diagnose"
         if task.response_format == "choice":
             components.append(QuizCard(
                 component_id=pending.id, question=prompt,
