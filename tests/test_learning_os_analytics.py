@@ -297,3 +297,36 @@ async def test_system_report_returns_only_aggregate_loader_result(monkeypatch):
 
     assert result == {"evidence_attempts": 12}
     loader.assert_awaited_once_with(db, days=30)
+
+
+
+def test_cross_surface_continuity_ignores_attempts_more_than_30_days_apart():
+    start = datetime(2026, 8, 1, 12, 0, 0)
+    rows = [
+        event(
+            start,
+            correct=True,
+            kind="application",
+            surface="chat",
+            action="check_application",
+            target="application",
+        ),
+        event(
+            start + timedelta(days=31),
+            correct=True,
+            kind="transfer",
+            surface="classroom",
+            action="check_transfer",
+            target="transfer",
+        ),
+    ]
+
+    report = aggregate_learning_os_events(
+        rows,
+        since=start,
+        now=start + timedelta(days=32),
+    )
+    continuity = report["cross_surface_continuity"]
+    assert continuity["max_gap_days"] == 30
+    assert continuity["cross_surface"]["attempts"] == 0
+    assert continuity["same_surface"]["attempts"] == 0
