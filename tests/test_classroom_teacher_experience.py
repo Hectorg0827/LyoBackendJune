@@ -79,10 +79,11 @@ def test_board_memory_is_deduplicated_and_bounded():
     assert state.board_memory[-1]["title"] == "Anchor 7"
 
 
-def test_surface_re_emits_prior_board_anchors_for_every_client():
+def test_surface_re_emits_only_the_latest_prior_board_anchor_for_every_client():
     ctx = context()
     state = state_for_class()
     state.board_memory = [
+        {"title": "Old anchor", "content": "This should no longer be replayed."},
         {"title": "First anchor", "content": "The same whole is divided into equal parts."},
         {"title": "Current anchor", "content": "A half is larger than a third of the same whole."},
     ]
@@ -103,7 +104,9 @@ def test_surface_re_emits_prior_board_anchors_for_every_client():
     )
     assert "First anchor" in memory.content
     assert "same whole" in memory.content
+    assert "Old anchor" not in memory.content
     assert "Current anchor" not in memory.content
+    assert len(memory.content) <= 320
 
 
 def test_summary_names_key_ideas_and_the_next_skill_to_revisit():
