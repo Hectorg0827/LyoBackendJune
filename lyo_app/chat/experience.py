@@ -165,6 +165,12 @@ _TEST_PREP_RE = re.compile(
     re.IGNORECASE,
 )
 _FLASHCARDS_RE = re.compile(r"\b(?:flashcards?|tarjetas\s+de\s+estudio)\b", re.IGNORECASE)
+_STUDY_PLAN_RE = re.compile(
+    r"\b(?:(?:create|make|build|give\s+me)\s+(?:a\s+)?(?:study\s+plan|study\s+schedule)|"
+    r"plan\s+my\s+studying|study\s+plan\s+(?:for|on|about)|"
+    r"(?:crea|hazme|dame)\s+(?:un\s+)?plan\s+de\s+estudio|plan\s+de\s+estudio)\b",
+    re.IGNORECASE,
+)
 _DEEP_RE = re.compile(
     r"\b(?:deep\s+dive|go\s+deeper|give\s+me\s+more\s+detail|"
     r"explain\s+(?:it\s+)?in\s+more\s+detail|more\s+detailed\s+(?:answer|explanation)|"
@@ -335,6 +341,11 @@ def resolve_interaction_contract(
         mode = InteractionMode.CREATE
         workflow_intent = Intent.FLASHCARDS
         reason = "explicit_flashcards"
+        explicit_user_control = True
+    elif _STUDY_PLAN_RE.search(text):
+        mode = InteractionMode.CREATE
+        workflow_intent = Intent.STUDY_PLAN
+        reason = "explicit_study_plan"
         explicit_user_control = True
     elif _QUIZ_RE.search(text):
         mode = InteractionMode.QUIZ
