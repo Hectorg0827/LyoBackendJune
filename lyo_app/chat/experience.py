@@ -197,6 +197,47 @@ _LEARNER_MEMORY_RE = re.compile(
 )
 
 
+def merged_chat_state(
+    state_summary: Optional[Mapping[str, Any]],
+    conversation_context: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Merge server-owned Chat preferences without overriding this client turn.
+
+    Conversation context is the cross-device fallback. A client may explicitly
+    send a preference for the current turn; that newer value wins.
+    """
+    merged = dict(conversation_context or {})
+    incoming = dict(state_summary or {})
+    merged.update(incoming)
+
+    stored_prefs = (
+        dict((conversation_context or {}).get("chat_preferences") or {})
+        if isinstance(conversation_context, Mapping)
+        else {}
+    )
+    incoming_prefs = (
+        dict((state_summary or {}).get("chat_preferences") or {})
+        if isinstance(state_summary, Mapping)
+        else {}
+    )
+    prefs = {**stored_prefs, **incoming_prefs}
+    if prefs:
+        merged["chat_preferences"] = prefs
+    return merged
+
+
+def context_with_response_depth(
+    conversation_context: Optional[Mapping[str, Any]],
+    depth: ResponseDepth,
+) -> dict[str, Any]:
+    """Return a reassigned JSON payload so SQLAlchemy persists the change."""
+    context = dict(conversation_context or {})
+    preferences = dict(context.get("chat_preferences") or {})
+    preferences["response_depth"] = depth.value
+    context["chat_preferences"] = preferences
+    return context
+
+
 def _state_depth(state_summary: Optional[Mapping[str, Any]]) -> Optional[ResponseDepth]:
     if not isinstance(state_summary, Mapping):
         return None
