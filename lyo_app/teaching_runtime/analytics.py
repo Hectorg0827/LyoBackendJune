@@ -221,20 +221,26 @@ def aggregate_learning_os_events(
                         repair_hours.append(gap.total_seconds() / 3600.0)
 
             if prior is not None:
-                old_surface = getattr(prior, "source_surface", None) or "unknown"
-                new_surface = getattr(event, "source_surface", None) or "unknown"
-                if old_surface != new_surface:
-                    cross["attempts"] += 1
-                    cross["successes"] += int(success)
-                    if target == "retention":
-                        cross["retention_attempts"] += 1
-                        cross["retention_successes"] += int(success)
-                    transition = transitions[f"{old_surface}->{new_surface}"]
-                    transition["attempts"] += 1
-                    transition["successes"] += int(success)
-                else:
-                    same["attempts"] += 1
-                    same["successes"] += int(success)
+                continuity_gap = event_time - _event_time(prior)
+                if timedelta(0) <= continuity_gap <= timedelta(days=30):
+                    old_surface = (
+                        getattr(prior, "source_surface", None) or "unknown"
+                    )
+                    new_surface = (
+                        getattr(event, "source_surface", None) or "unknown"
+                    )
+                    if old_surface != new_surface:
+                        cross["attempts"] += 1
+                        cross["successes"] += int(success)
+                        if target == "retention":
+                            cross["retention_attempts"] += 1
+                            cross["retention_successes"] += int(success)
+                        transition = transitions[f"{old_surface}->{new_surface}"]
+                        transition["attempts"] += 1
+                        transition["successes"] += int(success)
+                    else:
+                        same["attempts"] += 1
+                        same["successes"] += int(success)
 
             seconds = _response_seconds(event)
             if seconds is not None:
@@ -333,6 +339,7 @@ def aggregate_learning_os_events(
         "retention": retention,
         "hint_dependency": hint_groups,
         "cross_surface_continuity": {
+            "max_gap_days": 30,
             "cross_surface": {
                 **cross,
                 "success_rate": _rate(cross["successes"], cross["attempts"]),
