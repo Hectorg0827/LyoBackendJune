@@ -357,6 +357,18 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         answer_text = execution_response.answer_block.content.get("text", "")
         if persistent_conversation and answer_text:
+            action_labels = []
+            for action_block in execution_response.next_actions:
+                if action_block.content and "actions" in action_block.content:
+                    action_labels.extend(action_block.content["actions"])
+            experience_metadata = [{
+                "type": "chat_experience",
+                "sources": execution_response.metadata.get("sources") or [],
+                "interaction_contract": execution_response.metadata.get(
+                    "interaction_contract"
+                ),
+                "suggested_actions": action_labels,
+            }]
             await conversation_store.add_message(
                 db,
                 persistent_conversation.id,
@@ -364,6 +376,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 answer_text,
                 mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                 client_message_id=assistant_client_message_id,
+                ctas=experience_metadata,
             )
         
         return execution_response
