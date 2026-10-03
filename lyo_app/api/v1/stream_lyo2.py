@@ -1438,18 +1438,40 @@ async def stream_lyo2_chat(
             # pedagogy or planning, so downstream layers cannot silently change
             # "answer/explain/compare/search" into a different interaction.
             from lyo_app.chat.experience import (
+                context_with_response_depth,
                 effective_intent,
                 fast_lane_plan,
+                merged_chat_state,
                 resolve_interaction_contract,
             )
 
+            contract_state_summary = merged_chat_state(
+                request.state_summary,
+                getattr(persistent_conversation, "context_data", None),
+            )
             interaction_contract = resolve_interaction_contract(
                 user_text=request.text or "",
                 router_intent=decision.intent,
                 has_media=bool(media_attachments),
                 has_current_media=current_media_supplied,
-                state_summary=request.state_summary,
+                state_summary=contract_state_summary,
             )
+            if interaction_contract.depth_explicit and persistent_conversation is not None:
+                try:
+                    persistent_conversation.context_data = context_with_response_depth(
+                        getattr(persistent_conversation, "context_data", None),
+                        interaction_contract.depth,
+                    )
+                    await db.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "Could not persist Chat depth preference: %s",
+                        type(exc).__name__,
+                    )
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
             contracted_intent = effective_intent(interaction_contract, decision.intent)
             if contracted_intent != decision.intent:
                 decision = decision.model_copy(
@@ -1475,7 +1497,7 @@ async def stream_lyo2_chat(
             _policy_topic = resolve_chat_teaching_topic(
                 intent=decision.intent,
                 user_text=request.text or "",
-                state_summary=request.state_summary,
+                state_summary=contract_state_summary,
                 router_topic=getattr(getattr(decision, "entities", None), "topic", None),
                 router_subject=getattr(getattr(decision, "entities", None), "subject", None),
             )
@@ -1491,7 +1513,7 @@ async def stream_lyo2_chat(
                 concept_id=_teaching_concept_id,
                 topic=_policy_topic,
                 history=request.conversation_history,
-                state_summary=request.state_summary,
+                state_summary=contract_state_summary,
                 has_media=bool(media_attachments),
                 has_current_media=current_media_supplied,
                 interaction_contract={
