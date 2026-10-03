@@ -14,11 +14,6 @@ on:
           - seed
           - review
         default: seed
-      topic:
-        description: Topic used for a seed learning session
-        required: true
-        type: string
-        default: comparing fractions
       review_concept_id:
         description: Optional canonical due-review concept ID
         required: false
@@ -34,7 +29,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-teacher-quality-${{ github.ref }}
+  # Every run uses the same dedicated learner account and before/after
+  # analytics snapshots. One global group prevents cross-run contamination
+  # even when an operator dispatches from a different branch or tag.
+  group: live-teacher-quality-production
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +44,10 @@ jobs:
       LYO_BASE_URL: https://api.lyoai.app
       LYO_ACCESS_TOKEN: ${{ secrets.LYO_TEACHER_QUALITY_TOKEN }}
       VALIDATION_PHASE: ${{ inputs.phase }}
-      VALIDATION_TOPIC: ${{ inputs.topic }}
+      # This workflow intentionally validates one coherent baseline scenario.
+      # Other subjects require matching prompt/question/transfer fixtures and
+      # should use the CLI until profile presets are added.
+      VALIDATION_TOPIC: comparing fractions
       REVIEW_CONCEPT_ID: ${{ inputs.review_concept_id }}
       MAX_SCENES: ${{ inputs.max_scenes }}
 
