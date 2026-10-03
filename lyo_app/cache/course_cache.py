@@ -26,20 +26,26 @@ class CourseSemanticCache:
     Supports Redis (primary) and Filesystem (fallback).
     """
     
-    def __init__(self, redis_url: str = "redis://localhost:6379/0", fallback_dir: str = "/tmp/.lyo_cache"):
+    def __init__(self, redis_url: Optional[str] = None, fallback_dir: str = "/tmp/.lyo_cache"):
         self.redis_client = None
         self.use_redis = False
         self.fallback_dir = fallback_dir
+        # Match the rest of the runtime: explicit constructor value wins,
+        # otherwise use the deployed REDIS_URL. Do not silently invent a
+        # localhost Redis in hosted environments.
+        self.redis_url = redis_url or os.getenv("REDIS_URL")
         
-        # Try connecting to Redis
-        if REDIS_AVAILABLE:
+        # Try connecting to Redis only when it is actually configured.
+        if REDIS_AVAILABLE and self.redis_url:
             try:
-                self.redis_client = redis.from_url(redis_url, decode_responses=True)
+                self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
                 self.redis_client.ping()
                 self.use_redis = True
                 logger.info("✅ CourseSemanticCache: Connected to Redis")
             except Exception as e:
                 logger.warning(f"⚠️ CourseSemanticCache: Redis unavailable ({e}). Using filesystem.")
+        elif REDIS_AVAILABLE:
+            logger.info("CourseSemanticCache: REDIS_URL not configured; using filesystem fallback.")
         
         # Ensure fallback dir exists
         if not self.use_redis:
