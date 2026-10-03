@@ -25,13 +25,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
+import re
 import ssl
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -166,6 +169,149 @@ def choose_option(quiz: dict[str, Any], want_correct: bool) -> tuple[Optional[st
     if options and options[0].get("id") is not None:
         return str(options[0]["id"]), "unknown"
     return None, "missing"
+
+
+def choose_fraction_option(
+    quiz: dict[str, Any], want_correct: bool
+) -> tuple[Optional[str], str]:
+    """Choose from a hidden-key fractions card using learner-visible math only."""
+    question = str(quiz.get("question") or "")
+    lowered = question.casefold()
+    options = [o for o in quiz.get("options", []) if isinstance(o, dict)]
+    if not options:
+        return None, "missing"
+
+    pairs = [
+        (int(a), int(b))
+        for a, b in re.findall(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)", question)
+        if int(b) != 0
+    ]
+
+    expected: set[str] = set()
+    if len(pairs) >= 2:
+        (a, b), (c, d) = pairs[0], pairs[1]
+        left, right = Fraction(a, b), Fraction(c, d)
+        lcd = math.lcm(b, d)
+        if "common denominator" in lowered or "least common denominator" in lowered:
+            expected.add(str(lcd))
+        if (
+            "which fraction" in lowered
+            or "larger fraction" in lowered
+            or "which is larger" in lowered
+            or "compare" in lowered
+        ):
+            if left > right:
+                expected.add(f"{a}/{b}")
+            elif right > left:
+                expected.add(f"{c}/{d}")
+            else:
+                expected.update({"equal", "they are equal", "the fractions are equal"})
+
+    if len(pairs) == 1:
+        a, b = pairs[0]
+        target = re.search(
+            r"(?:denominator|denom(?:inator)?)[^\d]{0,15}(\d+)", lowered
+        )
+        if target:
+            target_den = int(target.group(1))
+            if target_den and target_den % b == 0:
+                expected.add(f"{a * (target_den // b)}/{target_den}")
+
+    def normal(value: str) -> str:
+        return re.sub(r"\s+", "", value.casefold()).strip(" .,:;!?")
+
+    expected_norm = {normal(value) for value in expected}
+    correct_index: Optional[int] = None
+    for index, option in enumerate(options):
+        if normal(str(option.get("label") or "")) in expected_norm:
+            correct_index = index
+            break
+
+    if correct_index is None:
+        return None, "unknown"
+
+    chosen_index = correct_index
+    if not want_correct:
+        chosen_index = next(
+            (index for index in range(len(options)) if index != correct_index),
+            correct_index,
+        )
+        if chosen_index == correct_index:
+            return None, "unknown"
+
+    option_id = options[chosen_index].get("id")
+    return (str(option_id), "computed") if option_id is not None else (None, "missing")
+
+
+def choose_scripted_option(
+    quiz: dict[str, Any], want_correct: bool
+) -> tuple[Optional[str], str]:
+    """Prefer declared practice feedback; otherwise solve learner-visible fractions."""
+    option_id, certainty = choose_option(quiz, want_correct)
+    if option_id is not None and certainty == "declared":
+        return option_id, certainty
+    return choose_fraction_option(quiz, want_correct)
+
+
+def scripted_fraction_response(question: str) -> str:
+    """Act as a deterministic learner for the one live fractions baseline.
+
+    This is deliberately subject-specific. The harness may compute an answer
+    from learner-visible question text, but it never reads a hidden answer key.
+    A broader subject matrix should add a separate scripted learner per fixture
+    rather than teaching this runner to guess.
+    """
+    text = question or ""
+    lowered = text.casefold()
+    pairs = [
+        (int(a), int(b))
+        for a, b in re.findall(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)", text)
+        if int(b) != 0
+    ]
+
+    if "why" in lowered or "explain" in lowered or "reason" in lowered:
+        return (
+            "The fractions have to describe the same whole. A larger denominator "
+            "splits that same whole into more equal pieces, so each piece is smaller. "
+            "Using a common denominator makes the pieces the same size, then the "
+            "numerators can be compared directly."
+        )
+
+    if len(pairs) >= 2:
+        (a, b), (c, d) = pairs[0], pairs[1]
+        lcd = math.lcm(b, d)
+        left_num = a * (lcd // b)
+        right_num = c * (lcd // d)
+        left = Fraction(a, b)
+        right = Fraction(c, d)
+        if left > right:
+            relation = f"{a}/{b} is larger"
+        elif right > left:
+            relation = f"{c}/{d} is larger"
+        else:
+            relation = "the fractions are equal"
+        return (
+            f"The least common denominator is {lcd}. "
+            f"{a}/{b} = {left_num}/{lcd} and {c}/{d} = {right_num}/{lcd}, "
+            f"so {relation}."
+        )
+
+    if len(pairs) == 1:
+        a, b = pairs[0]
+        target = re.search(r"denominator(?:\s+of|\s+to|\s+is)?\s+(\d+)", lowered)
+        if target:
+            target_den = int(target.group(1))
+            if target_den and target_den % b == 0:
+                factor = target_den // b
+                return (
+                    f"Multiply numerator and denominator by {factor}: "
+                    f"{a}/{b} = {a * factor}/{target_den}."
+                )
+
+    return (
+        "Use the least common denominator, rewrite the fractions as equivalent "
+        "fractions with that denominator, then compare their numerators."
+    )
 
 
 def select_due_review(
@@ -336,6 +482,8 @@ class LiveLyo:
             "state_summary": {},
         }
         started = time.perf_counter()
+        lines: list[str] = []
+        stream_error = ""
         async with client.stream(
             "POST",
             f"{self.base_url}/api/v1/lyo2/chat/stream",
@@ -343,7 +491,14 @@ class LiveLyo:
             headers={**self.headers, "Accept": "text/event-stream"},
         ) as response:
             response.raise_for_status()
-            lines = [line async for line in response.aiter_lines()]
+            try:
+                async for line in response.aiter_lines():
+                    lines.append(line)
+            except httpx.RemoteProtocolError as exc:
+                # Preserve every event received before a proxy/server closes an
+                # incomplete chunked stream. The run still records the transport
+                # failure, but no longer throws away useful teaching evidence.
+                stream_error = f"{type(exc).__name__}: {exc}"
         elapsed = round(time.perf_counter() - started, 3)
         events = parse_sse_lines(lines)
 
@@ -367,7 +522,12 @@ class LiveLyo:
         report.chat["teaching_policy"] = policy
         report.chat["conversation_id"] = conversation_id
         report.chat["quiz_seen"] = bool(quiz)
-        report.check("chat_stream_completed", bool(events), f"{len(events)} SSE events")
+        report.chat["stream_error"] = stream_error or None
+        report.check(
+            "chat_stream_completed",
+            bool(events) and not stream_error,
+            stream_error or f"{len(events)} SSE events",
+        )
         report.check("chat_policy_emitted", policy is not None)
         report.check("chat_conversation_persisted", bool(conversation_id))
 
@@ -454,16 +614,19 @@ class LiveLyo:
         scenes: list[dict[str, Any]] = []
         actions: list[dict[str, Any]] = []
         asked = False
+        diagnostic_help_requested = False
         hint_requested = False
         forced_wrong = False
         corrected = False
+        post_remediation_correct_answers = 0
+        open_answers_submitted = 0
         transfer_submitted = False
         reconnected = False
         resume_anchor: Optional[str] = None
         reconnect_anchor: Optional[str] = None
         post_question_seen = False
         resumed_same_example = False
-        original_example_text = ""
+        resume_signature: Optional[tuple[str, str]] = None
         remediation_seen = False
 
         async def send(ws, intent: str, comp: Optional[dict[str, Any]] = None, answer_data=None):
@@ -515,21 +678,26 @@ class LiveLyo:
                     remediation_seen = True
 
                 text = visible_teacher_text(scene)
-                if asked and text:
-                    # The first authored teacher scene after ASK_QUESTION is the
-                    # live answer to the detour. Pedagogical quality is reviewed
-                    # from the transcript; this assertion is only structural.
-                    post_question_seen = True
-                    if original_example_text and text == original_example_text:
-                        resumed_same_example = True
-
                 example = component(scene, "ExampleBlock", "LessonBlock")
                 quiz = component(scene, "QuizCard")
                 input_field = component(scene, "InputField")
 
-                if not asked and example is not None:
+                # The initial diagnostic is not the "interrupt the teacher"
+                # moment. Ask for help there to enter instruction, then reserve
+                # the real hint path for an actual practice checkpoint.
+                if action_name.casefold() == "diagnose" and quiz is not None and not diagnostic_help_requested:
+                    await send(ws, "request_hint", quiz)
+                    diagnostic_help_requested = True
+                    continue
+
+                # Interrupt a real demonstration, not a diagnostic card.
+                if (not asked and example is not None
+                        and action_name.casefold() == "demonstrate"):
                     resume_anchor = str(example.get("component_id") or scene.get("scene_id") or "")
-                    original_example_text = text
+                    resume_signature = (
+                        str(example.get("title") or "").strip(),
+                        str(example.get("content") or "").strip(),
+                    )
                     await send(
                         ws,
                         "ask_question",
@@ -539,13 +707,29 @@ class LiveLyo:
                     asked = True
                     continue
 
-                if quiz is not None and not hint_requested:
+                if asked and text:
+                    # The first authored scene after ASK_QUESTION is the detour
+                    # answer. A later scene has resumed only when the active
+                    # teaching anchor itself returns; board-memory text may
+                    # legitimately differ after the detour.
+                    if not post_question_seen and action_name.casefold() == "explain":
+                        post_question_seen = True
+                    elif post_question_seen and resume_signature and example is not None:
+                        signature = (
+                            str(example.get("title") or "").strip(),
+                            str(example.get("content") or "").strip(),
+                        )
+                        if signature == resume_signature:
+                            resumed_same_example = True
+
+                if (quiz is not None and not hint_requested
+                        and action_name.casefold() not in {"diagnose"}):
                     await send(ws, "request_hint", quiz)
                     hint_requested = True
                     continue
 
                 if quiz is not None and not forced_wrong:
-                    option_id, certainty = choose_option(quiz, want_correct=False)
+                    option_id, certainty = choose_scripted_option(quiz, want_correct=False)
                     if option_id:
                         await send(
                             ws,
@@ -553,16 +737,16 @@ class LiveLyo:
                             quiz,
                             {"selected_option_id": option_id},
                         )
-                        forced_wrong = certainty == "declared"
-                        if certainty != "declared":
+                        forced_wrong = certainty in {"declared", "computed"}
+                        if certainty not in {"declared", "computed"}:
                             report.notes.append(
-                                "First quiz withheld its key; submitted an option but did not claim it was wrong."
+                                "Could not determine a wrong option from learner-visible fraction math."
                             )
                         continue
 
                 if quiz is not None and forced_wrong and not corrected:
-                    option_id, certainty = choose_option(quiz, want_correct=True)
-                    if option_id and certainty == "declared":
+                    option_id, certainty = choose_scripted_option(quiz, want_correct=True)
+                    if option_id and certainty in {"declared", "computed"}:
                         await send(
                             ws,
                             "submit_answer",
@@ -572,14 +756,36 @@ class LiveLyo:
                         corrected = True
                         continue
 
-                if input_field is not None and not transfer_submitted:
+                # After the confirmed remediation repair, keep acting as a
+                # competent learner on any later practice choice whose client
+                # contract explicitly exposes correctness.
+                if quiz is not None and corrected:
+                    option_id, certainty = choose_scripted_option(quiz, want_correct=True)
+                    if option_id and certainty in {"declared", "computed"}:
+                        await send(
+                            ws,
+                            "submit_answer",
+                            quiz,
+                            {"selected_option_id": option_id},
+                        )
+                        post_remediation_correct_answers += 1
+                        continue
+
+                if input_field is not None:
+                    target = str(metadata.get("target_evidence_type") or "").casefold()
+                    response = (
+                        transfer_answer if target == "transfer"
+                        else scripted_fraction_response(str(input_field.get("question") or ""))
+                    )
                     await send(
                         ws,
                         "submit_transfer",
                         input_field,
-                        {"response": transfer_answer},
+                        {"response": response},
                     )
-                    transfer_submitted = True
+                    open_answers_submitted += 1
+                    if target == "transfer":
+                        transfer_submitted = True
                     continue
 
                 button = cta(scene, "continue") or cta(scene)
@@ -641,6 +847,7 @@ class LiveLyo:
                 if isinstance(s.get("metadata"), dict)
             ],
             "asked_free_form_question": asked,
+            "diagnostic_help_requested": diagnostic_help_requested,
             "answer_scene_observed": post_question_seen,
             "same_example_resumed": resumed_same_example,
             "resume_anchor": resume_anchor,
@@ -648,6 +855,8 @@ class LiveLyo:
             "forced_wrong_answer": forced_wrong,
             "remediation_observed": remediation_seen,
             "corrected_after_remediation": corrected,
+            "post_remediation_correct_answers": post_remediation_correct_answers,
+            "open_answers_submitted": open_answers_submitted,
             "transfer_submitted": transfer_submitted,
             "reconnected": reconnected,
             "reconnect_anchor": reconnect_anchor,
@@ -662,14 +871,14 @@ class LiveLyo:
         )
         report.check(
             "interrupted_example_resumed",
-            resumed_same_example if asked and original_example_text else None,
-            "same teacher text reappeared after the detour; deterministic tests cover state identity",
+            resumed_same_example if asked and resume_signature else None,
+            "the same active teaching anchor reappeared after the detour",
         )
         report.check("hint_path_exercised", hint_requested)
         report.check(
             "wrong_answer_scenario_forced",
             forced_wrong if hint_requested else None,
-            "only true when the live card declared a wrong option to the client",
+            "true when the card declared correctness or the scripted learner computed it from visible fraction math",
         )
         report.check(
             "remediation_observed",
