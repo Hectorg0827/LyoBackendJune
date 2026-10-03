@@ -1569,7 +1569,7 @@ async def stream_lyo2_chat(
                     and isinstance(_active_course.get("difficulty"), str)
                     else None
                 )
-                _topic = _resolve_course_topic(
+                _topic = _policy_topic or _resolve_course_topic(
                     request.text or "", request.conversation_history, _active_topic
                 )
                 _explicit_level = _extract_course_level(request.text or "")
@@ -1904,7 +1904,7 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             if decision.intent == Intent.COURSE:
-                topic_text = _resolve_course_topic(
+                topic_text = _policy_topic or _resolve_course_topic(
                     request.text or "",
                     request.conversation_history,
                     (
