@@ -374,15 +374,38 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     answer = (next(option.label for option in task.options if option.correct)
               if task.response_format == "choice" else task.example_answer)
     normalized = comparable_text(answer)
-    # Short numbers, fractions and one-word answers often occur as *data* in
-    # the scenario. Reject a full answer phrase, not a necessary operand.
-    if len(normalized) < 7 or len(normalized.split()) < 2:
-        return
     # response_hint is learner-visible as both guidance and input placeholder.
     visible = [turn.speech, turn.board_title, turn.board_content,
                task.scenario, task.question, task.response_hint]
     if turn.visual:
         visible.extend([turn.visual.caption, turn.visual.description])
+
+    # Short numeric/fraction answers are common *inputs* in a scenario, so the
+    # old gate skipped them entirely. The live teacher-quality run exposed the
+    # consequence: the board stated "the least common denominator is 24" and
+    # then asked the learner for that denominator. Short answers are safe when
+    # they occur only as problem data; they are not safe when the teacher's
+    # explanatory fields state them before the learner answers.
+    if len(normalized) < 7 or len(normalized.split()) < 2:
+        teaching_visible = [turn.speech, turn.board_title, turn.board_content]
+        if turn.visual:
+            teaching_visible.extend([turn.visual.caption, turn.visual.description])
+        scenario_text = comparable_text(task.scenario)
+        question_text = comparable_text(task.question)
+        for item in teaching_visible:
+            item_text = comparable_text(item)
+            if f" {normalized} " not in f" {item_text} ":
+                continue
+            # A short answer can also be one of the problem's operands (3/4,
+            # 24, x). Repeating the actual problem verbatim is harmless.
+            # Using that same token in any other teacher-authored sentence is
+            # treated as a leak; the author can restate the setup without
+            # asserting the result before the learner responds.
+            if item_text not in {scenario_text, question_text}:
+                raise TeachingContractError(
+                    "The visible teaching beat reveals the short answer before the learner responds")
+        return
+
     if any(f" {normalized} " in f" {comparable_text(item)} " for item in visible):
         raise TeachingContractError("The visible question or teaching beat reveals the answer")
 
