@@ -166,13 +166,17 @@ _TEST_PREP_RE = re.compile(
 )
 _FLASHCARDS_RE = re.compile(r"\b(?:flashcards?|tarjetas\s+de\s+estudio)\b", re.IGNORECASE)
 _DEEP_RE = re.compile(
-    r"\b(?:deep\s+dive|go\s+deeper|more\s+detail|detailed|in\s+depth|advanced|"
-    r"profundiza|m[aá]s\s+detalle|a\s+fondo)\b",
+    r"\b(?:deep\s+dive|go\s+deeper|give\s+me\s+more\s+detail|"
+    r"explain\s+(?:it\s+)?in\s+more\s+detail|more\s+detailed\s+(?:answer|explanation)|"
+    r"in\s+depth\s+(?:please|answer|explanation)|make\s+(?:it|this)\s+(?:more\s+)?detailed|"
+    r"profundiza|expl[ií]calo\s+con\s+m[aá]s\s+detalle|dame\s+m[aá]s\s+detalle|a\s+fondo\s+por\s+favor)\b",
     re.IGNORECASE,
 )
 _CONCISE_RE = re.compile(
-    r"\b(?:brief|short|concise|quick|tl;?dr|one\s+sentence|keep\s+it\s+short|"
-    r"breve|corto|conciso|r[aá]pido)\b",
+    r"\b(?:keep\s+(?:it|this)\s+(?:brief|short|concise)|be\s+concise|"
+    r"(?:give\s+me\s+)?(?:a\s+)?(?:brief|short|concise)\s+answer|"
+    r"one\s+sentence|tl;?dr|responde\s+(?:breve|corto|conciso)|"
+    r"hazlo\s+(?:breve|corto|conciso))\b",
     re.IGNORECASE,
 )
 _VISUAL_RE = re.compile(
