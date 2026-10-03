@@ -253,3 +253,37 @@ def test_required_search_without_sources_forbids_claiming_current_verification()
 
     assert "No live-search sources were returned" in prompt
     assert "Do not present time-sensitive claims as verified or current" in prompt
+
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What does this document say?",
+        "Explain this PDF",
+        "Summarize the attachment",
+        "What is on page 2?",
+        "Teach this in Classroom",
+        "Use this for Test Prep",
+        "Quiz me on this",
+    ],
+)
+def test_explicit_attachment_followups_reuse_prior_media(text):
+    from lyo_app.chat.experience import should_reuse_historical_media
+
+    assert should_reuse_historical_media(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Teach me fractions",
+        "What is the capital of Peru?",
+        "Explain photosynthesis",
+        "Compare Python and JavaScript",
+    ],
+)
+def test_unrelated_turns_do_not_reuse_stale_media(text):
+    from lyo_app.chat.experience import should_reuse_historical_media
+
+    assert should_reuse_historical_media(text) is False
