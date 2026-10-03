@@ -161,7 +161,8 @@ FADED = (
     "This move is faded: demonstration=[], supply a completion, choice or "
     "short_answer task with most of a related worked example already completed. "
     "Ask for ONE missing step or result; never a broad explanation. Only the "
-    "final step is removed. "
+    "final step is removed. If response_format=choice, use kind=choose or predict "
+    "rather than apply; tapped supported practice is not durable application evidence. "
 )
 
 INDEPENDENT = (
