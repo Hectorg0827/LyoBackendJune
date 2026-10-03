@@ -158,16 +158,36 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         )
         decision = routing_response.decision
 
+        from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
             TeachingSurface,
             decide_for_chat,
             record_policy_decision,
+            teaching_topic_from_text,
         )
+        _policy_topic = None
+        _teaching_concept_id = None
+        if decision.intent == Intent.EXPLAIN and request.text:
+            _active_course = (
+                request.state_summary.get("active_course", {})
+                if isinstance(request.state_summary, dict)
+                and isinstance(request.state_summary.get("active_course"), dict)
+                else {}
+            )
+            _policy_topic = (
+                str(_active_course.get("topic") or "").strip()
+                or teaching_topic_from_text(request.text or "")
+            )
+            if _policy_topic:
+                _teaching_concept_id = slugify_skill(_policy_topic)
+
         teaching_decision = await decide_for_chat(
             db=db,
             user_id=authenticated_user_id,
             user_text=request.text or "",
             intent=decision.intent.value if decision.intent else "GENERAL",
+            concept_id=_teaching_concept_id,
+            topic=_policy_topic,
             history=request.conversation_history,
             state_summary=request.state_summary,
         )
@@ -177,6 +197,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             trace_id=trace_id,
             surface=TeachingSurface.CHAT,
             decision=teaching_decision,
+            concept_id=_teaching_concept_id,
         )
         
         # Check for clarification gate
