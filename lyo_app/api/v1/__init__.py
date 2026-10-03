@@ -98,6 +98,20 @@ if not _lyo2_stream_loaded or not _lyo2_chat_loaded:
 
     api_router.include_router(_stub_router)
 
+# Empirical Learning OS reporting. The per-learner route is authenticated;
+# the system aggregate additionally requires VIEW_ANALYTICS.
+try:
+    from .learning_os_analytics import router as learning_os_analytics_router
+    api_router.include_router(
+        learning_os_analytics_router,
+        prefix="/learning-os",
+        tags=["Learning OS Analytics"],
+    )
+    logger.info("✅ Learning OS empirical analytics router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load Learning OS analytics router: {e}")
+    logger.error(f"   Traceback: {traceback.format_exc()}")
+
 # Import health router - minimal dependencies
 try:
     from .health import router as health_router
