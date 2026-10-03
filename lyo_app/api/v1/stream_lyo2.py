@@ -1460,6 +1460,8 @@ async def stream_lyo2_chat(
                 topic=_policy_topic,
                 history=request.conversation_history,
                 state_summary=request.state_summary,
+                has_media=bool(media_attachments),
+                has_current_media=bool(request.media),
             )
             await record_policy_decision(
                 db,
