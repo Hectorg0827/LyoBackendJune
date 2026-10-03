@@ -1,6 +1,7 @@
 import pytest
 
 from scripts.live_teacher_quality import (
+    analytics_delta,
     choose_option,
     parse_sse_lines,
     require_https,
@@ -80,3 +81,27 @@ def test_reports_redact_bearer_material_recursively():
     assert snapshot["token"] == "[REDACTED]"
     assert snapshot["nested"]["access_token"] == "[REDACTED]"
     assert snapshot["nested"]["value"] == "keep"
+
+
+def test_analytics_delta_tracks_only_durable_counters():
+    before = {
+        "evidence_attempts": 3,
+        "sessions": {"identified_sessions": 1, "successful_sessions": 0},
+        "model_usage": {"calls": 4, "tokens": 100, "linked_calls": 3, "linked_tokens": 80},
+        "transfer": {"attempts": 0, "successes": 0},
+        "remediation": {"eligible_followups": 1, "repaired": 0},
+    }
+    after = {
+        "evidence_attempts": 6,
+        "sessions": {"identified_sessions": 2, "successful_sessions": 1},
+        "model_usage": {"calls": 7, "tokens": 260, "linked_calls": 6, "linked_tokens": 230},
+        "transfer": {"attempts": 1, "successes": 1},
+        "remediation": {"eligible_followups": 2, "repaired": 1},
+    }
+    delta = analytics_delta(before, after)
+    assert delta["evidence_attempts"] == 3
+    assert delta["successful_sessions"] == 1
+    assert delta["model_calls"] == 3
+    assert delta["model_tokens"] == 160
+    assert delta["transfer_successes"] == 1
+    assert delta["remediation_repairs"] == 1
