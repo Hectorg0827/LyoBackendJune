@@ -6,6 +6,7 @@ import pytest
 from lyo_app.teaching_runtime.service import (
     load_learner_snapshot,
     teaching_topic_from_text,
+    resolve_chat_teaching_topic,
 )
 
 
@@ -47,7 +48,30 @@ def _record_item(
 def test_teaching_topic_strips_instruction_wrapper_without_guessing_aliases():
     assert teaching_topic_from_text("Teach me about fractions") == "fractions"
     assert teaching_topic_from_text("Explain price elasticity") == "price elasticity"
+    assert teaching_topic_from_text("Create a course on geometry") == "geometry"
+    assert teaching_topic_from_text("Quiz me on cellular respiration") == "cellular respiration"
     assert teaching_topic_from_text("fractions") == "fractions"
+
+
+def test_instructional_intents_resolve_topic_before_policy_execution():
+    assert resolve_chat_teaching_topic(
+        intent="COURSE",
+        user_text="Create a course on geometry",
+        router_topic="Geometry",
+    ) == "Geometry"
+    assert resolve_chat_teaching_topic(
+        intent="QUIZ",
+        user_text="Quiz me on fractions",
+    ) == "fractions"
+    assert resolve_chat_teaching_topic(
+        intent="COURSE",
+        user_text="Make it advanced",
+        state_summary={"active_course": {"topic": "Algebra"}},
+    ) == "Algebra"
+    assert resolve_chat_teaching_topic(
+        intent="GREETING",
+        user_text="hello",
+    ) is None
 
 
 @pytest.mark.asyncio

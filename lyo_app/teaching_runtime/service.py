@@ -51,24 +51,81 @@ _CONFUSED_RE = re.compile(
 )
 
 
-def teaching_topic_from_text(user_text: str) -> str:
-    """Strip only explicit teaching wrappers; preserve the learner's topic text.
+_CHAT_TOPIC_INTENTS = frozenset({
+    "EXPLAIN",
+    "COURSE",
+    "QUIZ",
+    "FLASHCARDS",
+    "STUDY_PLAN",
+    "TEST_PREP",
+})
 
-    This mirrors the classroom/free-topic entry convention without trying to
-    infer aliases. The resulting topic is used only to derive the same
-    deterministic topic scope Classroom uses; it never joins concepts by a
-    fuzzy title.
+
+def teaching_topic_from_text(user_text: str) -> str:
+    """Strip explicit learning-workflow wrappers while preserving the topic.
+
+    The result is only an identity seed for the deterministic topic scope. It
+    never fuzzy-matches concepts or changes the learner's requested workflow.
     """
     text = (user_text or "").strip()
     topic = re.sub(
         r"^(?:teach me(?: about| on)?|explain(?: to me)?|help me understand|"
         r"show me|walk me through|learn(?: about)?|quiero aprender(?: sobre)?|"
-        r"ens[eé][nñ]ame|expl[ií]came)\s*",
+        r"ens[eé][nñ]ame|expl[ií]came|"
+        r"(?:create|make|build|give me|i want)(?: me)? (?:a )?course(?: on| about| for)?|"
+        r"course(?: on| about)|"
+        r"(?:quiz|test) me(?: on| about)?|(?:create|make|give me)(?: a)? quiz(?: on| about| for)?|"
+        r"(?:create|make|give me)(?: some)? flashcards(?: on| about| for)?|flashcards(?: on| about| for)?|"
+        r"(?:create|make|build|give me)(?: a)? study plan(?: on| about| for)?|study plan(?: on| about| for)?|"
+        r"(?:prepare me|help me prepare)(?: for)?(?: my| a)? (?:test|exam)(?: on| about| for)?)\s*",
         "",
         text,
         flags=re.IGNORECASE,
     ).strip()
     return topic or text
+
+
+def resolve_chat_teaching_topic(
+    *,
+    intent: Any,
+    user_text: str,
+    state_summary: Optional[Mapping[str, Any]] = None,
+    router_topic: Optional[str] = None,
+    router_subject: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve concept/topic identity before the teaching policy runs.
+
+    Chat previously did this only for EXPLAIN, so COURSE/QUIZ/etc. entered the
+    Learning OS with an empty learner snapshot and could be converted into an
+    unrelated diagnostic turn. Router entities are authoritative when present;
+    active-course context is the fallback for short continuation requests.
+    """
+    normalized_intent = str(getattr(intent, "value", intent) or "").upper()
+    if normalized_intent not in _CHAT_TOPIC_INTENTS:
+        return None
+
+    explicit = str(router_topic or router_subject or "").strip()
+    if explicit:
+        return explicit
+
+    active_topic = ""
+    if isinstance(state_summary, Mapping):
+        active_course = state_summary.get("active_course")
+        if isinstance(active_course, Mapping):
+            active_topic = str(active_course.get("topic") or "").strip()
+
+    raw_text = (user_text or "").strip()
+    text_topic = teaching_topic_from_text(raw_text)
+
+    # Preserve the established EXPLAIN continuation behavior: "why?" or
+    # "show me" inside a course refers to the active course unless the router
+    # supplied a more specific topic. For other workflows, a successfully
+    # stripped wrapper is an explicit new topic; otherwise use active context.
+    if normalized_intent == "EXPLAIN" and active_topic:
+        return active_topic
+    if active_topic and text_topic == raw_text:
+        return active_topic
+    return text_topic or active_topic or None
 
 
 def session_snapshot(

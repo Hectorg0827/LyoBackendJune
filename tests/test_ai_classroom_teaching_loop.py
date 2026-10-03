@@ -318,12 +318,14 @@ class ClassroomPersistenceContractTests(unittest.IsolatedAsyncioTestCase):
             },
             "attempt_history": [{"intent": "skip_question", "is_correct": None}],
             "review_queue": [{"lesson_index": 1, "objective": "Compare fractions"}],
+            "review_concept_id": "fraction_skill_1",
             "language_code": "en-US",
         }
 
         await engine._persist_session_progress(trigger, context, progress)
 
         self.assertEqual(stored_session.context["skipped_lessons"], [1])
+        self.assertEqual(stored_session.context["review_concept_id"], "fraction_skill_1")
         self.assertEqual(stored_session.context["review_queue"][0]["lesson_index"], 1)
         self.assertIsNone(stored_session.context["attempt_history"][0]["is_correct"])
         interaction = next(

@@ -1232,6 +1232,9 @@ class SceneLifecycleEngine:
                 "misconception_history": list(progress.get("misconception_history", []))[-12:],
                 "learning_objective": progress.get("learning_objective"),
                 "record_scope": progress.get("record_scope", "topic"),
+                "review_concept_id": (
+                    progress.get("review_concept_id") or context.review_concept_id
+                ),
                 "difficulty": progress.get("difficulty"),
                 "classroom_mode": progress.get("classroom_mode", ClassroomMode.SOLO.value),
                 "target_duration_minutes": progress.get("target_duration_minutes", 10),

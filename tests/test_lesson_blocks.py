@@ -11,7 +11,9 @@ from lyo_app.api.v1.stream_lyo2 import (
     _find_check_block,
     _grade_check_block,
     _lesson_to_smart_blocks,
+    _lesson_mode_for_teaching_action,
 )
+from lyo_app.teaching_runtime import TeachingAction
 
 
 class _FakeMessage:
@@ -191,3 +193,21 @@ def test_emitted_check_can_be_found_and_graded_by_the_endpoint():
     assert _grade_check_block(found, 0)[0] is True
     # And the opt-out is recognised as an opt-out.
     assert _grade_check_block(found, 2)[1] is True
+
+
+
+def test_only_diagnose_can_fall_back_to_probe_mode():
+    assert _lesson_mode_for_teaching_action(TeachingAction.DIAGNOSE) == "probe"
+    for action in (
+        TeachingAction.CHECK_RECALL,
+        TeachingAction.CHECK_APPLICATION,
+        TeachingAction.CHECK_TRANSFER,
+        TeachingAction.REVIEW,
+        TeachingAction.ADVANCE,
+    ):
+        assert _lesson_mode_for_teaching_action(action) == "teach"
+
+
+def test_non_teaching_actions_do_not_start_structured_lesson_composition():
+    assert _lesson_mode_for_teaching_action(TeachingAction.ANSWER) is None
+    assert _lesson_mode_for_teaching_action(TeachingAction.PAUSE) is None

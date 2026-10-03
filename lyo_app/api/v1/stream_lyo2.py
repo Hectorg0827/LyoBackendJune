@@ -281,6 +281,32 @@ async def _has_prior_mastery(
         return False
 
 
+def _lesson_mode_for_teaching_action(action: Any) -> Optional[str]:
+    """Translate policy action into an explicit composer mode.
+
+    Only DIAGNOSE may create a first-contact probe. Once the Learning OS has
+    chosen any substantive teaching/check/review move, composition must not
+    fall back to the legacy Chat-slug mastery lookup and silently downgrade
+    stronger Classroom evidence to recognition.
+    """
+    value = str(getattr(action, "value", action) or "").lower()
+    if value == "diagnose":
+        return "probe"
+    if value in {
+        "explain",
+        "remediate",
+        "demonstrate",
+        "guide",
+        "check_recall",
+        "check_application",
+        "check_transfer",
+        "review",
+        "advance",
+    }:
+        return "teach"
+    return None
+
+
 async def _try_compose_lesson(
     db: AsyncSession,
     user_id: Optional[str],
@@ -1384,24 +1410,19 @@ async def stream_lyo2_chat(
                 TeachingSurface,
                 decide_for_chat,
                 record_policy_decision,
-                teaching_topic_from_text,
+                resolve_chat_teaching_topic,
             )
 
-            _teaching_concept_id = None
-            _policy_topic = None
-            if decision.intent == Intent.EXPLAIN and request.text:
-                _active_course = (
-                    request.state_summary.get("active_course", {})
-                    if isinstance(request.state_summary, dict)
-                    and isinstance(request.state_summary.get("active_course"), dict)
-                    else {}
-                )
-                _policy_topic = (
-                    str(_active_course.get("topic") or "").strip()
-                    or teaching_topic_from_text(request.text or "")
-                )
-                if _policy_topic:
-                    _teaching_concept_id = slugify_skill(_policy_topic)
+            _policy_topic = resolve_chat_teaching_topic(
+                intent=decision.intent,
+                user_text=request.text or "",
+                state_summary=request.state_summary,
+                router_topic=getattr(getattr(decision, "entities", None), "topic", None),
+                router_subject=getattr(getattr(decision, "entities", None), "subject", None),
+            )
+            _teaching_concept_id = (
+                slugify_skill(_policy_topic) if _policy_topic else None
+            )
 
             teaching_decision = await decide_for_chat(
                 db=db,
@@ -1619,53 +1640,47 @@ async def stream_lyo2_chat(
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
             if decision.intent == Intent.EXPLAIN and request.text:
-                _force_lesson_mode = None
-                if teaching_decision.action == TeachingAction.DIAGNOSE:
-                    _force_lesson_mode = "probe"
-                elif teaching_decision.action in {
-                    TeachingAction.EXPLAIN,
-                    TeachingAction.REMEDIATE,
-                    TeachingAction.DEMONSTRATE,
-                    TeachingAction.GUIDE,
-                }:
-                    _force_lesson_mode = "teach"
-                from lyo_app.teaching_runtime.service import (
-                    bounded_intervention_metadata,
+                _force_lesson_mode = _lesson_mode_for_teaching_action(
+                    teaching_decision.action
                 )
-
-                lesson_blocks, lesson = await _try_compose_lesson(
-                    db,
-                    authenticated_user_id,
-                    request.text,
-                    force_mode=_force_lesson_mode,
-                    target_evidence_type=teaching_decision.target_evidence_type,
-                    teaching_intervention=bounded_intervention_metadata(
-                        teaching_decision
-                    ),
-                )
-                if lesson is not None:
-                    async for event in _emit_composed_lesson(
-                        db,
-                        lesson,
-                        lesson_blocks,
-                        collected_bricks,
-                        persistent_conversation,
-                        assistant_client_message_id,
-                        ChatMode.GENERAL.value,
-                    ):
-                        yield event
-
-                    yield "data: [DONE]\n\n"
-                    logger.info(
-                        f"📚 [STREAM][{trace_id}] Served composed lesson "
-                        f"(skill={lesson.skill_id}, probe={lesson.is_probe}, "
-                        f"blocks={len(lesson_blocks)}) in {time.time()-start_time:.2f}s"
+                if _force_lesson_mode is not None:
+                    from lyo_app.teaching_runtime.service import (
+                        bounded_intervention_metadata,
                     )
-                    return
-                logger.info(
-                    f"📋 [STREAM][{trace_id}] Lesson composition unavailable; "
-                    "falling back to prose path"
-                )
+
+                    lesson_blocks, lesson = await _try_compose_lesson(
+                        db,
+                        authenticated_user_id,
+                        request.text,
+                        force_mode=_force_lesson_mode,
+                        target_evidence_type=teaching_decision.target_evidence_type,
+                        teaching_intervention=bounded_intervention_metadata(
+                            teaching_decision
+                        ),
+                    )
+                    if lesson is not None:
+                        async for event in _emit_composed_lesson(
+                            db,
+                            lesson,
+                            lesson_blocks,
+                            collected_bricks,
+                            persistent_conversation,
+                            assistant_client_message_id,
+                            ChatMode.GENERAL.value,
+                        ):
+                            yield event
+
+                        yield "data: [DONE]\n\n"
+                        logger.info(
+                            f"📚 [STREAM][{trace_id}] Served composed lesson "
+                            f"(skill={lesson.skill_id}, probe={lesson.is_probe}, "
+                            f"blocks={len(lesson_blocks)}) in {time.time()-start_time:.2f}s"
+                        )
+                        return
+                    logger.info(
+                        f"📋 [STREAM][{trace_id}] Lesson composition unavailable; "
+                        "falling back to prose path"
+                    )
 
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")

@@ -189,6 +189,43 @@ def test_retention_evidence_allows_advance():
     assert decision.action is TeachingAction.ADVANCE
 
 
+def test_course_workflow_is_not_replaced_by_first_contact_diagnosis():
+    decision = TeachingPolicy.decide(
+        context(text="Create a course on geometry", intent="COURSE")
+    )
+    assert decision.action is TeachingAction.ANSWER
+    assert decision.reason_code == "learner_requested_workflow"
+
+
+def test_quiz_request_uses_evidence_target_instead_of_generic_diagnosis():
+    first = TeachingPolicy.decide(
+        context(text="Quiz me on fractions", intent="QUIZ")
+    )
+    assert first.action is TeachingAction.CHECK_RECALL
+    assert first.target_evidence_type == "recognition"
+
+    transfer = TeachingPolicy.decide(
+        context(
+            text="Quiz me on fractions",
+            intent="QUIZ",
+            evidence_state="APPLIED",
+            strongest="application",
+            next_rung="transfer",
+            attempts=4,
+        )
+    )
+    assert transfer.action is TeachingAction.CHECK_TRANSFER
+    assert transfer.target_evidence_type == "transfer"
+
+
+def test_flashcard_request_enters_review_not_diagnosis():
+    decision = TeachingPolicy.decide(
+        context(text="Make flashcards on fractions", intent="FLASHCARDS")
+    )
+    assert decision.action is TeachingAction.REVIEW
+    assert decision.reason_code == "learner_requested_review"
+
+
 def test_non_instructional_chat_does_not_manufacture_quiz():
     decision = TeachingPolicy.decide(
         TeachingContext(
