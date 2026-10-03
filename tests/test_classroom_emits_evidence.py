@@ -45,6 +45,8 @@ async def test_a_live_answer_reaches_the_shared_event_stream_at_the_right_rung(c
     assert event.measurable_outcome == 1.0
     assert not event.skill_ids_json  # DKT is updated once directly, not again by the processor.
     assert event.metadata_json["classroom_checkpoint_id"] == component_id
+    assert event.metadata_json["session_id"] == "fractions"
+    assert event.metadata_json["response_time_seconds"] == 4.0
     intervention = event.metadata_json["teaching_intervention"]
     assert intervention["action"] in {"diagnose", "guide", "check_application", "check_transfer"}
     assert intervention["policy_version"] == "learning-os-v1"
@@ -91,6 +93,8 @@ async def test_missing_timing_is_not_fabricated(capture):
     component_id = seed(instance, ctx)
     await instance.handle_quiz_submission("42", "fractions", component_id, "a")
     log.assert_awaited_once()
+    event = log.await_args.args[1]
+    assert "response_time_seconds" not in (event.metadata_json or {})
     dkt.assert_not_awaited()
 
 

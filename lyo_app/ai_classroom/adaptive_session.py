@@ -676,6 +676,7 @@ class AdaptiveSession:
             ceiling, entry = "independent", "faded"
             state.outbox.append(dict(
                 event_id=pending.id, user_id=context.user_id,
+                session_id=context.session_id,
                 concept_id=self.record_concept(context, state),
                 correct=True, evidence_type="explanation",
                 hints_used=0, hint_level=None, misconception=None,
@@ -737,6 +738,7 @@ class AdaptiveSession:
         if result.verdict in ("correct", "incorrect"):
             state.outbox = [*state.outbox, dict(
                 event_id=pending.id, user_id=context.user_id,
+                session_id=context.session_id,
                 concept_id=self.record_concept(context, state),
                 correct=result.verdict == "correct",
                 evidence_type=None if pending.task.response_format == "choice"
@@ -977,6 +979,7 @@ class AdaptiveSession:
         )
         state.outbox.append(dict(
             event_id=pending.id, user_id=context.user_id,
+            session_id=context.session_id,
             concept_id=self.record_concept(context, state),
             correct=result.verdict == "correct", evidence_type=evidence_type,
             hints_used=pending.hints_used, hint_level=pending.hint_level,
