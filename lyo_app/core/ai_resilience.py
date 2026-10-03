@@ -354,6 +354,16 @@ class AIResilienceManager:
             cached = self._get_from_cache(cache_key)
             if cached:
                 print(f">>> [PID {os.getpid()}] AI Resilience: Using cached response", flush=True)
+                try:
+                    from lyo_app.teaching_runtime.model_usage import capture_model_usage
+                    await capture_model_usage(
+                        model=cached.get("model_used") or cached.get("model"),
+                        tokens_used=0,
+                        latency_ms=0,
+                        cache_hit=True,
+                    )
+                except Exception:
+                    pass
                 return cached
         
         # Intelligent model routing based on message complexity
@@ -390,6 +400,7 @@ class AIResilienceManager:
                 print(f">>> [PID {os.getpid()}]   ⏸️ Circuit breaker OPEN for {model_name}, skipping", flush=True)
                 continue
             try:
+                provider_started = time.time()
                 print(f">>> [PID {os.getpid()}]   🔄 Attempting {model_name}...", flush=True)
                 if model.endpoint == "openai":
                     if not self.openai_client:
@@ -411,8 +422,10 @@ class AIResilienceManager:
                     result = {
                         "content": res.choices[0].message.content,
                         "model": model.name,
+                        "model_used": model_name,
                         "tokens_used": res.usage.total_tokens if res.usage else 0,
-                        "response_time": 0,
+                        "latency_ms": int((time.time() - provider_started) * 1000),
+                        "response_time": time.time() - provider_started,
                         "timestamp": time.time(),
                     }
                     print(f">>> [PID {os.getpid()}]   ✅ OpenAI {model_name} SUCCESS", flush=True)
@@ -424,6 +437,20 @@ class AIResilienceManager:
                 
                 if use_cache:
                     self._add_to_cache(cache_key, result)
+                try:
+                    from lyo_app.teaching_runtime.model_usage import capture_model_usage
+                    await capture_model_usage(
+                        model=result.get("model_used") or result.get("model") or model_name,
+                        tokens_used=result.get("tokens_used", 0),
+                        latency_ms=result.get(
+                            "latency_ms",
+                            int((time.time() - provider_started) * 1000),
+                        ),
+                        cache_hit=False,
+                    )
+                except Exception:
+                    # Usage attribution is observability, never response authority.
+                    pass
                 return result
             except Exception as e:
                 print(f">>> [PID {os.getpid()}]   ❌ Error calling {model_name}: {type(e).__name__}: {str(e)[:100]}", flush=True)

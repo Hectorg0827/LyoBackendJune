@@ -2,8 +2,9 @@
 
 Turns the immutable LearningEvent stream into product measurements without
 trusting client-reported mastery. Only metrics supported by durable data are
-calculated. Model cost remains explicitly unavailable until model usage can be
-linked to the same durable session/outcome identity.
+calculated. Model token usage is linked to the same session identity as learner
+evidence; dollar cost remains explicitly unavailable until provider pricing is
+versioned rather than guessed from mutable defaults.
 """
 
 from __future__ import annotations
@@ -12,11 +13,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.events.evidence import evidence_rank, normalize_evidence_kind
-from lyo_app.events.models import LearningEvent
+from lyo_app.events.models import EventType, LearningEvent
 
 
 _RETENTION_TARGETS = {"retention", "retrieval"}
@@ -51,6 +52,21 @@ def _is_attempt(event: Any) -> bool:
         getattr(event, "concept_id", None)
         and getattr(event, "measurable_outcome", None) is not None
     )
+
+
+def _is_model_usage(event: Any) -> bool:
+    return _safe_metadata(event).get("event_kind") == "model_usage"
+
+
+def _usage_tokens(event: Any) -> int:
+    try:
+        return max(0, int(_safe_metadata(event).get("tokens_used") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _usage_model(event: Any) -> str:
+    return str(_safe_metadata(event).get("model") or "unknown")[:80]
 
 
 def _succeeded(event: Any) -> bool:
@@ -108,11 +124,14 @@ def aggregate_learning_os_events(
     to reported attempts.
     """
     now = now or datetime.utcnow()
-    ordered = sorted(
-        [event for event in events if _is_attempt(event)],
-        key=_event_time,
-    )
+    all_events = sorted(list(events), key=_event_time)
+    ordered = [event for event in all_events if _is_attempt(event)]
     window = [event for event in ordered if _event_time(event) >= since]
+    usage_window = [
+        event
+        for event in all_events
+        if _is_model_usage(event) and _event_time(event) >= since
+    ]
 
     action_groups: dict[tuple[str, str, str], dict[str, int]] = defaultdict(
         lambda: {
@@ -310,11 +329,47 @@ def aggregate_learning_os_events(
         )
 
     session_rows = list(sessions.values())
-    successful_sessions = sum(
-        1 for value in session_rows if value["high_rung_successes"] > 0
-    )
+    successful_session_keys = {
+        key
+        for key, value in sessions.items()
+        if value["high_rung_successes"] > 0
+    }
+    successful_sessions = len(successful_session_keys)
     total_sessions = len(session_rows)
     minutes = timed_seconds / 60.0
+
+    usage_by_session: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"calls": 0, "tokens": 0, "cache_hits": 0}
+    )
+    usage_by_model: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"calls": 0, "tokens": 0}
+    )
+    usage_without_session = 0
+    usage_tokens_without_session = 0
+    for event in usage_window:
+        tokens = _usage_tokens(event)
+        model = _usage_model(event)
+        usage_by_model[model]["calls"] += 1
+        usage_by_model[model]["tokens"] += tokens
+        session_key = _session_key(event)
+        if not session_key:
+            usage_without_session += 1
+            usage_tokens_without_session += tokens
+            continue
+        bucket = usage_by_session[session_key]
+        bucket["calls"] += 1
+        bucket["tokens"] += tokens
+        bucket["cache_hits"] += int(bool(_safe_metadata(event).get("cache_hit")))
+
+    identified_session_keys = set(sessions)
+    measured_usage_sessions = set(usage_by_session)
+    linked_session_keys = identified_session_keys & measured_usage_sessions
+    linked_tokens = sum(
+        usage_by_session[key]["tokens"] for key in linked_session_keys
+    )
+    linked_calls = sum(
+        usage_by_session[key]["calls"] for key in linked_session_keys
+    )
 
     return {
         "generated_at": now.isoformat(),
@@ -378,11 +433,37 @@ def aggregate_learning_os_events(
             "successful_sessions": successful_sessions,
             "success_rate": _rate(successful_sessions, total_sessions),
         },
+        "model_usage": {
+            "calls": sum(item["calls"] for item in usage_by_model.values()),
+            "tokens": sum(item["tokens"] for item in usage_by_model.values()),
+            "cache_hits": sum(
+                item["cache_hits"] for item in usage_by_session.values()
+            ),
+            "sessions_with_usage": len(measured_usage_sessions),
+            "linked_learning_sessions": len(linked_session_keys),
+            "session_attribution_rate": _rate(
+                len(linked_session_keys), total_sessions
+            ),
+            "linked_calls": linked_calls,
+            "linked_tokens": linked_tokens,
+            "tokens_per_successful_session": (
+                round(linked_tokens / successful_sessions, 2)
+                if successful_sessions
+                else None
+            ),
+            "unattributed_calls": usage_without_session,
+            "unattributed_tokens": usage_tokens_without_session,
+            "by_model": [
+                {"model": model, **values}
+                for model, values in sorted(usage_by_model.items())
+            ],
+        },
         "model_cost_per_successful_session": {
             "available": False,
             "reason": (
-                "Model token/cost usage is not yet durably linked to the same "
-                "session identity as learner evidence; no cost estimate is fabricated."
+                "Model usage is now durably linked to learning sessions, but "
+                "provider prices are not versioned in the evidence stream. "
+                "Token efficiency is reported instead of fabricating dollar cost."
             ),
         },
     }
@@ -403,8 +484,10 @@ async def load_learning_os_analytics(
 
     query = select(LearningEvent).where(
         LearningEvent.timestamp >= lookback,
-        LearningEvent.measurable_outcome.is_not(None),
-        LearningEvent.concept_id.is_not(None),
+        or_(
+            LearningEvent.measurable_outcome.is_not(None),
+            LearningEvent.event_type == EventType.AI_SESSION,
+        ),
     )
     if user_id is not None:
         query = query.where(LearningEvent.user_id == int(user_id))
