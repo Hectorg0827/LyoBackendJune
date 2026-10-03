@@ -24,6 +24,18 @@ _VISUAL_RE = re.compile(
     r"\b(show me|visual|diagram|graph|draw|picture|imagen|diagrama|gr[aá]fica)\b",
     re.IGNORECASE,
 )
+_ATTACHMENT_REFERENCE_RE = re.compile(
+    r"\b(?:"
+    r"what\s+(?:is|are|does|do)\s+(?:this|that|it)|what['’]?s\s+(?:this|that)|"
+    r"(?:analy[sz]e|analize|summari[sz]e|review|explain|describe|read|interpret|identify|check)\s+"
+    r"(?:this|that|it|the\s+(?:attached\s+)?(?:file|document|pdf|image|photo|screenshot))|"
+    r"(?:this|that|the\s+attached)\s+(?:file|document|pdf|image|photo|screenshot)|"
+    r"page\s+\d+|"
+    r"qu[eé]\s+es\s+esto|qu[eé]\s+dice\s+(?:esto|este\s+documento)|"
+    r"(?:analiza|resume|explica|describe|lee|interpreta)\s+(?:esto|este\s+(?:archivo|documento|pdf))"
+    r")\b",
+    re.IGNORECASE,
+)
 _CONFUSED_RE = re.compile(
     r"\b(i (?:don't|do not) (?:get|understand)|i'?m confused|doesn'?t make sense|"
     r"lost me|no entiendo|estoy confundid[oa]|no tiene sentido)\b",
@@ -94,6 +106,37 @@ class TeachingPolicy:
         direct = session.learner_requested_direct_answer or bool(_DIRECT_RE.search(text))
         visual = session.learner_requested_visual or bool(_VISUAL_RE.search(text))
         confused = session.learner_expressed_confusion or bool(_CONFUSED_RE.search(text))
+        has_media = bool(context.metadata.get("has_media"))
+        has_current_media = bool(context.metadata.get("has_current_media"))
+        attachment_referential = bool(_ATTACHMENT_REFERENCE_RE.search(text))
+
+        # Files are objects the learner is asking Lyo to inspect, not concepts
+        # that should be diagnosed before they are identified. A newly attached
+        # file is authoritative context for the current turn. On later turns we
+        # reuse it only when the learner explicitly refers back to the material,
+        # so an old attachment cannot hijack an unrelated lesson.
+        #
+        # Explicit workflows keep ownership: "quiz me on this PDF", "make
+        # flashcards", "create a course", and Test Prep still route through
+        # their requested workflow rather than this direct-answer path.
+        if (
+            has_media
+            and (has_current_media or attachment_referential)
+            and intent not in (_WORKFLOW_INTENTS | _REVIEW_INTENTS | {"QUIZ"})
+        ):
+            return _decision(
+                TeachingAction.ANSWER,
+                "attachment_information_request",
+                words=220,
+                model_tier="teaching",
+                directives=[
+                    "Inspect the attached material and answer the learner's actual question first.",
+                    "Treat demonstratives such as 'this' or 'it' as referring to the attachment.",
+                    "Do not ask a diagnostic, comprehension, or calibration question before answering.",
+                    "Do not quiz the learner unless they explicitly requested a quiz or test.",
+                    "After the direct answer, optional next steps may be offered briefly.",
+                ],
+            )
 
         if intent in {"GREETING", "CHAT", "GENERAL", "HELP", "UNKNOWN"} and not (
             confused or learner.concept_id
