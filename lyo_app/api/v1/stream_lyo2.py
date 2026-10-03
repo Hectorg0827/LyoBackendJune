@@ -2150,6 +2150,14 @@ async def stream_lyo2_chat(
                     logger.warning(f"⚠️ Cache save failed: {e}")
 
             if persistent_conversation and raw_llm_text:
+                experience_metadata = [{
+                    "type": "chat_experience",
+                    "sources": sources,
+                    "interaction_contract": execution_response.metadata.get(
+                        "interaction_contract"
+                    ),
+                    "suggested_actions": action_labels,
+                }]
                 await conversation_store.add_message(
                     db,
                     persistent_conversation.id,
@@ -2157,6 +2165,7 @@ async def stream_lyo2_chat(
                     content=raw_llm_text,
                     mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                     client_message_id=assistant_client_message_id,
+                    ctas=experience_metadata,
                 )
 
             # Completion signal
