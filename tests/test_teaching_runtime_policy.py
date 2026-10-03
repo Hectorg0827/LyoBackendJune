@@ -1,3 +1,4 @@
+import pytest
 from lyo_app.teaching_runtime.models import (
     LearnerSnapshot,
     PrerequisiteGap,
@@ -13,6 +14,7 @@ from lyo_app.teaching_runtime.policy import (
 )
 from lyo_app.teaching_runtime.service import (
     bounded_intervention_metadata,
+    decide_for_chat,
     record_policy_outcome,
     session_snapshot,
     teaching_policy_outcomes,
@@ -32,6 +34,8 @@ def context(
     attempts=0,
     checks=0,
     explanations=0,
+    has_media=False,
+    has_current_media=False,
 ):
     return TeachingContext(
         intent=intent,
@@ -51,6 +55,10 @@ def context(
             consecutive_checks=checks,
             consecutive_explanations=explanations,
         ),
+        metadata={
+            "has_media": has_media,
+            "has_current_media": has_current_media,
+        },
     )
 
 
@@ -68,6 +76,69 @@ def test_direct_answer_request_overrides_diagnostic():
     assert decision.action is TeachingAction.EXPLAIN
     assert decision.interaction_required is False
     assert "direct" in decision.reason_code
+
+
+def test_current_attachment_is_answered_before_any_diagnostic():
+    decision = TeachingPolicy.decide(
+        context(
+            text="what is this ?",
+            intent="EXPLAIN",
+            has_media=True,
+            has_current_media=True,
+        )
+    )
+    assert decision.action is TeachingAction.ANSWER
+    assert decision.interaction_required is False
+    assert decision.reason_code == "attachment_information_request"
+    assert "before answering" in " ".join(decision.directives).lower()
+
+
+def test_attachment_direct_explanation_is_not_turned_into_a_lesson_probe():
+    decision = TeachingPolicy.decide(
+        context(
+            text="Just explain it to me",
+            intent="EXPLAIN",
+            has_media=True,
+            has_current_media=True,
+        )
+    )
+    assert decision.action is TeachingAction.ANSWER
+    assert decision.reason_code == "attachment_information_request"
+
+
+def test_explicit_quiz_on_attachment_keeps_quiz_workflow():
+    decision = TeachingPolicy.decide(
+        context(
+            text="Quiz me on this PDF",
+            intent="QUIZ",
+            has_media=True,
+            has_current_media=True,
+        )
+    )
+    assert decision.action is TeachingAction.CHECK_RECALL
+
+
+def test_historical_attachment_only_overrides_when_referenced():
+    referenced = TeachingPolicy.decide(
+        context(
+            text="What does this document say?",
+            intent="EXPLAIN",
+            has_media=True,
+            has_current_media=False,
+        )
+    )
+    unrelated = TeachingPolicy.decide(
+        context(
+            text="teach me fractions",
+            intent="EXPLAIN",
+            has_media=True,
+            has_current_media=False,
+        )
+    )
+
+    assert referenced.action is TeachingAction.ANSWER
+    assert referenced.reason_code == "attachment_information_request"
+    assert unrelated.action is TeachingAction.DIAGNOSE
 
 
 def test_confusion_or_misconception_repairs_before_advancing():
@@ -315,3 +386,18 @@ def test_policy_outcome_counter_uses_measured_result_not_learner_text():
         "application", "correct", POLICY_VERSION,
     )._value.get()
     assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_decide_for_chat_propagates_current_attachment_state():
+    decision = await decide_for_chat(
+        db=None,
+        user_id=None,
+        user_text="what is this?",
+        intent="EXPLAIN",
+        has_media=True,
+        has_current_media=True,
+    )
+
+    assert decision.action is TeachingAction.ANSWER
+    assert decision.reason_code == "attachment_information_request"
