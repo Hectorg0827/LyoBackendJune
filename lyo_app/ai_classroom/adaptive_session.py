@@ -1267,7 +1267,7 @@ class AdaptiveSession:
             item for item in state.board_memory
             if item.get("title") != current_anchor["title"]
             or item.get("content") != current_anchor["content"]
-        ][-3:]
+        ][-1:]
         # The active teaching group comes before remembered context. Current
         # explanation + current visual are one pedagogical object and must remain
         # ahead of board memory even on clients that sort by component priority.
@@ -1292,12 +1292,12 @@ class AdaptiveSession:
                 anchor_content = item.get("content", "").strip()
                 if not anchor_title or not anchor_content:
                     continue
-                memory_lines.append(f"{anchor_title}\n{anchor_content[:360]}")
+                memory_lines.append(f"{anchor_title}\n{anchor_content[:240]}")
             if memory_lines:
                 components.append(ExampleBlock(
                     component_id="classroom-board-memory",
                     title=self.copy(context, "Keep in view", "Mantén a la vista"),
-                    content="\n\n".join(memory_lines)[:1500],
+                    content="\n\n".join(memory_lines)[:320],
                     language_code=context.language_code,
                     priority=4,
                 ))
