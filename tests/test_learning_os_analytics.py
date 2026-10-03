@@ -244,14 +244,15 @@ async def test_personal_report_is_scoped_to_authenticated_user(monkeypatch):
     loader = AsyncMock(return_value={"ok": True})
     monkeypatch.setattr(analytics_routes, "load_learning_os_analytics", loader)
 
+    db = object()
     result = await analytics_routes.my_learning_os_analytics(
         days=14,
-        db=object(),
+        db=db,
         current_user=SimpleNamespace(id=42),
     )
 
     assert result == {"ok": True}
-    loader.assert_awaited_once_with(object(), days=14, user_id=42)
+    loader.assert_awaited_once_with(db, days=14, user_id=42)
 
 
 @pytest.mark.asyncio
@@ -287,11 +288,12 @@ async def test_system_report_returns_only_aggregate_loader_result(monkeypatch):
     loader = AsyncMock(return_value={"evidence_attempts": 12})
     monkeypatch.setattr(analytics_routes, "load_learning_os_analytics", loader)
 
+    db = object()
     result = await analytics_routes.system_learning_os_analytics(
         days=30,
-        db=object(),
+        db=db,
         current_user=SimpleNamespace(id=42),
     )
 
     assert result == {"evidence_attempts": 12}
-    loader.assert_awaited_once_with(object(), days=30)
+    loader.assert_awaited_once_with(db, days=30)
