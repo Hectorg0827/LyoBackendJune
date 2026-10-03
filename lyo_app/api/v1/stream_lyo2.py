@@ -1289,6 +1289,27 @@ async def stream_lyo2_chat(
                     historical_media, missing_ok=True
                 )
 
+            from lyo_app.teaching_runtime.model_usage import (
+                bind_model_usage,
+                learning_event_usage_recorder,
+            )
+
+            def _model_usage_scope(tier: str):
+                conversation_key = (
+                    getattr(persistent_conversation, "id", None)
+                    or request.conversation_id
+                    or request.session_id
+                    or request.device_id
+                )
+                return bind_model_usage(
+                    learning_event_usage_recorder(
+                        user_id=authenticated_user_id,
+                        surface="chat",
+                        session_id=conversation_key,
+                        model_tier=tier,
+                    )
+                )
+
             collected_bricks = []
             
             skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
@@ -1391,13 +1412,14 @@ async def stream_lyo2_chat(
                     except Exception as ne:
                         logger.warning(f"Failed to fetch proactive nudges: {ne}")
 
-                    routing_response = await asyncio.wait_for(
-                        router_agent.route(
-                            routing_request,
-                            media_attachments=media_attachments,
-                        ),
-                        timeout=35.0,
-                    )
+                    with _model_usage_scope("orchestration"):
+                        routing_response = await asyncio.wait_for(
+                            router_agent.route(
+                                routing_request,
+                                media_attachments=media_attachments,
+                            ),
+                            timeout=35.0,
+                        )
                     decision = routing_response.decision
                 except asyncio.TimeoutError:
                     logger.error(f"❌ [STREAM][{trace_id}] Routing timed out after 35s")
@@ -1707,9 +1729,10 @@ async def stream_lyo2_chat(
                         if decision.intent == Intent.COURSE
                         else request
                     )
-                    plan = await asyncio.wait_for(
-                        planner_agent.plan(planning_request, decision), timeout=25.0
-                    )
+                    with _model_usage_scope("orchestration"):
+                        plan = await asyncio.wait_for(
+                            planner_agent.plan(planning_request, decision), timeout=25.0
+                        )
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 25s")
                 # Fallback plan
@@ -1772,22 +1795,23 @@ async def stream_lyo2_chat(
             ] if request.conversation_history else []
             
             try:
-                execution_response = await asyncio.wait_for(
-                    executor.execute(
-                        user_id=str(current_user.id),
-                        plan=plan,
-                        original_request=(
-                            course_effective_text
-                            if decision.intent == Intent.COURSE
-                            else request.text or ""
+                with _model_usage_scope(teaching_decision.model_tier):
+                    execution_response = await asyncio.wait_for(
+                        executor.execute(
+                            user_id=str(current_user.id),
+                            plan=plan,
+                            original_request=(
+                                course_effective_text
+                                if decision.intent == Intent.COURSE
+                                else request.text or ""
+                            ),
+                            conversation_history=history,
+                            intent=decision.intent.value if decision.intent else None,
+                            media_attachments=media_attachments,
+                            teaching_decision=teaching_decision.model_dump(mode="json"),
                         ),
-                        conversation_history=history,
-                        intent=decision.intent.value if decision.intent else None,
-                        media_attachments=media_attachments,
-                        teaching_decision=teaching_decision.model_dump(mode="json"),
-                    ),
-                    timeout=60.0 # Execution can take longer
-                )
+                        timeout=60.0 # Execution can take longer
+                    )
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Execution timed out after 60s")
                 yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
