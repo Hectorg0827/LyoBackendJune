@@ -325,13 +325,10 @@ def create_app() -> FastAPI:
         from lyo_app.ai_study.routes import router as ai_study_router
         logger.warning("Using basic AI study routes (clean routes unavailable)")
     
-    # Vision routes
-    try:
-        from lyo_app.ai_study.vision_routes import router as vision_router
-        app.include_router(vision_router)
-        logger.info("✅ Gemini Vision routes integrated - Multimodal image analysis active!")
-    except ImportError as e:
-        logger.warning(f"⚠️ Could not import Vision routes: {e}")
+    # The retired ai_study.vision_routes module is intentionally not mounted.
+    # Current multimodal input is handled by the Lyo 2.0 router/media pipeline,
+    # so probing for the removed legacy module only produced a misleading
+    # production-startup warning.
 
     # Recommendations routes
     try:
