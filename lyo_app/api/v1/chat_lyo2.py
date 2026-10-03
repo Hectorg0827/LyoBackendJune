@@ -12,7 +12,7 @@ from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
-    ConversationTurn, MediaRef, UIBlock, UIBlockType,
+    ConversationTurn, MediaRef, UIBlock, UIBlockType, Intent,
 )
 from lyo_app.ai.multimodal import (
     canonical_message_content,
