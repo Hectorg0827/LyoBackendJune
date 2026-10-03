@@ -116,6 +116,13 @@ def _experience_prompt(contract: Dict[str, Any], context_bundle: Dict[str, Any],
               "For live web results, cite source numbers like [1] after the claim and do not cite a source you did not use.\n"
             + "--- END SOURCE GROUNDING ---\n"
         )
+    elif bool(contract.get("requires_search")):
+        source_rules = (
+            "\n--- LIVE SEARCH STATUS ---\n"
+            "No live-search sources were returned. Do not present time-sensitive claims as verified or current. "
+            "Say briefly that live verification was unavailable, then provide only stable background knowledge if useful.\n"
+            "--- END LIVE SEARCH STATUS ---\n"
+        )
 
     directive_text = "\n".join(f"- {item}" for item in directives)
     memory_text = "\n".join(memory_lines)
