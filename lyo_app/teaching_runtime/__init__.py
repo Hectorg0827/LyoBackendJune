@@ -23,6 +23,7 @@ from .service import (
     teaching_policy_decisions,
     teaching_policy_outcomes,
     teaching_topic_from_text,
+    resolve_chat_teaching_topic,
 )
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "teaching_policy_decisions",
     "teaching_policy_outcomes",
     "teaching_topic_from_text",
+    "resolve_chat_teaching_topic",
     "decide_for_chat",
     "record_policy_decision",
 ]
