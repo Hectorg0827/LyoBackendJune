@@ -105,7 +105,7 @@ def _local_media_path(uri: str) -> Path:
 
 def _extract_document_content(
     data: bytes, mime_type: str
-) -> tuple[str, List[Dict[str, Any]]]:
+) -> tuple[str, List[Dict[str, Any]], int]:
     """Extract bounded text plus page provenance for source-aware answers.
 
     Gemini still receives the original file bytes.  Text extraction gives
@@ -114,10 +114,10 @@ def _extract_document_content(
     """
     if mime_type in {"text/plain", "text/markdown", "text/csv", "application/json"}:
         text = data.decode("utf-8", errors="replace").strip()
-        return text[:MAX_EXTRACTED_DOCUMENT_CHARS], []
+        return text[:MAX_EXTRACTED_DOCUMENT_CHARS], [], 0
 
     if mime_type != "application/pdf":
-        return "", []
+        return "", [], 0
 
     try:
         from pypdf import PdfReader
@@ -144,11 +144,11 @@ def _extract_document_content(
             rendered.append(f"[Page {index}]\n{bounded}")
             remaining -= len(bounded)
 
-        return "\n\n".join(rendered).strip(), pages
+        return "\n\n".join(rendered).strip(), pages, len(reader.pages)
     except Exception:
         # A scanned/image-only PDF can still be handled by a native
         # multimodal provider such as Gemini. Do not reject it here.
-        return "", []
+        return "", [], 0
 
 
 def _extract_document_text(data: bytes, mime_type: str) -> str:
@@ -266,13 +266,14 @@ async def load_media_attachments(
             "name": _clean_label(item.name or path.name),
         }
         if not mime_type.startswith("image/"):
-            extracted_text, source_pages = await asyncio.to_thread(
+            extracted_text, source_pages, page_count = await asyncio.to_thread(
                 _extract_document_content, data, mime_type
             )
             if extracted_text:
                 part["extracted_text"] = extracted_text
             if source_pages:
                 part["source_pages"] = source_pages
-                part["page_count"] = len(source_pages)
+            if page_count:
+                part["page_count"] = page_count
         prepared.append(part)
     return prepared
