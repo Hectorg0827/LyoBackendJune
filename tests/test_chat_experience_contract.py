@@ -207,3 +207,49 @@ def test_source_manifest_keeps_document_pages_and_web_urls():
     assert sources[0]["pages"] == [1, 2]
     assert sources[1]["kind"] == "web"
     assert sources[1]["url"] == "https://example.com/reference"
+
+
+
+def test_server_depth_preference_merges_but_current_client_wins():
+    from lyo_app.chat.experience import merged_chat_state
+
+    stored = {"chat_preferences": {"response_depth": "deep"}, "server": "kept"}
+    inherited = merged_chat_state({}, stored)
+    overridden = merged_chat_state(
+        {"chat_preferences": {"response_depth": "concise"}},
+        stored,
+    )
+
+    assert inherited["chat_preferences"]["response_depth"] == "deep"
+    assert overridden["chat_preferences"]["response_depth"] == "concise"
+    assert overridden["server"] == "kept"
+
+
+def test_depth_preference_update_reassigns_nested_json():
+    from lyo_app.chat.experience import ResponseDepth, context_with_response_depth
+
+    original = {"chat_preferences": {"response_depth": "standard"}, "other": 1}
+    updated = context_with_response_depth(original, ResponseDepth.DEEP)
+
+    assert updated is not original
+    assert original["chat_preferences"]["response_depth"] == "standard"
+    assert updated["chat_preferences"]["response_depth"] == "deep"
+    assert updated["other"] == 1
+
+
+def test_required_search_without_sources_forbids_claiming_current_verification():
+    from lyo_app.ai.executor import _experience_prompt
+
+    prompt = _experience_prompt(
+        {
+            "mode": "search",
+            "depth": "standard",
+            "representation": "prose",
+            "requires_search": True,
+        },
+        {},
+        [],
+    )
+
+    assert "No live-search sources were returned" in prompt
+    assert "Do not present time-sensitive claims as verified or current" in prompt
