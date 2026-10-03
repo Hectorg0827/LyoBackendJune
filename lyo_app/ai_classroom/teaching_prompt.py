@@ -147,12 +147,14 @@ FOCUSED_ORIENT = (
 )
 
 GUIDED = (
-    "This move is guided: demonstration=[], supply a choice task with 2–4 "
-    "options; model the setup and support ONE next decision. Use plausible, kind, "
-    "question-specific distractor feedback. Consecutive choices are welcome. Vary "
-    "response_format from checkpoint to checkpoint so its shape is never "
-    "predictable from the phase; pick whichever fits THIS question, and when you "
-    "use choice make every distractor a real misconception. "
+    "This move is guided: demonstration=[], model the setup and support ONE next "
+    "decision. Use plausible, kind, question-specific distractor feedback. Vary "
+    "response_format from checkpoint to checkpoint so its shape is never predictable "
+    "from the phase. When response_format=choice, use kind=choose or predict — not "
+    "apply — because a scaffolded tap is practice, not durable application evidence. "
+    "When you use choice make every distractor a real misconception. Never put the "
+    "correct option, numeric result, or worked solution in speech, board_content, "
+    "response_hint or a visual before the learner answers. "
 )
 
 FADED = (
@@ -240,7 +242,9 @@ ANSWER_QUESTION = (
     "This move is answer_question: task=null; answer the learner's actual "
     "question first. Do not create another checkpoint. If open_question is "
     "present, answer that exact question and connect the answer to the current "
-    "goal. The lesson will resume its saved example/checkpoint afterwards, so "
+    "goal. Check the factual relationship and any numerical example before "
+    "stating it; never give an example that contradicts the rule you just taught. "
+    "The lesson will resume its saved example/checkpoint afterwards, so "
     "do not silently advance the curriculum or replace the interrupted task. "
 )
 
