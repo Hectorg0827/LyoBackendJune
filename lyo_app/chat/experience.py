@@ -139,9 +139,11 @@ _COMPARE_RE = re.compile(
     re.IGNORECASE,
 )
 _SEARCH_RE = re.compile(
-    r"\b(?:search\s+(?:the\s+)?web|look\s+up|find\s+online|latest|today|current|"
-    r"right\s+now|recent|as\s+of\s+today|news|precio\s+actual|hoy|actual|"
-    r"m[aá]s\s+reciente|[uú]ltim[oa]s?)\b",
+    r"\b(?:search\s+(?:the\s+)?web|look\s+up|find\s+online|latest|today|"
+    r"right\s+now|recent|as\s+of\s+today|news|precio\s+actual|hoy|"
+    r"m[aá]s\s+reciente|[uú]ltim[oa]s?|"
+    r"current(?!\s+(?:progress|course|lesson|mastery|score|plan|level))|"
+    r"actual(?!\s+(?:progreso|curso|lecci[oó]n|dominio|puntaje|plan|nivel)))\b",
     re.IGNORECASE,
 )
 _CONTINUE_RE = re.compile(
