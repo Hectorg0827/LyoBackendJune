@@ -93,6 +93,8 @@ def test_a_short_numeric_answer_in_the_scenario_is_data_not_answer_leakage():
 def test_a_short_numeric_answer_may_not_be_stated_by_the_teacher_before_answering():
     ctx, state = context(), GuidedState(owner="42", plan=plan(1))
     turn = ScriptedTeacher()._turn(ctx, state, "guided")
+    turn.task.options[0].label = "24"
+    turn.task.options[1].label = "16"
     turn.task.example_answer = "24"
     turn.task.scenario = "Compare 3/8 and 5/12 by using a common denominator."
     turn.board_content = "The least common denominator is 24."
@@ -103,6 +105,8 @@ def test_a_short_numeric_answer_may_not_be_stated_by_the_teacher_before_answerin
 def test_a_short_fraction_answer_may_not_be_stated_by_the_teacher_before_answering():
     ctx, state = context(), GuidedState(owner="42", plan=plan(1))
     turn = ScriptedTeacher()._turn(ctx, state, "guided")
+    turn.task.options[0].label = "3/4"
+    turn.task.options[1].label = "2/5"
     turn.task.example_answer = "3/4"
     turn.task.scenario = "Compare 2/5 and 3/4."
     turn.board_content = "After conversion, 3/4 is larger."
