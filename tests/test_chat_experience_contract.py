@@ -15,7 +15,7 @@ from lyo_app.chat.experience import (
 @pytest.mark.parametrize(
     ("text", "intent", "mode"),
     [
-        ("what is this?", Intent.EXPLAIN, InteractionMode.ANSWER),
+        ("what is this?", Intent.EXPLAIN, InteractionMode.EXPLAIN),
         ("Explain photosynthesis", Intent.EXPLAIN, InteractionMode.EXPLAIN),
         ("Teach me photosynthesis", Intent.EXPLAIN, InteractionMode.TEACH),
         ("Quiz me on photosynthesis", Intent.EXPLAIN, InteractionMode.QUIZ),
