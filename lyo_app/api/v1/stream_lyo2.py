@@ -1294,7 +1294,7 @@ async def stream_lyo2_chat(
                 learning_event_usage_recorder,
             )
 
-            def _model_usage_scope(tier: str):
+            def _model_usage_scope(tier: str, surface: str = "chat"):
                 conversation_key = (
                     getattr(persistent_conversation, "id", None)
                     or request.conversation_id
@@ -1304,7 +1304,7 @@ async def stream_lyo2_chat(
                 return bind_model_usage(
                     learning_event_usage_recorder(
                         user_id=authenticated_user_id,
-                        surface="chat",
+                        surface=surface,
                         session_id=conversation_key,
                         model_tier=tier,
                     )
@@ -1628,7 +1628,7 @@ async def stream_lyo2_chat(
                     # "cellular respiration" beats "Biology".
                     prep_topic = _preferred_prep_topic(data.subject, data.topics)
                     if prep_topic:
-                        with _model_usage_scope("teaching"):
+                        with _model_usage_scope("teaching", "test_prep"):
                             prep_blocks, prep_lesson = await _try_compose_lesson(
                                 db,
                                 authenticated_user_id,
