@@ -1285,14 +1285,14 @@ class AdaptiveTeacher:
                     # `after_success` will not complete on a tapped answer, so
                     # offering one there asks a learner to keep answering a
                     # question that can never finish the lesson.
-                    if (move == "guided" and turn.task.response_format == "choice"
+                    if (move in ("guided", "faded") and turn.task.response_format == "choice"
                             and turn.task.kind == "apply"):
-                        # Guided choice is scaffolded practice, not durable
-                        # application evidence. Keeping it as choose/predict
-                        # also permits immediate client feedback without
-                        # exposing the key of an evidence-bearing checkpoint.
+                        # Supported choice is practice, not durable application
+                        # evidence. Keeping it as choose/predict also permits
+                        # immediate client feedback without exposing the key of
+                        # an evidence-bearing checkpoint.
                         raise TeachingContractError(
-                            "Guided choice must use choose or predict; application evidence needs an open response"
+                            "Supported choice must use choose or predict; application evidence needs an open response"
                         )
                     if move == "independent" and turn.task.kind != "apply":
                         raise TeachingContractError("Independent application required")
