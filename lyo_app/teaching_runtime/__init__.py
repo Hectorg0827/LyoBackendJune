@@ -22,6 +22,7 @@ from .service import (
     record_policy_outcome,
     teaching_policy_decisions,
     teaching_policy_outcomes,
+    teaching_topic_from_text,
 )
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "record_policy_outcome",
     "teaching_policy_decisions",
     "teaching_policy_outcomes",
+    "teaching_topic_from_text",
     "decide_for_chat",
     "record_policy_decision",
 ]
