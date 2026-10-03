@@ -30,12 +30,11 @@ teaching offline because a *reviewer* broke would turn one degraded dependency
 into a learner staring at a retry button. A judge that answers and says the
 content is unsound is a different matter, and rejects the turn.
 
-**Not enabled by default.** `CLASSROOM_SEMANTIC_JUDGE=true` turns it on. Two
-honest reasons for that default: it adds a model call per authored turn, and
-its calibration has never been measured against a real model — see the note in
-`docs/` and the tests, which cover the plumbing and the policy but cannot cover
-whether a given model judges well. Turning it on is a cost and quality decision
-with a measurable answer, and it should be made with that measurement in hand.
+**Enabled by default.** The first authenticated production teacher-quality run
+showed why this guard exists: a fluent fraction explanation contradicted itself
+while passing every structural check. `CLASSROOM_SEMANTIC_JUDGE=false` remains
+an emergency cost/degradation switch, but correctness review is the safe default
+for learner-facing authored turns. The judge still fails open when unavailable.
 """
 
 from __future__ import annotations
