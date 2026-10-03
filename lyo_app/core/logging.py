@@ -22,18 +22,18 @@ def setup_logging() -> None:
         ]
     )
     
-    # Configure specific loggers
-    loggers = [
-        "uvicorn.access",
-        "uvicorn.error", 
-        "sqlalchemy.engine",
-        "sqlalchemy.pool",
-        "lyo_app",
-    ]
-    
-    for logger_name in loggers:
-        logger = logging.getLogger(logger_name)
-        logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+    # Application loggers stay useful at INFO in production. Third-party
+    # database internals do not: SQLAlchemy emits every reflected statement at
+    # INFO, which can exceed Railway's 500 logs/sec cap during schema startup
+    # and hide the errors we actually need. Debug mode intentionally restores
+    # verbose SQL logging for local diagnosis.
+    app_level = logging.DEBUG if settings.debug else logging.INFO
+    for logger_name in ("uvicorn.access", "uvicorn.error", "lyo_app"):
+        logging.getLogger(logger_name).setLevel(app_level)
+
+    sql_level = logging.DEBUG if settings.debug else logging.WARNING
+    logging.getLogger("sqlalchemy.engine").setLevel(sql_level)
+    logging.getLogger("sqlalchemy.pool").setLevel(sql_level)
 
 
 def get_logger(name: str) -> logging.Logger:
