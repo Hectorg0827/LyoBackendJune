@@ -14,6 +14,7 @@ on:
       - "lyo_app/ai_classroom/sdui_models.py"
       - "tests/test_teaching_runtime_policy.py"
       - "tests/test_teaching_runtime_model_router.py"
+      - "tests/test_teaching_runtime_scope_bridge.py"
       - "lyo_app/ai_classroom/scene_lifecycle_engine.py"
       - ".github/workflows/learning-os-ci.yml"
 
