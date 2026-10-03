@@ -387,6 +387,8 @@ async def decide_for_chat(
     topic: Optional[str] = None,
     history: Optional[Iterable[Any]] = None,
     state_summary: Optional[Mapping[str, Any]] = None,
+    has_media: bool = False,
+    has_current_media: bool = False,
 ) -> TeachingDecision:
     learner = await load_learner_snapshot(db, user_id, concept_id, topic=topic)
     session = session_snapshot(
@@ -403,6 +405,10 @@ async def decide_for_chat(
         has_active_course=bool(
             isinstance(state_summary, Mapping) and state_summary.get("active_course")
         ),
+        metadata={
+            "has_media": bool(has_media),
+            "has_current_media": bool(has_current_media),
+        },
     )
     return TeachingPolicy.decide(context)
 
