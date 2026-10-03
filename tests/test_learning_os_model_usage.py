@@ -1,5 +1,7 @@
+import asyncio
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +39,7 @@ async def test_usage_context_is_explicit_and_bounded():
             tokens_used="123",
             latency_ms="456",
         )
+        await asyncio.sleep(0)
 
     assert captured == [
         ModelUsage(
@@ -46,6 +49,44 @@ async def test_usage_context_is_explicit_and_bounded():
             cache_hit=False,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_slow_usage_recorder_never_blocks_provider_response():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def recorder(_usage: ModelUsage):
+        started.set()
+        await release.wait()
+
+    with bind_model_usage(recorder):
+        await asyncio.wait_for(
+            capture_model_usage(
+                model="gpt-4o-mini",
+                tokens_used=42,
+                latency_ms=25,
+            ),
+            timeout=0.05,
+        )
+
+    await asyncio.wait_for(started.wait(), timeout=0.1)
+    release.set()
+    await asyncio.sleep(0)
+
+
+def test_authenticated_test_prep_binds_usage_before_early_return():
+    source = Path("lyo_app/api/v1/stream_lyo2.py").read_text(encoding="utf-8")
+    start = source.index(
+        "if authenticated_user_id and not cancelled_prep and decision.intent == Intent.TEST_PREP:"
+    )
+    end = source.index("course_effective_text = request.text or \"\"", start)
+    block = source[start:end]
+
+    assert 'with _model_usage_scope("teaching", "test_prep"):' in block
+    assert block.index('with _model_usage_scope("teaching", "test_prep"):') < block.index(
+        "text = await process_chat_turn"
+    )
 
 
 @pytest.mark.asyncio
@@ -71,6 +112,7 @@ async def test_cached_response_records_zero_new_tokens():
 
     with bind_model_usage(recorder):
         result = await manager.chat_completion(messages=messages, use_cache=True)
+        await asyncio.sleep(0)
 
     assert result["content"] == "Hi"
     assert captured == [
@@ -125,6 +167,7 @@ async def test_successful_provider_call_reports_tokens_and_canonical_model_key()
             provider_order=["gpt-4o-mini"],
             use_cache=False,
         )
+        await asyncio.sleep(0)
 
     assert result["model_used"] == "gpt-4o-mini"
     assert result["tokens_used"] == 137
