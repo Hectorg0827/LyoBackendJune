@@ -111,7 +111,7 @@ preference are not failures.
 
 
 def judge_enabled() -> bool:
-    return os.getenv("CLASSROOM_SEMANTIC_JUDGE", "false").strip().lower() == "true"
+    return os.getenv("CLASSROOM_SEMANTIC_JUDGE", "true").strip().lower() != "false"
 
 
 async def model_semantic_judge(move: str, unit: LearningUnit, turn: LearningTurn) -> bool:
