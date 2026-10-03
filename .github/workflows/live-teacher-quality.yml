@@ -1,0 +1,101 @@
+name: Live teacher-quality validation
+
+# Manual only. This workflow talks to the deployed learner APIs and must never
+# run on an ordinary push/PR. Configure LYO_TEACHER_QUALITY_TOKEN as an Actions
+# secret belonging to a dedicated non-production-person learner account.
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Validation phase
+        required: true
+        type: choice
+        options:
+          - seed
+          - review
+        default: seed
+      topic:
+        description: Topic used for a seed learning session
+        required: true
+        type: string
+        default: comparing fractions
+      review_concept_id:
+        description: Optional canonical due-review concept ID
+        required: false
+        type: string
+        default: ""
+      max_scenes:
+        description: Maximum Classroom scenes to consume
+        required: true
+        type: number
+        default: 32
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-teacher-quality-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate deployed teacher quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LYO_BASE_URL: https://api.lyoai.app
+      LYO_ACCESS_TOKEN: ${{ secrets.LYO_TEACHER_QUALITY_TOKEN }}
+      VALIDATION_PHASE: ${{ inputs.phase }}
+      VALIDATION_TOPIC: ${{ inputs.topic }}
+      REVIEW_CONCEPT_ID: ${{ inputs.review_concept_id }}
+      MAX_SCENES: ${{ inputs.max_scenes }}
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install black-box validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install httpx websockets pytest pytest-asyncio
+
+      - name: Prove harness safety helpers
+        run: python -m pytest -q tests/test_live_teacher_quality_harness.py
+
+      - name: Require dedicated learner credential
+        shell: bash
+        run: |
+          if [ -z "$LYO_ACCESS_TOKEN" ]; then
+            echo "::error::Configure the LYO_TEACHER_QUALITY_TOKEN Actions secret before running live validation."
+            exit 2
+          fi
+
+      - name: Run deployed black-box validation
+        shell: bash
+        run: |
+          mkdir -p artifacts/teacher-quality
+          args=(
+            "$VALIDATION_PHASE"
+            --topic "$VALIDATION_TOPIC"
+            --max-scenes "$MAX_SCENES"
+            --output "artifacts/teacher-quality/live-${VALIDATION_PHASE}-${GITHUB_RUN_ID}.json"
+          )
+          if [ "$VALIDATION_PHASE" = "review" ] && [ -n "$REVIEW_CONCEPT_ID" ]; then
+            args+=(--review-concept-id "$REVIEW_CONCEPT_ID")
+          fi
+          python scripts/live_teacher_quality.py "${args[@]}"
+
+      - name: Upload redacted teacher-quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: teacher-quality-${{ inputs.phase }}-${{ github.run_id }}
+          path: artifacts/teacher-quality/*.json
+          if-no-files-found: warn
+          retention-days: 30
