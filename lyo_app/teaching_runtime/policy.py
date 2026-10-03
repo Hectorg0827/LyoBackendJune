@@ -109,6 +109,35 @@ class TeachingPolicy:
         has_media = bool(context.metadata.get("has_media"))
         has_current_media = bool(context.metadata.get("has_current_media"))
         attachment_referential = bool(_ATTACHMENT_REFERENCE_RE.search(text))
+        interaction_contract = context.metadata.get("interaction_contract") or {}
+        contract_mode = str(interaction_contract.get("mode") or "").lower()
+        contract_directives = list(interaction_contract.get("directives") or [])
+
+        if contract_mode in {"answer", "analyze", "compare", "search", "continue"}:
+            return _decision(
+                TeachingAction.ANSWER,
+                f"interaction_contract_{contract_mode}",
+                words=220,
+                model_tier="teaching",
+                directives=contract_directives or [
+                    "Honor the requested interaction shape.",
+                    "Answer before offering an assessment.",
+                ],
+            )
+        if (
+            contract_mode == "explain"
+            and bool(interaction_contract.get("explicit_user_control"))
+        ):
+            return _decision(
+                TeachingAction.EXPLAIN,
+                "interaction_contract_explain",
+                words=240,
+                instrument="visual" if visual else None,
+                directives=contract_directives or [
+                    "Explain directly before asking anything.",
+                    "Do not replace this turn with a calibration question.",
+                ],
+            )
 
         # Files are objects the learner is asking Lyo to inspect, not concepts
         # that should be diagnosed before they are identified. A newly attached
