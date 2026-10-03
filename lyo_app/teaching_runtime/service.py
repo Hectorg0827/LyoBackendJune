@@ -51,6 +51,26 @@ _CONFUSED_RE = re.compile(
 )
 
 
+def teaching_topic_from_text(user_text: str) -> str:
+    """Strip only explicit teaching wrappers; preserve the learner's topic text.
+
+    This mirrors the classroom/free-topic entry convention without trying to
+    infer aliases. The resulting topic is used only to derive the same
+    deterministic topic scope Classroom uses; it never joins concepts by a
+    fuzzy title.
+    """
+    text = (user_text or "").strip()
+    topic = re.sub(
+        r"^(?:teach me(?: about| on)?|explain(?: to me)?|help me understand|"
+        r"show me|walk me through|learn(?: about)?|quiero aprender(?: sobre)?|"
+        r"ens[eé][nñ]ame|expl[ií]came)\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return topic or text
+
+
 def session_snapshot(
     *,
     surface: TeachingSurface,
@@ -119,9 +139,13 @@ def session_snapshot(
 
 
 async def load_learner_snapshot(
-    db: Optional[AsyncSession], user_id: Any, concept_id: Optional[str]
+    db: Optional[AsyncSession],
+    user_id: Any,
+    concept_id: Optional[str],
+    topic: Optional[str] = None,
 ) -> LearnerSnapshot:
     snapshot = LearnerSnapshot(concept_id=concept_id)
+    scoped_concept_ids: list[str] = []
     if db is None or not concept_id or user_id in (None, "", 0, "0"):
         return snapshot
 
@@ -140,6 +164,54 @@ async def load_learner_snapshot(
                 snapshot.next_rung = match.next_rung
                 snapshot.misconception = match.misconception
                 snapshot.last_seen = match.last_seen
+            elif topic:
+                # Classroom free-topic concepts live under a deterministic
+                # hashed scope. Reuse only evidence in that exact scope; never
+                # join on a similar title or guess an alias.
+                from lyo_app.ai_classroom.models import Concept
+                from lyo_app.ai_classroom.skill_identity import topic_scope
+
+                scope = topic_scope(topic)
+                if scope:
+                    scoped_concept_ids = list(
+                        (
+                            await db.execute(
+                                select(Concept.id).where(Concept.subject == scope)
+                            )
+                        ).scalars().all()
+                    )
+                    scoped = [
+                        item
+                        for item in record.concepts
+                        if item.concept_id in set(scoped_concept_ids)
+                    ]
+                    if scoped:
+                        rank = {
+                            None: -1,
+                            "exposure": 0,
+                            "recognition": 1,
+                            "explanation": 2,
+                            "application": 3,
+                            "transfer": 4,
+                            "retention": 5,
+                        }
+                        # Use the weakest demonstrated scoped concept so a
+                        # generic topic chat never overstates what one strong
+                        # unit proves about the whole subject.
+                        focus = min(
+                            scoped,
+                            key=lambda item: rank.get(item.best_rung, -1),
+                        )
+                        snapshot.evidence_state = focus.state
+                        snapshot.strongest_rung = focus.best_rung
+                        snapshot.next_rung = focus.next_rung
+                        snapshot.attempts = max(snapshot.attempts, len(scoped))
+                        recent = max(
+                            scoped,
+                            key=lambda item: item.last_seen or "",
+                        )
+                        snapshot.misconception = recent.misconception
+                        snapshot.last_seen = recent.last_seen
     except Exception as exc:
         logger.warning("Teaching runtime could not read evidence record: %s", type(exc).__name__)
 
@@ -199,24 +271,49 @@ async def load_learner_snapshot(
 
         learner_id = _coerce_learner_id(user_id)
         if learner_id is not None:
+            skill_ids = scoped_concept_ids or [concept_id]
             result = await db.execute(
                 select(LearnerMastery).where(
                     LearnerMastery.user_id == learner_id,
-                    LearnerMastery.skill_id == concept_id,
+                    LearnerMastery.skill_id.in_(skill_ids),
                 )
             )
-            row = result.scalar_one_or_none()
-            if row is not None:
-                snapshot.mastery_score = max(0.0, min(1.0, float(row.mastery_level or 0.0)))
-                snapshot.attempts = max(0, int(row.attempts or 0))
-                snapshot.hints_used = max(0, int(row.hints_used or 0))
-                snapshot.uncertainty = max(0.0, min(1.0, float(row.uncertainty or 0.0)))
+            rows = list(result.scalars().all())
+            if rows:
+                snapshot.mastery_score = max(
+                    0.0,
+                    min(
+                        1.0,
+                        sum(float(row.mastery_level or 0.0) for row in rows) / len(rows),
+                    ),
+                )
+                snapshot.attempts = max(
+                    snapshot.attempts,
+                    sum(max(0, int(row.attempts or 0)) for row in rows),
+                )
+                snapshot.hints_used = sum(max(0, int(row.hints_used or 0)) for row in rows)
+                snapshot.uncertainty = max(
+                    0.0,
+                    min(
+                        1.0,
+                        sum(float(row.uncertainty or 0.0) for row in rows) / len(rows),
+                    ),
+                )
                 if not snapshot.misconception:
-                    misconceptions = list(row.misconceptions or [])
-                    if misconceptions:
-                        snapshot.misconception = str(misconceptions[-1])[:500]
-                if snapshot.last_seen is None and row.last_seen is not None:
-                    snapshot.last_seen = row.last_seen.isoformat()
+                    for row in sorted(
+                        rows,
+                        key=lambda item: item.last_seen.isoformat()
+                        if item.last_seen is not None
+                        else "",
+                        reverse=True,
+                    ):
+                        misconceptions = list(row.misconceptions or [])
+                        if misconceptions:
+                            snapshot.misconception = str(misconceptions[-1])[:500]
+                            break
+                seen = [row.last_seen for row in rows if row.last_seen is not None]
+                if snapshot.last_seen is None and seen:
+                    snapshot.last_seen = max(seen).isoformat()
     except Exception as exc:
         logger.warning("Teaching runtime could not read numeric mastery: %s", type(exc).__name__)
 
@@ -230,10 +327,11 @@ async def decide_for_chat(
     user_text: str,
     intent: str,
     concept_id: Optional[str] = None,
+    topic: Optional[str] = None,
     history: Optional[Iterable[Any]] = None,
     state_summary: Optional[Mapping[str, Any]] = None,
 ) -> TeachingDecision:
-    learner = await load_learner_snapshot(db, user_id, concept_id)
+    learner = await load_learner_snapshot(db, user_id, concept_id, topic=topic)
     session = session_snapshot(
         surface=TeachingSurface.CHAT,
         user_text=user_text,
