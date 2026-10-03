@@ -337,6 +337,28 @@ def resolve_interaction_contract(
         workflow_intent = Intent.QUIZ
         reason = "explicit_quiz"
         explicit_user_control = True
+    elif router_intent in {
+        Intent.COURSE,
+        Intent.STUDY_PLAN,
+        Intent.TEST_PREP,
+        Intent.FLASHCARDS,
+        Intent.SCHEDULE_REMINDERS,
+        Intent.MODIFY_ARTIFACT,
+        Intent.COMMUNITY,
+    }:
+        # A concrete workflow already selected by the semantic router owns the
+        # turn. Date words such as "today" or "recent" describe that workflow;
+        # they must not silently convert it into web search.
+        mode = InteractionMode.CREATE
+        workflow_intent = router_intent
+        reason = "router_owned_workflow"
+    elif router_intent == Intent.QUIZ:
+        mode = InteractionMode.QUIZ
+        workflow_intent = Intent.QUIZ
+        reason = "router_owned_quiz"
+    elif router_intent in {Intent.REFLECT, Intent.WEEKLY_REVIEW}:
+        mode = InteractionMode.ANSWER
+        reason = "router_owned_learner_state"
     elif _SEARCH_RE.search(text):
         mode = InteractionMode.SEARCH
         reason = "explicit_or_time_sensitive_search"
