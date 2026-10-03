@@ -329,3 +329,21 @@ def test_required_search_with_only_document_source_still_warns_unverified():
 
     assert "No live-search sources were returned" in prompt
     assert "Non-web attachments or references do not satisfy live verification" in prompt
+
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Compare brief therapy with long-term therapy",
+        "What does concise mean?",
+        "What is a detailed balance sheet?",
+    ],
+)
+def test_depth_vocabulary_is_not_mistaken_for_a_preference_command(text):
+    contract = resolve_interaction_contract(
+        user_text=text,
+        router_intent=Intent.GENERAL,
+    )
+    assert contract.depth is ResponseDepth.STANDARD
+    assert contract.depth_explicit is False
