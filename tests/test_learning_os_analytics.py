@@ -133,7 +133,8 @@ def test_empirical_report_measures_repair_transfer_retention_and_continuity():
     assert gain["rungs_per_active_minute"] == 3.75
 
     assert report["sessions"]["identified_sessions"] == 3
-    assert report["sessions"]["successful_sessions"] == 3
+    assert report["sessions"]["successful_sessions"] == 2
+    assert report["sessions"]["success_rate"] == 0.6667
     assert report["model_cost_per_successful_session"]["available"] is False
 
 
