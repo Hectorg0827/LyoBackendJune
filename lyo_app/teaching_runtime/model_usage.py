@@ -11,6 +11,8 @@ it and must never share the live Classroom AsyncSession.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -30,6 +32,21 @@ _usage_recorder: ContextVar[Optional[UsageRecorder]] = ContextVar(
     "lyo_learning_os_model_usage_recorder",
     default=None,
 )
+_usage_tasks: set[asyncio.Task[None]] = set()
+
+
+def _finish_usage_task(task: asyncio.Task[None]) -> None:
+    """Retain fire-and-forget telemetry tasks until completion and consume errors."""
+    _usage_tasks.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Learning OS model usage task failed: %s",
+            type(exc).__name__,
+        )
 
 
 @contextmanager
@@ -66,14 +83,21 @@ async def capture_model_usage(
         latency = max(0, int(latency_ms or 0))
     except (TypeError, ValueError):
         latency = 0
-    await recorder(
-        ModelUsage(
-            model=str(model or "unknown")[:80],
-            tokens_used=tokens,
-            latency_ms=latency,
-            cache_hit=bool(cache_hit),
-        )
+    usage = ModelUsage(
+        model=str(model or "unknown")[:80],
+        tokens_used=tokens,
+        latency_ms=latency,
+        cache_hit=bool(cache_hit),
     )
+    # Observability must never sit on the learner response path. The durable
+    # recorder can wait on a busy database pool without delaying a successful
+    # provider result or consuming the caller's routing/teaching timeout.
+    task = asyncio.create_task(
+        recorder(usage),
+        name="learning-os-model-usage",
+    )
+    _usage_tasks.add(task)
+    task.add_done_callback(_finish_usage_task)
 
 
 def learning_event_usage_recorder(
