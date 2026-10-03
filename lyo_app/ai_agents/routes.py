@@ -818,11 +818,7 @@ async def ai_exception_handler(request, exc):
     )
 
 
-# Import and include optimization routes
-try:
-    from .optimization.routes import setup_optimization_routes
-    # Setup optimization routes
-    setup_optimization_routes(router)
-    logger.info("AI optimization routes loaded successfully")
-except ImportError as e:
-    logger.warning(f"AI optimization routes not available: {e}")
+# The legacy optimization management router is retired. Runtime request
+# optimization remains active through the optimizer used directly by the
+# current chat/Learning OS pipeline; importing the old management surface here
+# only exercised stale package-relative imports and produced startup warnings.
