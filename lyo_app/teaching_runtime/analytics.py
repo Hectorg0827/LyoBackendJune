@@ -143,7 +143,12 @@ def aggregate_learning_os_events(
         "retention_attempts": 0,
         "retention_successes": 0,
     }
-    same = {"attempts": 0, "successes": 0}
+    same = {
+        "attempts": 0,
+        "successes": 0,
+        "retention_attempts": 0,
+        "retention_successes": 0,
+    }
     transitions: dict[str, dict[str, int]] = defaultdict(
         lambda: {"attempts": 0, "successes": 0}
     )
@@ -241,6 +246,9 @@ def aggregate_learning_os_events(
                     else:
                         same["attempts"] += 1
                         same["successes"] += int(success)
+                        if target == "retention":
+                            same["retention_attempts"] += 1
+                            same["retention_successes"] += int(success)
 
             seconds = _response_seconds(event)
             if seconds is not None:
@@ -350,6 +358,9 @@ def aggregate_learning_os_events(
             "same_surface": {
                 **same,
                 "success_rate": _rate(same["successes"], same["attempts"]),
+                "retention_success_rate": _rate(
+                    same["retention_successes"], same["retention_attempts"]
+                ),
             },
             "transitions": transition_rows,
         },
