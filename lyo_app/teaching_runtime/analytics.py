@@ -258,6 +258,8 @@ def aggregate_learning_os_events(
         if success and current_rank >= 0:
             strongest_rank[key] = max(prior_rank, current_rank)
             previous_positive[key] = event
+            if current_rank >= evidence_rank("application"):
+                previous_failure.pop(key, None)
         if not success:
             previous_failure[key] = event
         previous_event[key] = event
