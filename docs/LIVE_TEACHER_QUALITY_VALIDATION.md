@@ -29,6 +29,23 @@ session.
 5. Structural pass/fail is automated. Pedagogical quality remains a separate
    review of the captured teacher output plus the durable outcome metrics.
 
+## Recommended production run: GitHub Actions
+
+For repeatable production checks, use the manual **Live teacher-quality
+validation** workflow in GitHub Actions rather than copying a bearer token into
+a terminal history.
+
+Before the first run, create an Actions secret named
+`LYO_TEACHER_QUALITY_TOKEN`. It should belong to a dedicated test learner,
+not a staff/admin account and not a real learner. The workflow fixes the target
+to `https://api.lyoai.app`, supplies the token only through the process
+environment, runs the harness safety tests first, and uploads the redacted JSON
+report as a 30-day artifact.
+
+Run **seed** first. Run **review** later, only after the server reports a concept
+as genuinely due. Do not schedule review early just to obtain a retention
+number.
+
 ## Seed run
 
 ```bash
