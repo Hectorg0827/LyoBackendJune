@@ -198,3 +198,36 @@ def test_lookback_rows_establish_baseline_but_do_not_inflate_window_attempts():
     assert report["evidence_attempts"] == 1
     assert report["retention"]["7d"]["attempts"] == 1
     assert report["cross_surface_continuity"]["cross_surface"]["attempts"] == 1
+
+
+
+def test_already_repaired_failure_is_not_credited_to_later_remediation():
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    rows = [
+        event(
+            start,
+            correct=False,
+            kind="application",
+            action="check_application",
+            target="application",
+            misconception="sign error",
+        ),
+        event(
+            start + timedelta(hours=1),
+            correct=True,
+            kind="application",
+            action="check_application",
+            target="application",
+        ),
+        event(
+            start + timedelta(hours=2),
+            correct=True,
+            kind="application",
+            action="remediate",
+            target="application",
+        ),
+    ]
+
+    report = aggregate_learning_os_events(rows, since=start)
+    assert report["remediation"]["eligible_followups"] == 0
+    assert report["remediation"]["repair_rate"] is None
