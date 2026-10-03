@@ -2,8 +2,9 @@
 
 Turns the immutable LearningEvent stream into product measurements without
 trusting client-reported mastery. Only metrics supported by durable data are
-calculated. Model cost remains explicitly unavailable until model usage can be
-linked to the same durable session/outcome identity.
+calculated. Model token usage is linked to the same session identity as learner
+evidence; dollar cost remains explicitly unavailable until provider pricing is
+versioned rather than guessed from mutable defaults.
 """
 
 from __future__ import annotations
