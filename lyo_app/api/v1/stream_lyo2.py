@@ -335,6 +335,131 @@ def _extract_course_topic(user_text: str) -> str:
     ).strip()
     return topic or user_text.strip()
 
+
+def _extract_course_level(user_text: str) -> Optional[str]:
+    """Return one unambiguous difficulty level explicitly named by the learner.
+
+    Level tokens are matched as whole words so unrelated text such as
+    "basically" cannot be mistaken for "basic". Requests that name more than
+    one distinct level are intentionally treated as ambiguous and left for the
+    course architect to resolve.
+    """
+    normalized = (user_text or "").casefold()
+    level_tokens = {
+        "advanced": ("advanced", "avanzado", "avanzada"),
+        "intermediate": ("intermediate", "intermedio", "intermedia"),
+        "beginner": (
+            "beginner",
+            "beginning",
+            "principiante",
+            "basic",
+            "básico",
+            "basico",
+        ),
+    }
+    matched_levels = {
+        level
+        for level, tokens in level_tokens.items()
+        if any(
+            _re.search(rf"\b{_re.escape(token)}\b", normalized)
+            for token in tokens
+        )
+    }
+    return next(iter(matched_levels)) if len(matched_levels) == 1 else None
+
+
+def _normalize_course_payload_for_stream(
+    payload: Optional[Dict[str, Any]],
+    topic: str,
+) -> Dict[str, Any]:
+    """Normalize executor course output to the same payload clients receive.
+
+    Executor implementations may return the course under a course key or
+    directly as the payload. Missing or unusable payloads are replaced with the
+    existing deterministic fallback before progress counts are calculated.
+    """
+    if isinstance(payload, dict):
+        nested_course = payload.get("course")
+        if isinstance(nested_course, dict):
+            return payload
+        if payload and any(
+            key in payload
+            for key in ("id", "title", "topic", "lessons", "objectives")
+        ):
+            return {"course": payload}
+
+    return {
+        "course": {
+            "id": str(uuid.uuid4()),
+            "title": topic.title() if topic else "Your Course",
+            "topic": topic,
+            "level": "beginner",
+            "duration": "4 weeks",
+            "objectives": [
+                f"Understand the fundamentals of {topic}",
+                f"Apply key concepts of {topic} in practice",
+                f"Build confidence with {topic}",
+            ],
+            "lessons": [],
+        }
+    }
+
+
+def _resolve_course_topic(
+    user_text: str,
+    history: Optional[List[ConversationTurn]] = None,
+    active_topic: Optional[str] = None,
+) -> str:
+    """Resolve the subject of a new course or a short live-course revision.
+
+    A revision such as "make it advanced" should keep the subject the learner
+    was already building, not create a course literally titled "Make It
+    Advanced". Explicit topic replacements win; otherwise we recover the most
+    recent explicit course request from canonical conversation history.
+    """
+    text = (user_text or "").strip()
+
+    adjust_match = _re.match(
+        r"^adjust this course to\s+(.+?)(?:\.|$)",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    if adjust_match:
+        return adjust_match.group(1).strip()
+
+    topic_change = _re.search(
+        r"\b(?:change|switch)\s+(?:the\s+)?(?:course\s+)?(?:topic\s+)?to\s+"
+        r"(.+?)(?:[.!?]|$)",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    if topic_change:
+        return topic_change.group(1).strip()
+
+    explicit_course_request = _re.match(
+        r"^(?:create|make|build|give me|i want)\b.*\bcourse\b",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    if explicit_course_request:
+        return _extract_course_topic(text)
+
+    if active_topic and active_topic.strip():
+        return active_topic.strip()
+
+    for turn in reversed(history or []):
+        if (turn.role or "").lower() != "user":
+            continue
+        prior = (turn.content or "").strip()
+        if _re.match(
+            r"^(?:create|make|build|give me|i want)\b.*\bcourse\b",
+            prior,
+            flags=_re.IGNORECASE,
+        ):
+            return _extract_course_topic(prior)
+
+    return _extract_course_topic(text)
+
 router = APIRouter()
 
 router_agent = MultimodalRouter()
@@ -1080,22 +1205,40 @@ async def stream_lyo2_chat(
                 )
             else:
                 try:
-                    # 2b. Fetch Proactive Nudges (New for Phase 16)
+                    # 2b. Fetch Proactive Nudges (New for Phase 16).
+                    #
+                    # Keep this context out of request.text. request.text is the
+                    # learner-authored surface and is reused for visible titles,
+                    # course topics, persistence and executor prompts. Mutating it
+                    # here leaked strings such as "[Proactive Context: ...]" into
+                    # the course card. The router gets an internal copy while the
+                    # planner receives the same data through USER STATE.
                     proactive_context = ""
+                    routing_request = request
                     try:
                         nudges = await proactive_engagement_service.get_pending_nudges_for_user(current_user.id, db)
                         if nudges:
                             proactive_context = "\n**Proactive System Nudges (Incorporate these into your greeting if relevant):**\n"
                             for n in nudges:
                                 proactive_context += f"- [{n.nudge_type}] {n.title}: {n.message}\n"
-                            # Append to request text for the router/planner/executor to see
-                            request.text = f"[Proactive Context: {proactive_context}]\n" + (request.text or "")
+                            request.state_summary = {
+                                **(request.state_summary or {}),
+                                "proactive_context": proactive_context,
+                            }
+                            routing_request = request.model_copy(
+                                update={
+                                    "text": (
+                                        f"[Internal proactive context: {proactive_context}]\n"
+                                        + (request.text or "")
+                                    )
+                                }
+                            )
                     except Exception as ne:
                         logger.warning(f"Failed to fetch proactive nudges: {ne}")
 
                     routing_response = await asyncio.wait_for(
                         router_agent.route(
-                            request,
+                            routing_request,
                             media_attachments=media_attachments,
                         ),
                         timeout=35.0,
@@ -1123,23 +1266,70 @@ async def stream_lyo2_chat(
                 yield "data: [DONE]\n\n"
                 return
 
+            course_effective_text = request.text or ""
             if decision.intent == Intent.COURSE:
-                _topic = _extract_course_topic(request.text or "")
-                _preview_oc = {
-                    "course": {
-                        "id": str(uuid.uuid4()),
-                        "title": _topic.title() if _topic else "Your Course",
-                        "topic": _topic,
-                        "level": "beginner",
-                        "duration": "~30 min",
-                        "objectives": [
-                            f"Understand the core concepts of {_topic}",
-                            "Apply your knowledge with guided exercises",
-                            "Build skills through structured practice",
-                        ],
-                    }
+                _active_course = (
+                    request.state_summary.get("active_course", {})
+                    if isinstance(request.state_summary, dict)
+                    else {}
+                )
+                _active_topic = (
+                    _active_course.get("topic")
+                    if isinstance(_active_course, dict)
+                    and isinstance(_active_course.get("topic"), str)
+                    else None
+                )
+                _active_level = (
+                    _active_course.get("difficulty")
+                    if isinstance(_active_course, dict)
+                    and isinstance(_active_course.get("difficulty"), str)
+                    else None
+                )
+                _topic = _resolve_course_topic(
+                    request.text or "", request.conversation_history, _active_topic
+                )
+                _explicit_level = _extract_course_level(request.text or "")
+                if not _explicit_level and _active_level:
+                    normalized_active_level = _active_level.lower().strip()
+                    if normalized_active_level in {"beginner", "intermediate", "advanced"}:
+                        _explicit_level = normalized_active_level
+                course_effective_text = (
+                    f'Create or revise a course on "{_topic}". '
+                    f'Apply this learner request: "{request.text or ""}".'
+                )
+                _preview_course = {
+                    "id": str(uuid.uuid4()),
+                    "title": _topic.title() if _topic else "Your Course",
+                    "topic": _topic,
+                    "objectives": [
+                        f"Understand the core concepts of {_topic}",
+                        "Apply your knowledge with guided exercises",
+                        "Build skills through structured practice",
+                    ],
                 }
-                oc_event_data = {'type': 'open_classroom', 'block': {'type': 'OpenClassroomBlock', 'content': {'type': 'OPEN_CLASSROOM', **_preview_oc}}}
+                if _explicit_level:
+                    _preview_course["level"] = _explicit_level
+                    _preview_course["difficulty"] = _explicit_level.capitalize()
+                _preview_oc = {"course": _preview_course}
+
+                yield yield_safe_sse_event(
+                    "course_generation",
+                    {
+                        "type": "course_generation",
+                        "phase": "intent",
+                        "progress": 10,
+                        "message": "Understanding your request",
+                    },
+                )
+
+                oc_event_data = {
+                    'type': 'open_classroom',
+                    'preview': True,
+                    'block': {
+                        'type': 'OpenClassroomBlock',
+                        'content': {'type': 'OPEN_CLASSROOM', **_preview_oc},
+                    },
+                }
                 yield yield_safe_sse_event("open_classroom_preview", oc_event_data)
                 
                 # v2: emit lyo_command for iOS v2 pipeline
@@ -1293,7 +1483,14 @@ async def stream_lyo2_chat(
                         )
                     ])
                 else:
-                    plan = await asyncio.wait_for(planner_agent.plan(request, decision), timeout=25.0)
+                    planning_request = (
+                        request.model_copy(update={"text": course_effective_text})
+                        if decision.intent == Intent.COURSE
+                        else request
+                    )
+                    plan = await asyncio.wait_for(
+                        planner_agent.plan(planning_request, decision), timeout=25.0
+                    )
             except asyncio.TimeoutError:
                 logger.error(f"❌ [STREAM][{trace_id}] Planning timed out after 25s")
                 # Fallback plan
@@ -1306,6 +1503,16 @@ async def stream_lyo2_chat(
                 ])
             
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
+            if decision.intent == Intent.COURSE:
+                yield yield_safe_sse_event(
+                    "course_generation",
+                    {
+                        "type": "course_generation",
+                        "phase": "planning",
+                        "progress": 30,
+                        "message": "Course plan ready",
+                    },
+                )
 
             # ── Ensure a GENERATE_TEXT step exists ─────────────────────
             # The LLM planner sometimes omits GENERATE_TEXT steps.
@@ -1325,6 +1532,16 @@ async def stream_lyo2_chat(
                 )
 
             # 4. Layer C: Execution (Simulated Streaming)
+            if decision.intent == Intent.COURSE:
+                yield yield_safe_sse_event(
+                    "course_generation",
+                    {
+                        "type": "course_generation",
+                        "phase": "execution",
+                        "progress": 45,
+                        "message": "Starting course generation",
+                    },
+                )
             logger.info(f"⚡ [STREAM][{trace_id}] Starting Execution...")
             e_start = time.time()
             executor = LyoExecutor(db)
@@ -1340,7 +1557,11 @@ async def stream_lyo2_chat(
                     executor.execute(
                         user_id=str(current_user.id),
                         plan=plan,
-                        original_request=request.text or "",
+                        original_request=(
+                            course_effective_text
+                            if decision.intent == Intent.COURSE
+                            else request.text or ""
+                        ),
                         conversation_history=history,
                         intent=decision.intent.value if decision.intent else None,
                         media_attachments=media_attachments,
@@ -1353,6 +1574,61 @@ async def stream_lyo2_chat(
                 return
                 
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
+            if decision.intent == Intent.COURSE:
+                topic_text = _resolve_course_topic(
+                    request.text or "",
+                    request.conversation_history,
+                    (
+                        request.state_summary.get("active_course", {}).get("topic")
+                        if isinstance(request.state_summary, dict)
+                        and isinstance(request.state_summary.get("active_course"), dict)
+                        else None
+                    ),
+                )
+                _raw_course_payload = execution_response.open_classroom_payload
+                _normalized_course_payload = _normalize_course_payload_for_stream(
+                    _raw_course_payload,
+                    topic_text,
+                )
+                if _normalized_course_payload is not _raw_course_payload:
+                    execution_response = execution_response.model_copy(
+                        update={"open_classroom_payload": _normalized_course_payload}
+                    )
+                    if not (
+                        isinstance(_raw_course_payload, dict)
+                        and _raw_course_payload
+                    ):
+                        logger.warning(
+                            f"⚠️ [STREAM][{trace_id}] COURSE intent but no usable "
+                            "open_classroom_payload — using synthesised fallback "
+                            f"for topic: '{topic_text[:60]}'"
+                        )
+
+                _generated_course = _normalized_course_payload["course"]
+                _generated_lessons = _generated_course.get("lessons", [])
+                if not isinstance(_generated_lessons, list):
+                    _generated_lessons = []
+                _lesson_count = len(_generated_lessons)
+                _outline = []
+                for lesson in _generated_lessons:
+                    if not isinstance(lesson, dict):
+                        continue
+                    _outline.append({
+                        "title": str(lesson.get("title") or "Lesson"),
+                        "description": str(lesson.get("description") or ""),
+                    })
+                yield yield_safe_sse_event(
+                    "course_generation",
+                    {
+                        "type": "course_generation",
+                        "phase": "lessons",
+                        "progress": 82,
+                        "message": "Course outline created",
+                        "completed_lessons": _lesson_count,
+                        "total_lessons": _lesson_count,
+                        "outline": _outline,
+                    },
+                )
             
             # ── Emit plain-text answer event ─────────────────────────
             raw_llm_text = execution_response.answer_block.content.get("text", "")
@@ -1426,34 +1702,9 @@ async def stream_lyo2_chat(
                     {"type": "smart_blocks", "blocks": redact_blocks(smart_blocks)},
                 )
 
-            # Send open_classroom payload (course creation trigger)
-            if (
-                execution_response.open_classroom_payload is None
-                and decision.intent == Intent.COURSE
-            ):
-                topic_text = _extract_course_topic(request.text or "")
-                fallback_oc = {
-                    "course": {
-                        "id": str(uuid.uuid4()),
-                        "title": topic_text.title() if topic_text else "Your Course",
-                        "topic": topic_text,
-                        "level": "beginner",
-                        "duration": "4 weeks",
-                        "objectives": [
-                            f"Understand the fundamentals of {topic_text}",
-                            f"Apply key concepts of {topic_text} in practice",
-                            f"Build confidence with {topic_text}",
-                        ],
-                    }
-                }
-                execution_response = execution_response.model_copy(
-                    update={"open_classroom_payload": fallback_oc}
-                )
-                logger.warning(
-                    f"⚠️ [STREAM][{trace_id}] COURSE intent but no open_classroom_payload — "
-                    f"using synthesised fallback for topic: '{topic_text[:60]}'"
-                )
-
+            # Send the normalized open_classroom payload (course creation trigger).
+            # COURSE payloads were normalized immediately after execution so the
+            # lesson milestone and the client consume the exact same data.
             if execution_response.open_classroom_payload:
                 try:
                     from lyo_app.ai_classroom.conversation_flow import get_conversation_manager, ConversationSession
@@ -1477,6 +1728,17 @@ async def stream_lyo2_chat(
                             logger.info(f"💾 Stored ConversationSession({s_id}) for topic '{c_topic}'")
                 except Exception as e:
                     logger.error(f"Failed to save cm session: {e}", exc_info=True)
+
+                if decision.intent == Intent.COURSE:
+                    yield yield_safe_sse_event(
+                        "course_generation",
+                        {
+                            "type": "course_generation",
+                            "phase": "finalizing",
+                            "progress": 95,
+                            "message": "Preparing your classroom",
+                        },
+                    )
 
                 logger.info(f"🏫 [STREAM][{trace_id}] Sending open_classroom event")
                 oc_brick = {
@@ -1535,6 +1797,16 @@ async def stream_lyo2_chat(
                 )
 
             # Completion signal
+            if decision.intent == Intent.COURSE:
+                yield yield_safe_sse_event(
+                    "course_generation",
+                    {
+                        "type": "course_generation",
+                        "phase": "ready",
+                        "progress": 100,
+                        "message": "Course ready",
+                    },
+                )
             yield "data: [DONE]\n\n"
             logger.info(f"🏁 [STREAM][{trace_id}] Total session time: {time.time()-start_time:.2f}s")
 
