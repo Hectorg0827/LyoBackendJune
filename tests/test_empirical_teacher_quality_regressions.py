@@ -7,7 +7,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
     TeachingContractError,
     validate_semantic_content,
 )
-from scripts.live_teacher_quality import scripted_fraction_response
+from scripts.live_teacher_quality import choose_scripted_option, scripted_fraction_response
 
 
 def _choice_task(*, answer: str, scenario: str, question: str) -> LearningTask:
@@ -94,3 +94,35 @@ def test_live_fraction_learner_can_explain_denominator_piece_size():
 
     assert "more equal pieces" in answer
     assert "each piece is smaller" in answer
+
+
+def test_live_fraction_learner_solves_hidden_common_denominator_choice():
+    quiz = {
+        "question": "Compare 3/8 and 5/12. What is the least common denominator?",
+        "options": [
+            {"id": "a", "label": "16", "is_correct": None},
+            {"id": "b", "label": "24", "is_correct": None},
+            {"id": "c", "label": "32", "is_correct": None},
+        ],
+    }
+
+    assert choose_scripted_option(quiz, True) == ("b", "computed")
+    wrong_id, basis = choose_scripted_option(quiz, False)
+    assert basis == "computed"
+    assert wrong_id in {"a", "c"}
+
+
+def test_live_fraction_learner_solves_hidden_fraction_comparison_choice():
+    quiz = {
+        "question": (
+            "You need to compare the fractions 2/5 and 3/4. "
+            "Which fraction is larger: 2/5 or 3/4?"
+        ),
+        "options": [
+            {"id": "a", "label": "2/5", "is_correct": None},
+            {"id": "b", "label": "3/4", "is_correct": None},
+            {"id": "c", "label": "They are equal", "is_correct": None},
+        ],
+    }
+
+    assert choose_scripted_option(quiz, True) == ("b", "computed")
