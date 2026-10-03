@@ -13,7 +13,6 @@ from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
     ConversationTurn, MediaRef, UIBlock, UIBlockType, Intent,
-    ActionType, PlannedAction, LyoPlan,
 )
 from lyo_app.ai.multimodal import (
     canonical_message_content,
@@ -208,7 +207,6 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
-            TeachingAction,
             TeachingSurface,
             decide_for_chat,
             record_policy_decision,
