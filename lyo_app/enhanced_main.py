@@ -713,6 +713,22 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ AI Classroom Playback routes not available: {e}")
 
+    # Client classroom telemetry lives in lyo_app.classroom.analytics (the
+    # persisted ClassroomSession/ClassroomInteraction subsystem), not in the
+    # newer ai_classroom router above. app_factory.py mounted this router, but
+    # Railway runs enhanced_main.py directly, so production clients were
+    # receiving 404 for POST /api/v1/classroom/analytics/event.
+    try:
+        from lyo_app.classroom.analytics import router as classroom_analytics_router
+        app.include_router(
+            classroom_analytics_router,
+            prefix="/api/v1/classroom/analytics",
+            tags=["Classroom Analytics"],
+        )
+        logger.info("✅ Classroom analytics telemetry route integrated!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Classroom analytics route not available: {e}")
+
     # ── Living Classroom: Production Monitoring Dashboard ──
     try:
         from lyo_app.ai_classroom.monitoring_dashboard import router as monitoring_router
