@@ -374,15 +374,30 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     answer = (next(option.label for option in task.options if option.correct)
               if task.response_format == "choice" else task.example_answer)
     normalized = comparable_text(answer)
-    # Short numbers, fractions and one-word answers often occur as *data* in
-    # the scenario. Reject a full answer phrase, not a necessary operand.
-    if len(normalized) < 7 or len(normalized.split()) < 2:
-        return
     # response_hint is learner-visible as both guidance and input placeholder.
     visible = [turn.speech, turn.board_title, turn.board_content,
                task.scenario, task.question, task.response_hint]
     if turn.visual:
         visible.extend([turn.visual.caption, turn.visual.description])
+
+    # Short numeric/fraction answers are common *inputs* in a scenario, so the
+    # old gate skipped them entirely. The live teacher-quality run exposed the
+    # consequence: the board stated "the least common denominator is 24" and
+    # then asked the learner for that denominator. Short answers are safe when
+    # they occur only as problem data; they are not safe when the teacher's
+    # explanatory fields state them before the learner answers.
+    if len(normalized) < 7 or len(normalized.split()) < 2:
+        teaching_visible = [turn.speech, turn.board_title, turn.board_content]
+        if turn.visual:
+            teaching_visible.extend([turn.visual.caption, turn.visual.description])
+        scenario_has_answer = f" {normalized} " in f" {comparable_text(task.scenario)} "
+        if (not scenario_has_answer and
+                any(f" {normalized} " in f" {comparable_text(item)} "
+                    for item in teaching_visible)):
+            raise TeachingContractError(
+                "The visible teaching beat reveals the short answer before the learner responds")
+        return
+
     if any(f" {normalized} " in f" {comparable_text(item)} " for item in visible):
         raise TeachingContractError("The visible question or teaching beat reveals the answer")
 
