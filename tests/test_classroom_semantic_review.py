@@ -1,10 +1,10 @@
 """The judge that reads the teaching, and what it is allowed to do about it.
 
 These cover the plumbing and the policy: what the judge is asked, what it is
-allowed to object to, and what happens on each answer it can give. They cannot
-cover whether a real model *judges well* — no model credentials exist in this
-environment — and that gap is the reason the review is off by default rather
-than an oversight. See `semantic_review`'s module docstring.
+allowed to object to, and what happens on each answer it can give. The first
+authenticated production validation caught fluent but contradictory teaching,
+so learner-facing review is enabled by default while still failing open if the
+reviewer itself is unavailable.
 """
 
 import os
@@ -109,15 +109,15 @@ def test_the_verdict_cannot_invent_a_new_reason_to_refuse_teaching():
 
 # ─── The default ────────────────────────────────────────────────────────────
 
-def test_the_review_is_off_unless_switched_on():
-    for value, expected in [(None, False), ("false", False), ("", False),
+def test_the_review_is_on_unless_explicitly_switched_off():
+    for value, expected in [(None, True), ("false", False), ("", True),
                             ("true", True), ("TRUE ", True)]:
         with patch.dict(os.environ, {} if value is None else {"CLASSROOM_SEMANTIC_JUDGE": value},
                         clear=value is None):
             assert judge_enabled() is expected, value
 
 
-def test_the_live_engine_leaves_it_off_by_default():
-    """Wiring it on is a cost decision, so the engine must not make it silently."""
+def test_plain_adaptive_teacher_still_has_no_implicit_reviewer():
+    """The live engine wires the reviewer; isolated teachers stay dependency-free."""
     from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
     assert AdaptiveTeacher().semantic_judge is None
