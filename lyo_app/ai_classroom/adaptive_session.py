@@ -18,6 +18,7 @@ from lyo_app.ai_classroom.sdui_models import (
     QuizOption, Scene, SceneType, TeacherMessage,
 )
 from lyo_app.ai_classroom.teaching_prompt import MOVES
+from lyo_app.teaching_runtime import POLICY_VERSION, canonical_action_for_classroom_move
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,31 @@ class AdaptiveSession:
     def __init__(self, teacher: AdaptiveTeacher, skill_resolver=None):
         self.teacher = teacher
         self.skill_resolver = skill_resolver
+
+    @staticmethod
+    def teaching_intervention_for_phase(phase: str) -> dict[str, str]:
+        """Bounded attribution copied onto the evidence event.
+
+        Classroom's own state machine remains authoritative; this only maps
+        the phase onto the shared Learning OS vocabulary for measurement.
+        """
+        action = canonical_action_for_classroom_move(phase)
+        targets = {
+            "diagnose": "recognition",
+            "guided": "application",
+            "faded": "application",
+            "independent": "application",
+            "transfer": "transfer",
+            "interleave": "retention",
+            "closing_win": "application",
+        }
+        return {
+            "action": action.value,
+            "reason_code": f"classroom_{phase}",
+            "target_evidence_type": targets.get(phase, ""),
+            "model_tier": "teaching",
+            "policy_version": POLICY_VERSION,
+        }
 
     @staticmethod
     def record_concept(context, state: GuidedState) -> str | None:
@@ -105,6 +131,10 @@ class AdaptiveSession:
                 identity_required=self.skill_resolver is not None,
                 remaining_units=list(range(1, len(plan.units))),
                 challenge_requested=challenge,
+                review_is_due=bool(
+                    context.classroom_mode.value == "review"
+                    and context.review_concept_id
+                ),
                 phase="independent" if challenge else "diagnose",
                 next_move="independent" if challenge else "diagnose",
             )
@@ -329,6 +359,17 @@ class AdaptiveSession:
                     if self.after_success(state, pending):
                         state.pending = None
                         self.schedule_review(context, state, passed=True)
+                        # A due-review session is one delayed retrieval, not a
+                        # miniature course. Once the learner succeeds on the
+                        # fresh, open application that is allowed to file
+                        # retention, close the review session immediately.
+                        # Keeping planner leftovers here would show a summary
+                        # with path_done=False and then ask for another unit,
+                        # even though the scheduled retrieval has already been
+                        # satisfied.
+                        if state.mode == "review" and state.review_is_due:
+                            state.remaining_units = []
+                        self.finish_unit(state)
                         return self.save(progress, state, self.summary(context, state))
                     move = state.phase
                     # Their first success is the moment they have something to
@@ -639,6 +680,7 @@ class AdaptiveSession:
                 correct=True, evidence_type="explanation",
                 hints_used=0, hint_level=None, misconception=None,
                 response_time_ms=response_time_ms,
+                teaching_intervention=self.teaching_intervention_for_phase(pending.phase),
             ))
             state.last_feedback = (result.feedback + " " + self.copy(
                 context,
@@ -702,6 +744,7 @@ class AdaptiveSession:
                 hints_used=pending.hints_used, hint_level=pending.hint_level,
                 misconception=result.misconception if result.verdict == "incorrect" else None,
                 response_time_ms=data.get("response_time_ms"),
+                teaching_intervention=self.teaching_intervention_for_phase(pending.phase),
             )]
         if state.unit_index not in state.skipped and state.unit_index not in state.completed:
             state.skipped.append(state.unit_index)
@@ -918,6 +961,14 @@ class AdaptiveSession:
 
     def record_practice(self, context, state, pending, result, data):
         evidence_type = None if pending.task.response_format == "choice" else (
+            "retrieval" if (
+                state.review_is_due
+                and state.mode == "review"
+                and pending.phase == "independent"
+                and pending.task.kind == "apply"
+                and not pending.assisted
+                and not pending.extra_help_used
+            ) else
             "transfer" if pending.phase == "transfer" and not pending.assisted
             and not pending.extra_help_used else
             "retrieval" if pending.phase == "interleave" and state.review_is_due
@@ -931,6 +982,7 @@ class AdaptiveSession:
             hints_used=pending.hints_used, hint_level=pending.hint_level,
             misconception=result.misconception if result.verdict == "incorrect" else None,
             response_time_ms=data.get("response_time_ms"),
+            teaching_intervention=self.teaching_intervention_for_phase(pending.phase),
         ))
 
     def start_interleave(self, context, state) -> bool:
@@ -1015,6 +1067,12 @@ class AdaptiveSession:
                 state.independent_application = True
                 state.completed = sorted(set([*state.completed, state.unit_index]))
                 state.skipped = [i for i in state.skipped if i != state.unit_index]
+                # A due review is itself the delayed retrieval check. Once
+                # the learner produces a correct open application without
+                # help, asking a second transfer question would turn a
+                # retrieval nudge into a mini-exam and add no stronger claim.
+                if state.mode == "review" and state.review_is_due:
+                    return True
                 state.phase = "transfer"
                 return False
             state.phase = "faded" if target in state.guided_targets else "guided"
@@ -1125,6 +1183,30 @@ class AdaptiveSession:
 
     @staticmethod
     def save(progress, state, scene):
+        # Classroom keeps ownership of progression, but publishes the same
+        # canonical pedagogical action vocabulary as Chat. This is a one-way
+        # adapter: no LLM or client can use these descriptive fields to advance
+        # the state machine.
+        canonical_action = canonical_action_for_classroom_move(
+            state.next_move, state.phase
+        )
+        scene.metadata.teaching_action = canonical_action.value
+        scene.metadata.teaching_policy_version = POLICY_VERSION
+        evidence_targets = {
+            "diagnose": "recognition",
+            "guided": "application",
+            "faded": "application",
+            "independent": "application",
+            "transfer": "transfer",
+            "interleave": "retention",
+        }
+        scene.metadata.target_evidence_type = (
+            "retention"
+            if state.mode == "review"
+            and state.review_is_due
+            and (state.next_move or state.phase or "").lower() == "independent"
+            else evidence_targets.get((state.next_move or state.phase or "").lower())
+        )
         if state.record_scope == "unit":
             # Scene start travels on every reconnect. List the skills already
             # encountered so the record panel can place their evidence in this

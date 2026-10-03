@@ -138,6 +138,17 @@ def test_a_declared_evidence_type_outranks_the_recognition_default():
     assert derive_mastery_state([transferred]) == "TRANSFERRED"
 
 
+def test_evidence_contract_can_cap_confidence_without_demoting_the_rung():
+    transferred = evidence_from_graded_answer(
+        correct=True,
+        evidence_type="transfer",
+        base_confidence=0.8,
+    )
+    assert transferred["kind"] == "transfer"
+    assert transferred["confidence"] == 0.8
+    assert derive_mastery_state([transferred]) == "TRANSFERRED"
+
+
 # ─── The client and server must mean the same thing ──────────────────────────
 #
 # These are the definitions that would diverge silently: the ladder's order

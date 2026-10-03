@@ -21,7 +21,12 @@ from lyo_app.ai.multimodal import (
     load_media_attachments,
     recent_media_refs,
 )
-from lyo_app.ai.schemas.smart_block import SmartBlock, QuizOption, SmartBlockType
+from lyo_app.ai.schemas.smart_block import (
+    EvidenceContract,
+    SmartBlock,
+    QuizOption,
+    SmartBlockType,
+)
 from lyo_app.ai.lesson_composer import ChatLesson, SectionKind, compose as compose_lesson
 try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
@@ -147,7 +152,10 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
 import re as _re
 
 def _lesson_to_smart_blocks(
-    lesson: "ChatLesson", source_surface: str = "chat"
+    lesson: "ChatLesson",
+    source_surface: str = "chat",
+    target_evidence_type: Optional[str] = None,
+    teaching_intervention: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Render a composed lesson into the block vocabulary clients consume.
 
@@ -194,6 +202,24 @@ def _lesson_to_smart_blocks(
 
     if lesson.check:
         check = lesson.check
+        # Probes can only establish recognition. A taught MCQ may establish
+        # application, or transfer only when the policy explicitly requested
+        # a novel-scenario check and the composer generated one for that
+        # target. Delayed retention and free-form explanation are not claims
+        # this renderer can honestly make.
+        requested_evidence = "recognition" if lesson.is_probe else target_evidence_type
+        awarded_evidence = (
+            requested_evidence
+            if requested_evidence in {"recognition", "application", "transfer"}
+            else ("recognition" if lesson.is_probe else "application")
+        )
+        confidence_cap = 0.8 if awarded_evidence == "transfer" else 1.0
+        evidence_contract = EvidenceContract(
+            target_evidence_type=awarded_evidence,
+            grading="server",
+            award_condition="correct",
+            confidence_cap=confidence_cap,
+        )
         block = SmartBlock.quiz(
             question=check.question,
             options=[
@@ -204,11 +230,19 @@ def _lesson_to_smart_blocks(
             explanation=check.explanation,
             hint=check.hint,
             bailout_index=check.bailout_index,
+            evidence_contract=evidence_contract,
         )
         block.metadata = {
+            **(block.metadata or {}),
             "skill_id": lesson.skill_id,
             "is_probe": lesson.is_probe,
             "source_surface": source_surface,
+            "requested_evidence_type": requested_evidence,
+            **(
+                {"teaching_intervention": teaching_intervention}
+                if teaching_intervention
+                else {}
+            ),
         }
         blocks.append(block.model_dump())
 
@@ -253,6 +287,9 @@ async def _try_compose_lesson(
     user_text: str,
     topic: Optional[str] = None,
     source_surface: str = "chat",
+    force_mode: Optional[str] = None,
+    target_evidence_type: Optional[str] = None,
+    teaching_intervention: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[ChatLesson]]:
     """Compose a structured lesson, or ([], None) to fall back to prose.
 
@@ -267,11 +304,26 @@ async def _try_compose_lesson(
     if not topic:
         return [], None
 
-    mode = "teach" if await _has_prior_mastery(db, user_id, slugify_skill(topic)) else "probe"
-    lesson = await compose_lesson(topic, db=db, user_id=user_id, mode=mode)
+    mode = force_mode or (
+        "teach" if await _has_prior_mastery(db, user_id, slugify_skill(topic)) else "probe"
+    )
+    if mode not in {"probe", "teach"}:
+        mode = "probe"
+    lesson = await compose_lesson(
+        topic,
+        db=db,
+        user_id=user_id,
+        mode=mode,
+        target_evidence_type=target_evidence_type,
+    )
     if lesson is None:
         return [], None
-    return _lesson_to_smart_blocks(lesson, source_surface=source_surface), lesson
+    return _lesson_to_smart_blocks(
+        lesson,
+        source_surface=source_surface,
+        target_evidence_type=target_evidence_type,
+        teaching_intervention=teaching_intervention,
+    ), lesson
 
 
 def _to_smart_blocks(
@@ -494,6 +546,7 @@ class CheckAnswerResponse(BaseModel):
     # not recorded against mastery.
     bailed_out: bool = False
     skill_id: Optional[str] = None
+    evidence_type: Optional[str] = None
     mastery: Optional[float] = None
     next_actions: List[str] = PydanticField(default_factory=list)
 
@@ -578,6 +631,58 @@ def _surface_of(block: Optional[Dict[str, Any]]) -> str:
 
     surface = ((block or {}).get("metadata") or {}).get("source_surface")
     return surface if surface in SOURCE_SURFACES else "chat"
+
+
+def _teaching_intervention_of(
+    block: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, str]]:
+    raw = ((block or {}).get("metadata") or {}).get("teaching_intervention")
+    if not isinstance(raw, dict):
+        return None
+    allowed = {
+        "action": 48,
+        "reason_code": 80,
+        "target_evidence_type": 32,
+        "preferred_instrument": 48,
+        "model_tier": 32,
+        "policy_version": 48,
+    }
+    cleaned: Dict[str, str] = {}
+    for key, limit in allowed.items():
+        value = raw.get(key)
+        if value is not None:
+            cleaned[key] = str(value)[:limit]
+    return cleaned or None
+
+
+def _check_evidence_contract(block: Optional[Dict[str, Any]]) -> EvidenceContract:
+    """Read the server-authored evidence contract from a persisted check.
+
+    Legacy blocks predate contracts and therefore fall back to recognition,
+    the weakest positive claim. Even a malformed/newer contract cannot make
+    this multiple-choice endpoint award explanation or delayed retention.
+    """
+    raw = ((block or {}).get("metadata") or {}).get("evidence_contract")
+    try:
+        contract = EvidenceContract.model_validate(raw or {})
+    except Exception:
+        return EvidenceContract(
+            target_evidence_type="recognition",
+            grading="server",
+            award_condition="correct",
+            confidence_cap=1.0,
+        )
+
+    if contract.grading != "server" or contract.award_condition != "correct":
+        return EvidenceContract(
+            target_evidence_type="recognition",
+            grading="server",
+            award_condition="correct",
+            confidence_cap=1.0,
+        )
+    if contract.target_evidence_type not in {"recognition", "application", "transfer"}:
+        return contract.model_copy(update={"target_evidence_type": "recognition"})
+    return contract
 
 
 def _preferred_prep_topic(
@@ -767,6 +872,7 @@ async def check_lyo2_answer(
     correct, bailed_out, misconception, correct_index, explanation = _grade_check_block(
         block, request.selected_index
     )
+    evidence_contract = _check_evidence_contract(block)
 
     response = CheckAnswerResponse(
         correct=correct,
@@ -776,6 +882,7 @@ async def check_lyo2_answer(
         misconception=misconception,
         bailed_out=bailed_out,
         skill_id=skill_id,
+        evidence_type=evidence_contract.target_evidence_type,
     )
 
     # Persist the verdict onto the block so a reloaded conversation shows the
@@ -836,8 +943,20 @@ async def check_lyo2_answer(
             bailed_out=bailed_out,
             misconception=misconception,
             hints_used=1 if request.hint_used else 0,
+            evidence_type=evidence_contract.target_evidence_type,
+            base_confidence=evidence_contract.confidence_cap,
         )
+        intervention = _teaching_intervention_of(block)
         if evidence is not None:
+            from lyo_app.teaching_runtime.models import TeachingSurface
+            from lyo_app.teaching_runtime.service import record_policy_outcome
+
+            record_policy_outcome(
+                surface=TeachingSurface.CHAT,
+                intervention=intervention,
+                evidence_type=evidence["kind"],
+                succeeded=correct,
+            )
             await log_learning_event(
                 db,
                 LearningEventCreate(
@@ -850,6 +969,11 @@ async def check_lyo2_answer(
                     hints_used=1 if request.hint_used else 0,
                     misconception=misconception,
                     source_surface=_surface_of(block),
+                    metadata_json=(
+                        {"teaching_intervention": intervention}
+                        if intervention
+                        else None
+                    ),
                 ),
             )
     except Exception as e:
@@ -1250,6 +1374,60 @@ async def stream_lyo2_chat(
                     return
                 
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
+
+            # Shared Learning OS policy. Routing says what the learner wants;
+            # this deterministic layer says what pedagogical move should happen
+            # next. It reads the same durable evidence the Classroom receives.
+            from lyo_app.ai.lesson_composer import slugify_skill
+            from lyo_app.teaching_runtime import (
+                TeachingAction,
+                TeachingSurface,
+                decide_for_chat,
+                record_policy_decision,
+                teaching_topic_from_text,
+            )
+
+            _teaching_concept_id = None
+            _policy_topic = None
+            if decision.intent == Intent.EXPLAIN and request.text:
+                _active_course = (
+                    request.state_summary.get("active_course", {})
+                    if isinstance(request.state_summary, dict)
+                    and isinstance(request.state_summary.get("active_course"), dict)
+                    else {}
+                )
+                _policy_topic = (
+                    str(_active_course.get("topic") or "").strip()
+                    or teaching_topic_from_text(request.text or "")
+                )
+                if _policy_topic:
+                    _teaching_concept_id = slugify_skill(_policy_topic)
+
+            teaching_decision = await decide_for_chat(
+                db=db,
+                user_id=authenticated_user_id,
+                user_text=request.text or "",
+                intent=decision.intent.value if decision.intent else "GENERAL",
+                concept_id=_teaching_concept_id,
+                topic=_policy_topic,
+                history=request.conversation_history,
+                state_summary=request.state_summary,
+            )
+            await record_policy_decision(
+                db,
+                user_id=authenticated_user_id,
+                trace_id=trace_id,
+                surface=TeachingSurface.CHAT,
+                decision=teaching_decision,
+                concept_id=_teaching_concept_id,
+            )
+            yield yield_safe_sse_event(
+                "teaching_policy",
+                {
+                    "type": "teaching_policy",
+                    **teaching_decision.model_dump(mode="json"),
+                },
+            )
             
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats
@@ -1441,8 +1619,29 @@ async def stream_lyo2_chat(
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
             if decision.intent == Intent.EXPLAIN and request.text:
+                _force_lesson_mode = None
+                if teaching_decision.action == TeachingAction.DIAGNOSE:
+                    _force_lesson_mode = "probe"
+                elif teaching_decision.action in {
+                    TeachingAction.EXPLAIN,
+                    TeachingAction.REMEDIATE,
+                    TeachingAction.DEMONSTRATE,
+                    TeachingAction.GUIDE,
+                }:
+                    _force_lesson_mode = "teach"
+                from lyo_app.teaching_runtime.service import (
+                    bounded_intervention_metadata,
+                )
+
                 lesson_blocks, lesson = await _try_compose_lesson(
-                    db, authenticated_user_id, request.text
+                    db,
+                    authenticated_user_id,
+                    request.text,
+                    force_mode=_force_lesson_mode,
+                    target_evidence_type=teaching_decision.target_evidence_type,
+                    teaching_intervention=bounded_intervention_metadata(
+                        teaching_decision
+                    ),
                 )
                 if lesson is not None:
                     async for event in _emit_composed_lesson(
@@ -1565,6 +1764,7 @@ async def stream_lyo2_chat(
                         conversation_history=history,
                         intent=decision.intent.value if decision.intent else None,
                         media_attachments=media_attachments,
+                        teaching_decision=teaching_decision.model_dump(mode="json"),
                     ),
                     timeout=60.0 # Execution can take longer
                 )

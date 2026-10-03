@@ -513,6 +513,14 @@ class SceneMetadata(BaseModel):
     user_mastery_context: Optional[Dict[str, float]] = None
     frustration_level: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    # Shared Learning OS contract. These fields are descriptive: the classroom
+    # state machine remains authoritative over progression, while Chat and
+    # Classroom expose the same pedagogical action vocabulary to clients and
+    # analytics.
+    teaching_action: Optional[str] = None
+    target_evidence_type: Optional[str] = None
+    teaching_policy_version: Optional[str] = None
+
     # Analytics
     scene_source: Literal["ai_generated", "template", "fallback"] = "ai_generated"
     creation_timestamp: datetime = Field(default_factory=datetime.utcnow)

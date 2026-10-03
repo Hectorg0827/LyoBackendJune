@@ -12,7 +12,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField
 from tests.adaptive_fixtures import (
-    ScriptedTeacher, action, advance_to_task, context, evaluation, tap_probe,
+    ScriptedTeacher, action, advance_to_task, context, evaluation, plan as fixture_plan, tap_probe,
 )
 
 
@@ -49,6 +49,63 @@ def test_transfer_and_revisit_contract_demand_an_open_application():
         with pytest.raises(ValidationError):
             TransferPracticeTurn.model_validate(
                 turn.model_copy(update={"task": teacher._turn(ctx, state, "guided").task}).model_dump())
+
+
+@pytest.mark.asyncio
+async def test_fresh_due_review_files_retention_and_ends_after_one_success():
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = lambda _ctx: fixture_plan(1)
+    ctx = context(
+        classroom_mode="review",
+        review_concept_id="fraction_skill_1",
+        scheduled_due_items=["fraction_skill_1"],
+        target_duration_minutes=10,
+    )
+    progress = {}
+    runner = AdaptiveSession(teacher)
+
+    await runner.run(ctx, progress, action(welcome=True))
+    state = current(progress)
+    assert state.phase == "independent"
+    assert state.review_is_due
+    assert state.pending is not None
+    assert state.pending.task.response_format != "choice"
+
+    scene = await answer(runner, progress, ctx)
+    state = current(progress)
+
+    assert state.path_done
+    assert state.outbox[-1]["evidence_type"] == "retrieval"
+    assert state.outbox[-1]["correct"] is True
+    assert state.review_outbox[-1]["passed"] is True
+    assert not any(entry["evidence_type"] == "transfer" for entry in state.outbox)
+    assert scene.metadata.target_evidence_type in (None, "retention")
+
+
+@pytest.mark.asyncio
+async def test_due_review_success_does_not_continue_into_extra_planner_units():
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = lambda _ctx: __import__(
+        "tests.adaptive_fixtures", fromlist=["plan"]
+    ).plan(2)
+    ctx = context(
+        classroom_mode="review",
+        review_concept_id="fraction_skill_1",
+        scheduled_due_items=["fraction_skill_1"],
+        target_duration_minutes=16,
+    )
+    progress = {}
+    runner = AdaptiveSession(teacher)
+
+    await runner.run(ctx, progress, action(welcome=True))
+    assert len(current(progress).plan.units) == 2
+    await answer(runner, progress, ctx)
+    state = current(progress)
+
+    assert state.path_done
+    assert state.remaining_units == []
+    assert state.outbox[-1]["evidence_type"] == "retrieval"
+    assert state.review_outbox[-1]["passed"] is True
 
 
 @pytest.mark.asyncio

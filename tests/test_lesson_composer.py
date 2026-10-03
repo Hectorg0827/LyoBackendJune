@@ -193,6 +193,20 @@ def test_teach_prompt_carries_the_probe_outcome():
     assert "root vs square" in captured["prompt"]
 
 
+def test_transfer_target_requires_a_novel_context_in_the_prompt():
+    captured = {}
+
+    async def _capture(prompt):
+        captured["prompt"] = prompt
+        return {"sections": [{"kind": "core", "text": "x"}], "next_directions": []}
+
+    with patch("lyo_app.ai.lesson_composer._generate_json", new=_capture):
+        _run(compose("square roots", mode="teach", target_evidence_type="transfer"))
+
+    assert 'evidence target is "transfer"' in captured["prompt"]
+    assert "genuinely novel context" in captured["prompt"]
+
+
 # --- plain-text fallback for non-block clients ------------------------------
 
 def test_plain_text_fallback_includes_content_and_options():

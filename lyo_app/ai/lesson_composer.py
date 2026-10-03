@@ -272,7 +272,27 @@ Return ONLY the JSON object, matching this shape:
   "next_directions":[]}}"""
 
 
-def _teach_prompt(topic: str, learner_context: str, entry_note: str) -> str:
+def _teach_prompt(
+    topic: str,
+    learner_context: str,
+    entry_note: str,
+    target_evidence_type: str = "application",
+) -> str:
+    evidence_instruction = {
+        "recognition": (
+            "Ask the learner to identify or distinguish the concept from plausible alternatives. "
+            "Do not claim this proves they can apply it."
+        ),
+        "application": (
+            "Use a fresh but familiar scenario that requires applying the idea, not repeating the worked example."
+        ),
+        "transfer": (
+            "Use a genuinely novel context or representation not used in the lesson. The learner must transfer the "
+            "same principle, not recall a phrase or copy a procedure."
+        ),
+    }.get(target_evidence_type, (
+        "Use a fresh but familiar scenario that requires applying the idea, not repeating the worked example."
+    ))
     return f"""You are Lyo, teaching "{topic}" to one specific learner.
 
 {entry_note}
@@ -299,9 +319,10 @@ genuinely does not apply to this topic):
    (GitHub-flavored markdown), if the topic has facts worth tabulating.
 
 Then:
-- "check": ONE retrieval question testing the idea just taught. Real options,
-  a "reveals" on each distractor, an "explanation", and a "hint". No
-  bailout_index here.
+- "check": ONE question whose evidence target is "{target_evidence_type}".
+  {evidence_instruction}
+  Use real options, a "reveals" on each distractor, an "explanation", and a
+  "hint". No bailout_index here.
 - "next_directions": 2-3 concrete named directions to go next.
 
 {PEDAGOGY_RULES}
@@ -434,6 +455,7 @@ async def compose(
     user_id: Optional[str] = None,
     mode: str = "probe",
     probe_result: Optional[Dict[str, Any]] = None,
+    target_evidence_type: Optional[str] = None,
 ) -> Optional[ChatLesson]:
     """Compose a lesson, or None to fall back to the existing prose path.
 
@@ -446,7 +468,21 @@ async def compose(
     if mode == "probe":
         prompt = _probe_prompt(topic, learner_context)
     else:
-        prompt = _teach_prompt(topic, learner_context, _entry_note(probe_result))
+        # A multiple-choice Smart Block can honestly support recognition,
+        # application, or a constrained novel-scenario transfer check. It
+        # cannot establish delayed retention or a free-form explanation, so
+        # those requests fail safe to application rather than over-crediting.
+        check_target = (
+            target_evidence_type
+            if target_evidence_type in {"recognition", "application", "transfer"}
+            else "application"
+        )
+        prompt = _teach_prompt(
+            topic,
+            learner_context,
+            _entry_note(probe_result),
+            check_target,
+        )
 
     raw = await _generate_json(prompt)
     if raw is None:

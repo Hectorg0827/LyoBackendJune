@@ -216,6 +216,9 @@ class ContextSnapshot(BaseModel):
     source_attributions: List[str] = Field(default_factory=list)
     review_due_items: List[str] = Field(default_factory=list)
     scheduled_due_items: List[str] = Field(default_factory=list)
+    # Set only when the client names a concept that the canonical spaced-
+    # repetition schedule says is actually due for this learner.
+    review_concept_id: Optional[str] = None
 
     # Current learner input + durable personalization context
     learner_signal: Optional[str] = None
@@ -507,6 +510,18 @@ class ContextAssembler:
         context.review_due_items = list(dict.fromkeys(
             item for item in [*context.review_due_items, *context.scheduled_due_items] if item
         ))
+        requested_review_concept = (
+            action_data.get("review_concept_id")
+            or progress.get("review_concept_id")
+        )
+        if requested_review_concept:
+            progress["review_concept_id"] = str(requested_review_concept)
+        context.review_concept_id = (
+            str(requested_review_concept)
+            if context.classroom_mode == ClassroomMode.REVIEW
+            and str(requested_review_concept) in set(context.scheduled_due_items)
+            else None
+        )
 
         # Gather knowledge states
         context.knowledge_states = await self._get_knowledge_states(trigger.user_id)
@@ -878,13 +893,14 @@ class ContextAssembler:
         )
 
     async def _get_due_review_items(self, user_id: str) -> List[str]:
-        """Return scheduled retrieval items without blocking guest sessions."""
+        """Return canonical skill IDs that are genuinely due for retrieval."""
         try:
             user_id_int = int(user_id)
             from lyo_app.personalization.service import PersonalizationEngine
-            return await PersonalizationEngine()._get_due_repetitions(
-                self.db, user_id_int
+            due = await PersonalizationEngine().get_due_reviews(
+                self.db, user_id_int, limit=10
             )
+            return [str(item["skill_id"]) for item in due if item.get("skill_id")]
         except (ValueError, TypeError):
             return []
         except Exception as exc:
@@ -1282,7 +1298,38 @@ class SceneLifecycleEngine:
                     is_correct=is_correct,
                     word_count=len(response.split()) if response else None,
                 ))
+            intervention = progress.get("_pending_teaching_intervention")
+            if (
+                record_interaction
+                and isinstance(intervention, dict)
+                and intervention.get("action")
+            ):
+                from lyo_app.events.models import EventType, LearningEvent
+
+                concept_id = intervention.get("concept_id")
+                if concept_id is not None:
+                    concept_id = str(concept_id)[:80]
+                self.db.add(
+                    LearningEvent(
+                        user_id=user_id,
+                        event_type=EventType.AI_SESSION,
+                        concept_id=concept_id,
+                        source_surface="classroom",
+                        metadata_json={
+                            "event_kind": "teaching_policy_decision",
+                            "session_id": trigger.session_id,
+                            "scene_id": intervention.get("scene_id"),
+                            "action": intervention.get("action"),
+                            "target_evidence_type": intervention.get(
+                                "target_evidence_type"
+                            ),
+                            "policy_version": intervention.get("policy_version"),
+                        },
+                    )
+                )
+
             await self.db.commit()
+            progress.pop("_pending_teaching_intervention", None)
             return True
         except (ValueError, TypeError):
             return False
@@ -1457,6 +1504,19 @@ class SceneLifecycleEngine:
                             else self.skill_resolver),
         )
         scene = await runner.run(context, progress, trigger)
+        # Keep intervention telemetry separate from learner evidence. This
+        # pending record is committed atomically with the same classroom turn.
+        progress["_pending_teaching_intervention"] = {
+            "scene_id": scene.scene_id,
+            "action": scene.metadata.teaching_action,
+            "target_evidence_type": scene.metadata.target_evidence_type,
+            "policy_version": scene.metadata.teaching_policy_version,
+            "concept_id": (
+                scene.metadata.target_concepts[0]
+                if scene.metadata.target_concepts
+                else None
+            ),
+        }
         state_data = progress.get("guided_state")
         state = self._read_guided_state(progress, state_data) if state_data else None
         if state is not None:
@@ -1929,6 +1989,7 @@ class SceneLifecycleEngine:
         hint_level: Optional[str] = None,
         evidence_type: Optional[str] = None,
         misconception: Optional[str] = None,
+        teaching_intervention: Optional[dict[str, Any]] = None,
         event_id: Optional[str] = None,
     ) -> bool:
         """Record what the learner just demonstrated on the shared event stream.
@@ -1973,6 +2034,8 @@ class SceneLifecycleEngine:
             from lyo_app.events.models import EventType
             from lyo_app.events.processor import log_learning_event
             from lyo_app.events.schemas import LearningEventCreate
+            from lyo_app.teaching_runtime.models import TeachingSurface
+            from lyo_app.teaching_runtime.service import record_policy_outcome
 
             evidence = evidence_from_graded_answer(
                 correct=correct,
@@ -1996,8 +2059,25 @@ class SceneLifecycleEngine:
                     hints_used=hints_used,
                     misconception=misconception,
                     source_surface="classroom",
-                    metadata_json={"classroom_checkpoint_id": event_id} if event_id else None,
+                    metadata_json={
+                        **(
+                            {"classroom_checkpoint_id": event_id}
+                            if event_id
+                            else {}
+                        ),
+                        **(
+                            {"teaching_intervention": teaching_intervention}
+                            if teaching_intervention
+                            else {}
+                        ),
+                    } or None,
                 ),
+            )
+            record_policy_outcome(
+                surface=TeachingSurface.CLASSROOM,
+                intervention=teaching_intervention,
+                evidence_type=evidence["kind"],
+                succeeded=correct,
             )
             return True
         except Exception as exc:

@@ -12,7 +12,7 @@ from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
-    ConversationTurn, MediaRef, UIBlock, UIBlockType,
+    ConversationTurn, MediaRef, UIBlock, UIBlockType, Intent,
 )
 from lyo_app.ai.multimodal import (
     canonical_message_content,
@@ -157,6 +157,48 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             media_attachments=media_attachments,
         )
         decision = routing_response.decision
+
+        from lyo_app.ai.lesson_composer import slugify_skill
+        from lyo_app.teaching_runtime import (
+            TeachingSurface,
+            decide_for_chat,
+            record_policy_decision,
+            teaching_topic_from_text,
+        )
+        _policy_topic = None
+        _teaching_concept_id = None
+        if decision.intent == Intent.EXPLAIN and request.text:
+            _active_course = (
+                request.state_summary.get("active_course", {})
+                if isinstance(request.state_summary, dict)
+                and isinstance(request.state_summary.get("active_course"), dict)
+                else {}
+            )
+            _policy_topic = (
+                str(_active_course.get("topic") or "").strip()
+                or teaching_topic_from_text(request.text or "")
+            )
+            if _policy_topic:
+                _teaching_concept_id = slugify_skill(_policy_topic)
+
+        teaching_decision = await decide_for_chat(
+            db=db,
+            user_id=authenticated_user_id,
+            user_text=request.text or "",
+            intent=decision.intent.value if decision.intent else "GENERAL",
+            concept_id=_teaching_concept_id,
+            topic=_policy_topic,
+            history=request.conversation_history,
+            state_summary=request.state_summary,
+        )
+        await record_policy_decision(
+            db,
+            user_id=authenticated_user_id,
+            trace_id=trace_id,
+            surface=TeachingSurface.CHAT,
+            decision=teaching_decision,
+            concept_id=_teaching_concept_id,
+        )
         
         # Check for clarification gate
         if decision.needs_clarification:
@@ -198,6 +240,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 for turn in request.conversation_history
             ],
             media_attachments=media_attachments,
+            teaching_decision=teaching_decision.model_dump(mode="json"),
         )
         
         # Add trace metadata
@@ -208,6 +251,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "intent": decision.intent,
             "tier": decision.suggested_tier,
             "conversation_id": request.conversation_id,
+            "teaching_policy": teaching_decision.model_dump(mode="json"),
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")

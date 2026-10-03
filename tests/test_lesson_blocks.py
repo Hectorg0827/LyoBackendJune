@@ -7,6 +7,7 @@ cannot drift into "the check renders but nothing can grade it".
 
 from lyo_app.ai.lesson_composer import ChatLesson
 from lyo_app.api.v1.stream_lyo2 import (
+    _check_evidence_contract,
     _find_check_block,
     _grade_check_block,
     _lesson_to_smart_blocks,
@@ -91,6 +92,54 @@ def test_check_block_carries_skill_and_probe_metadata():
     check = [b for b in blocks if b["type"] == "quiz"][0]
     assert check["metadata"]["skill_id"] == "square_roots"
     assert check["metadata"]["is_probe"] is True
+
+
+def test_probe_check_has_server_owned_recognition_contract():
+    blocks = _lesson_to_smart_blocks(_lesson(), target_evidence_type="transfer")
+    check = [b for b in blocks if b["type"] == "quiz"][0]
+    contract = check["metadata"]["evidence_contract"]
+    assert contract["target_evidence_type"] == "recognition"
+    assert contract["grading"] == "server"
+    assert contract["award_condition"] == "correct"
+
+
+def test_teach_check_can_target_transfer_but_caps_confidence():
+    lesson = _lesson()
+    lesson.is_probe = False
+    lesson.check.bailout_index = None
+    blocks = _lesson_to_smart_blocks(lesson, target_evidence_type="transfer")
+    check = [b for b in blocks if b["type"] == "quiz"][0]
+    contract = _check_evidence_contract(check)
+    assert contract.target_evidence_type == "transfer"
+    assert contract.confidence_cap == 0.8
+
+
+def test_unsupported_quiz_contract_fails_safe_to_recognition():
+    lesson = _lesson()
+    lesson.is_probe = False
+    lesson.check.bailout_index = None
+    blocks = _lesson_to_smart_blocks(lesson, target_evidence_type="retention")
+    check = [b for b in blocks if b["type"] == "quiz"][0]
+    contract = _check_evidence_contract(check)
+    assert contract.target_evidence_type == "application"
+
+
+def test_check_block_carries_bounded_teaching_intervention():
+    intervention = {
+        "action": "guide",
+        "reason_code": "developing_mastery",
+        "target_evidence_type": "application",
+        "preferred_instrument": "guided_attempt",
+        "model_tier": "teaching",
+        "policy_version": "learning-os-v1",
+    }
+    blocks = _lesson_to_smart_blocks(
+        _lesson(),
+        target_evidence_type="recognition",
+        teaching_intervention=intervention,
+    )
+    check = [b for b in blocks if b["type"] == "quiz"][0]
+    assert check["metadata"]["teaching_intervention"] == intervention
 
 
 def test_check_block_preserves_distractor_reveals_and_bailout():
