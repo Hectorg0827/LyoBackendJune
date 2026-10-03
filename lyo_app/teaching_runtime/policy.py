@@ -34,6 +34,17 @@ _STOP_RE = re.compile(
     re.IGNORECASE,
 )
 
+_WORKFLOW_INTENTS = {
+    "COURSE",
+    "STUDY_PLAN",
+    "TEST_PREP",
+    "SUMMARIZE_NOTES",
+    "SCHEDULE_REMINDERS",
+    "COMMUNITY",
+    "MODIFY_ARTIFACT",
+}
+_REVIEW_INTENTS = {"FLASHCARDS", "WEEKLY_REVIEW", "REFLECT"}
+
 
 def _decision(
     action: TeachingAction,
@@ -84,7 +95,7 @@ class TeachingPolicy:
         visual = session.learner_requested_visual or bool(_VISUAL_RE.search(text))
         confused = session.learner_expressed_confusion or bool(_CONFUSED_RE.search(text))
 
-        if intent in {"GREETING", "CHAT", "GENERAL", "HELP"} and not (
+        if intent in {"GREETING", "CHAT", "GENERAL", "HELP", "UNKNOWN"} and not (
             confused or learner.concept_id
         ):
             return _decision(
@@ -104,6 +115,59 @@ class TeachingPolicy:
                 directives=[
                     "Answer directly before asking anything.",
                     "Use one compact example; do not force an assessment in this turn.",
+                ],
+            )
+
+        # Some router intents own a concrete workflow. The Learning OS may
+        # inform that workflow with learner state, but it must not replace the
+        # learner's explicit request with an unrelated first-contact diagnosis.
+        if intent in _WORKFLOW_INTENTS:
+            return _decision(
+                TeachingAction.ANSWER,
+                "learner_requested_workflow",
+                words=120,
+                directives=[
+                    "Honor the routed workflow exactly; do not replace it with a diagnostic turn."
+                ],
+            )
+
+        if intent == "QUIZ":
+            if learner.next_rung == "transfer":
+                return _decision(
+                    TeachingAction.CHECK_TRANSFER,
+                    "learner_requested_quiz",
+                    interaction=True,
+                    words=65,
+                    instrument="novel_scenario",
+                    evidence="transfer",
+                )
+            if learner.next_rung == "application":
+                return _decision(
+                    TeachingAction.CHECK_APPLICATION,
+                    "learner_requested_quiz",
+                    interaction=True,
+                    words=65,
+                    instrument="short_answer",
+                    evidence="application",
+                )
+            return _decision(
+                TeachingAction.CHECK_RECALL,
+                "learner_requested_quiz",
+                interaction=True,
+                words=55,
+                instrument="diagnostic_choice",
+                evidence="recognition",
+            )
+
+        if intent in _REVIEW_INTENTS:
+            return _decision(
+                TeachingAction.REVIEW,
+                "learner_requested_review",
+                interaction=True,
+                words=70,
+                instrument="flashcards" if intent == "FLASHCARDS" else "retrieval",
+                directives=[
+                    "Honor the review request; use existing evidence to choose what to revisit."
                 ],
             )
 
