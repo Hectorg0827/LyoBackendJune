@@ -1384,24 +1384,19 @@ async def stream_lyo2_chat(
                 TeachingSurface,
                 decide_for_chat,
                 record_policy_decision,
-                teaching_topic_from_text,
+                resolve_chat_teaching_topic,
             )
 
-            _teaching_concept_id = None
-            _policy_topic = None
-            if decision.intent == Intent.EXPLAIN and request.text:
-                _active_course = (
-                    request.state_summary.get("active_course", {})
-                    if isinstance(request.state_summary, dict)
-                    and isinstance(request.state_summary.get("active_course"), dict)
-                    else {}
-                )
-                _policy_topic = (
-                    str(_active_course.get("topic") or "").strip()
-                    or teaching_topic_from_text(request.text or "")
-                )
-                if _policy_topic:
-                    _teaching_concept_id = slugify_skill(_policy_topic)
+            _policy_topic = resolve_chat_teaching_topic(
+                intent=decision.intent,
+                user_text=request.text or "",
+                state_summary=request.state_summary,
+                router_topic=getattr(getattr(decision, "entities", None), "topic", None),
+                router_subject=getattr(getattr(decision, "entities", None), "subject", None),
+            )
+            _teaching_concept_id = (
+                slugify_skill(_policy_topic) if _policy_topic else None
+            )
 
             teaching_decision = await decide_for_chat(
                 db=db,
