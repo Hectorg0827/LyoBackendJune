@@ -412,7 +412,7 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
         scene = await instance.process_trigger(action(welcome=True))
         state = GuidedState.model_validate(_SESSION_PROGRESS[key]["guided_state"])
         assert len(installed) == 1 and isinstance(installed[0], DatabaseUnitPackageCache)
-        assert reviewed == [None], "semantic review must remain opt-in by default"
+        assert reviewed == [__import__("lyo_app.ai_classroom.semantic_review", fromlist=["model_semantic_judge"]).model_semantic_judge]
         assert calls[:2] == ["LearningPlan", "DiagnosticTurn"]
         assert next(c for c in scene.components if isinstance(c, QuizCard)).concept_id == state.skill_ids[0]
         assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
