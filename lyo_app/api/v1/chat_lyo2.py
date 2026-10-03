@@ -13,6 +13,7 @@ from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
     ConversationTurn, MediaRef, UIBlock, UIBlockType, Intent,
+    ActionType, PlannedAction, LyoPlan,
 )
 from lyo_app.ai.multimodal import (
     canonical_message_content,
@@ -182,6 +183,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
+            TeachingAction,
             TeachingSurface,
             decide_for_chat,
             record_policy_decision,
@@ -219,8 +221,13 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             concept_id=_teaching_concept_id,
         )
         
-        # Check for clarification gate
-        if decision.needs_clarification:
+        # Check for clarification gate. A file plus a direct information
+        # request already supplies the missing referent, so router-level text
+        # ambiguity must not force a question before Lyo inspects the file.
+        if (
+            decision.needs_clarification
+            and teaching_decision.reason_code != "attachment_information_request"
+        ):
             logger.info(f"[{trace_id}] Clarification needed: {decision.clarification_question}")
             clarification = decision.clarification_question or "Could you clarify what you would like to learn?"
             if persistent_conversation:
@@ -245,8 +252,21 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             
         # 2. Layer B: Planning
         logger.info(f"[{trace_id}] Layer B: Planning execution for intent {decision.intent}")
-        with _model_usage_scope("orchestration"):
-            plan = await planner_agent.plan(request, decision)
+        if (
+            media_attachments
+            and teaching_decision.action == TeachingAction.ANSWER
+            and teaching_decision.reason_code == "attachment_information_request"
+        ):
+            plan = LyoPlan(steps=[
+                PlannedAction(
+                    action_type=ActionType.GENERATE_TEXT,
+                    description="Inspect the attachment and answer the learner directly",
+                    parameters={"content": None},
+                )
+            ])
+        else:
+            with _model_usage_scope("orchestration"):
+                plan = await planner_agent.plan(request, decision)
         
         # 3. Layer C: Execution
         logger.info(f"[{trace_id}] Layer C: Executing plan")
