@@ -1285,14 +1285,20 @@ async def stream_lyo2_chat(
                     return
 
             if not media_attachments:
-                historical_media = recent_media_refs(request.conversation_history)
+                from lyo_app.chat.experience import should_reuse_historical_media
+
+                historical_media = (
+                    recent_media_refs(request.conversation_history)
+                    if should_reuse_historical_media(request.text or "")
+                    else []
+                )
                 media_attachments = await load_media_attachments(
                     historical_media, missing_ok=True
                 )
                 if media_attachments and historical_media:
-                    # Rehydrate the reference as request media so workflow
-                    # adapters (Test Prep/course creation) inherit the exact
-                    # material instead of asking the learner to upload it again.
+                    # Rehydrate the reference as request media so explicit
+                    # Classroom/Test Prep/quiz continuations inherit the exact
+                    # material without leaking it into unrelated turns.
                     request.media = historical_media
 
             from lyo_app.teaching_runtime.model_usage import (
