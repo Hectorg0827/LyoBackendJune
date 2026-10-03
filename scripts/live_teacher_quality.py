@@ -336,6 +336,8 @@ class LiveLyo:
             "state_summary": {},
         }
         started = time.perf_counter()
+        lines: list[str] = []
+        stream_transport_error: Optional[str] = None
         async with client.stream(
             "POST",
             f"{self.base_url}/api/v1/lyo2/chat/stream",
@@ -343,7 +345,15 @@ class LiveLyo:
             headers={**self.headers, "Accept": "text/event-stream"},
         ) as response:
             response.raise_for_status()
-            lines = [line async for line in response.aiter_lines()]
+            try:
+                async for line in response.aiter_lines():
+                    lines.append(line)
+            except httpx.RemoteProtocolError as exc:
+                # Production proxies can terminate a chunked SSE response after
+                # the final useful event without a clean HTTP body terminator.
+                # Preserve the events already delivered so the report can judge
+                # Chat -> policy -> persistence instead of throwing that evidence away.
+                stream_transport_error = f"{type(exc).__name__}: {exc}"
         elapsed = round(time.perf_counter() - started, 3)
         events = parse_sse_lines(lines)
 
@@ -363,11 +373,26 @@ class LiveLyo:
 
         conversation_id = str(conversation.get("conversation_id")) if conversation else None
         report.chat["stream_latency_seconds"] = elapsed
+        report.chat["stream_transport_error"] = stream_transport_error
         report.chat["event_types"] = [str(e.get("type") or "unknown") for e in events]
         report.chat["teaching_policy"] = policy
         report.chat["conversation_id"] = conversation_id
         report.chat["quiz_seen"] = bool(quiz)
-        report.check("chat_stream_completed", bool(events), f"{len(events)} SSE events")
+        report.check(
+            "chat_stream_completed",
+            bool(events) and stream_transport_error is None,
+            (
+                f"{len(events)} SSE events"
+                if stream_transport_error is None
+                else f"{len(events)} SSE events recovered before {stream_transport_error}"
+            ),
+        )
+        if stream_transport_error is not None:
+            report.check(
+                "chat_stream_evidence_recovered",
+                bool(events),
+                "Partial SSE transport failure did not erase already-delivered teaching evidence.",
+            )
         report.check("chat_policy_emitted", policy is not None)
         report.check("chat_conversation_persisted", bool(conversation_id))
 
