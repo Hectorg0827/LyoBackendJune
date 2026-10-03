@@ -181,6 +181,28 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             )
         decision = routing_response.decision
 
+        from lyo_app.chat.experience import (
+            effective_intent,
+            fast_lane_plan,
+            resolve_interaction_contract,
+        )
+        interaction_contract = resolve_interaction_contract(
+            user_text=request.text or "",
+            router_intent=decision.intent,
+            has_media=bool(media_attachments),
+            has_current_media=bool(request.media),
+            state_summary=request.state_summary,
+        )
+        contracted_intent = effective_intent(interaction_contract, decision.intent)
+        if contracted_intent != decision.intent:
+            decision = decision.model_copy(
+                update={
+                    "intent": contracted_intent,
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                }
+            )
+
         from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
             TeachingAction,
@@ -211,6 +233,10 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             state_summary=request.state_summary,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
+            interaction_contract={
+                **interaction_contract.model_dump(mode="json"),
+                "directives": interaction_contract.prompt_directives(),
+            },
         )
         await record_policy_decision(
             db,
@@ -220,13 +246,22 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             decision=teaching_decision,
             concept_id=_teaching_concept_id,
         )
+
+        from lyo_app.chat.context_broker import build_context_bundle
+        chat_context_bundle = await build_context_bundle(
+            db=db,
+            user_id=authenticated_user_id,
+            contract=interaction_contract,
+            concept_id=_teaching_concept_id,
+            topic=_policy_topic,
+        )
         
         # Check for clarification gate. A file plus a direct information
         # request already supplies the missing referent, so router-level text
         # ambiguity must not force a question before Lyo inspects the file.
         if (
             decision.needs_clarification
-            and teaching_decision.reason_code != "attachment_information_request"
+            and not interaction_contract.fast_lane
         ):
             logger.info(f"[{trace_id}] Clarification needed: {decision.clarification_question}")
             clarification = decision.clarification_question or "Could you clarify what you would like to learn?"
@@ -252,18 +287,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             
         # 2. Layer B: Planning
         logger.info(f"[{trace_id}] Layer B: Planning execution for intent {decision.intent}")
-        if (
-            media_attachments
-            and teaching_decision.action == TeachingAction.ANSWER
-            and teaching_decision.reason_code == "attachment_information_request"
-        ):
-            plan = LyoPlan(steps=[
-                PlannedAction(
-                    action_type=ActionType.GENERATE_TEXT,
-                    description="Inspect the attachment and answer the learner directly",
-                    parameters={"content": None},
-                )
-            ])
+        if interaction_contract.fast_lane:
+            plan = fast_lane_plan(interaction_contract, request.text or "")
         else:
             with _model_usage_scope("orchestration"):
                 plan = await planner_agent.plan(request, decision)
@@ -282,6 +307,11 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 ],
                 media_attachments=media_attachments,
                 teaching_decision=teaching_decision.model_dump(mode="json"),
+                interaction_contract={
+                    **interaction_contract.model_dump(mode="json"),
+                    "directives": interaction_contract.prompt_directives(),
+                },
+                context_bundle=chat_context_bundle,
             )
         
         # Add trace metadata
@@ -293,6 +323,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "tier": decision.suggested_tier,
             "conversation_id": request.conversation_id,
             "teaching_policy": teaching_decision.model_dump(mode="json"),
+            "interaction_contract": interaction_contract.model_dump(mode="json"),
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")
