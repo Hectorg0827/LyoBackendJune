@@ -21,6 +21,65 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _openai_compatible_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Translate Lyo provider-neutral media parts to OpenAI chat content.
+
+    Images become data URLs. Documents use bounded text extracted by the
+    shared multimodal loader while the raw bytes remain available to Gemini.
+    This gives attachment requests a second provider instead of depending on
+    one Gemini key.
+    """
+    normalized: List[Dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content", "")
+        if not isinstance(content, list):
+            normalized.append(dict(message))
+            continue
+
+        parts: List[Dict[str, Any]] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "text":
+                parts.append({"type": "text", "text": str(item.get("text", ""))})
+                continue
+            if item_type == "image_uri":
+                uri = item.get("uri")
+                if uri:
+                    parts.append({"type": "image_url", "image_url": {"url": uri}})
+                continue
+            if item_type not in {"image_base64", "media_base64", "file_base64"}:
+                continue
+
+            mime_type = str(item.get("mime_type") or "application/octet-stream").lower()
+            data = item.get("data")
+            if mime_type.startswith("image/") and data:
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{data}"},
+                })
+                continue
+
+            extracted = str(item.get("extracted_text") or "").strip()
+            if extracted:
+                name = str(item.get("name") or "document")
+                parts.append({
+                    "type": "text",
+                    "text": f"\n\n[Attached document: {name}]\n{extracted}",
+                })
+                continue
+
+            raise ValueError(
+                f"OpenAI fallback cannot read attachment type {mime_type} without extracted text"
+            )
+
+        if not parts:
+            parts = [{"type": "text", "text": ""}]
+        normalized.append({**message, "content": parts})
+    return normalized
+
+
 class CircuitState(Enum):
     CLOSED = "closed"
     OPEN = "open"
@@ -191,7 +250,7 @@ class AIResilienceManager:
                     api_key=openai_key or "",
                     max_tokens=4000,
                     priority=1,
-                    capabilities=["chat", "fast", "conversational"],
+                    capabilities=["chat", "fast", "conversational", "multimodal"],
                 ),
                 "gemini-2.5-pro": AIModelConfig(
                     name="Google Gemini 2.5 Pro",
@@ -207,7 +266,7 @@ class AIResilienceManager:
                     api_key=openai_key or "",
                     max_tokens=4000,
                     priority=2,
-                    capabilities=["chat", "complex"],
+                    capabilities=["chat", "complex", "multimodal"],
                 )
             }
             print(f">>> [PID {os.getpid()}] AI Resilience Init: Configured {len(self.models)} models (Gemini: {bool(gemini_key)}, OpenAI: {bool(openai_key)})", flush=True)
@@ -293,7 +352,7 @@ class AIResilienceManager:
                     logger.info(f"Attempting OpenAI stream for {model_name}")
                     stream = await self.openai_client.chat.completions.create(
                         model=model_name,
-                        messages=messages,
+                        messages=_openai_compatible_messages(messages),
                         temperature=temperature,
                         max_tokens=max_tokens,
                         stream=True
@@ -410,7 +469,7 @@ class AIResilienceManager:
                     async def _openai_call():
                         call_kwargs = {
                             "model": model_name,
-                            "messages": messages,
+                            "messages": _openai_compatible_messages(messages),
                             "temperature": temperature,
                             "max_tokens": max_tokens
                         }
