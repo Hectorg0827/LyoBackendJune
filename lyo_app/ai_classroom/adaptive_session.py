@@ -979,6 +979,7 @@ class AdaptiveSession:
         )
         state.outbox.append(dict(
             event_id=pending.id, user_id=context.user_id,
+            session_id=context.session_id,
             concept_id=self.record_concept(context, state),
             correct=result.verdict == "correct", evidence_type=evidence_type,
             hints_used=pending.hints_used, hint_level=pending.hint_level,
