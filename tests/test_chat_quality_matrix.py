@@ -100,3 +100,14 @@ def test_new_attachment_analysis_is_not_a_quiz():
     assert contract.mode is InteractionMode.ANALYZE
     assert contract.fast_lane is True
     assert "Quiz me on this" in contract.suggested_actions
+
+
+
+def test_current_progress_is_learner_state_not_web_search():
+    contract = resolve_interaction_contract(
+        user_text="What is my current progress in algebra?",
+        router_intent=Intent.REFLECT,
+    )
+    assert contract.requires_search is False
+    assert contract.mode is InteractionMode.ANSWER
+    assert MemoryScope.LEARNER in contract.memory_scopes
