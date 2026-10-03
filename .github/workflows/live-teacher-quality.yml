@@ -67,7 +67,7 @@ jobs:
           python -m pip install httpx websockets pytest pytest-asyncio
 
       - name: Prove harness safety helpers
-        run: python -m pytest -q tests/test_live_teacher_quality_harness.py
+        run: python -m pytest -q --noconftest tests/test_live_teacher_quality_harness.py
 
       - name: Require dedicated learner credential
         shell: bash
