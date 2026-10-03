@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user, get_db
 from lyo_app.auth.rbac import PermissionType
-from lyo_app.auth.security_middleware import PermissionChecker
+from lyo_app.auth.rbac_service import RBACService
 from lyo_app.teaching_runtime.analytics import load_learning_os_analytics
 
 
@@ -35,9 +35,15 @@ async def system_learning_os_analytics(
     current_user: Any = Depends(get_current_user),
 ):
     """Anonymous aggregate Learning OS outcomes for analytics administrators."""
-    if not await PermissionChecker.check_permission(
-        current_user, PermissionType.VIEW_ANALYTICS
-    ):
+    rbac = RBACService(db)
+    user_id = int(current_user.id)
+    allowed = (
+        await rbac.user_has_permission(
+            user_id, PermissionType.VIEW_ANALYTICS.value
+        )
+        or await rbac.user_has_role(user_id, "super_admin")
+    )
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions",
