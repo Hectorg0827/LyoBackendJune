@@ -374,15 +374,30 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     answer = (next(option.label for option in task.options if option.correct)
               if task.response_format == "choice" else task.example_answer)
     normalized = comparable_text(answer)
-    # Short numbers, fractions and one-word answers often occur as *data* in
-    # the scenario. Reject a full answer phrase, not a necessary operand.
-    if len(normalized) < 7 or len(normalized.split()) < 2:
-        return
     # response_hint is learner-visible as both guidance and input placeholder.
     visible = [turn.speech, turn.board_title, turn.board_content,
                task.scenario, task.question, task.response_hint]
     if turn.visual:
         visible.extend([turn.visual.caption, turn.visual.description])
+
+    # Short numbers, fractions and one-word answers need a narrower rule than
+    # long answer phrases: they may legitimately be operands in the scenario.
+    # But when the answer does NOT appear in the question itself, seeing that
+    # exact value in the teaching/board before answering is an answer leak.
+    # The live teacher-quality run exposed this with a guided prompt asking for
+    # the LCD of 3/8 and 5/12 while the board simultaneously said "24".
+    if len(normalized) < 7 or len(normalized.split()) < 2:
+        asked = comparable_text(task.scenario + " " + task.question)
+        if normalized and f" {normalized} " not in f" {asked} ":
+            preanswer = [turn.speech, turn.board_title, turn.board_content, task.response_hint]
+            if turn.visual:
+                preanswer.extend([turn.visual.caption, turn.visual.description])
+            if any(f" {normalized} " in f" {comparable_text(item)} " for item in preanswer):
+                raise TeachingContractError(
+                    "The visible teaching or board reveals the short answer before the learner responds"
+                )
+        return
+
     if any(f" {normalized} " in f" {comparable_text(item)} " for item in visible):
         raise TeachingContractError("The visible question or teaching beat reveals the answer")
 
@@ -1217,7 +1232,16 @@ class AdaptiveTeacher:
                 )
                 turn = turn_schema(move, focused).model_validate(turn.model_dump())
                 validate_semantic_content(turn)
-                if self.semantic_judge is not None and not await self.semantic_judge(move, unit, turn):
+                semantic_judge = self.semantic_judge
+                if semantic_judge is None and move == "answer_question":
+                    # Free-form learner detours are the least constrained
+                    # teaching turns. The first production report caught a
+                    # fluent mathematical contradiction here, so these turns
+                    # now receive the existing factual semantic review even
+                    # when the global optional judge is disabled.
+                    from lyo_app.ai_classroom.semantic_review import model_semantic_judge
+                    semantic_judge = model_semantic_judge
+                if semantic_judge is not None and not await semantic_judge(move, unit, turn):
                     raise TeachingContractError("Independent semantic review rejected this teaching turn")
                 if move == "diagnose":
                     if turn.task is None or turn.demonstration:
@@ -1261,6 +1285,15 @@ class AdaptiveTeacher:
                     # `after_success` will not complete on a tapped answer, so
                     # offering one there asks a learner to keep answering a
                     # question that can never finish the lesson.
+                    if (move == "guided" and turn.task.response_format == "choice"
+                            and turn.task.kind == "apply"):
+                        # Guided choice is scaffolded practice, not durable
+                        # application evidence. Keeping it as choose/predict
+                        # also permits immediate client feedback without
+                        # exposing the key of an evidence-bearing checkpoint.
+                        raise TeachingContractError(
+                            "Guided choice must use choose or predict; application evidence needs an open response"
+                        )
                     if move == "independent" and turn.task.kind != "apply":
                         raise TeachingContractError("Independent application required")
                     # The completion gate wants the learner to produce the
