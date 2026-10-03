@@ -35,3 +35,14 @@ def test_live_validation_proves_harness_before_touching_production_and_keeps_rep
     assert "if: always()" in WORKFLOW
     assert "actions/upload-artifact@v4" in WORKFLOW
     assert "retention-days: 30" in WORKFLOW
+
+
+def test_live_validation_uses_one_coherent_baseline_subject():
+    assert "VALIDATION_TOPIC: comparing fractions" in WORKFLOW
+    assert "Topic used for a seed learning session" not in WORKFLOW
+    assert "VALIDATION_TOPIC: ${{ inputs.topic }}" not in WORKFLOW
+
+
+def test_live_validation_is_serialized_for_the_shared_test_learner():
+    assert "group: live-teacher-quality-production" in WORKFLOW
+    assert "live-teacher-quality-${{ github.ref }}" not in WORKFLOW
