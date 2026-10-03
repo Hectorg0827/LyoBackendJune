@@ -1506,7 +1506,19 @@ class SceneLifecycleEngine:
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
         )
-        scene = await runner.run(context, progress, trigger)
+        from lyo_app.teaching_runtime.model_usage import (
+            bind_model_usage,
+            learning_event_usage_recorder,
+        )
+        with bind_model_usage(
+            learning_event_usage_recorder(
+                user_id=trigger.user_id,
+                surface="classroom",
+                session_id=trigger.session_id,
+                model_tier="classroom",
+            )
+        ):
+            scene = await runner.run(context, progress, trigger)
         # Keep intervention telemetry separate from learner evidence. This
         # pending record is committed atomically with the same classroom turn.
         progress["_pending_teaching_intervention"] = {
