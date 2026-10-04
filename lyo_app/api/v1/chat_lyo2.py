@@ -145,6 +145,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                     client_message_id=request.client_message_id,
                 )
 
+        historical_media = []
         if not media_attachments:
             historical_media = recent_media_refs(request.conversation_history)
             media_attachments = await load_media_attachments(
@@ -181,6 +182,14 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             )
         decision = routing_response.decision
 
+        from lyo_app.ai.interaction_contract import resolve_interaction_contract
+        interaction_contract = resolve_interaction_contract(
+            request,
+            decision,
+            has_media=bool(media_attachments),
+            has_current_media=bool(request.media),
+        )
+
         from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
             TeachingAction,
@@ -211,6 +220,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             state_summary=request.state_summary,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
+            interaction_contract=interaction_contract.model_dump(mode="json"),
         )
         await record_policy_decision(
             db,
@@ -226,7 +236,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         # ambiguity must not force a question before Lyo inspects the file.
         if (
             decision.needs_clarification
-            and teaching_decision.reason_code != "attachment_information_request"
+            and not interaction_contract.answer_first
         ):
             logger.info(f"[{trace_id}] Clarification needed: {decision.clarification_question}")
             clarification = decision.clarification_question or "Could you clarify what you would like to learn?"
@@ -252,15 +262,24 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             
         # 2. Layer B: Planning
         logger.info(f"[{trace_id}] Layer B: Planning execution for intent {decision.intent}")
-        if (
-            media_attachments
-            and teaching_decision.action == TeachingAction.ANSWER
-            and teaching_decision.reason_code == "attachment_information_request"
-        ):
+        if interaction_contract.mode.value == "search":
+            plan = LyoPlan(steps=[
+                PlannedAction(
+                    action_type=ActionType.SEARCH_WEB,
+                    description="Ground the answer in current web sources",
+                    parameters={"query": request.text or "", "max_results": 5},
+                ),
+                PlannedAction(
+                    action_type=ActionType.GENERATE_TEXT,
+                    description="Answer from the grounded current sources",
+                    parameters={"content": None},
+                ),
+            ])
+        elif interaction_contract.fast_lane:
             plan = LyoPlan(steps=[
                 PlannedAction(
                     action_type=ActionType.GENERATE_TEXT,
-                    description="Inspect the attachment and answer the learner directly",
+                    description=f"Fulfill the {interaction_contract.mode.value} interaction directly",
                     parameters={"content": None},
                 )
             ])
@@ -282,6 +301,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 ],
                 media_attachments=media_attachments,
                 teaching_decision=teaching_decision.model_dump(mode="json"),
+                interaction_contract=interaction_contract.model_dump(mode="json"),
             )
         
         # Add trace metadata
@@ -293,6 +313,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "tier": decision.suggested_tier,
             "conversation_id": request.conversation_id,
             "teaching_policy": teaching_decision.model_dump(mode="json"),
+            "interaction_contract": interaction_contract.model_dump(mode="json"),
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")

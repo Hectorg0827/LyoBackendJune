@@ -525,6 +525,31 @@ def _resolve_course_topic(
     if active_topic and active_topic.strip():
         return active_topic.strip()
 
+    if _re.fullmatch(
+        r"\s*(?:teach this in classroom|open classroom|teach this as a class|turn this into a class)\s*[.!]?\s*",
+        text,
+        flags=_re.IGNORECASE,
+    ):
+        # Carry the source material into Classroom rather than creating a
+        # course literally titled "Teach This In Classroom".
+        for turn in reversed(history or []):
+            if (turn.role or "").lower() != "user":
+                continue
+            prior = (turn.content or "").strip()
+            attachment = _re.search(r"\[📎\s+([^\]]+)\]", prior)
+            if attachment:
+                filename = attachment.group(1).strip()
+                filename = _re.sub(r"\.[A-Za-z0-9]{1,8}$", "", filename)
+                return filename or "Attached material"
+            cleaned = _re.sub(r"!\[[^\]]*\]\([^)]+\)|\[📎[^\]]+\]\([^)]+\)", "", prior).strip()
+            if cleaned and cleaned.casefold() not in {"what is this?", "what is this", "analyze", "analize"}:
+                return cleaned[:120]
+
+        for turn in reversed(history or []):
+            if (turn.role or "").lower() == "assistant" and (turn.content or "").strip():
+                first_sentence = _re.split(r"(?<=[.!?])\s+", turn.content.strip(), maxsplit=1)[0]
+                return first_sentence[:120]
+
     for turn in reversed(history or []):
         if (turn.role or "").lower() != "user":
             continue
@@ -1283,6 +1308,7 @@ async def stream_lyo2_chat(
                     yield "data: [DONE]\n\n"
                     return
 
+            historical_media = []
             if not media_attachments:
                 historical_media = recent_media_refs(request.conversation_history)
                 media_attachments = await load_media_attachments(
@@ -1368,7 +1394,15 @@ async def stream_lyo2_chat(
                 lower_text = (request.text or "").strip().lower()
                 explicit_prep = any(phrase in lower_text for phrase in
                     ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
-                if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
+                classroom_handoff = lower_text in {
+                    "teach this in classroom",
+                    "open classroom",
+                    "teach this as a class",
+                    "turn this into a class",
+                }
+                if not request.forced_intent and classroom_handoff:
+                    request.forced_intent = Intent.COURSE
+                elif not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
             
             if request.forced_intent:
@@ -1428,6 +1462,21 @@ async def stream_lyo2_chat(
                 
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
+            from lyo_app.ai.interaction_contract import resolve_interaction_contract
+            interaction_contract = resolve_interaction_contract(
+                request,
+                decision,
+                has_media=bool(media_attachments),
+                has_current_media=bool(request.media),
+            )
+            yield yield_safe_sse_event(
+                "interaction_contract",
+                {
+                    "type": "interaction_contract",
+                    **interaction_contract.model_dump(mode="json"),
+                },
+            )
+
             # Shared Learning OS policy. Routing says what the learner wants;
             # this deterministic layer says what pedagogical move should happen
             # next. It reads the same durable evidence the Classroom receives.
@@ -1462,6 +1511,7 @@ async def stream_lyo2_chat(
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
+                interaction_contract=interaction_contract.model_dump(mode="json"),
             )
             await record_policy_decision(
                 db,
@@ -1484,6 +1534,13 @@ async def stream_lyo2_chat(
             # must never be hijacked by an unfinished exam elsewhere.
             if authenticated_user_id and not cancelled_prep and decision.intent == Intent.TEST_PREP:
                 from lyo_app.study_plans.chat import process_chat_turn
+                if not request.media and historical_media:
+                    _prep_text = (request.text or "").casefold()
+                    if any(token in _prep_text for token in (
+                        "this", "that", "document", "pdf", "notes", "material",
+                        "attached", "esto", "este", "documento", "notas",
+                    )):
+                        request.media = historical_media
                 # The authenticated intake/plan path returns before the generic
                 # Test Prep block below. Bind attribution here so intake and
                 # generate_plan model calls join the learner's Test Prep session.
@@ -1580,7 +1637,7 @@ async def stream_lyo2_chat(
             if (
                 decision.needs_clarification
                 and decision.confidence > 0.3
-                and teaching_decision.reason_code != "attachment_information_request"
+                and not interaction_contract.answer_first
             ):
                 # Only ask for clarification if the router is reasonably confident
                 # that it truly cannot understand. Low-confidence clarifications
@@ -1677,7 +1734,11 @@ async def stream_lyo2_chat(
             # A self-contained "explain X" is taught right here as a lesson
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
-            if decision.intent == Intent.EXPLAIN and request.text:
+            if (
+                decision.intent == Intent.EXPLAIN
+                and request.text
+                and interaction_contract.mode.value == "teach"
+            ):
                 _force_lesson_mode = _lesson_mode_for_teaching_action(
                     teaching_decision.action
                 )
@@ -1725,24 +1786,31 @@ async def stream_lyo2_chat(
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
             try:
-                # OPTIMIZATION: Attachment information requests are already
-                # resolved by the deterministic teaching policy. Sending them
-                # through the planner adds latency and gives a second model a
-                # chance to manufacture an assessment the learner never asked
-                # for, so execute one grounded generation step directly.
-                if (
-                    media_attachments
-                    and teaching_decision.action == TeachingAction.ANSWER
-                    and teaching_decision.reason_code == "attachment_information_request"
-                ):
+                # Deterministic fast lane: most normal Chat turns do not need
+                # an LLM planner between the learner and the answering model.
+                if interaction_contract.mode.value == "search":
+                    logger.info(f"⚡ [STREAM][{trace_id}] Current-info fast path with live grounding")
+                    plan = LyoPlan(steps=[
+                        PlannedAction(
+                            action_type=ActionType.SEARCH_WEB,
+                            description="Ground the answer in current web sources",
+                            parameters={"query": request.text or "", "max_results": 5},
+                        ),
+                        PlannedAction(
+                            action_type=ActionType.GENERATE_TEXT,
+                            description="Answer from the grounded current sources",
+                            parameters={"content": None},
+                        ),
+                    ])
+                elif interaction_contract.fast_lane:
                     logger.info(
-                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
-                        "skipping planner"
+                        f"⚡ [STREAM][{trace_id}] Chat fast lane: "
+                        f"{interaction_contract.mode.value}"
                     )
                     plan = LyoPlan(steps=[
                         PlannedAction(
                             action_type=ActionType.GENERATE_TEXT,
-                            description="Inspect the attachment and answer the learner directly",
+                            description=f"Fulfill the {interaction_contract.mode.value} interaction directly",
                             parameters={"content": None},
                         )
                     ])
@@ -1841,6 +1909,7 @@ async def stream_lyo2_chat(
                             intent=decision.intent.value if decision.intent else None,
                             media_attachments=media_attachments,
                             teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract=interaction_contract.model_dump(mode="json"),
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -1969,9 +2038,13 @@ async def stream_lyo2_chat(
             # Unified SmartBlock emission: same content as the legacy
             # answer/artifact events above, in the versioned block vocabulary
             # shared by all three clients. Additive — v1 consumers ignore it.
-            smart_blocks = _to_smart_blocks(
-                raw_llm_text, execution_response.artifact_block
+            smart_blocks = list(
+                execution_response.metadata.get("smart_blocks") or []
             )
+            if not smart_blocks:
+                smart_blocks = _to_smart_blocks(
+                    raw_llm_text, execution_response.artifact_block
+                )
             if smart_blocks:
                 yield yield_safe_sse_event(
                     "smart_blocks",
@@ -2031,6 +2104,13 @@ async def stream_lyo2_chat(
                 collected_bricks.append(oc_brick)
                 yield f"data: {json.dumps(oc_brick)}\n\n"
                 
+            sources = execution_response.metadata.get("sources") or []
+            if sources:
+                yield yield_safe_sse_event(
+                    "sources",
+                    {"type": "sources", "sources": sources},
+                )
+
             # Emit v1 actions event
             action_labels = []
             for action_block in execution_response.next_actions:

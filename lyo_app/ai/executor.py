@@ -5,6 +5,7 @@ import asyncio
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
+from lyo_app.ai.schemas.smart_block import SmartBlock, InteractiveItem
 from lyo_app.services.rag_service import RAGService
 from lyo_app.services.artifact_service import ArtifactService
 from lyo_app.services.mutator import FollowUpMutator
@@ -63,6 +64,87 @@ def _get_json_gemini_model():
     )
 
 
+def _attachment_grounding(media_attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, str]]]:
+    """Build bounded, citable source context from extracted attachment pages."""
+    source_refs: list[dict[str, str]] = []
+    chunks: list[str] = []
+    budget = 18000
+    for attachment in media_attachments:
+        name = str(attachment.get("name") or "attachment")
+        for section in attachment.get("source_sections") or []:
+            label = str(section.get("label") or "document")
+            section_text = str(section.get("text") or "").strip()
+            if not section_text or budget <= 0:
+                continue
+            bounded = section_text[:budget]
+            source_refs.append({"name": name, "label": label})
+            chunks.append(f"[{name} · {label}]\n{bounded}")
+            budget -= len(bounded)
+    if not chunks:
+        return "", source_refs
+    return (
+        "\n\n--- ATTACHMENT SOURCE MAP ---\n"
+        + "\n\n".join(chunks)
+        + "\n--- END ATTACHMENT SOURCE MAP ---\n",
+        source_refs,
+    )
+
+
+def _presentation_blocks(answer_text: str, representation: str) -> list[dict[str, Any]]:
+    """Turn naturally structured answers into canonical Smart Blocks."""
+    import re
+
+    text = (answer_text or "").strip()
+    if not text:
+        return []
+
+    if representation == "table":
+        lines = text.splitlines()
+        table_indices = [i for i, line in enumerate(lines) if "|" in line and line.count("|") >= 2]
+        if len(table_indices) >= 2:
+            start, end = min(table_indices), max(table_indices)
+            blocks: list[dict[str, Any]] = []
+            before = "\n".join(lines[:start]).strip()
+            after = "\n".join(lines[end + 1:]).strip()
+            if before:
+                blocks.append(SmartBlock.text(before, subtype="summary").model_dump())
+            blocks.append(SmartBlock.table("\n".join(lines[start:end + 1]).strip(), title="Comparison").model_dump())
+            if after:
+                blocks.append(SmartBlock.text(after).model_dump())
+            return blocks
+
+    if representation in {"steps", "timeline"}:
+        items: list[InteractiveItem] = []
+        for line in text.splitlines():
+            match = re.match(r"^\s*(?:\d+[.)]|[-*])\s*([^:—-]+?)\s*(?::|—|-)?\s*(.*)$", line)
+            if match:
+                label = match.group(1).strip()
+                detail = match.group(2).strip() or label
+                if label:
+                    items.append(InteractiveItem(label=label[:100], detail=detail[:700]))
+        if len(items) >= 2:
+            return [SmartBlock(
+                type="interactive",
+                subtype="stepByStep" if representation == "steps" else "timeline",
+                content={
+                    "title": "Steps" if representation == "steps" else "Timeline",
+                    "items": [item.model_dump() for item in items[:12]],
+                },
+            ).model_dump()]
+
+    if representation == "visual":
+        match = re.search(r"```mermaid\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            diagram = match.group(1).strip()
+            prose = (text[:match.start()] + text[match.end():]).strip()
+            blocks = []
+            if prose:
+                blocks.append(SmartBlock.text(prose, subtype="summary").model_dump())
+            blocks.append(SmartBlock.data_viz(diagram, fmt="mermaid", title="Visual explanation").model_dump())
+            return blocks
+
+    return []
+
 class LyoExecutor:
     """
     Layer C: Executor
@@ -100,11 +182,21 @@ class LyoExecutor:
         rag_text = ""
         if rag_snippets:
             rag_text = "\n\n--- REFERENCE MATERIAL ---\n"
-            for i, snippet in enumerate(rag_snippets, 1):
-                if isinstance(snippet, dict):
-                    rag_text += f"\n[{i}] {snippet.get('content', snippet)}\n"
+            web_index = 0
+            ref_index = 0
+            for snippet in rag_snippets:
+                if isinstance(snippet, dict) and snippet.get("source_type") == "web":
+                    web_index += 1
+                    title = str(snippet.get("title") or "Web source")
+                    url = str(snippet.get("url") or "")
+                    content = str(snippet.get("content") or "")
+                    rag_text += f"\n[web {web_index}] {title}\nURL: {url}\n{content}\n"
+                elif isinstance(snippet, dict):
+                    ref_index += 1
+                    rag_text += f"\n[ref {ref_index}] {snippet.get('content', snippet)}\n"
                 else:
-                    rag_text += f"\n[{i}] {snippet}\n"
+                    ref_index += 1
+                    rag_text += f"\n[ref {ref_index}] {snippet}\n"
 
         # Build conversation history context for multi-turn continuity
         conversation_history = context.get("conversation_history", [])
@@ -118,6 +210,42 @@ class LyoExecutor:
             history_text += "--- END HISTORY ---\n"
 
         teaching_decision = context.get("teaching_decision") or {}
+        interaction_contract = context.get("interaction_contract") or {}
+        memory_context = str(context.get("memory_context") or "").strip()
+        grounding_unavailable = bool(context.get("grounding_unavailable"))
+        media_attachments = context.get("media_attachments", [])
+        source_text, source_refs = _attachment_grounding(media_attachments)
+        context["source_refs"] = source_refs
+
+        depth = str(interaction_contract.get("depth") or "standard")
+        depth_rule = {
+            "compact": "Answer in roughly 2-5 sentences unless the task requires a table.",
+            "deep": "Give a thorough but well-structured answer. Use headings and examples where useful.",
+        }.get(depth, "Answer with enough detail to be useful, without unnecessary exposition.")
+        representation = str(interaction_contract.get("representation") or "prose")
+        representation_rule = {
+            "table": "When comparison data is present, render the core comparison as a Markdown table.",
+            "timeline": "Organize chronological material as a concise timeline.",
+            "steps": "Organize procedures as numbered steps.",
+            "visual": "When a diagram materially helps, include one valid Mermaid diagram in a mermaid code fence.",
+            "document": "Ground the answer in the attached material and identify relevant page or section labels.",
+        }.get(representation, "Use prose unless a structured representation is clearly more useful.")
+
+        contract_text = ""
+        if interaction_contract:
+            contract_text = f"""
+--- INTERACTION CONTRACT (HIGHEST PRIORITY FOR RESPONSE SHAPE) ---
+Mode: {interaction_contract.get("mode", "answer")}
+Depth: {depth}
+Representation: {representation}
+Answer first: {bool(interaction_contract.get("answer_first"))}
+{depth_rule}
+{representation_rule}
+Do not silently convert this interaction into a different mode. In particular,
+do not turn ANSWER/EXPLAIN/SUMMARIZE/COMPARE into a quiz or diagnostic.
+--- END INTERACTION CONTRACT ---
+"""
+        memory_text = f"\n\n{memory_context}\n" if memory_context else ""
         teaching_policy_text = ""
         if teaching_decision:
             directives = teaching_decision.get("directives") or []
@@ -133,7 +261,6 @@ Target evidence: {teaching_decision.get("target_evidence_type") or "none"}
 Do not override this action with a different pedagogical sequence. The policy chooses what to do; you only realize it clearly and naturally.
 --- END TEACHING POLICY ---
 """
-
         prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
 Answer the user's question with warmth, curiosity, and clarity.
 
@@ -166,7 +293,14 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{teaching_policy_text}
+{rag_text}{source_text}{history_text}{memory_text}{contract_text}{teaching_policy_text}
+
+GROUNDING RULES:
+- When the attachment source map contains page labels, support document-specific claims with compact labels such as [p. 2].
+- When live web sources are present, support current factual claims with the provided labels such as [web 1]. Never invent a web source.
+- Never invent a page, source, quotation, URL, or fact that is not present.
+- If the file is scanned and no page text is available, analyze the raw attachment visually and say when a detail cannot be verified.
+- Live grounding unavailable: {grounding_unavailable}. If true and the user asked for current/latest information, state that current information could not be verified; do not present model memory as current fact.
 
 USER QUESTION:
 {original_request}
@@ -178,15 +312,20 @@ USER QUESTION:
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
                 
-            media_attachments = context.get("media_attachments", [])
             from lyo_app.teaching_runtime.model_router import provider_order_for_tier
 
-            if media_attachments:
+            model_media_attachments = [
+                item
+                for item in media_attachments
+                if str(item.get("mime_type") or "").startswith("image/")
+                or not item.get("source_sections")
+            ]
+            if model_media_attachments:
                 messages = [{
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        *media_attachments,
+                        *model_media_attachments,
                     ],
                 }]
             else:
@@ -194,14 +333,14 @@ USER QUESTION:
 
             provider_order = provider_order_for_tier(
                 str(teaching_decision.get("model_tier") or "teaching"),
-                has_media=bool(media_attachments),
+                has_media=bool(model_media_attachments),
             )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=messages,
                     provider_order=provider_order,
-                    use_cache=not bool(media_attachments),
+                    use_cache=not bool(media_attachments) and not interaction_contract.get("requires_grounding"),
                 ),
                 timeout=30.0
             )
@@ -235,12 +374,29 @@ USER QUESTION:
         intent: str = None,
         media_attachments: list = None,
         teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
         conversation_history: list of {"role": ..., "content": ...} dicts for multi-turn context.
         intent: the router's classified intent (e.g. EXPLAIN, QUIZ, COURSE) for contextual suggestions.
         """
+        memory_context = ""
+        if self._db is not None and str(user_id).isdigit():
+            try:
+                from lyo_app.services.memory_synthesis import memory_synthesis_service
+
+                memory_context = await memory_synthesis_service.get_relevant_memory_for_prompt(
+                    int(user_id),
+                    original_request,
+                    self._db,
+                    instructional=str((interaction_contract or {}).get("mode") or "") in {
+                        "explain", "teach", "quiz", "review",
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Selective memory retrieval failed: %s", type(exc).__name__)
+
         execution_context = {
             "retrieved_content": [],
             "created_artifacts": [],
@@ -249,6 +405,11 @@ USER QUESTION:
             "conversation_history": conversation_history or [],
             "media_attachments": media_attachments or [],
             "teaching_decision": teaching_decision or {},
+            "interaction_contract": interaction_contract or {},
+            "memory_context": memory_context,
+            "source_refs": [],
+            "web_sources": [],
+            "grounding_unavailable": False,
         }
         
         for step in plan.steps:
@@ -259,6 +420,39 @@ USER QUESTION:
                 limit = step.parameters.get("limit", 3)
                 content = await self.rag.retrieve(query, limit=limit)
                 execution_context["retrieved_content"].extend(content)
+
+            elif step.action_type == ActionType.SEARCH_WEB:
+                try:
+                    from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+                    search = WebSearchTool()
+                    result = await search.execute(
+                        int(user_id) if str(user_id).isdigit() else 0,
+                        query=step.parameters.get("query", original_request),
+                        max_results=min(int(step.parameters.get("max_results", 5)), 8),
+                    )
+                    if result.success and isinstance(result.output, list) and result.output:
+                        for item in result.output:
+                            if not isinstance(item, dict):
+                                continue
+                            execution_context["retrieved_content"].append({
+                                "content": item.get("snippet") or "",
+                                "title": item.get("title"),
+                                "url": item.get("url"),
+                                "source_type": "web",
+                            })
+                            if item.get("url"):
+                                source_number = len(execution_context.setdefault("web_sources", [])) + 1
+                                execution_context["web_sources"].append({
+                                    "title": str(item.get("title") or item.get("url")),
+                                    "url": str(item.get("url")),
+                                    "label": f"web {source_number}",
+                                })
+                    else:
+                        execution_context["grounding_unavailable"] = True
+                except Exception as exc:
+                    execution_context["grounding_unavailable"] = True
+                    logger.warning("Live web grounding failed: %s", type(exc).__name__)
                 
             elif step.action_type == ActionType.CREATE_ARTIFACT:
                 # ... creation logic ...
@@ -347,18 +541,29 @@ USER QUESTION:
                 content=latest_art.get("content"),
                 version_id=f"{latest_art['artifact_id']}_v{latest_art['version']}"
             )
+        presentation_blocks = _presentation_blocks(
+            execution_context["final_text"],
+            str((interaction_contract or {}).get("representation") or "prose"),
+        )
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=self._contextual_actions(intent),
+            next_actions=self._contextual_actions(intent, interaction_contract),
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
+                "interaction_contract": interaction_contract or None,
+                "sources": (execution_context.get("source_refs") or []) + (execution_context.get("web_sources") or []),
+                "smart_blocks": presentation_blocks,
+                "memory_used": bool(memory_context),
             }
         )
-
-    def _contextual_actions(self, intent: str = None) -> list:
+    def _contextual_actions(
+        self,
+        intent: str = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+    ) -> list:
         """Generate context-aware suggestion buttons based on the classified intent."""
         _intent_actions = {
             "EXPLAIN":    ["Deep Dive", "Quiz Me", "Create Course"],
@@ -373,8 +578,13 @@ USER QUESTION:
             "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
             "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
         }
-        actions = _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
-        return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions})]
+        contract_actions = (interaction_contract or {}).get("suggested_actions")
+        actions = (
+            [str(item) for item in contract_actions if str(item).strip()]
+            if isinstance(contract_actions, list) and contract_actions
+            else _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
+        )
+        return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions[:5]})]
 
     async def _generate_course_data(
         self, original_request: str, step_params: Dict[str, Any], context: Dict[str, Any]
@@ -397,7 +607,10 @@ USER QUESTION:
                 ]
             }
         
+        course_source_text, _ = _attachment_grounding(context.get("media_attachments", []))
         prompt = f"""You are a course architect. Generate a structured learning course for: "{original_request}"
+{course_source_text}
+When source material is present, build the course from that material rather than from the filename alone.
 
 Return ONLY valid JSON, no markdown fences, no explanation:
 {{

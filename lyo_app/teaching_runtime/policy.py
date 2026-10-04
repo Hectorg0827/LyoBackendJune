@@ -103,6 +103,30 @@ class TeachingPolicy:
                 directives=["Acknowledge the pause. Do not introduce a new task."],
             )
 
+        contract = context.metadata.get("interaction_contract") or {}
+        contract_mode = str(contract.get("mode") or "").lower()
+        contract_depth = str(contract.get("depth") or "standard").lower()
+        contract_answer_first = bool(contract.get("answer_first"))
+        contract_words = {"compact": 90, "deep": 260}.get(contract_depth, 170)
+
+        # The interaction contract is upstream of pedagogy: it captures what
+        # the learner explicitly asked the product to do. Pedagogy may improve
+        # *how* we answer, but may not silently replace an answer/summary/
+        # comparison with a diagnostic or quiz.
+        if contract_answer_first and contract_mode in {
+            "answer", "explain", "summarize", "compare", "search",
+        }:
+            return _decision(
+                TeachingAction.EXPLAIN if contract_mode == "explain" else TeachingAction.ANSWER,
+                "interaction_contract_answer_first",
+                words=contract_words,
+                model_tier="deliberation" if contract_depth == "deep" else "teaching",
+                directives=[
+                    f"Honor the {contract_mode} request before any assessment.",
+                    "Do not ask a diagnostic or comprehension question in this turn.",
+                    "Optional learning actions may be offered only after the requested answer.",
+                ],
+            )
         direct = session.learner_requested_direct_answer or bool(_DIRECT_RE.search(text))
         visual = session.learner_requested_visual or bool(_VISUAL_RE.search(text))
         confused = session.learner_expressed_confusion or bool(_CONFUSED_RE.search(text))
