@@ -10,7 +10,12 @@ from __future__ import annotations
 from typing import List
 
 
-def provider_order_for_tier(tier: str, *, has_media: bool = False) -> List[str]:
+def provider_order_for_tier(
+    tier: str,
+    *,
+    has_media: bool = False,
+    prefer_low_latency: bool = False,
+) -> List[str]:
     """Return a bounded fallback order for one teaching turn.
 
     Multimodal turns use the same bounded fallback principle as text. Lyo
@@ -22,6 +27,17 @@ def provider_order_for_tier(tier: str, *, has_media: bool = False) -> List[str]:
         return ["gpt-4o-mini", "gemini-2.5-flash", "gpt-4o"]
 
     normalized = (tier or "teaching").strip().lower()
+
+    # Live voice uses the same model prompt, memory and teaching contract as
+    # text Chat. Only provider ordering changes: start with the lowest-latency
+    # configured provider so spoken turn-taking does not pay an avoidable
+    # failed/slow first attempt. Deliberation still starts with the stronger
+    # OpenAI model rather than silently downgrading reasoning quality.
+    if prefer_low_latency:
+        if normalized == "deliberation":
+            return ["gpt-4o", "gpt-4o-mini", "gemini-2.5-pro", "gemini-2.5-flash"]
+        return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-flash"]
+
     if normalized == "deliberation":
         return [
             "gemini-2.5-pro",
