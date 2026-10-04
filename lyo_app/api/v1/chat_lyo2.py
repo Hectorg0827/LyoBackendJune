@@ -193,15 +193,26 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             resolve_chat_teaching_topic,
         )
 
+        voice_session_state = (
+            request.state_summary.get("voice_session", {})
+            if isinstance(request.state_summary, dict)
+            else {}
+        )
+        voice_mode = bool(
+            isinstance(voice_session_state, dict)
+            and voice_session_state.get("active")
+        )
         interaction_contract = interaction_contract_for_request(
             text=request.text or "",
             routed_intent=decision.intent,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
+            voice_mode=voice_mode,
         )
         interaction_contract_payload = {
             "mode": interaction_contract.mode.value,
             "depth": interaction_contract.depth.value,
+            "delivery_mode": interaction_contract.delivery_mode.value,
             "fast_lane": interaction_contract.fast_lane,
             "workflow_intent": (
                 interaction_contract.workflow_intent.value
