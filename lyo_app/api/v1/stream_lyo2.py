@@ -1723,6 +1723,37 @@ async def stream_lyo2_chat(
 
                 grounded_sources = list(model_metadata.get("sources") or [])
                 if grounded_sources:
+                    source_items = [
+                        {
+                            "label": str(source.get("title") or "Web source"),
+                            "detail": "Live web source",
+                            "url": str(source.get("url") or ""),
+                        }
+                        for source in grounded_sources
+                        if isinstance(source, dict) and source.get("url")
+                    ]
+                    if source_items:
+                        yield yield_safe_sse_event(
+                            "smart_blocks",
+                            {
+                                "type": "smart_blocks",
+                                "blocks": [{
+                                    "id": f"sources-{trace_id[:8]}",
+                                    "schema_version": 1,
+                                    "type": "interactive",
+                                    "subtype": "sourceNavigator",
+                                    "content": {
+                                        "title": "Sources used",
+                                        "items": source_items,
+                                    },
+                                    "metadata": {
+                                        "role": "grounding",
+                                        "freshness": freshness_decision.mode.value
+                                        if freshness_decision else "none",
+                                    },
+                                }],
+                            },
+                        )
                     yield yield_safe_sse_event(
                         "sources",
                         {"type": "sources", "sources": grounded_sources},
