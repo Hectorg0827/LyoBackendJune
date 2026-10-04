@@ -171,7 +171,7 @@ def test_steps_answer_becomes_interactive_block():
 
 def test_visual_answer_extracts_mermaid_diagram():
     blocks = _presentation_blocks(
-        "A simple flow:\n\`\`\`mermaid\ngraph LR\nA-->B\n\`\`\`",
+        "A simple flow:\n```mermaid\ngraph LR\nA-->B\n```",
         "visual",
     )
     assert any(block["type"] == "dataViz" for block in blocks)
