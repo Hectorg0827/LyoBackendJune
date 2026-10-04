@@ -385,6 +385,35 @@ def _extract_markdown_table(text: str) -> Optional[str]:
     return None
 
 
+def prose_without_presented_table(text: str) -> str:
+    """Remove a markdown table that is rendered as its own SmartBlock.
+
+    This prevents the workspace from showing the same comparison twice: once
+    as markdown inside the prose block and again as the richer table block.
+    """
+    lines = (text or "").splitlines()
+    start = None
+    end = None
+    for i in range(len(lines) - 1):
+        if "|" not in lines[i]:
+            continue
+        separator = lines[i + 1].strip()
+        if not re.fullmatch(
+            r"\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?",
+            separator,
+        ):
+            continue
+        start = i
+        end = i + 2
+        while end < len(lines) and "|" in lines[end] and lines[end].strip():
+            end += 1
+        break
+    if start is None or end is None:
+        return (text or "").strip()
+    remaining = lines[:start] + lines[end:]
+    return "\n".join(remaining).strip()
+
+
 def _extract_numbered_steps(text: str) -> List[Dict[str, str]]:
     items: List[Dict[str, str]] = []
     for line in (text or "").splitlines():
