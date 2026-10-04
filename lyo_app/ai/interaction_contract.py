@@ -15,7 +15,7 @@ import re
 from enum import Enum
 from typing import List, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lyo_app.ai.schemas.lyo2 import Intent, RouterDecision, RouterRequest
 
@@ -44,11 +44,11 @@ class InteractionContract(BaseModel):
     fast_lane: bool = False
     requires_grounding: bool = False
     preserve_workflow: bool = False
-    suggested_actions: List[str] = []
+    suggested_actions: List[str] = Field(default_factory=list)
 
 
 _DEEP_RE = re.compile(
-    r"\b(deep dive|in depth|in-depth|detailed|detail|comprehensive|thorough|"
+    r"\b(deep dive|deeper|more detail|in depth|in-depth|detailed|detail|comprehensive|thorough|"
     r"profundo|en detalle|detallad[oa])\b",
     re.IGNORECASE,
 )
@@ -141,10 +141,15 @@ def _representation(text: str, *, has_media: bool) -> Literal[
 
 def _actions(mode: InteractionMode, *, has_media: bool) -> list[str]:
     if mode in {InteractionMode.ANSWER, InteractionMode.EXPLAIN, InteractionMode.SUMMARIZE, InteractionMode.COMPARE}:
-        actions = ["Explain deeper", "Show visually", "Give example", "Teach this in Classroom", "Quiz me"]
         if has_media:
-            actions.append("I have a test on this")
-        return actions[:5]
+            return [
+                "Explain deeper",
+                "Show visually",
+                "Teach this in Classroom",
+                "Quiz me",
+                "I have a test on this",
+            ]
+        return ["Explain deeper", "Show visually", "Give example", "Teach this in Classroom", "Quiz me"]
     if mode is InteractionMode.TEACH:
         return ["Continue", "Show visually", "Give example", "Quiz me", "Open Classroom"]
     if mode is InteractionMode.QUIZ:
