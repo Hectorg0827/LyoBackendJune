@@ -1824,7 +1824,7 @@ async def stream_lyo2_chat(
                     plan = LyoPlan(steps=[
                         PlannedAction(
                             action_type=ActionType.GENERATE_TEXT,
-                            description="Inspect the attachment and answer the learner directly",
+                            description=f"Handle {interaction_contract.mode.value} request directly",
                             parameters={"content": None},
                         )
                     ])
