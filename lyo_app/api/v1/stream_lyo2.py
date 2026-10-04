@@ -1965,7 +1965,16 @@ async def stream_lyo2_chat(
 
             execution_task = None
             try:
-                if interaction_contract.delivery_mode == DeliveryMode.VOICE:
+                voice_generate_steps = sum(
+                    1 for step in plan.steps
+                    if step.action_type == ActionType.GENERATE_TEXT
+                )
+                voice_can_stream = (
+                    interaction_contract.delivery_mode == DeliveryMode.VOICE
+                    and interaction_contract.workflow_intent is None
+                    and voice_generate_steps == 1
+                )
+                if voice_can_stream:
                     from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
 
                     voice_segments: asyncio.Queue[str] = asyncio.Queue()
