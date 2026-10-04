@@ -72,13 +72,13 @@ def _source_grounding_prompt(media_attachments: List[Dict[str, Any]]) -> str:
         pages = item.get("source_pages") or []
         page_count = item.get("page_count")
         if pages:
-            lines.append(f"Source: {name} ({page_count or len(pages)} pages)")
-            for page in pages:
-                if not isinstance(page, dict):
-                    continue
-                text = str(page.get("text") or "").strip()
-                if text:
-                    lines.append(f"[{name} p. {page.get('page')}] {text[:3500]}")
+            page_numbers = [
+                str(page.get("page"))
+                for page in pages[:50]
+                if isinstance(page, dict) and page.get("page") is not None
+            ]
+            suffix = f"; extracted pages: {', '.join(page_numbers)}" if page_numbers else ""
+            lines.append(f"Source: {name} ({page_count or len(pages)} pages{suffix})")
         else:
             lines.append(f"Source: {name} (native attachment; no extracted page text available)")
     lines.append("--- END ATTACHMENT SOURCE GROUNDING ---")
