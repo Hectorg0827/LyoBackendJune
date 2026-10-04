@@ -536,8 +536,10 @@ async def build_memory_layers(
         try:
             from lyo_app.services.memory_synthesis import memory_synthesis_service
 
-            personal = await memory_synthesis_service.get_memory_for_prompt(int(user_id), db)
-            personal = personal.strip()[:3000]
+            user = await memory_synthesis_service._get_user(int(user_id), db)
+            summary = str(getattr(user, "user_context_summary", "") or "").strip()
+            if summary:
+                personal = summary[:3000]
         except Exception:
             personal = ""
 
