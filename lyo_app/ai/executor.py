@@ -4,7 +4,7 @@ import uuid
 import asyncio
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
-from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
+from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType, Intent
 from lyo_app.services.rag_service import RAGService
 from lyo_app.services.artifact_service import ArtifactService
 from lyo_app.services.mutator import FollowUpMutator
