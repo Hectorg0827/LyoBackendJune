@@ -299,6 +299,10 @@ USER QUESTION:
             provider_order = provider_order_for_tier(
                 str(teaching_decision.get("model_tier") or "teaching"),
                 has_media=bool(media_attachments),
+                prefer_low_latency=bool(
+                    interaction_contract is not None
+                    and interaction_contract.delivery_mode is DeliveryMode.VOICE
+                ),
             )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
             ai_response = await asyncio.wait_for(
