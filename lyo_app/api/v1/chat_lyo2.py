@@ -198,10 +198,15 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             routed_intent=decision.intent,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
+            voice_active=bool(request.voice_session and request.voice_session.active),
+            voice_interrupted_previous_turn=bool(
+                request.voice_session and request.voice_session.interrupted_previous_turn
+            ),
         )
         interaction_contract_payload = {
             "mode": interaction_contract.mode.value,
             "depth": interaction_contract.depth.value,
+            "channel": interaction_contract.channel.value,
             "fast_lane": interaction_contract.fast_lane,
             "workflow_intent": (
                 interaction_contract.workflow_intent.value
