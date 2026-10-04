@@ -55,6 +55,7 @@ def mock_ai_internals():
         action=TeachingAction.ANSWER,
         reason_code="transport_test",
         model_tier="reflex",
+        policy_version="test",
     )
 
     with patch("lyo_app.api.v1.stream_lyo2.router_agent") as mock_router:
