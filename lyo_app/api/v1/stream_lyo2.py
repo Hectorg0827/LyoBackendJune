@@ -1963,27 +1963,112 @@ async def stream_lyo2_chat(
                     )
                     personal_memory = ""
 
+            execution_task = None
             try:
-                with _model_usage_scope(teaching_decision.model_tier):
-                    execution_response = await asyncio.wait_for(
-                        executor.execute(
-                            user_id=str(current_user.id),
-                            plan=plan,
-                            original_request=(
-                                course_effective_text
-                                if decision.intent == Intent.COURSE
-                                else request.text or ""
+                if interaction_contract.delivery_mode == DeliveryMode.VOICE:
+                    from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
+
+                    voice_segments: asyncio.Queue[str] = asyncio.Queue()
+                    voice_segmenter = VoiceSegmenter()
+                    voice_sequence = 0
+
+                    async def _on_voice_text_delta(delta: str) -> None:
+                        for segment in voice_segmenter.feed(delta):
+                            await voice_segments.put(segment)
+
+                    with _model_usage_scope(teaching_decision.model_tier):
+                        execution_task = asyncio.create_task(
+                            executor.execute(
+                                user_id=str(current_user.id),
+                                plan=plan,
+                                original_request=(
+                                    course_effective_text
+                                    if decision.intent == Intent.COURSE
+                                    else request.text or ""
+                                ),
+                                conversation_history=history,
+                                intent=decision.intent.value if decision.intent else None,
+                                media_attachments=media_attachments,
+                                teaching_decision=teaching_decision.model_dump(mode="json"),
+                                interaction_contract=interaction_contract_payload,
+                                personal_memory=personal_memory,
+                                text_delta_callback=_on_voice_text_delta,
+                            )
+                        )
+
+                    # Keep the canonical SSE request open while model deltas
+                    # become speakable phrases. The final answer still follows
+                    # through the normal answer event and is persisted once.
+                    deadline = asyncio.get_running_loop().time() + 60.0
+                    while not execution_task.done():
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            execution_task.cancel()
+                            await asyncio.gather(execution_task, return_exceptions=True)
+                            raise asyncio.TimeoutError
+                        try:
+                            segment = await asyncio.wait_for(
+                                voice_segments.get(),
+                                timeout=min(0.10, remaining),
+                            )
+                        except asyncio.TimeoutError:
+                            continue
+                        voice_sequence += 1
+                        yield yield_safe_sse_event(
+                            "voice_text_segment",
+                            {
+                                "type": "voice_text_segment",
+                                "text": segment,
+                                "sequence": voice_sequence,
+                            },
+                        )
+
+                    execution_response = await execution_task
+
+                    # The last model phrase often has no terminal punctuation.
+                    # Flush it only after generation has completed so clients
+                    # never wait for the full final-answer event to hear it.
+                    for segment in voice_segmenter.flush():
+                        await voice_segments.put(segment)
+                    while not voice_segments.empty():
+                        voice_sequence += 1
+                        yield yield_safe_sse_event(
+                            "voice_text_segment",
+                            {
+                                "type": "voice_text_segment",
+                                "text": voice_segments.get_nowait(),
+                                "sequence": voice_sequence,
+                            },
+                        )
+                else:
+                    with _model_usage_scope(teaching_decision.model_tier):
+                        execution_response = await asyncio.wait_for(
+                            executor.execute(
+                                user_id=str(current_user.id),
+                                plan=plan,
+                                original_request=(
+                                    course_effective_text
+                                    if decision.intent == Intent.COURSE
+                                    else request.text or ""
+                                ),
+                                conversation_history=history,
+                                intent=decision.intent.value if decision.intent else None,
+                                media_attachments=media_attachments,
+                                teaching_decision=teaching_decision.model_dump(mode="json"),
+                                interaction_contract=interaction_contract_payload,
+                                personal_memory=personal_memory,
                             ),
-                            conversation_history=history,
-                            intent=decision.intent.value if decision.intent else None,
-                            media_attachments=media_attachments,
-                            teaching_decision=teaching_decision.model_dump(mode="json"),
-                            interaction_contract=interaction_contract_payload,
-                            personal_memory=personal_memory,
-                        ),
-                        timeout=60.0 # Execution can take longer
-                    )
+                            timeout=60.0,
+                        )
+            except asyncio.CancelledError:
+                if execution_task is not None and not execution_task.done():
+                    execution_task.cancel()
+                    await asyncio.gather(execution_task, return_exceptions=True)
+                raise
             except asyncio.TimeoutError:
+                if execution_task is not None and not execution_task.done():
+                    execution_task.cancel()
+                    await asyncio.gather(execution_task, return_exceptions=True)
                 logger.error(f"❌ [STREAM][{trace_id}] Execution timed out after 60s")
                 yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                 return
