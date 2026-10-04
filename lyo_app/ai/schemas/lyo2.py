@@ -135,6 +135,13 @@ class RouterRequest(BaseModel):
     session_id: Optional[str] = None
     device_id: Optional[str] = None
     client_message_id: Optional[str] = None
+    response_channel: Literal["text", "voice"] = Field(
+        default="text",
+        description=(
+            "Presentation channel for the same Chat interaction contract. "
+            "Voice changes delivery style, never routing authority or learner state."
+        ),
+    )
     conversation_history: List[ConversationTurn] = Field(
         default_factory=list,
         validation_alias=AliasChoices("conversation_history", "history"),
