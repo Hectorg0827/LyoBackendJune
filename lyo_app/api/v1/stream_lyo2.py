@@ -1288,6 +1288,30 @@ async def stream_lyo2_chat(
                 media_attachments = await load_media_attachments(
                     historical_media, missing_ok=True
                 )
+                # A follow-up such as "Teach this" or "Use this for Test Prep"
+                # must carry the prior attachment into the new workflow, not
+                # merely into generic generation.
+                if historical_media and not request.media:
+                    request.media = historical_media
+
+            from lyo_app.ai.chat_intelligence import (
+                build_memory_layers,
+                derive_interaction_contract,
+                enforce_interaction_contract,
+            )
+            interaction_contract = derive_interaction_contract(
+                request.text,
+                has_media=bool(media_attachments),
+                has_current_media=bool(request.media),
+                interaction_contract=interaction_contract.to_dict(),
+            )
+            yield yield_safe_sse_event(
+                "interaction_contract",
+                {
+                    "type": "interaction_contract",
+                    **interaction_contract.to_dict(),
+                },
+            )
 
             from lyo_app.teaching_runtime.model_usage import (
                 bind_model_usage,
@@ -1379,6 +1403,25 @@ async def stream_lyo2_chat(
                     needs_clarification=False,
                     suggested_tier="MEDIUM"
                 )
+            elif (
+                interaction_contract.router_intent is not None
+                and interaction_contract.confidence >= 0.95
+            ):
+                logger.info(
+                    f"⚡ [STREAM][{trace_id}] Contract fast route: "
+                    f"{interaction_contract.mode.value} -> "
+                    f"{interaction_contract.router_intent.value}"
+                )
+                decision = RouterDecision(
+                    intent=interaction_contract.router_intent,
+                    confidence=interaction_contract.confidence,
+                    needs_clarification=False,
+                    suggested_tier=(
+                        "LARGE"
+                        if interaction_contract.router_intent == Intent.COURSE
+                        else "MEDIUM"
+                    ),
+                )
             else:
                 try:
                     # 2b. Fetch Proactive Nudges (New for Phase 16).
@@ -1426,6 +1469,9 @@ async def stream_lyo2_chat(
                     yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                     return
                 
+            if not request.forced_intent:
+                decision = enforce_interaction_contract(decision, interaction_contract)
+
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
             # Shared Learning OS policy. Routing says what the learner wants;
@@ -1477,6 +1523,25 @@ async def stream_lyo2_chat(
                     "type": "teaching_policy",
                     **teaching_decision.model_dump(mode="json"),
                 },
+            )
+
+            from lyo_app.teaching_runtime.service import load_learner_snapshot
+            learner_snapshot_for_memory = await load_learner_snapshot(
+                db,
+                authenticated_user_id,
+                _teaching_concept_id,
+                topic=_policy_topic,
+            )
+            memory_context = await build_memory_layers(
+                db=db,
+                user_id=authenticated_user_id,
+                text=request.text or "",
+                history=[
+                    {"role": turn.role, "content": turn.content}
+                    for turn in request.conversation_history
+                ],
+                contract=interaction_contract,
+                learner_snapshot=learner_snapshot_for_memory,
             )
             
             # Chat is an adapter onto the same account-owned intake as Test Prep.
@@ -1731,13 +1796,12 @@ async def stream_lyo2_chat(
                 # chance to manufacture an assessment the learner never asked
                 # for, so execute one grounded generation step directly.
                 if (
-                    media_attachments
+                    interaction_contract.fast_lane
                     and teaching_decision.action == TeachingAction.ANSWER
-                    and teaching_decision.reason_code == "attachment_information_request"
                 ):
                     logger.info(
-                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
-                        "skipping planner"
+                        f"⚡ [STREAM][{trace_id}] Chat fast lane: "
+                        f"{interaction_contract.mode.value}; skipping planner"
                     )
                     plan = LyoPlan(steps=[
                         PlannedAction(
@@ -1841,6 +1905,8 @@ async def stream_lyo2_chat(
                             intent=decision.intent.value if decision.intent else None,
                             media_attachments=media_attachments,
                             teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract=interaction_contract.to_dict(),
+                            memory_context=memory_context,
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -1972,6 +2038,14 @@ async def stream_lyo2_chat(
             smart_blocks = _to_smart_blocks(
                 raw_llm_text, execution_response.artifact_block
             )
+            presentation_blocks = execution_response.metadata.get(
+                "presentation_blocks", []
+            )
+            if isinstance(presentation_blocks, list):
+                smart_blocks.extend(
+                    block for block in presentation_blocks
+                    if isinstance(block, dict)
+                )
             if smart_blocks:
                 yield yield_safe_sse_event(
                     "smart_blocks",
