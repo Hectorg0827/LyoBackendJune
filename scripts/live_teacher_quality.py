@@ -51,7 +51,9 @@ class ScenarioPreset:
     chat_prompt: str
     question: str
     explanation_answer: str
+    application_answer: str
     transfer_answer: str
+    retrieval_answer: str
 
 
 @dataclass(frozen=True)
@@ -77,9 +79,17 @@ SCENARIOS: dict[str, ScenarioPreset] = {
             "For the same whole, making more equal pieces makes each piece smaller, "
             "so the denominator changes the size of each part."
         ),
+        application_answer=(
+            "For the same whole, 1/2 is greater than 1/3 because dividing the whole into "
+            "two equal parts makes larger pieces than dividing it into three equal parts."
+        ),
         transfer_answer=(
             "If two equal ribbons are cut into 4 pieces and 8 pieces, a fourth is longer "
             "because the same whole is divided into fewer equal pieces."
+        ),
+        retrieval_answer=(
+            "With the same whole, fewer equal parts means each part is larger; that is why "
+            "one half is larger than one third."
         ),
     ),
     "biology_photosynthesis": ScenarioPreset(
@@ -94,9 +104,17 @@ SCENARIOS: dict[str, ScenarioPreset] = {
             "Light supplies the energy that drives the reactions converting carbon dioxide "
             "and water into stored chemical energy in glucose."
         ),
+        application_answer=(
+            "If light is reduced while other conditions stay similar, photosynthesis usually "
+            "slows because less energy is available to make glucose."
+        ),
         transfer_answer=(
             "With less light, the plant generally makes glucose more slowly because less "
             "energy is available to drive photosynthesis, assuming other inputs stay similar."
+        ),
+        retrieval_answer=(
+            "Photosynthesis uses carbon dioxide and water with light energy to make glucose, "
+            "and oxygen is released as an output."
         ),
     ),
     "physics_newton2": ScenarioPreset(
@@ -111,9 +129,17 @@ SCENARIOS: dict[str, ScenarioPreset] = {
             "Acceleration depends on force per unit mass, so the same force is spread across "
             "more inertia when mass is larger."
         ),
+        application_answer=(
+            "Using a = F/m, increasing force with the same mass increases acceleration, while "
+            "increasing mass with the same force decreases acceleration."
+        ),
         transfer_answer=(
             "If force doubles while mass stays the same, acceleration doubles. If mass doubles "
             "with the same force, acceleration is cut in half."
+        ),
+        retrieval_answer=(
+            "Newton's second law is F = ma, or a = F/m: acceleration rises with net force and "
+            "falls as mass increases."
         ),
     ),
     "spanish_past_tense": ScenarioPreset(
@@ -128,9 +154,17 @@ SCENARIOS: dict[str, ScenarioPreset] = {
             "The imperfect frames an ongoing or habitual background state, while the preterite "
             "presents a bounded event that occurred and moved the story forward."
         ),
+        application_answer=(
+            "Use the imperfect for the ongoing background action and the preterite for the "
+            "bounded event that begins or interrupts it."
+        ),
         transfer_answer=(
             "In 'Yo caminaba cuando empezó a llover,' caminaba is imperfect because the walking "
             "was ongoing background action, while empezó is preterite because the rain began as a bounded event."
+        ),
+        retrieval_answer=(
+            "The imperfect describes ongoing, habitual, or background past situations; the "
+            "preterite presents completed or bounded past events."
         ),
     ),
     "business_contribution_margin": ScenarioPreset(
@@ -145,9 +179,17 @@ SCENARIOS: dict[str, ScenarioPreset] = {
             "Revenue ignores the variable cost required to make the sale. Contribution margin "
             "subtracts that cost and shows what remains to cover fixed costs and profit."
         ),
+        application_answer=(
+            "Contribution margin per unit equals selling price minus variable cost; a lower "
+            "price or higher variable cost reduces what each sale contributes."
+        ),
         transfer_answer=(
             "If price is $20 and variable cost rises from $12 to $14, contribution margin falls "
             "from $8 to $6 per unit, so each sale contributes $2 less before fixed costs."
+        ),
+        retrieval_answer=(
+            "Contribution margin is selling price minus variable cost; it is the amount left "
+            "per sale to cover fixed costs and then profit."
         ),
     ),
 }
@@ -186,6 +228,17 @@ QUALITY_RUBRIC: tuple[tuple[str, str], ...] = (
     ("avoids_monologue_repetition", "Avoids unnecessary monologues, repeated questions, and empty praise."),
     ("visual_adds_information", "Any visual remediation adds instructional information rather than decoration."),
 )
+
+
+def preset_response(preset: ScenarioPreset, evidence_type: str) -> str:
+    """Return a response fixture aligned to the evidence rung being graded."""
+    responses = {
+        "explanation": preset.explanation_answer,
+        "application": preset.application_answer,
+        "transfer": preset.transfer_answer,
+        "retrieval": preset.retrieval_answer,
+    }
+    return responses.get(evidence_type, preset.application_answer)
 
 
 def quality_rubric_template() -> list[dict[str, Any]]:
@@ -619,8 +672,7 @@ class LiveLyo:
         review_concept_id: Optional[str],
         max_scenes: int,
         question: str,
-        explanation_answer: str,
-        transfer_answer: str,
+        scenario_preset: ScenarioPreset,
         objective: str,
         learner_profile: LearnerProfile,
     ) -> None:
@@ -660,7 +712,7 @@ class LiveLyo:
         declared_wrong_available = False
         wrong_attempts = 0
         correct_submitted = False
-        unknown_quiz_submitted = False
+        unknown_quiz_components: set[str] = set()
         free_response_types: list[str] = []
 
         async def send(ws, intent: str, comp: Optional[dict[str, Any]] = None, answer_data=None):
@@ -708,6 +760,10 @@ class LiveLyo:
 
                 metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
                 action_name = str(metadata.get("teaching_action") or "")
+                is_diagnostic = (
+                    action_name.upper() == "DIAGNOSE"
+                    or str(scene.get("scene_type") or "").lower() == "diagnostic"
+                )
                 if action_name in {"REMEDIATE", "remediate", "reteach", "prerequisite"}:
                     remediation_seen = True
                     remediation_visual_seen = remediation_visual_seen or any(
@@ -747,7 +803,12 @@ class LiveLyo:
                     asked = True
                     continue
 
-                if quiz is not None and learner_profile.request_hint and not hint_requested:
+                if (
+                    quiz is not None
+                    and learner_profile.request_hint
+                    and not hint_requested
+                    and not is_diagnostic
+                ):
                     await send(ws, "request_hint", quiz)
                     hint_requested = True
                     continue
@@ -782,26 +843,27 @@ class LiveLyo:
                         correct_submitted = True
                         corrected = wrong_attempts > 0
                         continue
-                    if option_id and not unknown_quiz_submitted:
+                    quiz_key = str(
+                        quiz.get("component_id") or scene.get("scene_id") or ""
+                    )
+                    if option_id and quiz_key not in unknown_quiz_components:
                         await send(
                             ws,
                             "submit_answer",
                             quiz,
                             {"selected_option_id": option_id},
                         )
-                        unknown_quiz_submitted = True
+                        unknown_quiz_components.add(quiz_key)
                         report.notes.append(
-                            "Quiz withheld its key; submitted one learner-visible option but "
-                            "did not label it correct or incorrect."
+                            "Quiz withheld its key; submitted one learner-visible option for "
+                            "this checkpoint but did not label it correct or incorrect."
                         )
                         continue
 
                 if input_field is not None:
                     evidence_type = str(input_field.get("evidence_type") or "transfer")
                     free_response_types.append(evidence_type)
-                    response_text = (
-                        explanation_answer if evidence_type == "explanation" else transfer_answer
-                    )
+                    response_text = preset_response(scenario_preset, evidence_type)
                     if learner_profile.partial_free_response:
                         response_text = " ".join(response_text.split()[:7])
                     await send(
@@ -971,9 +1033,17 @@ async def run(args) -> int:
     topic = args.topic or scenario.topic
     chat_prompt = args.chat_prompt or scenario.chat_prompt
     question = args.question or scenario.question
-    explanation_answer = args.explanation_answer or scenario.explanation_answer
-    transfer_answer = args.transfer_answer or scenario.transfer_answer
-    objective = args.objective or scenario.objective
+    scenario = ScenarioPreset(
+        topic=topic,
+        objective=args.objective or scenario.objective,
+        chat_prompt=chat_prompt,
+        question=question,
+        explanation_answer=args.explanation_answer or scenario.explanation_answer,
+        application_answer=args.application_answer or scenario.application_answer,
+        transfer_answer=args.transfer_answer or scenario.transfer_answer,
+        retrieval_answer=args.retrieval_answer or scenario.retrieval_answer,
+    )
+    objective = scenario.objective
 
     session_id = args.session_id or f"teacher-quality-{uuid.uuid4()}"
     report = Report(
@@ -1006,8 +1076,7 @@ async def run(args) -> int:
                     review_concept_id=None,
                     max_scenes=args.max_scenes,
                     question=question,
-                    explanation_answer=explanation_answer,
-                    transfer_answer=transfer_answer,
+                    scenario_preset=scenario,
                     objective=objective,
                     learner_profile=learner_profile,
                 )
@@ -1116,7 +1185,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--chat-prompt")
     p.add_argument("--question")
     p.add_argument("--explanation-answer")
+    p.add_argument("--application-answer")
     p.add_argument("--transfer-answer")
+    p.add_argument("--retrieval-answer")
     p.add_argument("--review-concept-id")
     p.add_argument("--max-scenes", type=int, default=32)
     p.add_argument("--timeout", type=float, default=75.0)
