@@ -112,8 +112,10 @@ def _extract_document_payload(data: bytes, mime_type: str) -> Dict[str, Any]:
     """
     text = ""
     source_pages: List[Dict[str, Any]] = []
+    page_count = 0
     if mime_type in {"text/plain", "text/markdown", "text/csv", "application/json"}:
         text = data.decode("utf-8", errors="replace").strip()
+        page_count = 1 if text else 0
         if text:
             source_pages = [{"page": 1, "text": text[:8000]}]
     elif mime_type == "application/pdf":
@@ -121,6 +123,7 @@ def _extract_document_payload(data: bytes, mime_type: str) -> Dict[str, Any]:
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(data))
+            page_count = len(reader.pages)
             labelled: List[str] = []
             for index, page in enumerate(reader.pages, 1):
                 page_text = (page.extract_text() or "").strip()
@@ -134,10 +137,12 @@ def _extract_document_payload(data: bytes, mime_type: str) -> Dict[str, Any]:
             # multimodal provider such as Gemini. Do not reject it here.
             text = ""
             source_pages = []
+            page_count = 0
 
     return {
         "text": text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS],
         "source_pages": source_pages[:40],
+        "page_count": page_count,
     }
 
 
@@ -258,10 +263,8 @@ async def load_media_attachments(
             source_pages = extracted.get("source_pages") or []
             if source_pages:
                 part["source_pages"] = source_pages
-                part["page_count"] = max(
-                    int(page.get("page") or 0)
-                    for page in source_pages
-                    if isinstance(page, dict)
-                )
+            page_count = int(extracted.get("page_count") or 0)
+            if page_count:
+                part["page_count"] = page_count
         prepared.append(part)
     return prepared
