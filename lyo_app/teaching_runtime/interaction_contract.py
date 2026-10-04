@@ -39,11 +39,17 @@ class ResponseDepth(str, Enum):
     DEEP = "deep"
 
 
+class InteractionChannel(str, Enum):
+    TEXT = "text"
+    VOICE = "voice"
+
+
 @dataclass(frozen=True)
 class InteractionContract:
     mode: InteractionMode
     depth: ResponseDepth
     fast_lane: bool
+    channel: InteractionChannel = InteractionChannel.TEXT
     workflow_intent: Optional[Intent] = None
     attachment_authoritative: bool = False
     reason_code: str = "general"
@@ -138,6 +144,8 @@ def interaction_contract_for_request(
     routed_intent: Optional[Intent] = None,
     has_media: bool = False,
     has_current_media: bool = False,
+    voice_active: bool = False,
+    voice_interrupted_previous_turn: bool = False,
 ) -> InteractionContract:
     """Return the learner's authoritative interaction contract.
 
@@ -146,42 +154,64 @@ def interaction_contract_for_request(
     """
     text = (text or "").strip()
     depth = _depth_for(text)
+    channel = InteractionChannel.VOICE if voice_active else InteractionChannel.TEXT
+    voice_directives: tuple[str, ...] = ()
+    if voice_active:
+        voice_rules = [
+            "This is a live spoken turn. Use natural, compact sentences and lead with the answer.",
+            "Avoid reading markdown syntax, long tables, URLs, or source metadata aloud.",
+            "Do not add filler such as 'Sure' or restate the learner's question unless needed for clarity.",
+        ]
+        if voice_interrupted_previous_turn:
+            voice_rules.append(
+                "The learner interrupted the previous spoken turn. Respond to the new utterance immediately "
+                "and do not resume the interrupted answer unless they explicitly ask."
+            )
+        voice_directives = tuple(voice_rules)
 
     if _TEST_PREP_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="explicit_test_prep",
+            directives=voice_directives,
         )
     if _COURSE_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.COURSE,
             attachment_authoritative=has_media,
             reason_code="explicit_course_or_classroom",
+            directives=voice_directives,
         )
     if _FLASHCARD_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.FLASHCARDS,
             attachment_authoritative=has_media,
             reason_code="explicit_flashcards",
+            directives=voice_directives,
         )
     if _QUIZ_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.QUIZ,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.QUIZ,
             attachment_authoritative=has_media,
             reason_code="explicit_quiz",
+            directives=voice_directives,
         )
 
     if _SEARCH_RE.search(text):
@@ -189,7 +219,9 @@ def interaction_contract_for_request(
             mode=InteractionMode.SEARCH,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             reason_code="explicit_search",
+            directives=voice_directives,
         )
     if _CONTINUE_RE.search(text):
         lowered = text.casefold()
@@ -211,68 +243,82 @@ def interaction_contract_for_request(
             mode=InteractionMode.CONTINUE,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="explicit_continue",
-            directives=tuple(continuation_directives),
+            directives=tuple(continuation_directives) + voice_directives,
         )
     if _COMPARE_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.COMPARE,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="explicit_compare",
+            directives=voice_directives,
         )
     if _SUMMARY_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.SUMMARIZE,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="explicit_summary",
+            directives=voice_directives,
         )
     if has_media and (has_current_media or _ANALYZE_RE.search(text) or _EXPLAIN_RE.search(text)):
         return InteractionContract(
             mode=InteractionMode.ANALYZE,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=True,
             reason_code="attachment_analysis",
             directives=(
                 "Inspect the supplied material before answering.",
                 "Answer the learner's request before offering instruction or assessment.",
-            ),
+            ) + voice_directives,
         )
     if _TEACH_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.TEACH,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             reason_code="explicit_teach",
+            directives=voice_directives,
         )
     if _EXPLAIN_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="explicit_explain",
+            directives=voice_directives,
         )
     if _ANALYZE_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.ANALYZE,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="explicit_analyze",
+            directives=voice_directives,
         )
     if _DIRECT_ANSWER_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.ANSWER,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="explicit_answer",
+            directives=voice_directives,
         )
 
     # Only after all explicit learner-authored verbs have been checked may
@@ -283,52 +329,64 @@ def interaction_contract_for_request(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="routed_test_prep",
+            directives=voice_directives,
         )
     if routed_intent == Intent.COURSE:
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.COURSE,
             attachment_authoritative=has_media,
             reason_code="routed_course",
+            directives=voice_directives,
         )
     if routed_intent == Intent.FLASHCARDS:
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.FLASHCARDS,
             attachment_authoritative=has_media,
             reason_code="routed_flashcards",
+            directives=voice_directives,
         )
     if routed_intent == Intent.QUIZ:
         return InteractionContract(
             mode=InteractionMode.QUIZ,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=Intent.QUIZ,
             attachment_authoritative=has_media,
             reason_code="routed_quiz",
+            directives=voice_directives,
         )
     if routed_intent == Intent.EXPLAIN:
         return InteractionContract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="routed_explain",
+            directives=voice_directives,
         )
     if routed_intent == Intent.SUMMARIZE_NOTES:
         return InteractionContract(
             mode=InteractionMode.SUMMARIZE,
             depth=depth,
             fast_lane=True,
+            channel=channel,
             attachment_authoritative=has_media,
             reason_code="routed_summarize",
+            directives=voice_directives,
         )
     if routed_intent in {
         Intent.STUDY_PLAN,
@@ -342,15 +400,18 @@ def interaction_contract_for_request(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
             fast_lane=False,
+            channel=channel,
             workflow_intent=routed_intent,
             attachment_authoritative=has_media,
             reason_code="routed_workflow",
+            directives=voice_directives,
         )
 
     return InteractionContract(
         mode=InteractionMode.ANSWER,
         depth=depth,
         fast_lane=True,
+            channel=channel,
         attachment_authoritative=has_media and has_current_media,
         reason_code="default_answer",
     )
@@ -366,6 +427,7 @@ def contract_prompt(contract: InteractionContract) -> str:
     rules = [
         f"Mode: {contract.mode.value}",
         f"Depth: {contract.depth.value}",
+        f"Channel: {contract.channel.value}",
         depth_rules[contract.depth],
         "The interaction mode is authoritative. Do not silently change it into a different activity.",
     ]
