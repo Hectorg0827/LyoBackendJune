@@ -372,6 +372,10 @@ class AIResilienceManager:
                             provider_emitted = True
                             emitted_any = True
                             yield chunk.choices[0].delta.content
+                    if not provider_emitted:
+                        raise RuntimeError(
+                            f"OpenAI stream returned no text for {model_name}"
+                        )
                     cb._on_success(None)
                     try:
                         from lyo_app.teaching_runtime.model_usage import capture_model_usage
@@ -393,6 +397,11 @@ class AIResilienceManager:
                             provider_emitted = True
                             emitted_any = True
                             yield chunk
+                    if not provider_emitted:
+                        raise RuntimeError(
+                            f"Gemini stream returned no text for {model_name}"
+                        )
+                    cb._on_success(None)
                     return
             except asyncio.CancelledError:
                 # Barge-in owns cancellation. Never count a learner interrupt as
