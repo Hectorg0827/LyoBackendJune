@@ -458,42 +458,78 @@ Freshness rules:
             "current_time_context": current_time_context or "",
         }
         
-        for step in plan.steps:
-            logger.info(f"Executing step: {step.description} ({step.action_type})")
-            
+        # Grounding lookups are independent once the planner has produced
+        # concrete query parameters. Launch RAG and live web retrieval together
+        # instead of paying their latency serially before generation.
+        retrieval_steps = [
+            step
+            for step in plan.steps
+            if step.action_type in {ActionType.RAG_RETRIEVE, ActionType.SEARCH_WEB}
+        ]
+
+        async def _run_retrieval(step: PlannedAction):
             if step.action_type == ActionType.RAG_RETRIEVE:
                 query = step.parameters.get("query", original_request)
                 limit = step.parameters.get("limit", 3)
                 content = await self.rag.retrieve(query, limit=limit)
-                execution_context["retrieved_content"].extend(content)
-                
-            elif step.action_type == ActionType.SEARCH_WEB:
-                from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+                return {"content": list(content or []), "sources": []}
 
-                query = step.parameters.get("query", original_request)
-                limit = int(step.parameters.get("limit", 5) or 5)
-                search_result = await WebSearchTool().execute(
-                    int(user_id) if str(user_id).isdigit() else 0,
-                    query=query,
-                    max_results=limit,
+            from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+            query = step.parameters.get("query", original_request)
+            limit = int(step.parameters.get("limit", 5) or 5)
+            result = await WebSearchTool().execute(
+                int(user_id) if str(user_id).isdigit() else 0,
+                query=query,
+                max_results=limit,
+            )
+            if not result.success or not isinstance(result.output, list):
+                logger.warning(
+                    "SEARCH_WEB step could not retrieve live context: %s",
+                    result.message,
                 )
-                if search_result.success and isinstance(search_result.output, list):
-                    execution_context["retrieved_content"].extend(search_result.output)
-                    execution_context["web_sources"].extend(
-                        {
-                            "name": str(item.get("title") or "Web source"),
-                            "url": str(item.get("url") or ""),
-                            "mime_type": "text/html",
-                            "kind": "web",
-                        }
-                        for item in search_result.output
-                        if isinstance(item, dict) and item.get("url")
-                    )
-                else:
+                return {"content": [], "sources": []}
+            sources = [
+                {
+                    "name": str(item.get("title") or "Web source"),
+                    "url": str(item.get("url") or ""),
+                    "mime_type": "text/html",
+                    "kind": "web",
+                }
+                for item in result.output
+                if isinstance(item, dict) and item.get("url")
+            ]
+            return {"content": list(result.output), "sources": sources}
+
+        if retrieval_steps:
+            retrieval_started = time.monotonic()
+            retrieval_results = await asyncio.gather(
+                *(_run_retrieval(step) for step in retrieval_steps),
+                return_exceptions=True,
+            )
+            for result in retrieval_results:
+                if isinstance(result, Exception):
                     logger.warning(
-                        "SEARCH_WEB step could not retrieve live context: %s",
-                        search_result.message,
+                        "Parallel grounding lookup failed: %s",
+                        type(result).__name__,
                     )
+                    continue
+                execution_context["retrieved_content"].extend(
+                    result.get("content") or []
+                )
+                execution_context["web_sources"].extend(
+                    result.get("sources") or []
+                )
+            execution_context["retrieval_latency_ms"] = int(
+                (time.monotonic() - retrieval_started) * 1000
+            )
+
+        for step in plan.steps:
+            logger.info(f"Executing step: {step.description} ({step.action_type})")
+
+            if step.action_type in {ActionType.RAG_RETRIEVE, ActionType.SEARCH_WEB}:
+                # Already executed concurrently above.
+                continue
 
             elif step.action_type == ActionType.CREATE_ARTIFACT:
                 # ... creation logic ...
@@ -595,6 +631,7 @@ Freshness rules:
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
                 "interaction_contract": interaction_contract or None,
+                "retrieval_latency_ms": execution_context.get("retrieval_latency_ms"),
                 "sources": [
                     *_source_descriptors(media_attachments or []),
                     *execution_context.get("web_sources", []),
