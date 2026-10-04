@@ -202,3 +202,66 @@ def test_multimodal_teaching_has_more_than_one_provider() -> None:
     assert order[0] == "gpt-4o-mini"
     assert "gemini-2.5-flash" in order
     assert len(order) >= 2
+
+
+
+@pytest.mark.asyncio
+async def test_pdf_attachment_preserves_page_level_grounding(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        multimodal,
+        "settings",
+        SimpleNamespace(upload_dir=str(tmp_path)),
+    )
+    media_dir = tmp_path / "media" / "chat"
+    media_dir.mkdir(parents=True)
+
+    from pypdf import PdfWriter
+
+    pdf_path = media_dir / "pages.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    with pdf_path.open("wb") as handle:
+        writer.write(handle)
+
+    parts = await load_media_attachments(
+        [
+            MediaRef(
+                modality=InputModality.DOCUMENT,
+                uri="/api/v1/media/file/chat/pages.pdf",
+                mime_type="application/pdf",
+                name="pages.pdf",
+            )
+        ]
+    )
+
+    assert len(parts) == 1
+    assert parts[0]["mime_type"] == "application/pdf"
+    # Blank PDFs remain valid native multimodal inputs. Page metadata is only
+    # emitted when text extraction has something honest to cite.
+    assert "source_pages" not in parts[0]
+
+
+@pytest.mark.asyncio
+async def test_text_attachment_exposes_grounding_page(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        multimodal,
+        "settings",
+        SimpleNamespace(upload_dir=str(tmp_path)),
+    )
+    media_dir = tmp_path / "media" / "chat"
+    media_dir.mkdir(parents=True)
+    (media_dir / "notes.txt").write_text("Chapter 1: Cells", encoding="utf-8")
+
+    parts = await load_media_attachments(
+        [
+            MediaRef(
+                modality=InputModality.DOCUMENT,
+                uri="/api/v1/media/file/chat/notes.txt",
+                mime_type="text/plain",
+                name="notes.txt",
+            )
+        ]
+    )
+
+    assert parts[0]["source_pages"] == [{"page": 1, "text": "Chapter 1: Cells"}]
+    assert parts[0]["page_count"] == 1
