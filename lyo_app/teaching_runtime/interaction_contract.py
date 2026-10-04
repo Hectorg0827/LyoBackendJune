@@ -39,11 +39,17 @@ class ResponseDepth(str, Enum):
     DEEP = "deep"
 
 
+class InteractionChannel(str, Enum):
+    TEXT = "text"
+    VOICE = "voice"
+
+
 @dataclass(frozen=True)
 class InteractionContract:
     mode: InteractionMode
     depth: ResponseDepth
     fast_lane: bool
+    channel: InteractionChannel = InteractionChannel.TEXT
     workflow_intent: Optional[Intent] = None
     attachment_authoritative: bool = False
     reason_code: str = "general"
@@ -138,6 +144,7 @@ def interaction_contract_for_request(
     routed_intent: Optional[Intent] = None,
     has_media: bool = False,
     has_current_media: bool = False,
+    channel: InteractionChannel | str = InteractionChannel.TEXT,
 ) -> InteractionContract:
     """Return the learner's authoritative interaction contract.
 
@@ -146,9 +153,18 @@ def interaction_contract_for_request(
     """
     text = (text or "").strip()
     depth = _depth_for(text)
+    try:
+        resolved_channel = (
+            channel if isinstance(channel, InteractionChannel) else InteractionChannel(str(channel))
+        )
+    except ValueError:
+        resolved_channel = InteractionChannel.TEXT
+
+    def contract(**kwargs) -> InteractionContract:
+        return InteractionContract(channel=resolved_channel, **kwargs)
 
     if _TEST_PREP_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
             fast_lane=False,
@@ -157,7 +173,7 @@ def interaction_contract_for_request(
             reason_code="explicit_test_prep",
         )
     if _COURSE_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
@@ -166,7 +182,7 @@ def interaction_contract_for_request(
             reason_code="explicit_course_or_classroom",
         )
     if _FLASHCARD_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
@@ -175,7 +191,7 @@ def interaction_contract_for_request(
             reason_code="explicit_flashcards",
         )
     if _QUIZ_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.QUIZ,
             depth=depth,
             fast_lane=False,
@@ -185,7 +201,7 @@ def interaction_contract_for_request(
         )
 
     if _SEARCH_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.SEARCH,
             depth=depth,
             fast_lane=False,
@@ -207,7 +223,7 @@ def interaction_contract_for_request(
             continuation_directives.append(
                 "Continue from the prior answer without repeating its introduction."
             )
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.CONTINUE,
             depth=depth,
             fast_lane=True,
@@ -216,7 +232,7 @@ def interaction_contract_for_request(
             directives=tuple(continuation_directives),
         )
     if _COMPARE_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.COMPARE,
             depth=depth,
             fast_lane=True,
@@ -224,7 +240,7 @@ def interaction_contract_for_request(
             reason_code="explicit_compare",
         )
     if _SUMMARY_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.SUMMARIZE,
             depth=depth,
             fast_lane=True,
@@ -232,7 +248,7 @@ def interaction_contract_for_request(
             reason_code="explicit_summary",
         )
     if has_media and (has_current_media or _ANALYZE_RE.search(text) or _EXPLAIN_RE.search(text)):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.ANALYZE,
             depth=depth,
             fast_lane=True,
@@ -244,14 +260,14 @@ def interaction_contract_for_request(
             ),
         )
     if _TEACH_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.TEACH,
             depth=depth,
             fast_lane=False,
             reason_code="explicit_teach",
         )
     if _EXPLAIN_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
             fast_lane=True,
@@ -259,7 +275,7 @@ def interaction_contract_for_request(
             reason_code="explicit_explain",
         )
     if _ANALYZE_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.ANALYZE,
             depth=depth,
             fast_lane=True,
@@ -267,7 +283,7 @@ def interaction_contract_for_request(
             reason_code="explicit_analyze",
         )
     if _DIRECT_ANSWER_RE.search(text):
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.ANSWER,
             depth=depth,
             fast_lane=True,
@@ -279,7 +295,7 @@ def interaction_contract_for_request(
     # the probabilistic router supply a fallback activity. This prevents a
     # router guess such as QUIZ from overriding "explain photosynthesis".
     if routed_intent == Intent.TEST_PREP:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
             fast_lane=False,
@@ -288,7 +304,7 @@ def interaction_contract_for_request(
             reason_code="routed_test_prep",
         )
     if routed_intent == Intent.COURSE:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
@@ -297,7 +313,7 @@ def interaction_contract_for_request(
             reason_code="routed_course",
         )
     if routed_intent == Intent.FLASHCARDS:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.CREATE,
             depth=depth,
             fast_lane=False,
@@ -306,7 +322,7 @@ def interaction_contract_for_request(
             reason_code="routed_flashcards",
         )
     if routed_intent == Intent.QUIZ:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.QUIZ,
             depth=depth,
             fast_lane=False,
@@ -315,7 +331,7 @@ def interaction_contract_for_request(
             reason_code="routed_quiz",
         )
     if routed_intent == Intent.EXPLAIN:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
             fast_lane=True,
@@ -323,7 +339,7 @@ def interaction_contract_for_request(
             reason_code="routed_explain",
         )
     if routed_intent == Intent.SUMMARIZE_NOTES:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.SUMMARIZE,
             depth=depth,
             fast_lane=True,
@@ -338,7 +354,7 @@ def interaction_contract_for_request(
         Intent.REFLECT,
         Intent.WEEKLY_REVIEW,
     }:
-        return InteractionContract(
+        return contract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
             fast_lane=False,
@@ -347,7 +363,7 @@ def interaction_contract_for_request(
             reason_code="routed_workflow",
         )
 
-    return InteractionContract(
+    return contract(
         mode=InteractionMode.ANSWER,
         depth=depth,
         fast_lane=True,
@@ -366,9 +382,19 @@ def contract_prompt(contract: InteractionContract) -> str:
     rules = [
         f"Mode: {contract.mode.value}",
         f"Depth: {contract.depth.value}",
+        f"Channel: {contract.channel.value}",
         depth_rules[contract.depth],
         "The interaction mode is authoritative. Do not silently change it into a different activity.",
     ]
+    if contract.channel == InteractionChannel.VOICE:
+        rules.extend(
+            [
+                "This is the same Chat AI in a spoken turn, not a separate voice persona or model.",
+                "Lead with a speakable answer: short sentences, natural contractions, no preamble.",
+                "Keep the spoken core compact; put dense tables, code, citations, and optional detail in the visual response.",
+                "Do not announce markdown, formatting, source syntax, or UI controls aloud.",
+            ]
+        )
     if contract.attachment_authoritative:
         rules.append("The attachment is authoritative context for this turn; inspect it before answering.")
     rules.extend(contract.directives)
