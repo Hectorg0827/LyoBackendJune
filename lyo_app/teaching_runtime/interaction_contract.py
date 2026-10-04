@@ -414,6 +414,7 @@ def interaction_contract_for_request(
         channel=channel,
         attachment_authoritative=has_media and has_current_media,
         reason_code="default_answer",
+        directives=voice_directives,
     )
 
 
