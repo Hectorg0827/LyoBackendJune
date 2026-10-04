@@ -103,28 +103,42 @@ def _local_media_path(uri: str) -> Path:
     return candidate
 
 
-def _extract_document_text(data: bytes, mime_type: str) -> str:
-    """Extract bounded text for providers that cannot consume raw documents.
+def _extract_document_payload(data: bytes, mime_type: str) -> Dict[str, Any]:
+    """Extract bounded text plus source/page metadata.
 
-    Gemini still receives the original file bytes. The extracted copy is
-    carried as metadata so OpenAI can be used as a real fallback instead of
-    rejecting Lyo's internal `media_base64` part.
+    Native multimodal providers still receive the original file bytes. The
+    extracted copy gives text-only fallbacks a grounded representation and
+    lets the response layer tell the learner which pages support an answer.
     """
     text = ""
+    source_pages: List[Dict[str, Any]] = []
     if mime_type in {"text/plain", "text/markdown", "text/csv", "application/json"}:
-        text = data.decode("utf-8", errors="replace")
+        text = data.decode("utf-8", errors="replace").strip()
+        if text:
+            source_pages = [{"page": 1, "text": text[:8000]}]
     elif mime_type == "application/pdf":
         try:
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(data))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            labelled: List[str] = []
+            for index, page in enumerate(reader.pages, 1):
+                page_text = (page.extract_text() or "").strip()
+                if not page_text:
+                    continue
+                source_pages.append({"page": index, "text": page_text[:8000]})
+                labelled.append(f"[Page {index}]\n{page_text}")
+            text = "\n\n".join(labelled)
         except Exception:
             # A scanned/image-only PDF can still be handled by a native
             # multimodal provider such as Gemini. Do not reject it here.
             text = ""
+            source_pages = []
 
-    return text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS]
+    return {
+        "text": text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS],
+        "source_pages": source_pages[:40],
+    }
 
 
 def canonical_message_content(text: str | None, media: Iterable[MediaRef]) -> str:
@@ -237,8 +251,17 @@ async def load_media_attachments(
             "name": _clean_label(item.name or path.name),
         }
         if not mime_type.startswith("image/"):
-            extracted_text = await asyncio.to_thread(_extract_document_text, data, mime_type)
+            extracted = await asyncio.to_thread(_extract_document_payload, data, mime_type)
+            extracted_text = str(extracted.get("text") or "")
             if extracted_text:
                 part["extracted_text"] = extracted_text
+            source_pages = extracted.get("source_pages") or []
+            if source_pages:
+                part["source_pages"] = source_pages
+                part["page_count"] = max(
+                    int(page.get("page") or 0)
+                    for page in source_pages
+                    if isinstance(page, dict)
+                )
         prepared.append(part)
     return prepared
