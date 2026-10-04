@@ -1305,7 +1305,6 @@ async def stream_lyo2_chat(
                 request.text,
                 has_media=bool(media_attachments),
                 has_current_media=current_media_supplied,
-                interaction_contract=interaction_contract.to_dict(),
             )
             yield yield_safe_sse_event(
                 "interaction_contract",
