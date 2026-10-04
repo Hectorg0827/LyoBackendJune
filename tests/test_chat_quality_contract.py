@@ -119,6 +119,32 @@ def test_old_attachment_does_not_turn_unrelated_teaching_into_answer():
     result = contract("Teach me fractions", has_media=True, has_current_media=False)
     assert result.mode is InteractionMode.TEACH
     assert result.answer_first is False
+    assert result.representation == "prose"
+    assert result.requires_grounding is False
+
+
+def test_old_attachment_does_not_ground_unrelated_direct_question():
+    result = contract(
+        "What is photosynthesis?",
+        has_media=True,
+        has_current_media=False,
+    )
+    assert result.mode is InteractionMode.ANSWER
+    assert result.representation == "prose"
+    assert result.requires_grounding is False
+
+
+def test_electric_current_is_not_mistaken_for_current_events():
+    result = contract("Explain electric current through a wire")
+    assert result.mode is InteractionMode.EXPLAIN
+    assert result.requires_grounding is False
+    assert result.fast_lane is True
+
+
+def test_current_price_still_uses_live_search():
+    result = contract("What is the current price of gold?")
+    assert result.mode is InteractionMode.SEARCH
+    assert result.requires_grounding is True
 
 
 @pytest.mark.asyncio
