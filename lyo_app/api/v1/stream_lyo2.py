@@ -1448,8 +1448,6 @@ async def stream_lyo2_chat(
                 routed_intent=decision.intent,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
-                interaction_mode=interaction_contract.mode.value,
-                response_depth=interaction_contract.depth.value,
             )
             interaction_contract_payload = {
                 "mode": interaction_contract.mode.value,
@@ -1521,6 +1519,8 @@ async def stream_lyo2_chat(
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
+                interaction_mode=interaction_contract.mode.value,
+                response_depth=interaction_contract.depth.value,
             )
             await record_policy_decision(
                 db,
