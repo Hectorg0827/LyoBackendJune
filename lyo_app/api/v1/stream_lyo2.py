@@ -1538,29 +1538,6 @@ async def stream_lyo2_chat(
                 },
             )
 
-            # Personal memory is a separate lane from conversation working
-            # memory and learner-evidence memory. Retrieve it only for turns
-            # where adaptation can actually help, and overlap the small DB read
-            # with downstream work so it does not tax every chat message.
-            personal_memory_task = None
-            if (
-                authenticated_user_id
-                and not media_attachments
-                and interaction_contract.mode
-                in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
-            ):
-                try:
-                    from lyo_app.services.memory_synthesis import memory_synthesis_service
-                    personal_memory_task = asyncio.create_task(
-                        memory_synthesis_service.get_relevant_memory_for_prompt(
-                            int(authenticated_user_id),
-                            request.text or "",
-                            db,
-                        )
-                    )
-                except Exception as memory_exc:
-                    logger.debug("Selective memory task unavailable: %s", type(memory_exc).__name__)
-            
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats
             # must never be hijacked by an unfinished exam elsewhere.
@@ -1916,10 +1893,27 @@ async def stream_lyo2_chat(
             ] if request.conversation_history else []
             
             personal_memory = ""
-            if personal_memory_task is not None:
+            if (
+                authenticated_user_id
+                and not media_attachments
+                and interaction_contract.mode
+                in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
+            ):
                 try:
-                    personal_memory = await asyncio.wait_for(personal_memory_task, timeout=0.45)
-                except (asyncio.TimeoutError, Exception):
+                    from lyo_app.services.memory_synthesis import memory_synthesis_service
+                    personal_memory = await asyncio.wait_for(
+                        memory_synthesis_service.get_relevant_memory_for_prompt(
+                            int(authenticated_user_id),
+                            request.text or "",
+                            db,
+                        ),
+                        timeout=0.45,
+                    )
+                except Exception as memory_exc:
+                    logger.debug(
+                        "Selective memory lookup unavailable: %s",
+                        type(memory_exc).__name__,
+                    )
                     personal_memory = ""
 
             try:
