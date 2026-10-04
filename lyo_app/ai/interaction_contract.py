@@ -80,8 +80,10 @@ _DIRECT_ANSWER_RE = re.compile(
     re.IGNORECASE,
 )
 _CURRENT_RE = re.compile(
-    r"\b(latest|today|current|currently|right now|recent|newest|"
-    r"hoy|actual|actualmente|reciente|últim[oa]|ultimo|última)\b",
+    r"\b(latest|today|currently|right now|recent|newest|as of|this week|"
+    r"current\s+(?:price|rate|status|version|weather|news|score|standings|"
+    r"market|stock|availability|schedule|time|date|events|results|information)|"
+    r"hoy|actualmente|reciente|últim[oa]|ultimo|última)\b",
     re.IGNORECASE,
 )
 _CONTINUE_RE = re.compile(
@@ -169,7 +171,11 @@ def resolve_interaction_contract(
     text = (request.text or "").strip()
     intent = decision.intent
     depth = _depth(text)
-    representation = _representation(text, has_media=has_media)
+    attachment_referential = bool(_ATTACHMENT_REF_RE.search(text))
+    attachment_relevant = bool(
+        has_current_media or (has_media and attachment_referential)
+    )
+    representation = _representation(text, has_media=attachment_relevant)
 
     # Explicit product workflows own the turn.  The interaction contract does
     # not replace them; it prevents later layers from silently changing them.
@@ -217,7 +223,6 @@ def resolve_interaction_contract(
         # manufacturing instruction.
         mode = InteractionMode.EXPLAIN if intent is Intent.EXPLAIN else InteractionMode.ANSWER
 
-    attachment_referential = bool(_ATTACHMENT_REF_RE.search(text))
     answer_first = mode in {
         InteractionMode.ANSWER,
         InteractionMode.EXPLAIN,
@@ -225,7 +230,7 @@ def resolve_interaction_contract(
         InteractionMode.COMPARE,
         InteractionMode.SEARCH,
     }
-    if has_media and (has_current_media or attachment_referential):
+    if attachment_relevant:
         answer_first = mode is not InteractionMode.TEACH
 
     fast_lane = (
@@ -240,7 +245,7 @@ def resolve_interaction_contract(
         and not decision.needs_clarification
     )
 
-    requires_grounding = has_media or mode is InteractionMode.SEARCH
+    requires_grounding = attachment_relevant or mode is InteractionMode.SEARCH
 
     return InteractionContract(
         mode=mode,
