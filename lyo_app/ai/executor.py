@@ -11,8 +11,77 @@ from lyo_app.services.mutator import FollowUpMutator
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
 from lyo_app.integrations.calendar_integration import calendar_service, CalendarEvent, EventCategory
+from lyo_app.teaching_runtime.interaction_contract import (
+    InteractionContract,
+    InteractionMode,
+    ResponseDepth,
+    contract_prompt,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_interaction_contract(raw: Optional[Dict[str, Any]]) -> Optional[InteractionContract]:
+    if not raw:
+        return None
+    try:
+        return InteractionContract(
+            mode=InteractionMode(str(raw.get("mode") or "answer")),
+            depth=ResponseDepth(str(raw.get("depth") or "standard")),
+            fast_lane=bool(raw.get("fast_lane")),
+            attachment_authoritative=bool(raw.get("attachment_authoritative")),
+            reason_code=str(raw.get("reason_code") or "general"),
+            directives=tuple(str(item) for item in (raw.get("directives") or [])),
+        )
+    except Exception:
+        return None
+
+
+def _source_descriptors(media_attachments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sources: List[Dict[str, Any]] = []
+    for item in media_attachments or []:
+        pages = item.get("source_pages") or []
+        page_numbers = [
+            int(page.get("page"))
+            for page in pages
+            if isinstance(page, dict) and isinstance(page.get("page"), int)
+        ]
+        sources.append({
+            "name": str(item.get("name") or "Attachment"),
+            "mime_type": str(item.get("mime_type") or ""),
+            "page_count": item.get("page_count"),
+            "available_pages": page_numbers[:50],
+            "kind": str(item.get("source_kind") or "attachment"),
+        })
+    return sources
+
+
+def _source_grounding_prompt(media_attachments: List[Dict[str, Any]]) -> str:
+    if not media_attachments:
+        return ""
+    lines = [
+        "--- ATTACHMENT SOURCE GROUNDING ---",
+        "When a factual claim comes from an attached document, cite its location inline.",
+        "Use the exact form 【filename p. N】 when page-aware extracted text supports the claim.",
+        "For images or documents without page text, cite 【filename】.",
+        "Never invent a page number. If the attachment does not support a claim, say so.",
+    ]
+    for item in media_attachments:
+        name = str(item.get("name") or "Attachment")
+        pages = item.get("source_pages") or []
+        page_count = item.get("page_count")
+        if pages:
+            lines.append(f"Source: {name} ({page_count or len(pages)} pages)")
+            for page in pages:
+                if not isinstance(page, dict):
+                    continue
+                text = str(page.get("text") or "").strip()
+                if text:
+                    lines.append(f"[{name} p. {page.get('page')}] {text[:3500]}")
+        else:
+            lines.append(f"Source: {name} (native attachment; no extracted page text available)")
+    lines.append("--- END ATTACHMENT SOURCE GROUNDING ---")
+    return "\n".join(lines)
 
 
 def _get_gemini_model():
@@ -118,6 +187,25 @@ class LyoExecutor:
             history_text += "--- END HISTORY ---\n"
 
         teaching_decision = context.get("teaching_decision") or {}
+        interaction_contract = _coerce_interaction_contract(context.get("interaction_contract"))
+        interaction_contract_text = ""
+        if interaction_contract is not None:
+            interaction_contract_text = (
+                "\n--- INTERACTION CONTRACT (HIGHEST PRIORITY) ---\n"
+                + contract_prompt(interaction_contract)
+                + "\n--- END INTERACTION CONTRACT ---\n"
+            )
+
+        personal_memory = str(context.get("personal_memory") or "").strip()
+        personal_memory_text = (
+            f"\n--- SELECTIVE PERSONAL MEMORY ---\n{personal_memory}\n"
+            "--- END SELECTIVE PERSONAL MEMORY ---\n"
+            if personal_memory else ""
+        )
+
+        media_attachments = context.get("media_attachments", [])
+        source_grounding_text = _source_grounding_prompt(media_attachments)
+
         teaching_policy_text = ""
         if teaching_decision:
             directives = teaching_decision.get("directives") or []
@@ -166,7 +254,21 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{teaching_policy_text}
+{rag_text}{history_text}{personal_memory_text}{interaction_contract_text}{teaching_policy_text}
+{source_grounding_text}
+
+MEMORY BOUNDARIES:
+- Conversation history is working memory for this thread.
+- Teaching-policy learner evidence is the only source of claims about demonstrated mastery or misconceptions.
+- Selective personal memory is durable preference/context only. Never treat it as proof of current knowledge.
+- Do not mention remembered personal context unless it materially helps this request.
+
+REPRESENTATION RULES:
+- For comparisons, prefer a compact markdown table when it improves clarity.
+- For sequences or procedures, use numbered steps.
+- For quantities/trends, use a compact table or chart-like structure rather than prose alone.
+- For attachments, ground claims with the source markers described above.
+- Answer first. Optional next actions come after the answer, never before it.
 
 USER QUESTION:
 {original_request}
@@ -178,7 +280,6 @@ USER QUESTION:
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
                 
-            media_attachments = context.get("media_attachments", [])
             from lyo_app.teaching_runtime.model_router import provider_order_for_tier
 
             if media_attachments:
@@ -235,6 +336,8 @@ USER QUESTION:
         intent: str = None,
         media_attachments: list = None,
         teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+        personal_memory: str = "",
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
@@ -249,6 +352,8 @@ USER QUESTION:
             "conversation_history": conversation_history or [],
             "media_attachments": media_attachments or [],
             "teaching_decision": teaching_decision or {},
+            "interaction_contract": interaction_contract or {},
+            "personal_memory": personal_memory or "",
         }
         
         for step in plan.steps:
@@ -350,30 +455,46 @@ USER QUESTION:
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=self._contextual_actions(intent),
+            next_actions=self._contextual_actions(
+                intent,
+                interaction_contract=interaction_contract,
+                has_media=bool(media_attachments),
+            ),
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
+                "interaction_contract": interaction_contract or None,
+                "sources": _source_descriptors(media_attachments or []),
             }
         )
 
-    def _contextual_actions(self, intent: str = None) -> list:
+    def _contextual_actions(
+        self,
+        intent: str = None,
+        *,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+        has_media: bool = False,
+    ) -> list:
         """Generate context-aware suggestion buttons based on the classified intent."""
-        _intent_actions = {
-            "EXPLAIN":    ["Deep Dive", "Quiz Me", "Create Course"],
-            "COURSE":     ["Start Learning", "Customize", "Save for Later"],
-            "QUIZ":       ["Explain Answers", "Try Harder", "New Topic"],
-            "FLASHCARDS": ["Start Review", "More Cards", "Quiz Me"],
-            "STUDY_PLAN": ["Start Now", "Modify Plan", "Create Course"],
-            "TEST_PREP":  ["Start Studying", "Upload Notes", "Take a Quiz"],
-            "SUMMARIZE_NOTES": ["Deep Dive", "Quiz Me", "Flashcards"],
-            "REFLECT":    ["Explain Difficulty", "Try a Quiz", "New Topic"],
-            "WEEKLY_REVIEW": ["Deep Dive", "Set Goals", "Start Lesson"],
-            "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
-            "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
-        }
-        actions = _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
+        mode = str((interaction_contract or {}).get("mode") or "").lower()
+        if has_media and mode in {"analyze", "summarize", "answer", "explain", "compare"}:
+            actions = ["Go Deeper", "Teach this in Classroom", "Use this for Test Prep"]
+        else:
+            _intent_actions = {
+                "EXPLAIN":    ["Go Deeper", "Show Visually", "Teach this in Classroom"],
+                "COURSE":     ["Start Learning", "Customize", "Save for Later"],
+                "QUIZ":       ["Explain Answers", "Try Harder", "New Topic"],
+                "FLASHCARDS": ["Start Review", "More Cards", "Quiz Me"],
+                "STUDY_PLAN": ["Start Now", "Modify Plan", "Create Course"],
+                "TEST_PREP":  ["Start Studying", "Upload Notes", "Take a Quiz"],
+                "SUMMARIZE_NOTES": ["Go Deeper", "Quiz Me", "Make Flashcards"],
+                "REFLECT":    ["Explain Difficulty", "Try a Quiz", "New Topic"],
+                "WEEKLY_REVIEW": ["Go Deeper", "Set Goals", "Start Lesson"],
+                "CHAT":       ["Go Deeper", "Show an Example", "Quiz Me"],
+                "GENERAL":    ["Go Deeper", "Show an Example", "Quiz Me"],
+            }
+            actions = _intent_actions.get(intent, ["Go Deeper", "Show an Example", "Quiz Me"])
         return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions})]
 
     async def _generate_course_data(
