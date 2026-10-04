@@ -27,7 +27,7 @@ class VoiceSegmenter:
     holding the floor indefinitely.
     """
 
-    min_chars: int = 28
+    min_chars: int = 16
     soft_target_chars: int = 120
     hard_max_chars: int = 220
     _buffer: str = field(default="", init=False, repr=False)
