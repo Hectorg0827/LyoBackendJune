@@ -41,7 +41,139 @@ import websockets
 
 
 DEFAULT_BASE_URL = "https://api.lyoai.app"
-REPORT_VERSION = 1
+REPORT_VERSION = 2
+
+
+@dataclass(frozen=True)
+class ScenarioPreset:
+    topic: str
+    objective: str
+    chat_prompt: str
+    question: str
+    explanation_answer: str
+    transfer_answer: str
+
+
+@dataclass(frozen=True)
+class LearnerProfile:
+    ask_question: bool = False
+    request_hint: bool = False
+    wrong_attempts: int = 0
+    attempt_correct: bool = True
+    reconnect: bool = False
+    partial_free_response: bool = False
+
+
+SCENARIOS: dict[str, ScenarioPreset] = {
+    "math_fractions": ScenarioPreset(
+        topic="comparing fractions",
+        objective="Compare fractions by reasoning about equal parts of the same whole",
+        chat_prompt=(
+            "Teach me how to compare fractions such as 1/2 and 1/3. "
+            "Do not just give me the answer; teach me and check whether I can apply it."
+        ),
+        question="Wait — why does a larger denominator make each equal piece smaller?",
+        explanation_answer=(
+            "For the same whole, making more equal pieces makes each piece smaller, "
+            "so the denominator changes the size of each part."
+        ),
+        transfer_answer=(
+            "If two equal ribbons are cut into 4 pieces and 8 pieces, a fourth is longer "
+            "because the same whole is divided into fewer equal pieces."
+        ),
+    ),
+    "biology_photosynthesis": ScenarioPreset(
+        topic="photosynthesis",
+        objective="Explain photosynthesis inputs and outputs and predict the effect of reduced light",
+        chat_prompt=(
+            "Teach me the inputs and outputs of photosynthesis, then check whether I can "
+            "apply the idea to a plant receiving less light."
+        ),
+        question="Why is light an input to the process if it is not matter like water or carbon dioxide?",
+        explanation_answer=(
+            "Light supplies the energy that drives the reactions converting carbon dioxide "
+            "and water into stored chemical energy in glucose."
+        ),
+        transfer_answer=(
+            "With less light, the plant generally makes glucose more slowly because less "
+            "energy is available to drive photosynthesis, assuming other inputs stay similar."
+        ),
+    ),
+    "physics_newton2": ScenarioPreset(
+        topic="Newton's second law",
+        objective="Apply F = ma when force or mass changes",
+        chat_prompt=(
+            "Teach me Newton's second law conceptually, not just the formula, and then "
+            "check whether I can predict acceleration when force or mass changes."
+        ),
+        question="Why does the same force produce less acceleration when the object's mass is larger?",
+        explanation_answer=(
+            "Acceleration depends on force per unit mass, so the same force is spread across "
+            "more inertia when mass is larger."
+        ),
+        transfer_answer=(
+            "If force doubles while mass stays the same, acceleration doubles. If mass doubles "
+            "with the same force, acceleration is cut in half."
+        ),
+    ),
+    "spanish_past_tense": ScenarioPreset(
+        topic="Spanish preterite versus imperfect",
+        objective="Choose preterite or imperfect from narrative context",
+        chat_prompt=(
+            "Teach me when to use the Spanish preterite versus imperfect with a short story, "
+            "then check whether I can choose the tense in a new context."
+        ),
+        question="Why would an ongoing background action use the imperfect while an interrupting event uses the preterite?",
+        explanation_answer=(
+            "The imperfect frames an ongoing or habitual background state, while the preterite "
+            "presents a bounded event that occurred and moved the story forward."
+        ),
+        transfer_answer=(
+            "In 'Yo caminaba cuando empezó a llover,' caminaba is imperfect because the walking "
+            "was ongoing background action, while empezó is preterite because the rain began as a bounded event."
+        ),
+    ),
+    "business_contribution_margin": ScenarioPreset(
+        topic="contribution margin",
+        objective="Apply contribution-margin reasoning when price or variable cost changes",
+        chat_prompt=(
+            "Teach me contribution margin using a simple product example, then check whether "
+            "I can reason through a price or variable-cost change."
+        ),
+        question="Why is contribution margin more useful than revenue alone for judging what each sale contributes?",
+        explanation_answer=(
+            "Revenue ignores the variable cost required to make the sale. Contribution margin "
+            "subtracts that cost and shows what remains to cover fixed costs and profit."
+        ),
+        transfer_answer=(
+            "If price is $20 and variable cost rises from $12 to $14, contribution margin falls "
+            "from $8 to $6 per unit, so each sale contributes $2 less before fixed costs."
+        ),
+    ),
+}
+
+
+LEARNER_PROFILES: dict[str, LearnerProfile] = {
+    "advanced": LearnerProfile(reconnect=True),
+    "beginner": LearnerProfile(request_hint=True, wrong_attempts=1, reconnect=True),
+    "confident_wrong": LearnerProfile(wrong_attempts=1, reconnect=True),
+    "quiet_partial": LearnerProfile(request_hint=True, partial_free_response=True, reconnect=True),
+    "curious": LearnerProfile(ask_question=True, reconnect=True),
+    "struggling": LearnerProfile(
+        request_hint=True,
+        wrong_attempts=3,
+        attempt_correct=False,
+        reconnect=True,
+        partial_free_response=True,
+    ),
+    "fast_learner": LearnerProfile(),
+    "interrupter": LearnerProfile(
+        ask_question=True,
+        request_hint=True,
+        wrong_attempts=1,
+        reconnect=True,
+    ),
+}
 
 
 def utc_now() -> str:
@@ -232,6 +364,8 @@ class Report:
     phase: str
     base_url: str
     session_id: str
+    scenario: str
+    learner_profile: str
     topic: str
     started_at: str = field(default_factory=utc_now)
     finished_at: Optional[str] = None
@@ -254,6 +388,8 @@ class Report:
                 "phase": self.phase,
                 "base_url": self.base_url,
                 "session_id": self.session_id,
+                "scenario": self.scenario,
+                "learner_profile": self.learner_profile,
                 "topic": self.topic,
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
@@ -456,13 +592,16 @@ class LiveLyo:
         review_concept_id: Optional[str],
         max_scenes: int,
         question: str,
+        explanation_answer: str,
         transfer_answer: str,
+        objective: str,
+        learner_profile: LearnerProfile,
     ) -> None:
         params = {
             "session_id": report.session_id,
             "token": self.token,
             "topic": report.topic,
-            "objective": f"Apply {report.topic} accurately in a new situation",
+            "objective": objective,
             "record_scope": "unit",
             "difficulty": "intermediate",
             "mode": mode,
@@ -490,6 +629,12 @@ class LiveLyo:
         resumed_same_example = False
         original_example_text = ""
         remediation_seen = False
+        remediation_visual_seen = False
+        declared_wrong_available = False
+        wrong_attempts = 0
+        correct_submitted = False
+        unknown_quiz_submitted = False
+        free_response_types: list[str] = []
 
         async def send(ws, intent: str, comp: Optional[dict[str, Any]] = None, answer_data=None):
             payload = {
@@ -538,6 +683,17 @@ class LiveLyo:
                 action_name = str(metadata.get("teaching_action") or "")
                 if action_name in {"REMEDIATE", "remediate", "reteach", "prerequisite"}:
                     remediation_seen = True
+                    remediation_visual_seen = remediation_visual_seen or any(
+                        isinstance(item, dict)
+                        and (
+                            item.get("block_type") == "teaching_visual"
+                            or (
+                                item.get("type") == "LessonBlock"
+                                and item.get("block_type") == "teaching_visual"
+                            )
+                        )
+                        for item in scene.get("components", [])
+                    )
 
                 text = visible_teacher_text(scene)
                 if asked and text:
@@ -552,7 +708,7 @@ class LiveLyo:
                 quiz = component(scene, "QuizCard")
                 input_field = component(scene, "InputField")
 
-                if not asked and example is not None:
+                if learner_profile.ask_question and not asked and example is not None:
                     resume_anchor = str(example.get("component_id") or scene.get("scene_id") or "")
                     original_example_text = text
                     await send(
@@ -564,28 +720,30 @@ class LiveLyo:
                     asked = True
                     continue
 
-                if quiz is not None and not hint_requested:
+                if quiz is not None and learner_profile.request_hint and not hint_requested:
                     await send(ws, "request_hint", quiz)
                     hint_requested = True
                     continue
 
-                if quiz is not None and not forced_wrong:
+                if quiz is not None and wrong_attempts < learner_profile.wrong_attempts:
                     option_id, certainty = choose_option(quiz, want_correct=False)
-                    if option_id:
+                    if option_id and certainty == "declared":
+                        declared_wrong_available = True
                         await send(
                             ws,
                             "submit_answer",
                             quiz,
                             {"selected_option_id": option_id},
                         )
-                        forced_wrong = certainty == "declared"
-                        if certainty != "declared":
-                            report.notes.append(
-                                "First quiz withheld its key; submitted an option but did not claim it was wrong."
-                            )
+                        wrong_attempts += 1
+                        forced_wrong = True
                         continue
+                    report.notes.append(
+                        "Quiz withheld its key; the requested wrong-answer learner behavior "
+                        "was not claimed or forced."
+                    )
 
-                if quiz is not None and forced_wrong and not corrected:
+                if quiz is not None and learner_profile.attempt_correct and not correct_submitted:
                     option_id, certainty = choose_option(quiz, want_correct=True)
                     if option_id and certainty == "declared":
                         await send(
@@ -594,17 +752,39 @@ class LiveLyo:
                             quiz,
                             {"selected_option_id": option_id},
                         )
-                        corrected = True
+                        correct_submitted = True
+                        corrected = wrong_attempts > 0
+                        continue
+                    if option_id and not unknown_quiz_submitted:
+                        await send(
+                            ws,
+                            "submit_answer",
+                            quiz,
+                            {"selected_option_id": option_id},
+                        )
+                        unknown_quiz_submitted = True
+                        report.notes.append(
+                            "Quiz withheld its key; submitted one learner-visible option but "
+                            "did not label it correct or incorrect."
+                        )
                         continue
 
-                if input_field is not None and not transfer_submitted:
+                if input_field is not None:
+                    evidence_type = str(input_field.get("evidence_type") or "transfer")
+                    free_response_types.append(evidence_type)
+                    response_text = (
+                        explanation_answer if evidence_type == "explanation" else transfer_answer
+                    )
+                    if learner_profile.partial_free_response:
+                        response_text = " ".join(response_text.split()[:7])
                     await send(
                         ws,
-                        "submit_transfer",
+                        str(input_field.get("action_intent") or "submit_transfer"),
                         input_field,
-                        {"response": transfer_answer},
+                        {"response": response_text},
                     )
-                    transfer_submitted = True
+                    if evidence_type == "transfer":
+                        transfer_submitted = True
                     continue
 
                 button = cta(scene, "continue") or cta(scene)
@@ -621,8 +801,9 @@ class LiveLyo:
 
                 # no-op
 
-        # Explicitly reconnect once with the same learner/session identity.
-        if scenes:
+        # Explicitly reconnect with the same learner/session identity only for
+        # profiles designed to exercise continuity.
+        if scenes and learner_profile.reconnect:
             reconnect_anchor = str(scenes[-1].get("scene_id") or "")
             ws_cm2 = await connect()
             async with ws_cm2 as ws2:
@@ -632,6 +813,11 @@ class LiveLyo:
                     metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
                     if str(metadata.get("teaching_action") or "") in {"REMEDIATE", "remediate", "reteach", "prerequisite"}:
                         remediation_seen = True
+                        remediation_visual_seen = remediation_visual_seen or any(
+                            isinstance(item, dict)
+                            and item.get("block_type") == "teaching_visual"
+                            for item in scene.get("components", [])
+                        )
 
         transcript = [
             {
@@ -672,14 +858,23 @@ class LiveLyo:
             "hint_requested": hint_requested,
             "forced_wrong_answer": forced_wrong,
             "remediation_observed": remediation_seen,
+            "remediation_visual_observed": remediation_visual_seen,
             "corrected_after_remediation": corrected,
+            "declared_wrong_available": declared_wrong_available,
+            "wrong_attempts_forced": wrong_attempts,
+            "correct_answer_submitted": correct_submitted,
+            "free_response_evidence_types": free_response_types,
             "transfer_submitted": transfer_submitted,
             "reconnected": reconnected,
             "reconnect_anchor": reconnect_anchor,
             "last_scene": scenes[-1] if scenes else None,
         }
         report.check("classroom_scene_received", bool(scenes), f"{len(scenes)} scenes")
-        report.check("free_form_question_sent", asked)
+        report.check(
+            "free_form_question_sent",
+            asked if learner_profile.ask_question else None,
+            "profile does not request a detour" if not learner_profile.ask_question else "",
+        )
         report.check(
             "free_form_question_answered",
             post_question_seen if asked else None,
@@ -690,19 +885,35 @@ class LiveLyo:
             resumed_same_example if asked and original_example_text else None,
             "same teacher text reappeared after the detour; deterministic tests cover state identity",
         )
-        report.check("hint_path_exercised", hint_requested)
+        report.check(
+            "hint_path_exercised",
+            hint_requested if learner_profile.request_hint else None,
+            "profile does not request a hint" if not learner_profile.request_hint else "",
+        )
         report.check(
             "wrong_answer_scenario_forced",
-            forced_wrong if hint_requested else None,
-            "only true when the live card declared a wrong option to the client",
+            (
+                wrong_attempts >= learner_profile.wrong_attempts
+                if learner_profile.wrong_attempts and declared_wrong_available
+                else None
+            ),
+            "only evaluated when the live card declares an incorrect option",
         )
         report.check(
             "remediation_observed",
             remediation_seen if forced_wrong else None,
             "only evaluated after a confirmed wrong answer",
         )
-        report.check("transfer_submitted", transfer_submitted)
-        report.check("same_session_reconnected", reconnected)
+        report.check(
+            "transfer_submitted",
+            transfer_submitted if "transfer" in free_response_types else None,
+            "no live transfer InputField was reached" if "transfer" not in free_response_types else "",
+        )
+        report.check(
+            "same_session_reconnected",
+            reconnected if learner_profile.reconnect else None,
+            "profile does not request reconnect" if not learner_profile.reconnect else "",
+        )
 
     async def due_reviews(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
         response = await client.get(
@@ -730,13 +941,24 @@ async def run(args) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    scenario = SCENARIOS[args.scenario]
+    learner_profile = LEARNER_PROFILES[args.profile]
+    topic = args.topic or scenario.topic
+    chat_prompt = args.chat_prompt or scenario.chat_prompt
+    question = args.question or scenario.question
+    explanation_answer = args.explanation_answer or scenario.explanation_answer
+    transfer_answer = args.transfer_answer or scenario.transfer_answer
+    objective = args.objective or scenario.objective
+
     session_id = args.session_id or f"teacher-quality-{uuid.uuid4()}"
     report = Report(
         run_id=str(uuid.uuid4()),
         phase=args.phase,
         base_url=base_url,
         session_id=session_id,
-        topic=args.topic,
+        scenario=args.scenario,
+        learner_profile=args.profile,
+        topic=topic,
     )
     lyo = LiveLyo(base_url, token, args.timeout)
 
@@ -748,7 +970,7 @@ async def run(args) -> int:
 
         if args.phase == "seed":
             try:
-                await lyo.chat_seed(client, report, args.chat_prompt)
+                await lyo.chat_seed(client, report, chat_prompt)
             except Exception as exc:
                 report.check("chat_stream_completed", False, f"{type(exc).__name__}: {exc}")
 
@@ -758,8 +980,11 @@ async def run(args) -> int:
                     mode="solo",
                     review_concept_id=None,
                     max_scenes=args.max_scenes,
-                    question=args.question,
-                    transfer_answer=args.transfer_answer,
+                    question=question,
+                    explanation_answer=explanation_answer,
+                    transfer_answer=transfer_answer,
+                    objective=objective,
+                    learner_profile=learner_profile,
                 )
             except Exception as exc:
                 report.check("classroom_scene_received", False, f"{type(exc).__name__}: {exc}")
@@ -846,25 +1071,24 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--base-url", default=DEFAULT_BASE_URL)
     p.add_argument("--allow-http", action="store_true")
     p.add_argument("--session-id")
-    p.add_argument("--topic", default="comparing fractions")
     p.add_argument(
-        "--chat-prompt",
-        default=(
-            "Teach me how to compare fractions such as 1/2 and 1/3. "
-            "Do not just give me the answer; teach me and check whether I can apply it."
-        ),
+        "--scenario",
+        choices=tuple(SCENARIOS),
+        default="math_fractions",
+        help="Coherent subject fixture; explicit text flags below override its fields.",
     )
     p.add_argument(
-        "--question",
-        default="Wait — why does a larger denominator make each equal piece smaller?",
+        "--profile",
+        choices=tuple(LEARNER_PROFILES),
+        default="interrupter",
+        help="Scripted learner behavior to exercise against the live teacher.",
     )
-    p.add_argument(
-        "--transfer-answer",
-        default=(
-            "If two equal ribbons are cut into 4 pieces and 8 pieces, a fourth is longer "
-            "because the same whole is divided into fewer equal pieces."
-        ),
-    )
+    p.add_argument("--topic")
+    p.add_argument("--objective")
+    p.add_argument("--chat-prompt")
+    p.add_argument("--question")
+    p.add_argument("--explanation-answer")
+    p.add_argument("--transfer-answer")
     p.add_argument("--review-concept-id")
     p.add_argument("--max-scenes", type=int, default=32)
     p.add_argument("--timeout", type=float, default=75.0)
