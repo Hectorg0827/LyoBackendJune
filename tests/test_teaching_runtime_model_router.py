@@ -31,3 +31,17 @@ def test_media_has_redundant_multimodal_provider_fallbacks():
 
 def test_unknown_tier_fails_safe_to_teaching():
     assert provider_order_for_tier("future-tier") == provider_order_for_tier("teaching")
+
+
+def test_voice_prefers_low_latency_provider_without_changing_contract_tier():
+    assert provider_order_for_tier("teaching", prefer_low_latency=True) == [
+        "gpt-4o-mini",
+        "gpt-4o",
+        "gemini-2.5-flash",
+    ]
+
+
+def test_voice_deliberation_keeps_strong_model_first():
+    order = provider_order_for_tier("deliberation", prefer_low_latency=True)
+    assert order[0] == "gpt-4o"
+    assert "gemini-2.5-pro" in order
