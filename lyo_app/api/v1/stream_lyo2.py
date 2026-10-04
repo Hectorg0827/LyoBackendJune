@@ -134,7 +134,9 @@ def _speech_text(raw: str) -> str:
     things that sound unnatural when read aloud.
     """
     text = raw or ""
-    text = _re.sub(r"```[\s\S]*?```", " ", text)
+    # Preserve code contents; remove only the visual fence/language marker.
+    text = _re.sub(r"```(?:[A-Za-z0-9_+.-]+)?\
+?", " ", text)
     text = _re.sub(r"【[^】]+】", " ", text)
     text = _re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
     text = _re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
