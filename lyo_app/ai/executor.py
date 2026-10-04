@@ -543,7 +543,9 @@ Return ONLY valid JSON, no markdown fences, no explanation:
         {{"title": "Lesson Title", "description": "1-sentence description", "type": "reading|exercise|quiz", "duration": "X min"}}
     ]
 }}
-Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
+Include exactly 4 lessons and 3 objectives. Keep all descriptions concise.
+If attached material is present, treat it as the primary source: infer the real topic from it,
+build lessons around what it actually contains, and do not invent unrelated coverage."""
         
         try:
             # Use the standard model since Gemini 3.1 excels at dual-output text+JSON in one pass
@@ -551,10 +553,27 @@ Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
             
+            media_attachments = context.get("media_attachments") or []
+            if media_attachments:
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        *media_attachments,
+                    ],
+                }]
+            else:
+                messages = [{"role": "user", "content": prompt}]
+
+            from lyo_app.teaching_runtime.model_router import provider_order_for_tier
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    messages=messages,
+                    provider_order=provider_order_for_tier(
+                        "deliberation",
+                        has_media=bool(media_attachments),
+                    ),
+                    use_cache=not bool(media_attachments),
                 ),
                 timeout=45.0
             )
