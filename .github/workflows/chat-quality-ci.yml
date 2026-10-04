@@ -2,7 +2,7 @@ name: Chat Quality Gate
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/chat-companion-v2]
     paths:
       - "lyo_app/api/v1/chat_lyo2.py"
       - "lyo_app/api/v1/stream_lyo2.py"
