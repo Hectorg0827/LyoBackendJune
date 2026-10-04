@@ -182,11 +182,21 @@ class LyoExecutor:
         rag_text = ""
         if rag_snippets:
             rag_text = "\n\n--- REFERENCE MATERIAL ---\n"
-            for i, snippet in enumerate(rag_snippets, 1):
-                if isinstance(snippet, dict):
-                    rag_text += f"\n[{i}] {snippet.get('content', snippet)}\n"
+            web_index = 0
+            ref_index = 0
+            for snippet in rag_snippets:
+                if isinstance(snippet, dict) and snippet.get("source_type") == "web":
+                    web_index += 1
+                    title = str(snippet.get("title") or "Web source")
+                    url = str(snippet.get("url") or "")
+                    content = str(snippet.get("content") or "")
+                    rag_text += f"\n[web {web_index}] {title}\nURL: {url}\n{content}\n"
+                elif isinstance(snippet, dict):
+                    ref_index += 1
+                    rag_text += f"\n[ref {ref_index}] {snippet.get('content', snippet)}\n"
                 else:
-                    rag_text += f"\n[{i}] {snippet}\n"
+                    ref_index += 1
+                    rag_text += f"\n[ref {ref_index}] {snippet}\n"
 
         # Build conversation history context for multi-turn continuity
         conversation_history = context.get("conversation_history", [])
@@ -286,7 +296,8 @@ TEACHING RULES — read the conversation history before you write a single word:
 
 GROUNDING RULES:
 - When the attachment source map contains page labels, support document-specific claims with compact labels such as [p. 2].
-- Never invent a page, source, quotation, or fact that is not present.
+- When live web sources are present, support current factual claims with the provided labels such as [web 1]. Never invent a web source.
+- Never invent a page, source, quotation, URL, or fact that is not present.
 - If the file is scanned and no page text is available, analyze the raw attachment visually and say when a detail cannot be verified.
 
 USER QUESTION:
