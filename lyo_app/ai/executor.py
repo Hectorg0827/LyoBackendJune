@@ -355,12 +355,29 @@ USER QUESTION:
         intent: str = None,
         media_attachments: list = None,
         teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
         conversation_history: list of {"role": ..., "content": ...} dicts for multi-turn context.
         intent: the router's classified intent (e.g. EXPLAIN, QUIZ, COURSE) for contextual suggestions.
         """
+        memory_context = ""
+        if self._db is not None and str(user_id).isdigit():
+            try:
+                from lyo_app.services.memory_synthesis import memory_synthesis_service
+
+                memory_context = await memory_synthesis_service.get_relevant_memory_for_prompt(
+                    int(user_id),
+                    original_request,
+                    self._db,
+                    instructional=str((interaction_contract or {}).get("mode") or "") in {
+                        "explain", "teach", "quiz", "review",
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Selective memory retrieval failed: %s", type(exc).__name__)
+
         execution_context = {
             "retrieved_content": [],
             "created_artifacts": [],
@@ -369,6 +386,9 @@ USER QUESTION:
             "conversation_history": conversation_history or [],
             "media_attachments": media_attachments or [],
             "teaching_decision": teaching_decision or {},
+            "interaction_contract": interaction_contract or {},
+            "memory_context": memory_context,
+            "source_refs": [],
         }
         
         for step in plan.steps:
@@ -467,18 +487,29 @@ USER QUESTION:
                 content=latest_art.get("content"),
                 version_id=f"{latest_art['artifact_id']}_v{latest_art['version']}"
             )
+        presentation_blocks = _presentation_blocks(
+            execution_context["final_text"],
+            str((interaction_contract or {}).get("representation") or "prose"),
+        )
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=self._contextual_actions(intent),
+            next_actions=self._contextual_actions(intent, interaction_contract),
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
+                "interaction_contract": interaction_contract or None,
+                "sources": execution_context.get("source_refs") or [],
+                "smart_blocks": presentation_blocks,
+                "memory_used": bool(memory_context),
             }
         )
-
-    def _contextual_actions(self, intent: str = None) -> list:
+    def _contextual_actions(
+        self,
+        intent: str = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+    ) -> list:
         """Generate context-aware suggestion buttons based on the classified intent."""
         _intent_actions = {
             "EXPLAIN":    ["Deep Dive", "Quiz Me", "Create Course"],
@@ -493,8 +524,13 @@ USER QUESTION:
             "CHAT":       ["Tell Me More", "Quiz Me", "Create Course"],
             "GENERAL":    ["Tell Me More", "Quiz Me", "Create Course"],
         }
-        actions = _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
-        return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions})]
+        contract_actions = (interaction_contract or {}).get("suggested_actions")
+        actions = (
+            [str(item) for item in contract_actions if str(item).strip()]
+            if isinstance(contract_actions, list) and contract_actions
+            else _intent_actions.get(intent, ["Tell Me More", "Quiz Me", "Create Course"])
+        )
+        return [UIBlock(type=UIBlockType.CTA_ROW, content={"actions": actions[:5]})]
 
     async def _generate_course_data(
         self, original_request: str, step_params: Dict[str, Any], context: Dict[str, Any]
