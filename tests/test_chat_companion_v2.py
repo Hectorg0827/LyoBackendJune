@@ -3,6 +3,7 @@ import pytest
 from lyo_app.ai.executor import LyoExecutor, _source_descriptors
 from lyo_app.ai.schemas.lyo2 import Intent
 from lyo_app.teaching_runtime.interaction_contract import (
+    DeliveryMode,
     InteractionMode,
     ResponseDepth,
     interaction_contract_for_request,
@@ -179,3 +180,44 @@ def test_attachment_actions_create_real_learning_handoffs():
         "Teach this in Classroom",
         "Use this for Test Prep",
     ]
+
+
+def test_voice_uses_same_interaction_contract_with_spoken_delivery():
+    contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        routed_intent=Intent.EXPLAIN,
+        voice_mode=True,
+    )
+
+    assert contract.mode is InteractionMode.EXPLAIN
+    assert contract.delivery_mode is DeliveryMode.VOICE
+    assert contract.fast_lane is True
+
+
+def test_voice_does_not_turn_answer_into_separate_voice_workflow():
+    contract = interaction_contract_for_request(
+        text="what is this?",
+        routed_intent=Intent.EXPLAIN,
+        has_media=True,
+        has_current_media=True,
+        voice_mode=True,
+    )
+
+    assert contract.mode is InteractionMode.ANALYZE
+    assert contract.delivery_mode is DeliveryMode.VOICE
+    assert contract.workflow_intent is None
+
+
+def test_voice_prompt_is_spoken_friendly_without_changing_mode():
+    from lyo_app.teaching_runtime.interaction_contract import contract_prompt
+
+    contract = interaction_contract_for_request(
+        text="compare mitosis and meiosis",
+        voice_mode=True,
+    )
+    prompt = contract_prompt(contract)
+
+    assert "Mode: compare" in prompt
+    assert "Delivery: voice" in prompt
+    assert "live spoken turn" in prompt
+    assert "Do not announce" in prompt
