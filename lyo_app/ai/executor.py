@@ -389,6 +389,7 @@ USER QUESTION:
             "interaction_contract": interaction_contract or {},
             "memory_context": memory_context,
             "source_refs": [],
+            "web_sources": [],
         }
         
         for step in plan.steps:
@@ -399,6 +400,34 @@ USER QUESTION:
                 limit = step.parameters.get("limit", 3)
                 content = await self.rag.retrieve(query, limit=limit)
                 execution_context["retrieved_content"].extend(content)
+
+            elif step.action_type == ActionType.SEARCH_WEB:
+                try:
+                    from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+                    search = WebSearchTool()
+                    result = await search.execute(
+                        int(user_id) if str(user_id).isdigit() else 0,
+                        query=step.parameters.get("query", original_request),
+                        max_results=min(int(step.parameters.get("max_results", 5)), 8),
+                    )
+                    if result.success and isinstance(result.output, list):
+                        for item in result.output:
+                            if not isinstance(item, dict):
+                                continue
+                            execution_context["retrieved_content"].append({
+                                "content": item.get("snippet") or "",
+                                "title": item.get("title"),
+                                "url": item.get("url"),
+                                "source_type": "web",
+                            })
+                            if item.get("url"):
+                                execution_context.setdefault("web_sources", []).append({
+                                    "title": str(item.get("title") or item.get("url")),
+                                    "url": str(item.get("url")),
+                                })
+                except Exception as exc:
+                    logger.warning("Live web grounding failed: %s", type(exc).__name__)
                 
             elif step.action_type == ActionType.CREATE_ARTIFACT:
                 # ... creation logic ...
@@ -500,7 +529,7 @@ USER QUESTION:
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
                 "interaction_contract": interaction_contract or None,
-                "sources": execution_context.get("source_refs") or [],
+                "sources": (execution_context.get("source_refs") or []) + (execution_context.get("web_sources") or []),
                 "smart_blocks": presentation_blocks,
                 "memory_used": bool(memory_context),
             }
