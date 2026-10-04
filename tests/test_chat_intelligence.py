@@ -188,3 +188,24 @@ def test_personal_memory_is_selective_not_global():
         factual,
         "Do you remember what I struggled with last time?",
     ) is True
+
+
+
+@pytest.mark.asyncio
+async def test_explicit_explanation_contract_beats_first_contact_diagnosis():
+    from lyo_app.teaching_runtime.service import decide_for_chat
+    from lyo_app.teaching_runtime.models import TeachingAction
+
+    contract = derive_interaction_contract("Explain gravity")
+    decision = await decide_for_chat(
+        db=None,
+        user_id=None,
+        user_text="Explain gravity",
+        intent="EXPLAIN",
+        concept_id="gravity",
+        interaction_contract=contract.to_dict(),
+    )
+
+    assert decision.action is TeachingAction.ANSWER
+    assert decision.reason_code == "interaction_contract_answer_first"
+    assert decision.interaction_required is False
