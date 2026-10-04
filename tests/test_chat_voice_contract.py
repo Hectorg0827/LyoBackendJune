@@ -38,6 +38,14 @@ def test_speech_text_keeps_meaning_but_removes_visual_markup() -> None:
     assert "/api/v1/media" not in spoken
 
 
+def test_speech_text_preserves_fenced_code_contents() -> None:
+    spoken = _speech_text("Use this:\n\n```python\nprint('hello')\n```")
+
+    assert "print('hello')" in spoken
+    assert "```" not in spoken
+    assert "python" not in spoken
+
+
 def test_speech_segments_are_interruptible_and_bounded() -> None:
     raw = " ".join(
         f"Sentence {index} explains one useful idea." for index in range(1, 80)
