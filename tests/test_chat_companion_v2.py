@@ -1,10 +1,12 @@
 import pytest
 
 from lyo_app.ai.executor import LyoExecutor, _source_descriptors
-from lyo_app.ai.schemas.lyo2 import Intent
+from lyo_app.ai.schemas.lyo2 import Intent, RouterRequest
 from lyo_app.teaching_runtime.interaction_contract import (
+    InteractionChannel,
     InteractionMode,
     ResponseDepth,
+    contract_prompt,
     interaction_contract_for_request,
 )
 from lyo_app.teaching_runtime.models import (
@@ -179,3 +181,28 @@ def test_attachment_actions_create_real_learning_handoffs():
         "Teach this in Classroom",
         "Use this for Test Prep",
     ]
+
+
+
+def test_voice_channel_uses_same_interaction_mode_and_router_contract():
+    text_contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        routed_intent=Intent.EXPLAIN,
+        channel="text",
+    )
+    voice_contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        routed_intent=Intent.EXPLAIN,
+        channel="voice",
+    )
+
+    assert text_contract.mode is voice_contract.mode is InteractionMode.EXPLAIN
+    assert text_contract.workflow_intent == voice_contract.workflow_intent
+    assert text_contract.channel is InteractionChannel.TEXT
+    assert voice_contract.channel is InteractionChannel.VOICE
+    assert "not a separate voice persona or model" in contract_prompt(voice_contract)
+
+
+def test_router_request_voice_channel_is_explicit_and_text_is_default():
+    assert RouterRequest(text="hello").response_channel == "text"
+    assert RouterRequest(text="hello", response_channel="voice").response_channel == "voice"
