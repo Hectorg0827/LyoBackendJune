@@ -1380,25 +1380,6 @@ async def stream_lyo2_chat(
                 "freshness_mode": freshness_decision.mode.value,
             }
 
-            # Start selective memory early so it overlaps routing/policy work.
-            if authenticated_user_id and not media_attachments:
-                async def _load_parallel_memory():
-                    try:
-                        from lyo_app.services.memory_synthesis import memory_synthesis_service
-                        return await memory_synthesis_service.get_relevant_memory_for_prompt(
-                            int(authenticated_user_id),
-                            request.text or "",
-                            db,
-                        )
-                    except Exception as memory_exc:
-                        logger.debug(
-                            "Parallel memory lookup unavailable: %s",
-                            type(memory_exc).__name__,
-                        )
-                        return ""
-
-                memory_task = asyncio.create_task(_load_parallel_memory())
-
             # The legacy optimizer/cache is not allowed to sit in front of the
             # ordinary-chat fast lane. Complex paths retain it.
             cache_key = None
@@ -1652,18 +1633,10 @@ async def stream_lyo2_chat(
                 and not media_attachments
                 and not decision.needs_clarification
             ):
+                # Conversation history is sufficient working memory on the
+                # reflex lane. Durable-memory synthesis belongs to teaching
+                # and planner-driven turns and must not delay ordinary chat.
                 personal_memory = ""
-                if memory_task is not None:
-                    memory_wait_started = time.monotonic()
-                    try:
-                        personal_memory = await asyncio.wait_for(
-                            memory_task, timeout=0.45
-                        )
-                    except Exception:
-                        personal_memory = ""
-                    latency_metrics["memory_wait_ms"] = int(
-                        (time.monotonic() - memory_wait_started) * 1000
-                    )
 
                 history = [
                     {"role": turn.role, "content": turn.content}
@@ -2049,6 +2022,32 @@ async def stream_lyo2_chat(
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
+
+            # Memory synthesis uses this request's DB session, so only overlap
+            # it with the model-only planner — never with other DB operations.
+            if (
+                authenticated_user_id
+                and not media_attachments
+                and interaction_contract.mode
+                in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
+            ):
+                async def _load_planner_parallel_memory():
+                    try:
+                        from lyo_app.services.memory_synthesis import memory_synthesis_service
+                        return await memory_synthesis_service.get_relevant_memory_for_prompt(
+                            int(authenticated_user_id),
+                            request.text or "",
+                            db,
+                        )
+                    except Exception as memory_exc:
+                        logger.debug(
+                            "Planner-parallel memory lookup unavailable: %s",
+                            type(memory_exc).__name__,
+                        )
+                        return ""
+
+                memory_task = asyncio.create_task(_load_planner_parallel_memory())
+
             try:
                 # OPTIMIZATION: Attachment information requests are already
                 # resolved by the deterministic teaching policy. Sending them
