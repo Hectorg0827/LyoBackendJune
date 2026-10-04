@@ -1,6 +1,9 @@
 import pytest
 
 from scripts.live_teacher_quality import (
+    LEARNER_PROFILES,
+    SCENARIOS,
+    Report,
     analytics_delta,
     choose_option,
     parse_sse_lines,
@@ -131,3 +134,61 @@ def test_analytics_delta_tracks_only_durable_counters():
     assert delta["model_tokens"] == 160
     assert delta["transfer_successes"] == 1
     assert delta["remediation_repairs"] == 1
+
+
+
+def test_subject_presets_are_coherent_and_cover_the_validation_matrix():
+    assert set(SCENARIOS) == {
+        "math_fractions",
+        "biology_photosynthesis",
+        "physics_newton2",
+        "spanish_past_tense",
+        "business_contribution_margin",
+    }
+    for preset in SCENARIOS.values():
+        assert preset.topic.strip()
+        assert preset.objective.strip()
+        assert preset.chat_prompt.strip()
+        assert preset.question.strip()
+        assert preset.explanation_answer.strip()
+        assert preset.transfer_answer.strip()
+        assert preset.question != preset.transfer_answer
+
+
+def test_learner_profiles_cover_distinct_behavioral_paths():
+    assert set(LEARNER_PROFILES) == {
+        "advanced",
+        "beginner",
+        "confident_wrong",
+        "quiet_partial",
+        "curious",
+        "struggling",
+        "fast_learner",
+        "interrupter",
+    }
+    assert LEARNER_PROFILES["advanced"].wrong_attempts == 0
+    assert LEARNER_PROFILES["beginner"].request_hint is True
+    assert LEARNER_PROFILES["confident_wrong"].wrong_attempts == 1
+    assert LEARNER_PROFILES["quiet_partial"].partial_free_response is True
+    assert LEARNER_PROFILES["curious"].ask_question is True
+    assert LEARNER_PROFILES["struggling"].attempt_correct is False
+    assert LEARNER_PROFILES["struggling"].wrong_attempts >= 2
+    assert LEARNER_PROFILES["fast_learner"].reconnect is False
+    assert LEARNER_PROFILES["interrupter"].ask_question is True
+    assert LEARNER_PROFILES["interrupter"].request_hint is True
+
+
+def test_report_groups_results_by_scenario_and_learner_profile():
+    report = Report(
+        run_id="r1",
+        phase="seed",
+        base_url="https://api.lyoai.app",
+        session_id="s1",
+        scenario="biology_photosynthesis",
+        learner_profile="curious",
+        topic="photosynthesis",
+    )
+    body = report.to_dict()
+    assert body["scenario"] == "biology_photosynthesis"
+    assert body["learner_profile"] == "curious"
+    assert body["report_version"] == 2
