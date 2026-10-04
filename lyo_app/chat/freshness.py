@@ -46,7 +46,7 @@ _EXPLICIT_CURRENT = re.compile(
 )
 
 _EXPLICIT_SEARCH = re.compile(
-    r"\b(search|look up|lookup|browse|check online|check the web|web search|find online)\b",
+    r"\b(search|look(?:\s+\w+){0,3}\s+up|lookup|browse|check online|check the web|web search|find online)\b",
     re.IGNORECASE,
 )
 
