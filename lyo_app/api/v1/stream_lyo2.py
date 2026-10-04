@@ -1508,7 +1508,8 @@ async def stream_lyo2_chat(
                 history=request.conversation_history,
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
-                has_current_media=bool(request.media),
+                has_current_media=current_media_supplied,
+                interaction_contract=interaction_contract.to_dict(),
             )
             await record_policy_decision(
                 db,
