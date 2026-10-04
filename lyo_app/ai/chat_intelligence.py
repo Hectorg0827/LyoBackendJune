@@ -217,6 +217,12 @@ def derive_interaction_contract(
             router_intent=Intent.STUDY_PLAN,
         )
     if _TEACH_RE.search(raw):
+        if has_media and attachment_ref:
+            return make(
+                InteractionMode.TEACH, "attachment_to_classroom",
+                answer_first=False, allow_assessment=True, fast_lane=False,
+                router_intent=Intent.COURSE,
+            )
         return make(
             InteractionMode.TEACH, "explicit_teaching",
             answer_first=False, allow_assessment=True, fast_lane=False,
