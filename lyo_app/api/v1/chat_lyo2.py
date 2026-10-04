@@ -188,7 +188,6 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             decision,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
-            interaction_contract=interaction_contract.model_dump(mode="json"),
         )
 
         from lyo_app.ai.lesson_composer import slugify_skill
@@ -221,6 +220,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             state_summary=request.state_summary,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
+            interaction_contract=interaction_contract.model_dump(mode="json"),
         )
         await record_policy_decision(
             db,
