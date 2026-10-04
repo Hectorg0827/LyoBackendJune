@@ -525,6 +525,31 @@ def _resolve_course_topic(
     if active_topic and active_topic.strip():
         return active_topic.strip()
 
+    if _re.fullmatch(
+        r"\s*(?:teach this in classroom|open classroom|teach this as a class|turn this into a class)\s*[.!]?\s*",
+        text,
+        flags=_re.IGNORECASE,
+    ):
+        # Carry the source material into Classroom rather than creating a
+        # course literally titled "Teach This In Classroom".
+        for turn in reversed(history or []):
+            if (turn.role or "").lower() != "user":
+                continue
+            prior = (turn.content or "").strip()
+            attachment = _re.search(r"\[📎\s+([^\]]+)\]", prior)
+            if attachment:
+                filename = attachment.group(1).strip()
+                filename = _re.sub(r"\.[A-Za-z0-9]{1,8}$", "", filename)
+                return filename or "Attached material"
+            cleaned = _re.sub(r"!\[[^\]]*\]\([^)]+\)|\[📎[^\]]+\]\([^)]+\)", "", prior).strip()
+            if cleaned and cleaned.casefold() not in {"what is this?", "what is this", "analyze", "analize"}:
+                return cleaned[:120]
+
+        for turn in reversed(history or []):
+            if (turn.role or "").lower() == "assistant" and (turn.content or "").strip():
+                first_sentence = _re.split(r"(?<=[.!?])\s+", turn.content.strip(), maxsplit=1)[0]
+                return first_sentence[:120]
+
     for turn in reversed(history or []):
         if (turn.role or "").lower() != "user":
             continue
@@ -1369,7 +1394,15 @@ async def stream_lyo2_chat(
                 lower_text = (request.text or "").strip().lower()
                 explicit_prep = any(phrase in lower_text for phrase in
                     ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
-                if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
+                classroom_handoff = lower_text in {
+                    "teach this in classroom",
+                    "open classroom",
+                    "teach this as a class",
+                    "turn this into a class",
+                }
+                if not request.forced_intent and classroom_handoff:
+                    request.forced_intent = Intent.COURSE
+                elif not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
             
             if request.forced_intent:
