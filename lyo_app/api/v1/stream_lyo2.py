@@ -33,6 +33,7 @@ try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
     logger = logging.getLogger(__name__)
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
     logger.warning("Test prep agent module unavailable; using fallback clarification flow: %s", exc)
 
     class _FallbackTestPrepData:
@@ -1216,7 +1217,15 @@ async def stream_lyo2_chat(
     async def event_generator() -> AsyncGenerator[str, None]:
         start_time = time.time()
         request_started = time.monotonic()
-        latency_metrics: Dict[str, Any] = {}
+        process_uptime_ms = int(
+            (time.monotonic() - _PROCESS_STARTED_MONOTONIC) * 1000
+        )
+        latency_metrics: Dict[str, Any] = {
+            "process_uptime_ms": process_uptime_ms,
+            # A request arriving very soon after process import is a useful
+            # production signal for a Cloud Run/Railway cold-start effect.
+            "cold_start_suspected": process_uptime_ms < 60_000,
+        }
         memory_task = None
         current_time_for_prompt = ""
         freshness_decision = None
