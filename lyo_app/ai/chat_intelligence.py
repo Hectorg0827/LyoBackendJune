@@ -196,6 +196,10 @@ def derive_interaction_contract(
             attachment_referential=attachment_ref,
         )
 
+    # Exact continuation commands are control flow, not content requests.
+    # Check these before "resume" can be read as the Spanish summarization
+    # verb or before any attachment inherited from history influences routing.
+
     # Workflow ownership comes before generic verbs such as "explain".
     if _TEST_PREP_RE.search(raw):
         return make(
