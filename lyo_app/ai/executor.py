@@ -200,6 +200,41 @@ class LyoExecutor:
             history_text += "--- END HISTORY ---\n"
 
         teaching_decision = context.get("teaching_decision") or {}
+        interaction_contract = context.get("interaction_contract") or {}
+        memory_context = str(context.get("memory_context") or "").strip()
+        media_attachments = context.get("media_attachments", [])
+        source_text, source_refs = _attachment_grounding(media_attachments)
+        context["source_refs"] = source_refs
+
+        depth = str(interaction_contract.get("depth") or "standard")
+        depth_rule = {
+            "compact": "Answer in roughly 2-5 sentences unless the task requires a table.",
+            "deep": "Give a thorough but well-structured answer. Use headings and examples where useful.",
+        }.get(depth, "Answer with enough detail to be useful, without unnecessary exposition.")
+        representation = str(interaction_contract.get("representation") or "prose")
+        representation_rule = {
+            "table": "When comparison data is present, render the core comparison as a Markdown table.",
+            "timeline": "Organize chronological material as a concise timeline.",
+            "steps": "Organize procedures as numbered steps.",
+            "visual": "When a diagram materially helps, include one valid Mermaid diagram in a mermaid code fence.",
+            "document": "Ground the answer in the attached material and identify relevant page or section labels.",
+        }.get(representation, "Use prose unless a structured representation is clearly more useful.")
+
+        contract_text = ""
+        if interaction_contract:
+            contract_text = f"""
+--- INTERACTION CONTRACT (HIGHEST PRIORITY FOR RESPONSE SHAPE) ---
+Mode: {interaction_contract.get("mode", "answer")}
+Depth: {depth}
+Representation: {representation}
+Answer first: {bool(interaction_contract.get("answer_first"))}
+{depth_rule}
+{representation_rule}
+Do not silently convert this interaction into a different mode. In particular,
+do not turn ANSWER/EXPLAIN/SUMMARIZE/COMPARE into a quiz or diagnostic.
+--- END INTERACTION CONTRACT ---
+"""
+        memory_text = f"\n\n{memory_context}\n" if memory_context else ""
         teaching_policy_text = ""
         if teaching_decision:
             directives = teaching_decision.get("directives") or []
@@ -215,7 +250,6 @@ Target evidence: {teaching_decision.get("target_evidence_type") or "none"}
 Do not override this action with a different pedagogical sequence. The policy chooses what to do; you only realize it clearly and naturally.
 --- END TEACHING POLICY ---
 """
-
         prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
 Answer the user's question with warmth, curiosity, and clarity.
 
@@ -248,7 +282,12 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{teaching_policy_text}
+{rag_text}{source_text}{history_text}{memory_text}{contract_text}{teaching_policy_text}
+
+GROUNDING RULES:
+- When the attachment source map contains page labels, support document-specific claims with compact labels such as [p. 2].
+- Never invent a page, source, quotation, or fact that is not present.
+- If the file is scanned and no page text is available, analyze the raw attachment visually and say when a detail cannot be verified.
 
 USER QUESTION:
 {original_request}
@@ -260,7 +299,6 @@ USER QUESTION:
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
                 
-            media_attachments = context.get("media_attachments", [])
             from lyo_app.teaching_runtime.model_router import provider_order_for_tier
 
             if media_attachments:
