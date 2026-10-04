@@ -192,12 +192,28 @@ def interaction_contract_for_request(
             reason_code="explicit_search",
         )
     if _CONTINUE_RE.search(text):
+        lowered = text.casefold()
+        continuation_directives = []
+        if "show visually" in lowered:
+            continuation_directives.append(
+                "Use the clearest visual/structured representation available "
+                "(diagram, table, sequence, or worked layout) rather than more prose."
+            )
+        if "show an example" in lowered:
+            continuation_directives.append(
+                "Give one concrete worked example that directly extends the prior answer."
+            )
+        if "go deeper" in lowered or "tell me more" in lowered:
+            continuation_directives.append(
+                "Continue from the prior answer without repeating its introduction."
+            )
         return InteractionContract(
             mode=InteractionMode.CONTINUE,
             depth=depth,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_continue",
+            directives=tuple(continuation_directives),
         )
     if _COMPARE_RE.search(text):
         return InteractionContract(
