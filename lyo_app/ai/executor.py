@@ -518,7 +518,26 @@ USER QUESTION:
                 ]
             }
         
+        source_context = ""
+        media = context.get("media_attachments") or []
+        if media:
+            snippets = []
+            for item in media[:4]:
+                name = str(item.get("name") or "Attachment")
+                extracted = str(item.get("extracted_text") or "").strip()
+                if extracted:
+                    snippets.append(f"## {name}\n{extracted[:6000]}")
+                else:
+                    snippets.append(f"## {name}\n[Native attachment available to the surrounding multimodal turn]")
+            if snippets:
+                source_context = (
+                    "\n\nUse the attached source material as the primary curriculum basis. "
+                    "Do not invent a different topic just because the learner used a deictic "
+                    "phrase such as 'this'.\n" + "\n\n".join(snippets)
+                )
+
         prompt = f"""You are a course architect. Generate a structured learning course for: "{original_request}"
+{source_context}
 
 Return ONLY valid JSON, no markdown fences, no explanation:
 {{
