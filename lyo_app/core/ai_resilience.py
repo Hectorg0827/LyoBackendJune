@@ -334,6 +334,7 @@ class AIResilienceManager:
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
 
+        emitted_any = False
         for model_name in provider_order:
             if model_name not in self.models:
                 continue
@@ -344,6 +345,7 @@ class AIResilienceManager:
             if not cb.is_closed:
                 continue
 
+            provider_emitted = False
             try:
                 if model.endpoint == "openai":
                     if not self.openai_client:
@@ -359,22 +361,47 @@ class AIResilienceManager:
                     )
                     async for chunk in stream:
                         if chunk.choices and chunk.choices[0].delta.content:
+                            provider_emitted = True
+                            emitted_any = True
                             yield chunk.choices[0].delta.content
                     cb._on_success(None)
-                    return # Success
+                    return  # Success
                 else:
                     logger.info(f"Attempting Gemini stream for {model_name}")
-                    async for chunk in self._stream_gemini(model_name, model, messages, temperature, max_tokens):
-                        yield chunk
+                    async for chunk in self._stream_gemini(
+                        model_name, model, messages, temperature, max_tokens
+                    ):
+                        if chunk:
+                            provider_emitted = True
+                            emitted_any = True
+                            yield chunk
                     return
+            except asyncio.CancelledError:
+                # Barge-in owns cancellation. Never count a learner interrupt as
+                # a provider failure and never restart the answer on another
+                # provider after the learner has taken the floor.
+                raise
             except Exception as e:
                 cb._on_failure()
-                logger.error(f"Streaming error with {model_name} (Type: {type(e).__name__}): {e}")
+                logger.error(
+                    f"Streaming error with {model_name} "
+                    f"(Type: {type(e).__name__}): {e}"
+                )
                 import traceback
                 logger.error(traceback.format_exc())
+                if provider_emitted or emitted_any:
+                    # Spoken/text deltas may already be visible or audible.
+                    # Falling through to another provider would restart the
+                    # answer from the beginning and create duplicated speech.
+                    logger.warning(
+                        "Not failing over after partial streamed output from %s",
+                        model_name,
+                    )
+                    return
                 continue
         
-        yield "I'm having trouble responding right now. Please try again."
+        if not emitted_any:
+            yield "I'm having trouble responding right now. Please try again."
 
     async def _stream_gemini(self, model_key: str, model: AIModelConfig, messages: List[Dict[str, str]], temperature: float, max_tokens: int):
         """Internal helper for Gemini streaming."""
