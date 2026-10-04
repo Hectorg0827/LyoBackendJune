@@ -103,29 +103,42 @@ def _local_media_path(uri: str) -> Path:
     return candidate
 
 
-def _extract_document_text(data: bytes, mime_type: str) -> str:
-    """Extract bounded text for providers that cannot consume raw documents.
+def _extract_document_payload(data: bytes, mime_type: str) -> tuple[str, list[dict[str, str]]]:
+    """Extract bounded text plus human-readable source sections.
 
-    Gemini still receives the original file bytes. The extracted copy is
-    carried as metadata so OpenAI can be used as a real fallback instead of
-    rejecting Lyo's internal `media_base64` part.
+    Native multimodal providers still receive the original bytes. The text
+    copy gives non-native providers a fallback, while source sections let the
+    executor ground statements in the learner material (for example [p. 2])
+    instead of answering from an opaque blob.
     """
     text = ""
+    sections: list[dict[str, str]] = []
     if mime_type in {"text/plain", "text/markdown", "text/csv", "application/json"}:
-        text = data.decode("utf-8", errors="replace")
+        text = data.decode("utf-8", errors="replace").strip()
+        if text:
+            sections.append({"label": "document", "text": text[:MAX_EXTRACTED_DOCUMENT_CHARS]})
     elif mime_type == "application/pdf":
         try:
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(data))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            chunks: list[str] = []
+            remaining = MAX_EXTRACTED_DOCUMENT_CHARS
+            for page_number, page in enumerate(reader.pages, 1):
+                page_text = (page.extract_text() or "").strip()
+                if not page_text or remaining <= 0:
+                    continue
+                bounded = page_text[:remaining]
+                chunks.append(bounded)
+                sections.append({"label": f"p. {page_number}", "text": bounded})
+                remaining -= len(bounded)
+            text = "\n\n".join(chunks)
         except Exception:
             # A scanned/image-only PDF can still be handled by a native
             # multimodal provider such as Gemini. Do not reject it here.
             text = ""
 
-    return text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS]
-
+    return text.strip()[:MAX_EXTRACTED_DOCUMENT_CHARS], sections[:30]
 
 def canonical_message_content(text: str | None, media: Iterable[MediaRef]) -> str:
     """Persist attachments as portable Markdown while keeping model input structured."""
@@ -237,8 +250,12 @@ async def load_media_attachments(
             "name": _clean_label(item.name or path.name),
         }
         if not mime_type.startswith("image/"):
-            extracted_text = await asyncio.to_thread(_extract_document_text, data, mime_type)
+            extracted_text, source_sections = await asyncio.to_thread(
+                _extract_document_payload, data, mime_type
+            )
             if extracted_text:
                 part["extracted_text"] = extracted_text
+            if source_sections:
+                part["source_sections"] = source_sections
         prepared.append(part)
     return prepared
