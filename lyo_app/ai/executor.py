@@ -2,7 +2,7 @@ import logging
 import json
 import uuid
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, Awaitable
 import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
 from lyo_app.services.rag_service import RAGService
@@ -160,7 +160,10 @@ class LyoExecutor:
         """
         # If the planner already provided concrete content, use it
         static_content = step_params.get("content")
+        text_delta_callback = context.get("text_delta_callback")
         if static_content and static_content != "I've processed your request.":
+            if text_delta_callback:
+                await text_delta_callback(static_content)
             return static_content
 
         if not self._gemini:
@@ -301,28 +304,46 @@ USER QUESTION:
                 has_media=bool(media_attachments),
             )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
-            ai_response = await asyncio.wait_for(
-                ai_resilience_manager.chat_completion(
+            if text_delta_callback:
+                # Voice delivery uses the exact same prompt, interaction
+                # contract, learner state, memory and provider routing as text
+                # Chat. Only delivery changes: surface model deltas as they
+                # arrive so TTS can begin before the full answer is complete.
+                pieces: List[str] = []
+                async for delta in ai_resilience_manager.stream_chat_completion(
                     messages=messages,
                     provider_order=provider_order,
-                    use_cache=not bool(media_attachments),
-                ),
-                timeout=30.0
-            )
-            print(f">>> [PID {os.getpid()}] LyoExecutor: Received AIResilience response", flush=True)
-            if ai_response.get("is_fallback"):
-                logger.warning("AI providers unavailable during tutor generation")
-                if media_attachments:
-                    return (
-                        "I couldn't analyze that attachment just now. "
-                        "Your file is still attached, so please retry."
-                    )
-                return static_content or (
-                    "I'm having trouble responding right now. Please try again."
+                ):
+                    if not delta:
+                        continue
+                    pieces.append(delta)
+                    await text_delta_callback(delta)
+                generated = "".join(pieces).strip()
+                if generated:
+                    return generated
+            else:
+                ai_response = await asyncio.wait_for(
+                    ai_resilience_manager.chat_completion(
+                        messages=messages,
+                        provider_order=provider_order,
+                        use_cache=not bool(media_attachments),
+                    ),
+                    timeout=30.0
                 )
-            generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
-            if generated:
-                return generated
+                print(f">>> [PID {os.getpid()}] LyoExecutor: Received AIResilience response", flush=True)
+                if ai_response.get("is_fallback"):
+                    logger.warning("AI providers unavailable during tutor generation")
+                    if media_attachments:
+                        return (
+                            "I couldn't analyze that attachment just now. "
+                            "Your file is still attached, so please retry."
+                        )
+                    return static_content or (
+                        "I'm having trouble responding right now. Please try again."
+                    )
+                generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
+                if generated:
+                    return generated
         except asyncio.TimeoutError:
             logger.error(f"Text generation TIMED OUT after 30s for request: {original_request[:100]}")
         except Exception as e:
@@ -341,6 +362,7 @@ USER QUESTION:
         teaching_decision: Optional[Dict[str, Any]] = None,
         interaction_contract: Optional[Dict[str, Any]] = None,
         personal_memory: str = "",
+        text_delta_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
@@ -357,6 +379,7 @@ USER QUESTION:
             "teaching_decision": teaching_decision or {},
             "interaction_contract": interaction_contract or {},
             "personal_memory": personal_memory or "",
+            "text_delta_callback": text_delta_callback,
         }
         
         for step in plan.steps:
