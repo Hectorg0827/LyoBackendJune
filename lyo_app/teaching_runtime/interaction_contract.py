@@ -147,7 +147,7 @@ def interaction_contract_for_request(
     text = (text or "").strip()
     depth = _depth_for(text)
 
-    if _TEST_PREP_RE.search(text) or routed_intent == Intent.TEST_PREP:
+    if _TEST_PREP_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
@@ -156,7 +156,7 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_test_prep",
         )
-    if _COURSE_RE.search(text) or routed_intent == Intent.COURSE:
+    if _COURSE_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
@@ -165,7 +165,7 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_course_or_classroom",
         )
-    if _FLASHCARD_RE.search(text) or routed_intent == Intent.FLASHCARDS:
+    if _FLASHCARD_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
@@ -174,7 +174,7 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_flashcards",
         )
-    if _QUIZ_RE.search(text) or routed_intent == Intent.QUIZ:
+    if _QUIZ_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.QUIZ,
             depth=depth,
@@ -250,7 +250,7 @@ def interaction_contract_for_request(
             fast_lane=False,
             reason_code="explicit_teach",
         )
-    if _EXPLAIN_RE.search(text) or routed_intent == Intent.EXPLAIN:
+    if _EXPLAIN_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
@@ -275,9 +275,63 @@ def interaction_contract_for_request(
             reason_code="explicit_answer",
         )
 
+    # Only after all explicit learner-authored verbs have been checked may
+    # the probabilistic router supply a fallback activity. This prevents a
+    # router guess such as QUIZ from overriding "explain photosynthesis".
+    if routed_intent == Intent.TEST_PREP:
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            fast_lane=False,
+            workflow_intent=Intent.TEST_PREP,
+            attachment_authoritative=has_media,
+            reason_code="routed_test_prep",
+        )
+    if routed_intent == Intent.COURSE:
+        return InteractionContract(
+            mode=InteractionMode.CREATE,
+            depth=depth,
+            fast_lane=False,
+            workflow_intent=Intent.COURSE,
+            attachment_authoritative=has_media,
+            reason_code="routed_course",
+        )
+    if routed_intent == Intent.FLASHCARDS:
+        return InteractionContract(
+            mode=InteractionMode.CREATE,
+            depth=depth,
+            fast_lane=False,
+            workflow_intent=Intent.FLASHCARDS,
+            attachment_authoritative=has_media,
+            reason_code="routed_flashcards",
+        )
+    if routed_intent == Intent.QUIZ:
+        return InteractionContract(
+            mode=InteractionMode.QUIZ,
+            depth=depth,
+            fast_lane=False,
+            workflow_intent=Intent.QUIZ,
+            attachment_authoritative=has_media,
+            reason_code="routed_quiz",
+        )
+    if routed_intent == Intent.EXPLAIN:
+        return InteractionContract(
+            mode=InteractionMode.EXPLAIN,
+            depth=depth,
+            fast_lane=True,
+            attachment_authoritative=has_media,
+            reason_code="routed_explain",
+        )
+    if routed_intent == Intent.SUMMARIZE_NOTES:
+        return InteractionContract(
+            mode=InteractionMode.SUMMARIZE,
+            depth=depth,
+            fast_lane=True,
+            attachment_authoritative=has_media,
+            reason_code="routed_summarize",
+        )
     if routed_intent in {
         Intent.STUDY_PLAN,
-        Intent.SUMMARIZE_NOTES,
         Intent.SCHEDULE_REMINDERS,
         Intent.COMMUNITY,
         Intent.MODIFY_ARTIFACT,
