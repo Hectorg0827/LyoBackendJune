@@ -114,7 +114,7 @@ _ANALYZE_RE = re.compile(
     re.IGNORECASE,
 )
 _CONTINUE_RE = re.compile(
-    r"^\s*(?:continue|keep going|go on|next|more|sigue|contin[uú]a|pr[oó]ximo)\s*[.!?]?\s*$",
+    r"^\s*(?:continue|keep going|go on|next|more|go deeper|tell me more|show an example|show visually|sigue|contin[uú]a|pr[oó]ximo)\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
 _DIRECT_ANSWER_RE = re.compile(
