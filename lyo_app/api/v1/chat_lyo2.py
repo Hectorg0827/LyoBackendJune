@@ -342,6 +342,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 teaching_decision=teaching_decision.model_dump(mode="json"),
                 interaction_contract=interaction_contract_payload,
                 personal_memory=personal_memory,
+                delivery_mode=request.delivery_mode,
             )
         
         # Add trace metadata
@@ -354,7 +355,14 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "conversation_id": request.conversation_id,
             "teaching_policy": teaching_decision.model_dump(mode="json"),
             "interaction_contract": interaction_contract_payload,
+            "delivery_mode": request.delivery_mode,
         })
+        if request.delivery_mode == "voice":
+            from lyo_app.api.v1.stream_lyo2 import _speech_segments
+            execution_response.metadata["voice_turn_id"] = request.voice_turn_id or trace_id
+            execution_response.metadata["voice_segments"] = _speech_segments(
+                execution_response.answer_block.content.get("text", "")
+            )
 
         answer_text = execution_response.answer_block.content.get("text", "")
         if persistent_conversation and answer_text:
