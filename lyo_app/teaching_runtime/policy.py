@@ -109,6 +109,55 @@ class TeachingPolicy:
         has_media = bool(context.metadata.get("has_media"))
         has_current_media = bool(context.metadata.get("has_current_media"))
         attachment_referential = bool(_ATTACHMENT_REFERENCE_RE.search(text))
+        interaction_contract = context.metadata.get("interaction_contract") or {}
+        contract_mode = str(interaction_contract.get("mode") or "")
+        contract_answer_first = bool(interaction_contract.get("answer_first"))
+        contract_allow_assessment = bool(
+            interaction_contract.get("allow_assessment", True)
+        )
+
+        # The interaction contract is above pedagogy. When the learner has
+        # explicitly asked for an answer/explanation/analysis/summary/compare,
+        # calibration is not allowed to replace that request with a quiz.
+        if contract_answer_first and contract_mode in {
+            "answer", "explain", "analyze", "summarize", "compare", "search",
+        }:
+            from lyo_app.ai.chat_intelligence import (
+                contract_directives,
+                InteractionContract,
+                InteractionMode,
+                ResponseDepth,
+            )
+
+            try:
+                contract = InteractionContract(
+                    mode=InteractionMode(contract_mode),
+                    confidence=float(interaction_contract.get("confidence") or 1.0),
+                    answer_first=True,
+                    allow_assessment=contract_allow_assessment,
+                    fast_lane=bool(interaction_contract.get("fast_lane")),
+                    response_depth=ResponseDepth(
+                        interaction_contract.get("response_depth") or "standard"
+                    ),
+                    router_intent=None,
+                    reason=str(interaction_contract.get("reason") or "explicit_request"),
+                    attachment_referential=bool(
+                        interaction_contract.get("attachment_referential")
+                    ),
+                )
+                directives = contract_directives(contract)
+            except Exception:
+                directives = [
+                    "Answer the learner's explicit request before asking anything.",
+                    "Do not manufacture an assessment in this turn.",
+                ]
+            return _decision(
+                TeachingAction.ANSWER,
+                "interaction_contract_answer_first",
+                words=220,
+                model_tier="teaching",
+                directives=directives,
+            )
 
         # Files are objects the learner is asking Lyo to inspect, not concepts
         # that should be diagnosed before they are identified. A newly attached

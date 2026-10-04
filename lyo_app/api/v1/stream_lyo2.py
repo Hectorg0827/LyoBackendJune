@@ -1189,6 +1189,7 @@ async def stream_lyo2_chat(
         
         try:
             display_content = canonical_message_content(request.text, request.media)
+            current_media_supplied = bool(request.media)
             media_attachments = await load_media_attachments(request.media)
             if not request.text and request.media:
                 request.text = "Please analyze the attached material and respond to what it contains."
@@ -1288,6 +1289,30 @@ async def stream_lyo2_chat(
                 media_attachments = await load_media_attachments(
                     historical_media, missing_ok=True
                 )
+                # A follow-up such as "Teach this" or "Use this for Test Prep"
+                # must carry the prior attachment into the new workflow, not
+                # merely into generic generation.
+                if historical_media and not request.media:
+                    request.media = historical_media
+
+            from lyo_app.ai.chat_intelligence import (
+                build_memory_layers,
+                derive_interaction_contract,
+                enforce_interaction_contract,
+                prose_without_presented_table,
+            )
+            interaction_contract = derive_interaction_contract(
+                request.text,
+                has_media=bool(media_attachments),
+                has_current_media=current_media_supplied,
+            )
+            yield yield_safe_sse_event(
+                "interaction_contract",
+                {
+                    "type": "interaction_contract",
+                    **interaction_contract.to_dict(),
+                },
+            )
 
             from lyo_app.teaching_runtime.model_usage import (
                 bind_model_usage,
@@ -1379,6 +1404,25 @@ async def stream_lyo2_chat(
                     needs_clarification=False,
                     suggested_tier="MEDIUM"
                 )
+            elif (
+                interaction_contract.router_intent is not None
+                and interaction_contract.confidence >= 0.95
+            ):
+                logger.info(
+                    f"⚡ [STREAM][{trace_id}] Contract fast route: "
+                    f"{interaction_contract.mode.value} -> "
+                    f"{interaction_contract.router_intent.value}"
+                )
+                decision = RouterDecision(
+                    intent=interaction_contract.router_intent,
+                    confidence=interaction_contract.confidence,
+                    needs_clarification=False,
+                    suggested_tier=(
+                        "LARGE"
+                        if interaction_contract.router_intent == Intent.COURSE
+                        else "MEDIUM"
+                    ),
+                )
             else:
                 try:
                     # 2b. Fetch Proactive Nudges (New for Phase 16).
@@ -1426,6 +1470,9 @@ async def stream_lyo2_chat(
                     yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                     return
                 
+            if not request.forced_intent:
+                decision = enforce_interaction_contract(decision, interaction_contract)
+
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
             # Shared Learning OS policy. Routing says what the learner wants;
@@ -1461,7 +1508,8 @@ async def stream_lyo2_chat(
                 history=request.conversation_history,
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
-                has_current_media=bool(request.media),
+                has_current_media=current_media_supplied,
+                interaction_contract=interaction_contract.to_dict(),
             )
             await record_policy_decision(
                 db,
@@ -1477,6 +1525,25 @@ async def stream_lyo2_chat(
                     "type": "teaching_policy",
                     **teaching_decision.model_dump(mode="json"),
                 },
+            )
+
+            from lyo_app.teaching_runtime.service import load_learner_snapshot
+            learner_snapshot_for_memory = await load_learner_snapshot(
+                db,
+                authenticated_user_id,
+                _teaching_concept_id,
+                topic=_policy_topic,
+            )
+            memory_context = await build_memory_layers(
+                db=db,
+                user_id=authenticated_user_id,
+                text=request.text or "",
+                history=[
+                    {"role": turn.role, "content": turn.content}
+                    for turn in request.conversation_history
+                ],
+                contract=interaction_contract,
+                learner_snapshot=learner_snapshot_for_memory,
             )
             
             # Chat is an adapter onto the same account-owned intake as Test Prep.
@@ -1520,6 +1587,17 @@ async def stream_lyo2_chat(
                 _topic = _resolve_course_topic(
                     request.text or "", request.conversation_history, _active_topic
                 )
+                if (
+                    interaction_contract.reason == "attachment_to_classroom"
+                    and media_attachments
+                ):
+                    source_name = str(
+                        (media_attachments[0] or {}).get("name")
+                        if isinstance(media_attachments[0], dict)
+                        else ""
+                    ).strip()
+                    if source_name:
+                        _topic = source_name.rsplit(".", 1)[0].replace("_", " ").strip()
                 _explicit_level = _extract_course_level(request.text or "")
                 if not _explicit_level and _active_level:
                     normalized_active_level = _active_level.lower().strip()
@@ -1527,7 +1605,12 @@ async def stream_lyo2_chat(
                         _explicit_level = normalized_active_level
                 course_effective_text = (
                     f'Create or revise a course on "{_topic}". '
-                    f'Apply this learner request: "{request.text or ""}".'
+                    f'Apply this learner request: "{request.text or ""}". '
+                    + (
+                        "Use the attached material as the primary source for the course."
+                        if interaction_contract.reason == "attachment_to_classroom"
+                        else ""
+                    )
                 )
                 _preview_course = {
                     "id": str(uuid.uuid4()),
@@ -1731,18 +1814,17 @@ async def stream_lyo2_chat(
                 # chance to manufacture an assessment the learner never asked
                 # for, so execute one grounded generation step directly.
                 if (
-                    media_attachments
+                    interaction_contract.fast_lane
                     and teaching_decision.action == TeachingAction.ANSWER
-                    and teaching_decision.reason_code == "attachment_information_request"
                 ):
                     logger.info(
-                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
-                        "skipping planner"
+                        f"⚡ [STREAM][{trace_id}] Chat fast lane: "
+                        f"{interaction_contract.mode.value}; skipping planner"
                     )
                     plan = LyoPlan(steps=[
                         PlannedAction(
                             action_type=ActionType.GENERATE_TEXT,
-                            description="Inspect the attachment and answer the learner directly",
+                            description=f"Handle {interaction_contract.mode.value} request directly",
                             parameters={"content": None},
                         )
                     ])
@@ -1841,6 +1923,8 @@ async def stream_lyo2_chat(
                             intent=decision.intent.value if decision.intent else None,
                             media_attachments=media_attachments,
                             teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract=interaction_contract.to_dict(),
+                            memory_context=memory_context,
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -1969,9 +2053,29 @@ async def stream_lyo2_chat(
             # Unified SmartBlock emission: same content as the legacy
             # answer/artifact events above, in the versioned block vocabulary
             # shared by all three clients. Additive — v1 consumers ignore it.
-            smart_blocks = _to_smart_blocks(
-                raw_llm_text, execution_response.artifact_block
+            presentation_blocks = execution_response.metadata.get(
+                "presentation_blocks", []
             )
+            block_prose = raw_llm_text
+            if (
+                isinstance(presentation_blocks, list)
+                and any(
+                    isinstance(block, dict)
+                    and block.get("type") == "dataViz"
+                    and block.get("subtype") == "table"
+                    for block in presentation_blocks
+                )
+            ):
+                block_prose = prose_without_presented_table(raw_llm_text)
+
+            smart_blocks = _to_smart_blocks(
+                block_prose, execution_response.artifact_block
+            )
+            if isinstance(presentation_blocks, list):
+                smart_blocks.extend(
+                    block for block in presentation_blocks
+                    if isinstance(block, dict)
+                )
             if smart_blocks:
                 yield yield_safe_sse_event(
                     "smart_blocks",
@@ -2070,6 +2174,8 @@ async def stream_lyo2_chat(
                     content=raw_llm_text,
                     mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                     client_message_id=assistant_client_message_id,
+                    blocks=smart_blocks or None,
+                    chip_actions=action_labels or None,
                 )
 
             # Completion signal

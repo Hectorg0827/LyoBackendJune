@@ -4,7 +4,7 @@ import uuid
 import asyncio
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
-from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
+from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType, Intent
 from lyo_app.services.rag_service import RAGService
 from lyo_app.services.artifact_service import ArtifactService
 from lyo_app.services.mutator import FollowUpMutator
@@ -134,13 +134,71 @@ Do not override this action with a different pedagogical sequence. The policy ch
 --- END TEACHING POLICY ---
 """
 
+        interaction_contract = context.get("interaction_contract") or {}
+        contract_text = ""
+        if interaction_contract:
+            contract_text = f"""
+--- INTERACTION CONTRACT (HIGHEST PRIORITY) ---
+Mode: {interaction_contract.get("mode", "unknown")}
+Answer first: {bool(interaction_contract.get("answer_first"))}
+Assessment allowed: {bool(interaction_contract.get("allow_assessment", True))}
+Depth: {interaction_contract.get("response_depth", "standard")}
+Reason: {interaction_contract.get("reason", "unspecified")}
+Honor this shape exactly. Do not turn an answer into a quiz, an explanation into a course,
+or a direct request into a calibration question.
+--- END INTERACTION CONTRACT ---
+"""
+
+        memory_context = context.get("memory_context") or {}
+        memory_text = ""
+        if memory_context:
+            learner_memory = memory_context.get("learner") or {}
+            personal_memory = str(memory_context.get("personal") or "").strip()
+            parts = []
+            if learner_memory:
+                parts.append("Learner evidence: " + json.dumps(learner_memory, default=str))
+            if personal_memory:
+                parts.append("Relevant personal preferences/context:\n" + personal_memory)
+            if parts:
+                memory_text = "\n\n--- SELECTIVE MEMORY ---\n" + "\n".join(parts) + "\n--- END SELECTIVE MEMORY ---\n"
+
+        source_text = ""
+        media_for_sources = context.get("media_attachments") or []
+        source_lines = []
+        for attachment in media_for_sources:
+            if not isinstance(attachment, dict):
+                continue
+            name = str(attachment.get("name") or "Attachment")
+            pages = attachment.get("source_pages") or []
+            if isinstance(pages, list) and pages:
+                page_ids = [
+                    str(p.get("page"))
+                    for p in pages
+                    if isinstance(p, dict) and p.get("page") is not None
+                ]
+                source_lines.append(
+                    f"- {name}: extracted pages {', '.join(page_ids[:20])}"
+                )
+            else:
+                source_lines.append(f"- {name}: {attachment.get('mime_type') or 'attached material'}")
+        if source_lines:
+            source_text = """
+--- ATTACHMENT SOURCE MAP ---
+""" + "\n".join(source_lines) + """
+When a claim comes from an attached document and page information is available,
+cite it naturally as "(Source: filename, p. N)". Never invent a page number.
+If the file is an image or page extraction is unavailable, name the file without
+a fabricated page citation. Distinguish what the source states from your inference.
+--- END ATTACHMENT SOURCE MAP ---
+"""
+
         prompt = f"""You are Lyo, a highly intelligent, magical, and empathetic AI learning companion.
 Answer the user's question with warmth, curiosity, and clarity.
 
 CRITICAL PERSONA & FORMATTING RULES:
 - Ban AI Cliches: NEVER say "As an AI language model...", "Here is a breakdown", "Certainly!", "Let's dive in", or "I'd be happy to help".
 - Show, Don't Tell: Start directly with a fascinating hook, insight, or the core answer. Cut all robotic filler introductions.
-- Be CONCISE. Keep responses conversational, limiting to 2-4 short paragraphs MAX.
+- Match the requested response depth from the interaction contract. Be concise by default, but honor explicit requests for depth.
 - Use bullet points for lists, but keep them punchy.
 - Break complex topics into digestible, human-readable chunks.
 - Never write walls of text. If a topic is broad, give a high-level magical overview and offer to go deeper.
@@ -166,7 +224,7 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{teaching_policy_text}
+{rag_text}{history_text}{memory_text}{source_text}{contract_text}{teaching_policy_text}
 
 USER QUESTION:
 {original_request}
@@ -235,6 +293,8 @@ USER QUESTION:
         intent: str = None,
         media_attachments: list = None,
         teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+        memory_context: Optional[Dict[str, Any]] = None,
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
@@ -249,6 +309,8 @@ USER QUESTION:
             "conversation_history": conversation_history or [],
             "media_attachments": media_attachments or [],
             "teaching_decision": teaching_decision or {},
+            "interaction_contract": interaction_contract or {},
+            "memory_context": memory_context or {},
         }
         
         for step in plan.steps:
@@ -347,14 +409,84 @@ USER QUESTION:
                 content=latest_art.get("content"),
                 version_id=f"{latest_art['artifact_id']}_v{latest_art['version']}"
             )
+        from lyo_app.ai.chat_intelligence import (
+            InteractionContract,
+            InteractionMode,
+            ResponseDepth,
+            contextual_action_labels,
+            presentation_blocks,
+        )
+
+        contract_obj = None
+        if interaction_contract:
+            try:
+                router_intent = interaction_contract.get("router_intent")
+                contract_obj = InteractionContract(
+                    mode=InteractionMode(interaction_contract.get("mode", "unknown")),
+                    confidence=float(interaction_contract.get("confidence") or 0.0),
+                    answer_first=bool(interaction_contract.get("answer_first")),
+                    allow_assessment=bool(interaction_contract.get("allow_assessment", True)),
+                    fast_lane=bool(interaction_contract.get("fast_lane")),
+                    response_depth=ResponseDepth(
+                        interaction_contract.get("response_depth") or "standard"
+                    ),
+                    router_intent=Intent(router_intent) if router_intent else None,
+                    reason=str(interaction_contract.get("reason") or "unspecified"),
+                    attachment_referential=bool(
+                        interaction_contract.get("attachment_referential")
+                    ),
+                )
+            except Exception:
+                contract_obj = None
+
+        next_actions = self._contextual_actions(intent)
+        presentation = []
+        if contract_obj is not None:
+            labels = contextual_action_labels(
+                contract_obj,
+                has_media=bool(media_attachments),
+            )
+            if labels:
+                next_actions = [
+                    UIBlock(type=UIBlockType.CTA_ROW, content={"actions": labels})
+                ]
+            presentation = presentation_blocks(
+                contract=contract_obj,
+                answer_text=execution_context["final_text"],
+                media_attachments=media_attachments or [],
+            )
+
+        source_grounding = []
+        for item in media_attachments or []:
+            if not isinstance(item, dict):
+                continue
+            source_grounding.append({
+                "name": item.get("name"),
+                "mime_type": item.get("mime_type"),
+                "page_count": item.get("page_count"),
+                "pages": [
+                    page.get("page")
+                    for page in (item.get("source_pages") or [])
+                    if isinstance(page, dict) and page.get("page") is not None
+                ][:40],
+            })
+
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=self._contextual_actions(intent),
+            next_actions=next_actions,
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
+                "interaction_contract": interaction_contract or None,
+                "presentation_blocks": presentation,
+                "source_grounding": source_grounding,
+                "memory_layers_used": {
+                    "working": bool((memory_context or {}).get("working")),
+                    "learner": bool((memory_context or {}).get("learner")),
+                    "personal": bool((memory_context or {}).get("personal")),
+                },
             }
         )
 
@@ -411,7 +543,9 @@ Return ONLY valid JSON, no markdown fences, no explanation:
         {{"title": "Lesson Title", "description": "1-sentence description", "type": "reading|exercise|quiz", "duration": "X min"}}
     ]
 }}
-Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
+Include exactly 4 lessons and 3 objectives. Keep all descriptions concise.
+If attached material is present, treat it as the primary source: infer the real topic from it,
+build lessons around what it actually contains, and do not invent unrelated coverage."""
         
         try:
             # Use the standard model since Gemini 3.1 excels at dual-output text+JSON in one pass
@@ -419,10 +553,27 @@ Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
             
+            media_attachments = context.get("media_attachments") or []
+            if media_attachments:
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        *media_attachments,
+                    ],
+                }]
+            else:
+                messages = [{"role": "user", "content": prompt}]
+
+            from lyo_app.teaching_runtime.model_router import provider_order_for_tier
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    messages=messages,
+                    provider_order=provider_order_for_tier(
+                        "deliberation",
+                        has_media=bool(media_attachments),
+                    ),
+                    use_cache=not bool(media_attachments),
                 ),
                 timeout=45.0
             )

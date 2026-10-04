@@ -13,7 +13,7 @@ from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
     ConversationTurn, MediaRef, UIBlock, UIBlockType, Intent,
-    ActionType, PlannedAction, LyoPlan,
+    ActionType, PlannedAction, LyoPlan, RouterDecision,
 )
 from lyo_app.ai.multimodal import (
     canonical_message_content,
@@ -72,6 +72,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
     start_time = time.time()
     try:
         display_content = canonical_message_content(request.text, request.media)
+        current_media_supplied = bool(request.media)
         media_attachments = await load_media_attachments(request.media)
         if not request.text and request.media:
             request.text = "Please analyze the attached material and respond to what it contains."
@@ -150,6 +151,19 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             media_attachments = await load_media_attachments(
                 historical_media, missing_ok=True
             )
+            if historical_media and not request.media:
+                request.media = historical_media
+
+        from lyo_app.ai.chat_intelligence import (
+            build_memory_layers,
+            derive_interaction_contract,
+            enforce_interaction_contract,
+        )
+        interaction_contract = derive_interaction_contract(
+            request.text,
+            has_media=bool(media_attachments),
+            has_current_media=current_media_supplied,
+        )
 
         from lyo_app.teaching_runtime.model_usage import (
             bind_model_usage,
@@ -174,12 +188,39 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         # 1. Layer A: Multimodal Routing
         logger.info(f"[{trace_id}] Layer A: Routing request for user {current_user.id}")
-        with _model_usage_scope("orchestration"):
-            routing_response = await router_agent.route(
-                request,
-                media_attachments=media_attachments,
+        if request.forced_intent:
+            decision = RouterDecision(
+                intent=request.forced_intent,
+                confidence=1.0,
+                needs_clarification=False,
+                suggested_tier=(
+                    "LARGE" if request.forced_intent == Intent.COURSE else "MEDIUM"
+                ),
             )
-        decision = routing_response.decision
+        elif (
+            interaction_contract.router_intent is not None
+            and interaction_contract.confidence >= 0.95
+        ):
+            decision = RouterDecision(
+                intent=interaction_contract.router_intent,
+                confidence=interaction_contract.confidence,
+                needs_clarification=False,
+                suggested_tier=(
+                    "LARGE"
+                    if interaction_contract.router_intent == Intent.COURSE
+                    else "MEDIUM"
+                ),
+            )
+        else:
+            with _model_usage_scope("orchestration"):
+                routing_response = await router_agent.route(
+                    request,
+                    media_attachments=media_attachments,
+                )
+            decision = routing_response.decision
+
+        if not request.forced_intent:
+            decision = enforce_interaction_contract(decision, interaction_contract)
 
         from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
@@ -210,7 +251,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             history=request.conversation_history,
             state_summary=request.state_summary,
             has_media=bool(media_attachments),
-            has_current_media=bool(request.media),
+            has_current_media=current_media_supplied,
+            interaction_contract=interaction_contract.to_dict(),
         )
         await record_policy_decision(
             db,
@@ -219,6 +261,25 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             surface=TeachingSurface.CHAT,
             decision=teaching_decision,
             concept_id=_teaching_concept_id,
+        )
+
+        from lyo_app.teaching_runtime.service import load_learner_snapshot
+        learner_snapshot_for_memory = await load_learner_snapshot(
+            db,
+            authenticated_user_id,
+            _teaching_concept_id,
+            topic=_policy_topic,
+        )
+        memory_context = await build_memory_layers(
+            db=db,
+            user_id=authenticated_user_id,
+            text=request.text or "",
+            history=[
+                {"role": turn.role, "content": turn.content}
+                for turn in request.conversation_history
+            ],
+            contract=interaction_contract,
+            learner_snapshot=learner_snapshot_for_memory,
         )
         
         # Check for clarification gate. A file plus a direct information
@@ -253,14 +314,13 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         # 2. Layer B: Planning
         logger.info(f"[{trace_id}] Layer B: Planning execution for intent {decision.intent}")
         if (
-            media_attachments
+            interaction_contract.fast_lane
             and teaching_decision.action == TeachingAction.ANSWER
-            and teaching_decision.reason_code == "attachment_information_request"
         ):
             plan = LyoPlan(steps=[
                 PlannedAction(
                     action_type=ActionType.GENERATE_TEXT,
-                    description="Inspect the attachment and answer the learner directly",
+                    description=f"Handle {interaction_contract.mode.value} request directly",
                     parameters={"content": None},
                 )
             ])
@@ -282,6 +342,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 ],
                 media_attachments=media_attachments,
                 teaching_decision=teaching_decision.model_dump(mode="json"),
+                interaction_contract=interaction_contract.to_dict(),
+                memory_context=memory_context,
             )
         
         # Add trace metadata
@@ -297,6 +359,37 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         answer_text = execution_response.answer_block.content.get("text", "")
         if persistent_conversation and answer_text:
+            from lyo_app.ai.schemas.smart_block import SmartBlock
+            from lyo_app.ai.chat_intelligence import prose_without_presented_table
+
+            presentation = execution_response.metadata.get("presentation_blocks", [])
+            block_text = answer_text
+            if (
+                isinstance(presentation, list)
+                and any(
+                    isinstance(block, dict)
+                    and block.get("type") == "dataViz"
+                    and block.get("subtype") == "table"
+                    for block in presentation
+                )
+            ):
+                block_text = prose_without_presented_table(answer_text)
+
+            persisted_blocks = []
+            if block_text:
+                persisted_blocks.append(
+                    SmartBlock.text(block_text).model_dump(mode="json")
+                )
+            if isinstance(presentation, list):
+                persisted_blocks.extend(
+                    block for block in presentation if isinstance(block, dict)
+                )
+
+            action_labels = []
+            for action_block in execution_response.next_actions:
+                if action_block.content and "actions" in action_block.content:
+                    action_labels.extend(action_block.content["actions"])
+
             await conversation_store.add_message(
                 db,
                 persistent_conversation.id,
@@ -304,6 +397,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 answer_text,
                 mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                 client_message_id=assistant_client_message_id,
+                blocks=persisted_blocks or None,
+                chip_actions=action_labels or None,
             )
         
         return execution_response
