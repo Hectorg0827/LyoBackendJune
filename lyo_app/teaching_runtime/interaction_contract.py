@@ -411,7 +411,7 @@ def interaction_contract_for_request(
         mode=InteractionMode.ANSWER,
         depth=depth,
         fast_lane=True,
-            channel=channel,
+        channel=channel,
         attachment_authoritative=has_media and has_current_media,
         reason_code="default_answer",
     )
