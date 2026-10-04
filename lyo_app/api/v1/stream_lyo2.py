@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import json
+import re
 import uuid
 import time
 from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
@@ -728,6 +729,31 @@ def _preferred_prep_topic(
     return (subject or "").strip()
 
 
+def _voice_friendly_lesson_text(raw: str) -> str:
+    """Make structured lesson fallback text natural when read aloud.
+
+    SmartBlocks are still emitted unchanged for the screen. This only adapts
+    the parallel plain-text representation used by TTS, so voice remains the
+    same lesson and evidence workflow rather than a second teaching system.
+    """
+    text = raw or ""
+    text = re.sub(r"```[\s\S]*?```", " ", text)
+    text = re.sub(r"(?m)^#{1,6}\s*", "", text)
+    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    text = re.sub(r"(?m)^\s*([A-Da-d])[.)]\s+", r"\1: ", text)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+    text = re.sub(r"`([^\`]+)`", r"\1", text)
+    text = text.replace("\\(", "").replace("\\)", "")
+    text = text.replace("\\[", "").replace("\\]", "")
+    text = text.replace("$", "")
+    text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
+    text = re.sub(r"(?m)^\s*:?-{3,}:?(?:\s*,\s*:?-{3,}:?)+\s*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
+
+
 async def _emit_composed_lesson(
     db: AsyncSession,
     lesson: "ChatLesson",
@@ -736,6 +762,7 @@ async def _emit_composed_lesson(
     persistent_conversation: Any,
     assistant_client_message_id: Optional[str],
     mode_used: str,
+    voice_delivery: bool = False,
 ):
     """Stream one composed lesson to the client and persist it.
 
@@ -747,6 +774,8 @@ async def _emit_composed_lesson(
     # Clients that do not render blocks yet (iOS, Android) read this
     # plain-text event, so the lesson degrades instead of disappearing.
     lesson_text = lesson.to_plain_text()
+    if voice_delivery:
+        lesson_text = _voice_friendly_lesson_text(lesson_text)
     answer_brick = {
         "type": "answer",
         "block": {
@@ -1434,6 +1463,7 @@ async def stream_lyo2_chat(
             # next. It reads the same durable evidence the Classroom receives.
             from lyo_app.ai.lesson_composer import slugify_skill
             from lyo_app.teaching_runtime import (
+                DeliveryMode,
                 InteractionMode,
                 TeachingAction,
                 TeachingSurface,
@@ -1725,6 +1755,9 @@ async def stream_lyo2_chat(
                                 persistent_conversation,
                                 assistant_client_message_id,
                                 ChatMode.TEST_PREP.value,
+                                voice_delivery=(
+                                    interaction_contract.delivery_mode == DeliveryMode.VOICE
+                                ),
                             ):
                                 yield event
 
@@ -1780,6 +1813,9 @@ async def stream_lyo2_chat(
                             persistent_conversation,
                             assistant_client_message_id,
                             ChatMode.GENERAL.value,
+                            voice_delivery=(
+                                interaction_contract.delivery_mode == DeliveryMode.VOICE
+                            ),
                         ):
                             yield event
 
