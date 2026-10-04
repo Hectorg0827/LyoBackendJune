@@ -788,6 +788,9 @@ async def _emit_composed_lesson(
     persistent_conversation: Any,
     assistant_client_message_id: Optional[str],
     mode_used: str,
+    *,
+    delivery_mode: str = "text",
+    voice_turn_id: Optional[str] = None,
 ):
     """Stream one composed lesson to the client and persist it.
 
@@ -809,6 +812,20 @@ async def _emit_composed_lesson(
     }
     collected_bricks.append(answer_brick)
     yield yield_safe_sse_event("answer", answer_brick)
+    if delivery_mode == "voice":
+        speech_segments = _speech_segments(lesson_text)
+        if speech_segments:
+            yield yield_safe_sse_event(
+                "voice_delivery",
+                {
+                    "type": "voice_delivery",
+                    "voice_turn_id": voice_turn_id,
+                    "phase": "response_ready",
+                    "segments": speech_segments,
+                    "interruptible": True,
+                    "language": "auto",
+                },
+            )
     # Redacted on the way out only. The persisted copy keeps the answer key,
     # because grading happens on a later request against what was stored.
     yield yield_safe_sse_event(
@@ -1548,6 +1565,17 @@ async def stream_lyo2_chat(
                 "interaction_contract",
                 {"type": "interaction_contract", **interaction_contract_payload},
             )
+            voice_turn_id = request.voice_turn_id or trace_id
+            if request.delivery_mode == "voice":
+                yield yield_safe_sse_event(
+                    "voice_turn",
+                    {
+                        "type": "voice_turn",
+                        "voice_turn_id": voice_turn_id,
+                        "phase": "thinking",
+                        "interaction_mode": interaction_contract.mode.value,
+                    },
+                )
 
             _policy_topic = resolve_chat_teaching_topic(
                 intent=decision.intent,
@@ -1606,6 +1634,20 @@ async def stream_lyo2_chat(
                         client_message_id=assistant_client_message_id)
                 yield yield_safe_sse_event("answer", {"type": "answer", "block": {
                     "type": "TutorMessageBlock", "content": {"text": text}, "priority": 0}})
+                if request.delivery_mode == "voice":
+                    segments = _speech_segments(text)
+                    if segments:
+                        yield yield_safe_sse_event(
+                            "voice_delivery",
+                            {
+                                "type": "voice_delivery",
+                                "voice_turn_id": voice_turn_id,
+                                "phase": "response_ready",
+                                "segments": segments,
+                                "interruptible": True,
+                                "language": "auto",
+                            },
+                        )
                 yield "data: [DONE]\n\n"
                 return
 
@@ -1707,6 +1749,20 @@ async def stream_lyo2_chat(
                         client_message_id=assistant_client_message_id,
                     )
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
+                if request.delivery_mode == "voice" and decision.clarification_question:
+                    segments = _speech_segments(decision.clarification_question)
+                    if segments:
+                        yield yield_safe_sse_event(
+                            "voice_delivery",
+                            {
+                                "type": "voice_delivery",
+                                "voice_turn_id": voice_turn_id,
+                                "phase": "response_ready",
+                                "segments": segments,
+                                "interruptible": True,
+                                "language": "auto",
+                            },
+                        )
                 return
                 
             # Intercept TEST_PREP intent to gather structured details
@@ -1728,6 +1784,20 @@ async def stream_lyo2_chat(
                                 client_message_id=assistant_client_message_id,
                             )
                         yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
+                        if request.delivery_mode == "voice" and data.follow_up_question:
+                            segments = _speech_segments(data.follow_up_question)
+                            if segments:
+                                yield yield_safe_sse_event(
+                                    "voice_delivery",
+                                    {
+                                        "type": "voice_delivery",
+                                        "voice_turn_id": voice_turn_id,
+                                        "phase": "response_ready",
+                                        "segments": segments,
+                                        "interruptible": True,
+                                        "language": "auto",
+                                    },
+                                )
                         return
                     # Optionally attach extracted data back to the request for the planner
                     request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
@@ -1766,6 +1836,8 @@ async def stream_lyo2_chat(
                                 persistent_conversation,
                                 assistant_client_message_id,
                                 ChatMode.TEST_PREP.value,
+                                delivery_mode=request.delivery_mode,
+                                voice_turn_id=voice_turn_id,
                             ):
                                 yield event
 
@@ -1821,6 +1893,8 @@ async def stream_lyo2_chat(
                             persistent_conversation,
                             assistant_client_message_id,
                             ChatMode.GENERAL.value,
+                            delivery_mode=request.delivery_mode,
+                            voice_turn_id=voice_turn_id,
                         ):
                             yield event
 
@@ -1985,6 +2059,7 @@ async def stream_lyo2_chat(
                             teaching_decision=teaching_decision.model_dump(mode="json"),
                             interaction_contract=interaction_contract_payload,
                             personal_memory=personal_memory,
+                            delivery_mode=request.delivery_mode,
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -2076,6 +2151,20 @@ async def stream_lyo2_chat(
                 collected_bricks.append(answer_brick)
                 yield yield_safe_sse_event("answer", answer_brick)
                 logger.info(f"📝 [STREAM][{trace_id}] Emitted answer event ({len(raw_llm_text)} chars)")
+                if request.delivery_mode == "voice":
+                    segments = _speech_segments(raw_llm_text)
+                    if segments:
+                        yield yield_safe_sse_event(
+                            "voice_delivery",
+                            {
+                                "type": "voice_delivery",
+                                "voice_turn_id": voice_turn_id,
+                                "phase": "response_ready",
+                                "segments": segments,
+                                "interruptible": True,
+                                "language": "auto",
+                            },
+                        )
             
             if execution_response.artifact_block:
                 # Send agent-tagged artifact event
