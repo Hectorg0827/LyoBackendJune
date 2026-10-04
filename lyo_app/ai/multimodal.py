@@ -266,6 +266,7 @@ async def load_media_attachments(
             "mime_type": mime_type,
             "data": base64.b64encode(data).decode("ascii"),
             "name": _clean_label(item.name or path.name),
+            "uri": item.uri,
         }
         if not mime_type.startswith("image/"):
             source = await asyncio.to_thread(_extract_document_source, data, mime_type)
