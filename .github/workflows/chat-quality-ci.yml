@@ -1,0 +1,56 @@
+name: Chat Quality Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "lyo_app/api/v1/chat_lyo2.py"
+      - "lyo_app/api/v1/stream_lyo2.py"
+      - "lyo_app/ai/executor.py"
+      - "lyo_app/ai/multimodal.py"
+      - "lyo_app/teaching_runtime/**"
+      - "lyo_app/services/memory_synthesis.py"
+      - "tests/test_chat_companion_v2.py"
+      - "tests/test_chat_multimodal.py"
+      - "tests/test_chat_continuity.py"
+      - ".github/workflows/chat-quality-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TESTING: "true"
+      SECRET_KEY: chat-quality-test-secret-key-at-least-32-characters
+      ENVIRONMENT: development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/requirements-chat-quality.txt
+          python -m pip install --ignore-installed packaging -r /tmp/requirements-chat-quality.txt
+          python -m pip install pytest pytest-asyncio flake8
+
+      - name: Reject syntax and undefined-name regressions
+        run: |
+          python -m flake8             lyo_app/teaching_runtime             lyo_app/ai/executor.py             lyo_app/ai/multimodal.py             lyo_app/api/v1/chat_lyo2.py             lyo_app/api/v1/stream_lyo2.py             lyo_app/services/memory_synthesis.py             tests/test_chat_companion_v2.py             --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Intent directness depth and handoff contract
+        run: python -m pytest -q tests/test_chat_companion_v2.py tests/test_teaching_runtime_policy.py
+
+      - name: Grounding multimodal and continuity regressions
+        run: |
+          python -m pytest -q             tests/test_chat_multimodal.py             tests/test_chat_continuity.py             tests/test_chat_check_grading.py
