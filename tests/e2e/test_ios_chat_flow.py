@@ -11,6 +11,7 @@ os.environ["LYO_LIGHTWEIGHT_STARTUP"] = "1"
 # Now import app
 from lyo_app.app_factory import create_app
 from lyo_app.ai.schemas.lyo2 import RouterDecision, Intent, RouterResponse
+from lyo_app.teaching_runtime import TeachingAction, TeachingDecision
 
 app = create_app()
 client = TestClient(app)
@@ -49,14 +50,28 @@ def mock_auth():
 
 @pytest.fixture
 def mock_ai_internals():
-    """Mock both the semantic router and the canonical low-latency executor."""
+    """Isolate the transport contract from learner-policy/database behavior."""
+    decision = TeachingDecision(
+        action=TeachingAction.ANSWER,
+        reason_code="transport_test",
+        model_tier="reflex",
+    )
+
     with patch("lyo_app.api.v1.stream_lyo2.router_agent") as mock_router:
         mock_router.route = AsyncMock(return_value=RouterResponse(
             decision=RouterDecision(intent=Intent.CHAT, confidence=0.9),
             trace_id="test-trace"
         ))
 
-        with patch("lyo_app.api.v1.stream_lyo2.LyoExecutor.stream_text") as mock_stream:
+        with patch(
+            "lyo_app.teaching_runtime.decide_for_chat",
+            new=AsyncMock(return_value=decision),
+        ), patch(
+            "lyo_app.teaching_runtime.record_policy_decision",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "lyo_app.api.v1.stream_lyo2.LyoExecutor.stream_text"
+        ) as mock_stream:
             async def stream_generator(*args, **kwargs):
                 yield "Hello"
                 yield " there"
@@ -103,7 +118,7 @@ async def test_ios_chat_flow_hi(mock_auth, mock_ai_internals):
             delta_lines = [c for c in chunks if 'type": "text_delta"' in c]
             answer_lines = [c for c in chunks if 'type": "answer"' in c]
             assert len(delta_lines) == 0, "Legacy client unexpectedly received text deltas"
-            assert len(answer_lines) > 0, "Legacy client did not receive final answer content"
+            assert len(answer_lines) > 0, f"Legacy client did not receive final answer content: {chunks}"
 
             print(f"\n✅ PASSED: Legacy client received {len(answer_lines)} final answer event(s).")
 
@@ -134,7 +149,7 @@ async def test_ios_chat_flow_text_delta_capability(mock_auth, mock_ai_internals)
 
     delta_lines = [line for line in chunks if 'type": "text_delta"' in line]
     answer_lines = [line for line in chunks if 'type": "answer"' in line]
-    assert len(delta_lines) == 3
+    assert len(delta_lines) == 3, f"Expected three text deltas, got: {chunks}"
     assert len(answer_lines) == 1
     assert any('"final_snapshot": true' in line for line in answer_lines)
 
