@@ -12,6 +12,7 @@ from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
 from lyo_app.integrations.calendar_integration import calendar_service, CalendarEvent, EventCategory
 from lyo_app.teaching_runtime.interaction_contract import (
+    InteractionChannel,
     InteractionContract,
     InteractionMode,
     ResponseDepth,
@@ -29,6 +30,7 @@ def _coerce_interaction_contract(raw: Optional[Dict[str, Any]]) -> Optional[Inte
             mode=InteractionMode(str(raw.get("mode") or "answer")),
             depth=ResponseDepth(str(raw.get("depth") or "standard")),
             fast_lane=bool(raw.get("fast_lane")),
+            channel=InteractionChannel(str(raw.get("channel") or "text")),
             attachment_authoritative=bool(raw.get("attachment_authoritative")),
             reason_code=str(raw.get("reason_code") or "general"),
             directives=tuple(str(item) for item in (raw.get("directives") or [])),
