@@ -5,6 +5,7 @@ import asyncio
 from typing import Optional, Dict, Any, List
 import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
+from lyo_app.ai.schemas.smart_block import SmartBlock, InteractiveItem
 from lyo_app.services.rag_service import RAGService
 from lyo_app.services.artifact_service import ArtifactService
 from lyo_app.services.mutator import FollowUpMutator
@@ -62,6 +63,87 @@ def _get_json_gemini_model():
         },
     )
 
+
+def _attachment_grounding(media_attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, str]]]:
+    """Build bounded, citable source context from extracted attachment pages."""
+    source_refs: list[dict[str, str]] = []
+    chunks: list[str] = []
+    budget = 18000
+    for attachment in media_attachments:
+        name = str(attachment.get("name") or "attachment")
+        for section in attachment.get("source_sections") or []:
+            label = str(section.get("label") or "document")
+            section_text = str(section.get("text") or "").strip()
+            if not section_text or budget <= 0:
+                continue
+            bounded = section_text[:budget]
+            source_refs.append({"name": name, "label": label})
+            chunks.append(f"[{name} · {label}]\n{bounded}")
+            budget -= len(bounded)
+    if not chunks:
+        return "", source_refs
+    return (
+        "\n\n--- ATTACHMENT SOURCE MAP ---\n"
+        + "\n\n".join(chunks)
+        + "\n--- END ATTACHMENT SOURCE MAP ---\n",
+        source_refs,
+    )
+
+
+def _presentation_blocks(answer_text: str, representation: str) -> list[dict[str, Any]]:
+    """Turn naturally structured answers into canonical Smart Blocks."""
+    import re
+
+    text = (answer_text or "").strip()
+    if not text:
+        return []
+
+    if representation == "table":
+        lines = text.splitlines()
+        table_indices = [i for i, line in enumerate(lines) if "|" in line and line.count("|") >= 2]
+        if len(table_indices) >= 2:
+            start, end = min(table_indices), max(table_indices)
+            blocks: list[dict[str, Any]] = []
+            before = "\n".join(lines[:start]).strip()
+            after = "\n".join(lines[end + 1:]).strip()
+            if before:
+                blocks.append(SmartBlock.text(before, subtype="summary").model_dump())
+            blocks.append(SmartBlock.table("\n".join(lines[start:end + 1]).strip(), title="Comparison").model_dump())
+            if after:
+                blocks.append(SmartBlock.text(after).model_dump())
+            return blocks
+
+    if representation in {"steps", "timeline"}:
+        items: list[InteractiveItem] = []
+        for line in text.splitlines():
+            match = re.match(r"^\s*(?:\d+[.)]|[-*])\s*([^:—-]+?)\s*(?::|—|-)?\s*(.*)$", line)
+            if match:
+                label = match.group(1).strip()
+                detail = match.group(2).strip() or label
+                if label:
+                    items.append(InteractiveItem(label=label[:100], detail=detail[:700]))
+        if len(items) >= 2:
+            return [SmartBlock(
+                type="interactive",
+                subtype="stepByStep" if representation == "steps" else "timeline",
+                content={
+                    "title": "Steps" if representation == "steps" else "Timeline",
+                    "items": [item.model_dump() for item in items[:12]],
+                },
+            ).model_dump()]
+
+    if representation == "visual":
+        match = re.search(r"```mermaid\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            diagram = match.group(1).strip()
+            prose = (text[:match.start()] + text[match.end():]).strip()
+            blocks = []
+            if prose:
+                blocks.append(SmartBlock.text(prose, subtype="summary").model_dump())
+            blocks.append(SmartBlock.data_viz(diagram, fmt="mermaid", title="Visual explanation").model_dump())
+            return blocks
+
+    return []
 
 class LyoExecutor:
     """
