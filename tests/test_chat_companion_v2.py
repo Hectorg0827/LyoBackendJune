@@ -59,6 +59,27 @@ def test_interaction_contract_matches_explicit_user_goal(
     assert contract.fast_lane is fast
 
 
+def test_explicit_explain_outranks_incorrect_routed_quiz_guess():
+    contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        routed_intent=Intent.QUIZ,
+    )
+
+    assert contract.mode is InteractionMode.EXPLAIN
+    assert contract.workflow_intent is None
+    assert contract.reason_code == "explicit_explain"
+
+
+def test_explicit_quiz_outranks_incorrect_routed_explain_guess():
+    contract = interaction_contract_for_request(
+        text="quiz me on photosynthesis",
+        routed_intent=Intent.EXPLAIN,
+    )
+
+    assert contract.mode is InteractionMode.QUIZ
+    assert contract.workflow_intent is Intent.QUIZ
+
+
 def test_explicit_cross_surface_handoffs_own_the_turn():
     classroom = interaction_contract_for_request(
         text="Teach this in Classroom",
