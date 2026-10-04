@@ -15,6 +15,13 @@ from .models import (
     TeachingSurface,
 )
 from .policy import POLICY_VERSION, TeachingPolicy, canonical_action_for_classroom_move
+from .interaction_contract import (
+    InteractionContract,
+    InteractionMode,
+    ResponseDepth,
+    contract_prompt,
+    interaction_contract_for_request,
+)
 from .service import (
     bounded_intervention_metadata,
     decide_for_chat,
@@ -34,6 +41,11 @@ __all__ = [
     "TeachingContext",
     "TeachingDecision",
     "TeachingSurface",
+    "InteractionContract",
+    "InteractionMode",
+    "ResponseDepth",
+    "contract_prompt",
+    "interaction_contract_for_request",
     "POLICY_VERSION",
     "TeachingPolicy",
     "canonical_action_for_classroom_move",
