@@ -146,3 +146,49 @@ async def test_streaming_provider_does_not_restart_after_partial_output():
 
     assert output == ["Partial answer."]
     assert completions.calls == ["first"]
+
+
+
+@pytest.mark.asyncio
+async def test_gemini_stream_failure_before_output_falls_through_to_openai(monkeypatch):
+    manager = AIResilienceManager()
+    manager._initialized = True
+    manager.models = {
+        "gemini-first": AIModelConfig(
+            name="Gemini first",
+            endpoint="https://example.invalid/model:generateContent",
+            api_key="configured-key",
+        ),
+        "openai-second": AIModelConfig(
+            name="OpenAI second",
+            endpoint="openai",
+            api_key="configured-key",
+        ),
+    }
+    manager.circuit_breakers = {
+        name: CircuitBreaker(CircuitBreakerConfig())
+        for name in manager.models
+    }
+
+    async def failing_gemini(*args, **kwargs):
+        if False:
+            yield ""
+        raise RuntimeError("gemini unavailable")
+
+    monkeypatch.setattr(manager, "_stream_gemini", failing_gemini)
+    completions = _Completions()
+    async def openai_create(**kwargs):
+        completions.calls.append(kwargs["model"])
+        return _SuccessfulStream(["Healthy fallback."])
+    completions.create = openai_create
+    manager.openai_client = _OpenAI(completions)
+
+    output = []
+    async for delta in manager.stream_chat_completion(
+        [{"role": "user", "content": "Explain gravity"}],
+        provider_order=["gemini-first", "openai-second"],
+    ):
+        output.append(delta)
+
+    assert output == ["Healthy fallback."]
+    assert completions.calls == ["openai-second"]
