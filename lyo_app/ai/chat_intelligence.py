@@ -125,6 +125,16 @@ _EXPLAIN_RE = re.compile(
     r"help me understand|expl[ií]came|qu[eé] significa|por qu[eé])\b",
     re.IGNORECASE,
 )
+_VISUAL_REQUEST_RE = re.compile(
+    r"\b(show (?:me )?(?:visually|a diagram|a graph|a visual)|visuali[sz]e|"
+    r"draw (?:it|this)|diagram|diagrama|mu[eé]strame visualmente)\b",
+    re.IGNORECASE,
+)
+_EXAMPLE_REQUEST_RE = re.compile(
+    r"\b(give me an example|show me an example|example please|another example|"
+    r"dame un ejemplo|mu[eé]strame un ejemplo)\b",
+    re.IGNORECASE,
+)
 _DIRECT_QUESTION_RE = re.compile(
     r"^\s*(what|who|when|where|why|how|which|is|are|can|could|does|do|did|"
     r"qu[eé]|qui[eé]n|cu[aá]ndo|d[oó]nde|por qu[eé]|c[oó]mo|cu[aá]l)\b",
@@ -269,6 +279,18 @@ def derive_interaction_contract(
             answer_first=True, allow_assessment=False, fast_lane=True,
             router_intent=Intent.EXPLAIN,
         )
+    if _VISUAL_REQUEST_RE.search(raw):
+        return make(
+            InteractionMode.EXPLAIN, "explicit_visual_explanation",
+            answer_first=True, allow_assessment=False, fast_lane=True,
+            router_intent=Intent.EXPLAIN,
+        )
+    if _EXAMPLE_REQUEST_RE.search(raw):
+        return make(
+            InteractionMode.EXPLAIN, "explicit_example",
+            answer_first=True, allow_assessment=False, fast_lane=True,
+            router_intent=Intent.EXPLAIN,
+        )
     if _EXPLAIN_RE.search(raw):
         return make(
             InteractionMode.EXPLAIN, "explicit_explanation",
@@ -343,6 +365,14 @@ def contract_directives(contract: InteractionContract) -> List[str]:
         directives.append("Use moderate depth: enough to be useful without turning the answer into a lecture.")
     if contract.mode is InteractionMode.COMPARE:
         directives.append("Use a compact comparison table when it materially improves clarity.")
+    if contract.reason == "explicit_visual_explanation":
+        directives.append(
+            "Prefer a visual representation: a compact diagram, labeled structure, or spatial analogy rather than more prose."
+        )
+    if contract.reason == "explicit_example":
+        directives.append(
+            "Lead with one concrete worked example tied to the current context."
+        )
     if contract.mode is InteractionMode.ANALYZE:
         directives.append("Ground claims in the attached material and distinguish observation from inference.")
     return directives
