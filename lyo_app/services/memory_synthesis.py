@@ -25,6 +25,7 @@ from lyo_app.services.embedding_service import embedding_service
 from lyo_app.ai_agents.models import MentorInteraction
 from lyo_app.auth.models import User
 import json
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,73 @@ Your output MUST be a JSON list of objects:
 - Acknowledge their progress and growth
 - Avoid approaches that haven't worked for them
 """
+
+    async def get_relevant_memory_for_prompt(
+        self,
+        user_id: int,
+        query: str,
+        db: AsyncSession,
+        limit: int = 5,
+    ) -> str:
+        """Return a small, query-relevant personal-memory lane.
+
+        Working memory is the active conversation and learner memory is owned by
+        the Learning OS evidence model. This method deliberately returns only
+        durable personal/preferences context, and only when it is relevant
+        enough to help the current turn.
+        """
+        try:
+            result = await db.execute(
+                select(MemoryInsightDB)
+                .where(
+                    and_(
+                        MemoryInsightDB.user_id == user_id,
+                        MemoryInsightDB.confidence >= 0.55,
+                    )
+                )
+                .order_by(desc(MemoryInsightDB.confidence), desc(MemoryInsightDB.created_at))
+                .limit(40)
+            )
+            rows = list(result.scalars().all())
+        except Exception as exc:
+            logger.warning("Relevant-memory lookup failed: %s", type(exc).__name__)
+            return ""
+
+        if not rows:
+            return ""
+
+        tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]{3,}", (query or "").casefold())
+            if token not in {
+                "the", "and", "for", "this", "that", "with", "what", "how",
+                "why", "can", "you", "from", "into", "about", "tell", "show",
+            }
+        }
+        always_use_categories = {"learning_style", "success_pattern"}
+        scored = []
+        for row in rows:
+            text = str(row.insight_text or "").strip()
+            if not text:
+                continue
+            haystack = text.casefold()
+            overlap = sum(1 for token in tokens if token in haystack)
+            category_bonus = 1 if row.category in always_use_categories else 0
+            score = overlap * 3 + category_bonus + float(row.confidence or 0.0)
+            if overlap or category_bonus:
+                scored.append((score, row))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        selected = [row for _, row in scored[: max(1, min(limit, 8))]]
+        if not selected:
+            return ""
+
+        lines = [
+            "PERSONAL MEMORY (durable, selectively retrieved; never treat as current learner evidence):"
+        ]
+        for row in selected:
+            lines.append(f"- [{row.category}] {str(row.insight_text).strip()[:280]}")
+        return "\n".join(lines)
 
     async def update_memory_insight(
         self,
