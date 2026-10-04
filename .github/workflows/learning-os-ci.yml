@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - feat/chat-companion-v2
       - course-generation-events-20261001
     paths:
       - "lyo_app/teaching_runtime/**"
