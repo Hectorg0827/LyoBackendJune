@@ -2006,6 +2006,10 @@ async def stream_lyo2_chat(
                 decision.intent == Intent.EXPLAIN
                 and request.text
                 and interaction_contract.mode == InteractionMode.TEACH
+                and not (
+                    freshness_decision
+                    and freshness_decision.mode.value == "require"
+                )
             ):
                 _force_lesson_mode = _lesson_mode_for_teaching_action(
                     teaching_decision.action
@@ -2138,6 +2142,28 @@ async def stream_lyo2_chat(
                 ])
             
             latency_metrics["planning_ms"] = int((time.time() - p_start) * 1000)
+
+            if (
+                freshness_decision
+                and freshness_decision.mode.value == "require"
+                and not any(
+                    step.action_type == ActionType.SEARCH_WEB
+                    for step in plan.steps
+                )
+            ):
+                plan.steps.insert(
+                    0,
+                    PlannedAction(
+                        action_type=ActionType.SEARCH_WEB,
+                        description="Ground explicitly current information in live web results",
+                        parameters={"query": request.text or "", "limit": 5},
+                    ),
+                )
+                latency_metrics["search_injected"] = True
+                logger.info(
+                    f"🌐 [STREAM][{trace_id}] Injected SEARCH_WEB for freshness-required turn"
+                )
+
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
             if decision.intent == Intent.COURSE:
                 yield yield_safe_sse_event(
