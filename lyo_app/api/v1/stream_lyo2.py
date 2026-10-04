@@ -1299,6 +1299,7 @@ async def stream_lyo2_chat(
                 build_memory_layers,
                 derive_interaction_contract,
                 enforce_interaction_contract,
+                prose_without_presented_table,
             )
             interaction_contract = derive_interaction_contract(
                 request.text,
@@ -2052,11 +2053,23 @@ async def stream_lyo2_chat(
             # Unified SmartBlock emission: same content as the legacy
             # answer/artifact events above, in the versioned block vocabulary
             # shared by all three clients. Additive — v1 consumers ignore it.
-            smart_blocks = _to_smart_blocks(
-                raw_llm_text, execution_response.artifact_block
-            )
             presentation_blocks = execution_response.metadata.get(
                 "presentation_blocks", []
+            )
+            block_prose = raw_llm_text
+            if (
+                isinstance(presentation_blocks, list)
+                and any(
+                    isinstance(block, dict)
+                    and block.get("type") == "dataViz"
+                    and block.get("subtype") == "table"
+                    for block in presentation_blocks
+                )
+            ):
+                block_prose = prose_without_presented_table(raw_llm_text)
+
+            smart_blocks = _to_smart_blocks(
+                block_prose, execution_response.artifact_block
             )
             if isinstance(presentation_blocks, list):
                 smart_blocks.extend(
@@ -2161,6 +2174,8 @@ async def stream_lyo2_chat(
                     content=raw_llm_text,
                     mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                     client_message_id=assistant_client_message_id,
+                    blocks=smart_blocks or None,
+                    chip_actions=action_labels or None,
                 )
 
             # Completion signal
