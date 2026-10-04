@@ -1510,7 +1510,7 @@ async def stream_lyo2_chat(
                     yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                     return
                 
-            latency_metrics["routing_ms"] = int((time.monotonic() - r_start) * 1000)
+            latency_metrics["routing_ms"] = int((time.time() - r_start) * 1000)
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
             # Shared Learning OS policy. Routing says what the learner wants;
@@ -2095,7 +2095,7 @@ async def stream_lyo2_chat(
                     )
                 ])
             
-            latency_metrics["planning_ms"] = int((time.monotonic() - p_start) * 1000)
+            latency_metrics["planning_ms"] = int((time.time() - p_start) * 1000)
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
             if decision.intent == Intent.COURSE:
                 yield yield_safe_sse_event(
@@ -2205,7 +2205,7 @@ async def stream_lyo2_chat(
                 yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                 return
                 
-            latency_metrics["execution_ms"] = int((time.monotonic() - e_start) * 1000)
+            latency_metrics["execution_ms"] = int((time.time() - e_start) * 1000)
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             if decision.intent == Intent.COURSE:
                 topic_text = _resolve_course_topic(
