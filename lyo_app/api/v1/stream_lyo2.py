@@ -1639,7 +1639,7 @@ async def stream_lyo2_chat(
             if (
                 decision.needs_clarification
                 and decision.confidence > 0.3
-                and interaction_contract.reason_code == "default_answer"
+                and not interaction_contract.attachment_authoritative
             ):
                 # Only ask for clarification if the router is reasonably confident
                 # that it truly cannot understand. Low-confidence clarifications
