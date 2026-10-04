@@ -1448,10 +1448,12 @@ async def stream_lyo2_chat(
                 routed_intent=decision.intent,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
+                channel=request.response_channel,
             )
             interaction_contract_payload = {
                 "mode": interaction_contract.mode.value,
                 "depth": interaction_contract.depth.value,
+                "channel": interaction_contract.channel.value,
                 "fast_lane": interaction_contract.fast_lane,
                 "workflow_intent": (
                     interaction_contract.workflow_intent.value
