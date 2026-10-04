@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lyo_app.services.analytics_service import analytics_service
 
@@ -27,6 +27,22 @@ class LyoAnalyticsEvent(BaseModel):
     is_correct: Optional[bool] = None
     word_count: Optional[int] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @model_validator(mode="after")
+    def require_card_id_for_card_scoped_events(self):
+        card_scoped_events = {
+            "card_viewed",
+            "quiz_answered",
+            "check_skipped",
+            "help_requested",
+            "reflection_submitted",
+            "lesson_completed",
+        }
+        if self.event_type in card_scoped_events and not self.card_id:
+            raise ValueError(
+                f"card_id is required for card-scoped event '{self.event_type}'"
+            )
+        return self
 
 
 @router.post("/event")
