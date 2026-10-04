@@ -380,6 +380,7 @@ Maximum exposition: {teaching_decision.get("max_exposition_words", 120)} words
 
 Freshness rules:
 - You may use Google Search when it is available and the answer could have changed.
+- Current information is explicitly required for this turn: {"YES" if search_required else "NO"}.
 - If current information is explicitly required, search before making time-sensitive factual claims.
 - Do not search merely to decorate a stable answer.
 - Never claim something is current unless the grounded evidence supports it.
@@ -403,7 +404,11 @@ Freshness rules:
             )
         messages.append({"role": "user", "content": user_text})
 
-        model_tier = str(teaching_decision.get("model_tier") or "reflex")
+        # This method is only called by the ordinary-chat fast lane;
+        # explicit teaching/workflows never reach it. Force the reflex tier so
+        # a normal question does not pay a hidden reasoning budget merely
+        # because the broader teaching policy classifies ANSWER as "teaching".
+        model_tier = "reflex"
         provider_order = provider_order_for_tier(model_tier)
         # Search grounding is a Gemini-native tool, so give Gemini first shot
         # whenever freshness is possible. OpenAI remains the bounded fallback.
