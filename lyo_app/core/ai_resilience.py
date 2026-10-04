@@ -322,29 +322,44 @@ class AIResilienceManager:
 
     async def stream_chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: float = 0.7,
         max_tokens: int = 1000,
         provider_order: Optional[List[str]] = None,
+        thinking_budget: Optional[int] = None,
+        enable_google_search: bool = False,
+        metadata_sink: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Streaming chat completion with fallbacks."""
+        """Stream model output token-by-token with bounded fallbacks.
+
+        metadata_sink is mutated in-place with provider, TTFT and grounded
+        source information. This keeps the hot token path string-only for
+        existing callers while allowing the SSE layer to expose observability
+        and citations after generation.
+        """
         if not self._initialized:
             await self.initialize()
 
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
 
+        stream_started = time.monotonic()
+        first_token_recorded = False
+
         for model_name in provider_order:
             if model_name not in self.models:
                 continue
-            
+
             model = self.models[model_name]
             cb = self.circuit_breakers[model_name]
-            
+
             if not cb.is_closed:
                 continue
 
             try:
+                if metadata_sink is not None:
+                    metadata_sink["provider"] = model_name
+
                 if model.endpoint == "openai":
                     if not self.openai_client:
                         logger.warning(f"OpenAI client missing for {model_name}")
@@ -355,34 +370,227 @@ class AIResilienceManager:
                         messages=_openai_compatible_messages(messages),
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        stream=True
+                        stream=True,
                     )
                     async for chunk in stream:
                         if chunk.choices and chunk.choices[0].delta.content:
+                            if not first_token_recorded:
+                                first_token_recorded = True
+                                if metadata_sink is not None:
+                                    metadata_sink["model_ttft_ms"] = int(
+                                        (time.monotonic() - stream_started) * 1000
+                                    )
                             yield chunk.choices[0].delta.content
                     cb._on_success(None)
-                    return # Success
-                else:
-                    logger.info(f"Attempting Gemini stream for {model_name}")
-                    async for chunk in self._stream_gemini(model_name, model, messages, temperature, max_tokens):
-                        yield chunk
                     return
+
+                logger.info(f"Attempting Gemini stream for {model_name}")
+                async for chunk in self._stream_gemini(
+                    model_name,
+                    model,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    thinking_budget=thinking_budget,
+                    enable_google_search=enable_google_search,
+                    metadata_sink=metadata_sink,
+                ):
+                    if chunk and not first_token_recorded:
+                        first_token_recorded = True
+                        if metadata_sink is not None:
+                            metadata_sink["model_ttft_ms"] = int(
+                                (time.monotonic() - stream_started) * 1000
+                            )
+                    yield chunk
+                cb._on_success(None)
+                return
             except Exception as e:
                 cb._on_failure()
-                logger.error(f"Streaming error with {model_name} (Type: {type(e).__name__}): {e}")
+                logger.error(
+                    f"Streaming error with {model_name} "
+                    f"(Type: {type(e).__name__}): {e}"
+                )
                 import traceback
                 logger.error(traceback.format_exc())
+                if first_token_recorded:
+                    # Once the user has seen provider A, provider B cannot be
+                    # appended safely: that would splice two independent
+                    # answers into one persisted assistant turn.
+                    if metadata_sink is not None:
+                        metadata_sink["stream_interrupted_after_output"] = True
+                    raise RuntimeError(
+                        f"{model_name} stream interrupted after visible output"
+                    ) from e
                 continue
-        
+
+        if metadata_sink is not None:
+            metadata_sink["provider"] = "fallback"
         yield "I'm having trouble responding right now. Please try again."
 
-    async def _stream_gemini(self, model_key: str, model: AIModelConfig, messages: List[Dict[str, str]], temperature: float, max_tokens: int):
-        """Internal helper for Gemini streaming."""
-        # Simple implementation using existing logic but for streaming
-        # Actually, let's just yield the full response for now if streaming is not fully wired
-        # to avoid complex SSE parsing here.
-        res = await self.chat_completion(messages, temperature, max_tokens, provider_order=[model_key])
-        yield res.get("content", "")
+    async def _stream_gemini(
+        self,
+        model_key: str,
+        model: AIModelConfig,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+        *,
+        thinking_budget: Optional[int] = None,
+        enable_google_search: bool = False,
+        metadata_sink: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[str, None]:
+        """True Gemini SSE streaming via streamGenerateContent.
+
+        The old implementation called the non-streaming endpoint and yielded
+        the finished answer as one chunk. This method keeps the connection open,
+        forwards deltas as they arrive, suppresses thought parts, and harvests
+        Google Search grounding metadata without exposing hidden reasoning.
+        """
+        if not model.api_key:
+            raise Exception(f"No API key configured for {model.name}")
+        if self.session is None:
+            raise RuntimeError("AI resilience HTTP session is not initialized")
+
+        contents: List[Dict[str, Any]] = []
+        system_parts: List[str] = []
+        for msg in messages:
+            role_value = msg.get("role", "user")
+            content_value = msg.get("content", "")
+            if role_value == "system":
+                if isinstance(content_value, str):
+                    system_parts.append(content_value)
+                elif isinstance(content_value, list):
+                    for item in content_value:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            system_parts.append(str(item.get("text", "")))
+                continue
+
+            role = "user" if role_value == "user" else "model"
+            message_parts: List[Dict[str, Any]] = []
+            if isinstance(content_value, list):
+                for item in content_value:
+                    if not isinstance(item, dict):
+                        continue
+                    item_type = item.get("type")
+                    if item_type == "text":
+                        message_parts.append({"text": str(item.get("text", ""))})
+                    elif item_type == "image_uri":
+                        uri = item.get("uri")
+                        if uri:
+                            message_parts.append({
+                                "fileData": {
+                                    "mimeType": item.get("mime_type", "image/jpeg"),
+                                    "fileUri": uri,
+                                }
+                            })
+                    elif item_type in {"image_base64", "media_base64", "file_base64"}:
+                        data = item.get("data")
+                        if data:
+                            message_parts.append({
+                                "inlineData": {
+                                    "mimeType": item.get("mime_type", "image/jpeg"),
+                                    "data": data,
+                                }
+                            })
+            else:
+                message_parts.append({"text": str(content_value)})
+
+            if contents and contents[-1]["role"] == role:
+                contents[-1]["parts"].extend(message_parts)
+            else:
+                contents.append({"role": role, "parts": message_parts})
+
+        generation_config: Dict[str, Any] = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.8,
+            "topK": 40,
+        }
+        if thinking_budget is not None:
+            generation_config["thinkingConfig"] = {
+                "thinkingBudget": int(thinking_budget)
+            }
+
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": generation_config,
+        }
+        if system_parts:
+            payload["systemInstruction"] = {
+                "parts": [{"text": "\n\n".join(system_parts)}]
+            }
+        if enable_google_search:
+            payload["tools"] = [{"google_search": {}}]
+
+        base_endpoint = model.endpoint.split("?", 1)[0]
+        if ":generateContent" in base_endpoint:
+            base_endpoint = base_endpoint.replace(
+                ":generateContent", ":streamGenerateContent"
+            )
+        elif ":streamGenerateContent" not in base_endpoint:
+            base_endpoint = base_endpoint.rstrip("/") + ":streamGenerateContent"
+        endpoint = f"{base_endpoint}?alt=sse&key={model.api_key}"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        unique_sources: Dict[str, Dict[str, str]] = {}
+
+        async with self.session.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=45),
+        ) as response:
+            if response.status != 200:
+                body = await response.text()
+                raise Exception(
+                    f"Gemini streaming API returned {response.status}: {body[:500]}"
+                )
+
+            async for raw_line in response.content:
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data_text = line[5:].strip()
+                if not data_text or data_text == "[DONE]":
+                    continue
+                try:
+                    data = json.loads(data_text)
+                except json.JSONDecodeError:
+                    logger.debug("Skipping malformed Gemini SSE line")
+                    continue
+
+                for candidate in data.get("candidates", []) or []:
+                    grounding = candidate.get("groundingMetadata") or {}
+                    for grounding_chunk in grounding.get("groundingChunks", []) or []:
+                        web = grounding_chunk.get("web") if isinstance(grounding_chunk, dict) else None
+                        if not isinstance(web, dict):
+                            continue
+                        uri = str(web.get("uri") or "").strip()
+                        if not uri:
+                            continue
+                        unique_sources[uri] = {
+                            "url": uri,
+                            "title": str(web.get("title") or uri),
+                        }
+                    queries = grounding.get("webSearchQueries") or []
+                    if metadata_sink is not None and queries:
+                        metadata_sink["search_queries"] = [
+                            str(query) for query in queries if query
+                        ]
+
+                    candidate_content = candidate.get("content") or {}
+                    for part in candidate_content.get("parts", []) or []:
+                        if not isinstance(part, dict) or part.get("thought"):
+                            continue
+                        text_part = part.get("text")
+                        if text_part:
+                            yield str(text_part)
+
+                if metadata_sink is not None and unique_sources:
+                    metadata_sink["sources"] = list(unique_sources.values())
 
     async def chat_completion(
         self,
