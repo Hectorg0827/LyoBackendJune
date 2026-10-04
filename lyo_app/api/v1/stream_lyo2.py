@@ -1189,6 +1189,7 @@ async def stream_lyo2_chat(
         
         try:
             display_content = canonical_message_content(request.text, request.media)
+            current_media_supplied = bool(request.media)
             media_attachments = await load_media_attachments(request.media)
             if not request.text and request.media:
                 request.text = "Please analyze the attached material and respond to what it contains."
@@ -1302,7 +1303,7 @@ async def stream_lyo2_chat(
             interaction_contract = derive_interaction_contract(
                 request.text,
                 has_media=bool(media_attachments),
-                has_current_media=bool(request.media),
+                has_current_media=current_media_supplied,
                 interaction_contract=interaction_contract.to_dict(),
             )
             yield yield_safe_sse_event(
