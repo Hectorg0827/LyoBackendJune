@@ -179,3 +179,24 @@ async def test_streaming_preserves_paid_provider_opt_in(tmp_path):
             await anext(service.synthesize_streaming('Do not charge.'))
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_stalled_cached_stream_does_not_block_another_cached_client(tmp_path):
+    import asyncio
+    service = TTSService(_config(tmp_path))
+    service._synthesize_uncached = AsyncMock(return_value=b"firstlast")
+    try:
+        await service.synthesize("Same cached teacher turn.")
+        stalled = service.synthesize_streaming("Same cached teacher turn.", chunk_size=5)
+        assert await anext(stalled) == b"first"
+        # Leave that client suspended at yield while a second consumes audio.
+        assert not service._key_locks
+        async def download():
+            return b"".join([chunk async for chunk in service.synthesize_streaming(
+                "Same cached teacher turn.", chunk_size=5)])
+        assert await asyncio.wait_for(download(), 1) == b"firstlast"
+        service._synthesize_uncached.assert_awaited_once()
+        await stalled.aclose()
+    finally:
+        await service.close()

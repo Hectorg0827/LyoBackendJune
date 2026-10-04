@@ -619,35 +619,37 @@ class TTSService:
         key = self._get_cache_key(text, resolved, format, speed)
         async with self._render_lock(key):
             cached = self._get_cached_audio(key, format)
-            if cached is not None:
-                for offset in range(0, len(cached), chunk_size):
-                    yield cached[offset:offset + chunk_size]
-                return
-            headers = None
-            url = f"{self.config.kokoro_base_url}/v1/audio/speech"
-            provider_model = resolved.provider_model
-            if resolved.provider == "openai":
-                url = "https://api.openai.com/v1/audio/speech"
-                provider_model = model or self.config.default_model
-                headers = {"Authorization": f"Bearer {self.config.openai_api_key}"}
-            payload = {
-                "model": provider_model, "input": text,
-                "voice": resolved.provider_voice, "response_format": format,
-                "speed": speed,
-            }
-            if not self._session:
-                raise TTSUnavailableError("TTS HTTP session is not initialized")
-            async with self._session.post(url, json=payload, headers=headers) as response:
-                if response.status != 200:
-                    raise RuntimeError(f"TTS provider returned {response.status}")
-                chunks = []
-                async for chunk in response.content.iter_chunked(chunk_size):
-                    if chunk:
-                        chunks.append(chunk)
-                        yield chunk
-                if not chunks:
-                    raise RuntimeError("TTS provider returned empty audio")
-                self._cache_audio(key, format, b"".join(chunks))
+            if cached is None:
+                headers = None
+                url = f"{self.config.kokoro_base_url}/v1/audio/speech"
+                provider_model = resolved.provider_model
+                if resolved.provider == "openai":
+                    url = "https://api.openai.com/v1/audio/speech"
+                    provider_model = model or self.config.default_model
+                    headers = {"Authorization": f"Bearer {self.config.openai_api_key}"}
+                payload = {
+                    "model": provider_model, "input": text,
+                    "voice": resolved.provider_voice, "response_format": format,
+                    "speed": speed,
+                }
+                if not self._session:
+                    raise TTSUnavailableError("TTS HTTP session is not initialized")
+                async with self._session.post(url, json=payload, headers=headers) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"TTS provider returned {response.status}")
+                    chunks = []
+                    async for chunk in response.content.iter_chunked(chunk_size):
+                        if chunk:
+                            chunks.append(chunk)
+                            yield chunk
+                    if not chunks:
+                        raise RuntimeError("TTS provider returned empty audio")
+                    self._cache_audio(key, format, b"".join(chunks))
+        # Serving existing bytes is not rendering. Release the lock before
+        # yielding so a slow downloader cannot block other cached clients.
+        if cached is not None:
+            for offset in range(0, len(cached), chunk_size):
+                yield cached[offset:offset + chunk_size]
 
     async def synthesize_lesson_audio(
         self,
