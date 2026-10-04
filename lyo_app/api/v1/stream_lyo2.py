@@ -1741,6 +1741,18 @@ async def stream_lyo2_chat(
                         mode_used=ChatMode.GENERAL.value,
                         client_message_id=assistant_client_message_id,
                     )
+                if (
+                    decision.clarification_question
+                    and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                ):
+                    yield yield_safe_sse_event(
+                        "voice_ready",
+                        _voice_ready_payload(
+                            decision.clarification_question,
+                            message_id=assistant_client_message_id,
+                            latency_ms=int((time.time() - start_time) * 1000),
+                        ),
+                    )
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
                 return
                 
@@ -1761,6 +1773,18 @@ async def stream_lyo2_chat(
                                 content=data.follow_up_question,
                                 mode_used=ChatMode.TEST_PREP.value,
                                 client_message_id=assistant_client_message_id,
+                            )
+                        if (
+                            data.follow_up_question
+                            and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                        ):
+                            yield yield_safe_sse_event(
+                                "voice_ready",
+                                _voice_ready_payload(
+                                    data.follow_up_question,
+                                    message_id=assistant_client_message_id,
+                                    latency_ms=int((time.time() - start_time) * 1000),
+                                ),
                             )
                         yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
                         return
