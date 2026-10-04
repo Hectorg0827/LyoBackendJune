@@ -122,6 +122,11 @@ class ConversationTurn(BaseModel):
 class RouterRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     timezone: Optional[str] = None
+    # Delivery is presentation metadata only. Voice uses the exact same
+    # router -> interaction contract -> teaching policy -> executor path as
+    # typed chat; this flag must never select a separate AI.
+    delivery_mode: Literal["text", "voice"] = "text"
+    voice_turn_id: Optional[str] = None
     # The authenticated identity is always derived from the bearer token.  This
     # optional field remains for old clients but is never trusted by routes.
     user_id: Optional[str] = None

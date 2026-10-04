@@ -34,6 +34,30 @@ router = APIRouter()
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
 
+
+def _with_voice_delivery(
+    response: UnifiedChatResponse,
+    request: RouterRequest,
+    trace_id: str,
+) -> UnifiedChatResponse:
+    """Decorate any non-stream response with canonical speech metadata.
+
+    This is deliberately shared by normal execution, clarification and
+    idempotent replay so voice retries never fall back to a text-only shape.
+    """
+    response.metadata["delivery_mode"] = request.delivery_mode
+    if request.delivery_mode != "voice":
+        return response
+
+    from lyo_app.api.v1.stream_lyo2 import _speech_segments
+
+    response.metadata["voice_turn_id"] = request.voice_turn_id or trace_id
+    response.metadata["voice_segments"] = _speech_segments(
+        response.answer_block.content.get("text", "")
+    )
+    return response
+
+
 @router.post("/chat", response_model=UnifiedChatResponse)
 async def lyo2_chat(
     request: RouterRequest,
@@ -126,16 +150,20 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                     db, persistent_conversation.id, assistant_client_message_id
                 )
                 if replayed:
-                    return UnifiedChatResponse(
-                        answer_block=UIBlock(
-                            type=UIBlockType.TUTOR_MESSAGE,
-                            content={"text": replayed.content},
+                    return _with_voice_delivery(
+                        UnifiedChatResponse(
+                            answer_block=UIBlock(
+                                type=UIBlockType.TUTOR_MESSAGE,
+                                content={"text": replayed.content},
+                            ),
+                            metadata={
+                                "trace_id": trace_id,
+                                "conversation_id": persistent_conversation.id,
+                                "replayed": True,
+                            },
                         ),
-                        metadata={
-                            "trace_id": trace_id,
-                            "conversation_id": persistent_conversation.id,
-                            "replayed": True,
-                        },
+                        request,
+                        trace_id,
                     )
             if display_content:
                 await conversation_store.add_message(
@@ -276,16 +304,20 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                     clarification,
                     client_message_id=assistant_client_message_id,
                 )
-            return UnifiedChatResponse(
-                answer_block=UIBlock(
-                    type=UIBlockType.TUTOR_MESSAGE,
-                    content={"text": clarification}
+            return _with_voice_delivery(
+                UnifiedChatResponse(
+                    answer_block=UIBlock(
+                        type=UIBlockType.TUTOR_MESSAGE,
+                        content={"text": clarification}
+                    ),
+                    metadata={
+                        "clarification_needed": True,
+                        "trace_id": trace_id,
+                        "conversation_id": request.conversation_id,
+                    }
                 ),
-                metadata={
-                    "clarification_needed": True,
-                    "trace_id": trace_id,
-                    "conversation_id": request.conversation_id,
-                }
+                request,
+                trace_id,
             )
             
         # 2. Layer B: Planning
@@ -342,6 +374,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 teaching_decision=teaching_decision.model_dump(mode="json"),
                 interaction_contract=interaction_contract_payload,
                 personal_memory=personal_memory,
+                delivery_mode=request.delivery_mode,
             )
         
         # Add trace metadata
@@ -354,8 +387,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "conversation_id": request.conversation_id,
             "teaching_policy": teaching_decision.model_dump(mode="json"),
             "interaction_contract": interaction_contract_payload,
+            "delivery_mode": request.delivery_mode,
         })
-
         answer_text = execution_response.answer_block.content.get("text", "")
         if persistent_conversation and answer_text:
             await conversation_store.add_message(
@@ -367,7 +400,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 client_message_id=assistant_client_message_id,
             )
         
-        return execution_response
+        return _with_voice_delivery(execution_response, request, trace_id)
 
     except HTTPException:
         raise

@@ -207,6 +207,21 @@ class LyoExecutor:
         media_attachments = context.get("media_attachments", [])
         source_grounding_text = _source_grounding_prompt(media_attachments)
 
+        delivery_mode = str(context.get("delivery_mode") or "text").lower()
+        delivery_text = ""
+        if delivery_mode == "voice":
+            delivery_text = """
+--- DELIVERY MODE: CONVERSATIONAL VOICE ---
+This is the SAME chat interaction, not a separate voice assistant.
+- The interaction contract above remains authoritative.
+- Lead with the answer in the first spoken sentence.
+- Prefer short, natural sentences and contractions.
+- Avoid relying on headings, tables, emoji, or visual-only formatting for meaning.
+- Keep source markers in the on-screen answer when grounding requires them; the delivery layer strips them from speech.
+- Do not add filler such as "Sure", "Absolutely", or a voice-specific greeting.
+--- END DELIVERY MODE ---
+"""
+
         teaching_policy_text = ""
         if teaching_decision:
             directives = teaching_decision.get("directives") or []
@@ -255,7 +270,7 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{personal_memory_text}{interaction_contract_text}{teaching_policy_text}
+{rag_text}{history_text}{personal_memory_text}{interaction_contract_text}{teaching_policy_text}{delivery_text}
 {source_grounding_text}
 
 MEMORY BOUNDARIES:
@@ -339,6 +354,7 @@ USER QUESTION:
         teaching_decision: Optional[Dict[str, Any]] = None,
         interaction_contract: Optional[Dict[str, Any]] = None,
         personal_memory: str = "",
+        delivery_mode: str = "text",
     ) -> UnifiedChatResponse:
         """
         Executes the provided plan and returns a unified response.
@@ -355,6 +371,7 @@ USER QUESTION:
             "teaching_decision": teaching_decision or {},
             "interaction_contract": interaction_contract or {},
             "personal_memory": personal_memory or "",
+            "delivery_mode": delivery_mode if delivery_mode in {"text", "voice"} else "text",
         }
         
         for step in plan.steps:
@@ -467,6 +484,7 @@ USER QUESTION:
                 "teaching_policy": teaching_decision or None,
                 "interaction_contract": interaction_contract or None,
                 "sources": _source_descriptors(media_attachments or []),
+                "delivery_mode": delivery_mode if delivery_mode in {"text", "voice"} else "text",
             }
         )
 
