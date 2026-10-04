@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 import pytest
 
 from scripts.live_teacher_quality import (
@@ -219,3 +222,28 @@ def test_report_includes_blank_human_quality_rubric():
     }
     assert all(item["score"] is None for item in rubric)
     assert all(item["scale"] == "1-5" for item in rubric)
+
+
+
+def test_seed_and_review_classroom_calls_use_the_full_matrix_contract():
+    tree = ast.parse(
+        Path("scripts/live_teacher_quality.py").read_text(encoding="utf-8")
+    )
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "classroom"
+    ]
+    assert len(calls) == 2
+    required = {
+        "question",
+        "explanation_answer",
+        "transfer_answer",
+        "objective",
+        "learner_profile",
+    }
+    for call in calls:
+        names = {keyword.arg for keyword in call.keywords if keyword.arg}
+        assert required <= names
