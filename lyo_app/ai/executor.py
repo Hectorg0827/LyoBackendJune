@@ -582,7 +582,10 @@ USER QUESTION:
                 ]
             }
         
+        course_source_text, _ = _attachment_grounding(context.get("media_attachments", []))
         prompt = f"""You are a course architect. Generate a structured learning course for: "{original_request}"
+{course_source_text}
+When source material is present, build the course from that material rather than from the filename alone.
 
 Return ONLY valid JSON, no markdown fences, no explanation:
 {{
