@@ -192,3 +192,30 @@ def test_report_groups_results_by_scenario_and_learner_profile():
     assert body["scenario"] == "biology_photosynthesis"
     assert body["learner_profile"] == "curious"
     assert body["report_version"] == 2
+
+
+
+def test_report_includes_blank_human_quality_rubric():
+    report = Report(
+        run_id="r2",
+        phase="seed",
+        base_url="https://api.lyoai.app",
+        session_id="s2",
+        scenario="math_fractions",
+        learner_profile="interrupter",
+        topic="comparing fractions",
+    ).to_dict()
+    rubric = report["quality_rubric"]
+    assert len(rubric) == 8
+    assert {item["criterion"] for item in rubric} == {
+        "answers_learner_words",
+        "examples_progress",
+        "detour_then_resume",
+        "misconception_specific_repair",
+        "hint_preserves_struggle",
+        "transfer_is_novel",
+        "avoids_monologue_repetition",
+        "visual_adds_information",
+    }
+    assert all(item["score"] is None for item in rubric)
+    assert all(item["scale"] == "1-5" for item in rubric)
