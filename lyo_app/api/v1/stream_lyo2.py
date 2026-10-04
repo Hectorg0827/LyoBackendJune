@@ -1283,6 +1283,7 @@ async def stream_lyo2_chat(
                     yield "data: [DONE]\n\n"
                     return
 
+            historical_media = []
             if not media_attachments:
                 historical_media = recent_media_refs(request.conversation_history)
                 media_attachments = await load_media_attachments(
@@ -1463,6 +1464,19 @@ async def stream_lyo2_chat(
                 "reason_code": interaction_contract.reason_code,
                 "directives": list(interaction_contract.directives),
             }
+
+            # A handoff such as "Use this for Test Prep" or "Teach this in
+            # Classroom" inherits the most recent Lyo-owned attachment instead
+            # of forcing the learner to upload the same material again.
+            if (
+                not request.media
+                and historical_media
+                and (
+                    interaction_contract.attachment_authoritative
+                    or interaction_contract.workflow_intent in {Intent.TEST_PREP, Intent.COURSE}
+                )
+            ):
+                request.media = historical_media
 
             # Explicit learner language is more authoritative than a coarse
             # router guess. Workflows can therefore correct the router before
