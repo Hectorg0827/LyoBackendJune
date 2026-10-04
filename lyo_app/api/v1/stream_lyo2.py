@@ -729,6 +729,29 @@ def _preferred_prep_topic(
     return (subject or "").strip()
 
 
+def _voice_ready_payload(
+    text: str,
+    *,
+    message_id: Optional[str] = None,
+    latency_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Delivery hint for clients that can start TTS before the SSE turn closes.
+
+    This is not a second model result. It carries the exact canonical Chat text
+    that will also be rendered/persisted for the turn.
+    """
+    payload: Dict[str, Any] = {
+        "type": "voice_ready",
+        "text": text,
+        "final": True,
+    }
+    if message_id:
+        payload["message_id"] = message_id
+    if latency_ms is not None:
+        payload["latency_ms"] = max(0, int(latency_ms))
+    return payload
+
+
 def _voice_friendly_lesson_text(raw: str) -> str:
     """Make structured lesson fallback text natural when read aloud.
 
@@ -784,6 +807,17 @@ async def _emit_composed_lesson(
             "priority": 0,
         },
     }
+    if voice_delivery and lesson_text:
+        # Start speech before SmartBlocks/actions/persistence finish. The text is
+        # identical to the answer below, so voice stays a delivery layer over
+        # the canonical teaching turn.
+        yield yield_safe_sse_event(
+            "voice_ready",
+            _voice_ready_payload(
+                lesson_text,
+                message_id=assistant_client_message_id,
+            ),
+        )
     collected_bricks.append(answer_brick)
     yield yield_safe_sse_event("answer", answer_brick)
     # Redacted on the way out only. The persisted copy keeps the answer key,
