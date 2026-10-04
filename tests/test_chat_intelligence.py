@@ -229,3 +229,17 @@ def test_optional_followups_do_not_turn_into_diagnostics(text):
     assert contract.mode is InteractionMode.EXPLAIN
     assert contract.answer_first is True
     assert contract.fast_lane is True
+
+
+
+@pytest.mark.parametrize("text", ["resume", "continue", "next"])
+def test_exact_continuation_commands_are_not_summaries(text):
+    contract = derive_interaction_contract(
+        text,
+        has_media=True,
+        has_current_media=False,
+    )
+
+    assert contract.mode is InteractionMode.CONTINUE
+    assert contract.reason == "explicit_continuation"
+    assert contract.fast_lane is False
