@@ -703,6 +703,20 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ AI Classroom HTTP routes not available: {e}")
 
+    # iOS/web classroom telemetry. app_factory already mounted this router, but
+    # production runs enhanced_main; keeping the mount here prevents the live
+    # client from posting into a 404.
+    try:
+        from lyo_app.classroom.analytics import router as classroom_analytics_router
+        app.include_router(
+            classroom_analytics_router,
+            prefix="/api/v1/classroom/analytics",
+            tags=["classroom-analytics"],
+        )
+        logger.info("✅ Classroom analytics route integrated!")
+    except ImportError as e:
+        logger.warning(f"⚠️ Classroom analytics route not available: {e}")
+
     try:
         from lyo_app.ai_classroom.playback_routes import router as playback_router
         app.include_router(playback_router)
