@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from lyo_app.ai_study import clean_routes
 from lyo_app.classroom import analytics as classroom_analytics
@@ -27,6 +28,16 @@ def test_classroom_analytics_accepts_current_unscoped_ui_events():
     dumped = event.model_dump()
     assert dumped["courseId"] == "course-123"
     assert dumped["card_count"] == 4
+
+
+
+def test_legacy_card_event_still_requires_card_id():
+    with pytest.raises(ValidationError, match="card_id is required"):
+        classroom_analytics.LyoAnalyticsEvent(
+            event_type="quiz_answered",
+            topic="fractions",
+            is_correct=True,
+        )
 
 
 @pytest.mark.asyncio
