@@ -81,8 +81,9 @@ _QUIZ_RE = re.compile(
     re.IGNORECASE,
 )
 _COURSE_RE = re.compile(
-    r"\b(create|make|build|generate) (?:me )?(?:a )?(?:course|curriculum)|"
-    r"\b(?:course|curriculum) (?:on|about|for)\b",
+    r"^\s*(?:(?:please\s+)?(?:create|make|build|generate)\s+(?:me\s+)?(?:a\s+)?"
+    r"(?:course|curriculum)|i\s+(?:want|need)\s+(?:a\s+)?(?:course|curriculum)|"
+    r"(?:course|curriculum)\s+(?:on|about|for)\b)",
     re.IGNORECASE,
 )
 _TEACH_RE = re.compile(
@@ -445,7 +446,7 @@ def presentation_blocks(
             SmartBlock(
                 type="interactive",
                 subtype="notes",
-                content={"title": "Sources used", "items": sources[:4]},
+                content={"title": "Source material", "items": sources[:4]},
             ).model_dump(mode="json")
         )
 
