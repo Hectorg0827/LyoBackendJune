@@ -188,9 +188,17 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         # 1. Layer A: Multimodal Routing
         logger.info(f"[{trace_id}] Layer A: Routing request for user {current_user.id}")
-        if (
-            not request.forced_intent
-            and interaction_contract.router_intent is not None
+        if request.forced_intent:
+            decision = RouterDecision(
+                intent=request.forced_intent,
+                confidence=1.0,
+                needs_clarification=False,
+                suggested_tier=(
+                    "LARGE" if request.forced_intent == Intent.COURSE else "MEDIUM"
+                ),
+            )
+        elif (
+            interaction_contract.router_intent is not None
             and interaction_contract.confidence >= 0.95
         ):
             decision = RouterDecision(
@@ -351,6 +359,37 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         answer_text = execution_response.answer_block.content.get("text", "")
         if persistent_conversation and answer_text:
+            from lyo_app.ai.schemas.smart_block import SmartBlock
+            from lyo_app.ai.chat_intelligence import prose_without_presented_table
+
+            presentation = execution_response.metadata.get("presentation_blocks", [])
+            block_text = answer_text
+            if (
+                isinstance(presentation, list)
+                and any(
+                    isinstance(block, dict)
+                    and block.get("type") == "dataViz"
+                    and block.get("subtype") == "table"
+                    for block in presentation
+                )
+            ):
+                block_text = prose_without_presented_table(answer_text)
+
+            persisted_blocks = []
+            if block_text:
+                persisted_blocks.append(
+                    SmartBlock.text(block_text).model_dump(mode="json")
+                )
+            if isinstance(presentation, list):
+                persisted_blocks.extend(
+                    block for block in presentation if isinstance(block, dict)
+                )
+
+            action_labels = []
+            for action_block in execution_response.next_actions:
+                if action_block.content and "actions" in action_block.content:
+                    action_labels.extend(action_block.content["actions"])
+
             await conversation_store.add_message(
                 db,
                 persistent_conversation.id,
@@ -358,6 +397,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 answer_text,
                 mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                 client_message_id=assistant_client_message_id,
+                blocks=persisted_blocks or None,
+                chip_actions=action_labels or None,
             )
         
         return execution_response
