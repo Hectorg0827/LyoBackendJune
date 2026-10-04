@@ -320,7 +320,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             plan = LyoPlan(steps=[
                 PlannedAction(
                     action_type=ActionType.GENERATE_TEXT,
-                    description="Inspect the attachment and answer the learner directly",
+                    description=f"Handle {interaction_contract.mode.value} request directly",
                     parameters={"content": None},
                 )
             ])
