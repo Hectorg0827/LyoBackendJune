@@ -1468,7 +1468,6 @@ async def stream_lyo2_chat(
                 decision,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
-                interaction_contract=interaction_contract.model_dump(mode="json"),
             )
             yield yield_safe_sse_event(
                 "interaction_contract",
@@ -1512,6 +1511,7 @@ async def stream_lyo2_chat(
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
+                interaction_contract=interaction_contract.model_dump(mode="json"),
             )
             await record_policy_decision(
                 db,
