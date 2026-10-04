@@ -25,6 +25,7 @@ from lyo_app.services.embedding_service import embedding_service
 from lyo_app.ai_agents.models import MentorInteraction
 from lyo_app.auth.models import User
 import json
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,78 @@ Your output MUST be a JSON list of objects:
 - Acknowledge their progress and growth
 - Avoid approaches that haven't worked for them
 """
+
+    async def get_relevant_memory_for_prompt(
+        self,
+        user_id: int,
+        query: str,
+        db: AsyncSession,
+        *,
+        instructional: bool = False,
+        limit: int = 4,
+    ) -> str:
+        """Return only memory that can materially improve the current turn.
+
+        Long-term memory used to be designed as one synthesized blob for every
+        AI session. That is convenient, but it over-personalizes unrelated
+        factual questions and spends tokens/latency on context the learner did
+        not need. Chat now treats memory as three layers:
+
+        - working memory: recent conversation, already carried separately;
+        - learner memory: mastery/evidence, owned by the teaching runtime;
+        - personal memory: discrete durable insights selected here.
+
+        Selection is deliberately conservative. An insight must either overlap
+        the current query or be a learning-style/success-pattern insight on an
+        instructional turn. If nothing is relevant, return an empty string.
+        """
+        query_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]{3,}", (query or "").casefold())
+            if token not in {
+                "the", "and", "that", "this", "with", "from", "what", "how",
+                "why", "can", "you", "for", "are", "about", "please",
+            }
+        }
+        try:
+            result = await db.execute(
+                select(MemoryInsightDB)
+                .where(MemoryInsightDB.user_id == user_id)
+                .order_by(desc(MemoryInsightDB.confidence), desc(MemoryInsightDB.created_at))
+                .limit(40)
+            )
+            rows = list(result.scalars().all())
+        except Exception as exc:
+            logger.warning("Could not retrieve selective memory: %s", type(exc).__name__)
+            return ""
+
+        ranked: list[tuple[int, float, MemoryInsightDB]] = []
+        instructional_categories = {"learning_style", "success_pattern", "struggle_point"}
+        for row in rows:
+            insight = (row.insight_text or "").strip()
+            if not insight:
+                continue
+            insight_tokens = set(re.findall(r"[a-z0-9]{3,}", insight.casefold()))
+            overlap = len(query_tokens & insight_tokens)
+            category_bonus = 1 if instructional and row.category in instructional_categories else 0
+            if overlap == 0 and category_bonus == 0:
+                continue
+            ranked.append((overlap + category_bonus, float(row.confidence or 0.0), row))
+
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        selected = [item[2] for item in ranked[: max(1, min(limit, 6))]]
+        if not selected:
+            return ""
+
+        lines = [
+            "## Relevant durable learner context",
+            *[f"- {row.insight_text.strip()}" for row in selected],
+            "",
+            "Use this only when it is directly relevant. Never mention memory",
+            "for its own sake and never let it override the user's current request.",
+        ]
+        return "\n".join(lines)
+
 
     async def update_memory_insight(
         self,
