@@ -129,6 +129,7 @@ def test_source_descriptors_expose_locations_without_document_text():
                 {"page": 1, "text": "private contents"},
                 {"page": 3, "text": "more private contents"},
             ],
+            "uri": "/api/v1/media/file/chat/lease.pdf",
         }
     ])
 
@@ -138,6 +139,7 @@ def test_source_descriptors_expose_locations_without_document_text():
         "page_count": 3,
         "available_pages": [1, 3],
         "kind": "attachment",
+        "url": "/api/v1/media/file/chat/lease.pdf",
     }]
     assert "private contents" not in str(sources)
 
