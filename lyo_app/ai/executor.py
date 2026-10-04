@@ -441,6 +441,7 @@ Freshness rules:
         """
         execution_context = {
             "retrieved_content": [],
+            "web_sources": [],
             "created_artifacts": [],
             "final_text": "",
             "open_classroom_payload": None,
@@ -461,6 +462,34 @@ Freshness rules:
                 content = await self.rag.retrieve(query, limit=limit)
                 execution_context["retrieved_content"].extend(content)
                 
+            elif step.action_type == ActionType.SEARCH_WEB:
+                from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+                query = step.parameters.get("query", original_request)
+                limit = int(step.parameters.get("limit", 5) or 5)
+                search_result = await WebSearchTool().execute(
+                    int(user_id) if str(user_id).isdigit() else 0,
+                    query=query,
+                    max_results=limit,
+                )
+                if search_result.success and isinstance(search_result.output, list):
+                    execution_context["retrieved_content"].extend(search_result.output)
+                    execution_context["web_sources"].extend(
+                        {
+                            "name": str(item.get("title") or "Web source"),
+                            "url": str(item.get("url") or ""),
+                            "mime_type": "text/html",
+                            "kind": "web",
+                        }
+                        for item in search_result.output
+                        if isinstance(item, dict) and item.get("url")
+                    )
+                else:
+                    logger.warning(
+                        "SEARCH_WEB step could not retrieve live context: %s",
+                        search_result.message,
+                    )
+
             elif step.action_type == ActionType.CREATE_ARTIFACT:
                 # ... creation logic ...
                 art_type_str = step.parameters.get("type", "QUIZ")
@@ -561,7 +590,10 @@ Freshness rules:
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
                 "interaction_contract": interaction_contract or None,
-                "sources": _source_descriptors(media_attachments or []),
+                "sources": [
+                    *_source_descriptors(media_attachments or []),
+                    *execution_context.get("web_sources", []),
+                ],
             }
         )
 
