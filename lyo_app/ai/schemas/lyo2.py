@@ -119,6 +119,22 @@ class ConversationTurn(BaseModel):
     content: str
 
 
+class VoiceSessionContext(BaseModel):
+    """Transport metadata for conversational voice.
+
+    Voice is not a separate AI mode. The transcript still enters the exact
+    same interaction contract, teaching policy, planner, and executor as text.
+    This object only lets those layers format a turn for spoken delivery and
+    makes interruption/turn-taking observable without changing intent.
+    """
+    model_config = ConfigDict(extra="ignore")
+    active: bool = True
+    locale: str = Field(default="auto", max_length=24)
+    turn_id: Optional[str] = Field(default=None, max_length=128)
+    interrupted_previous_turn: bool = False
+    hands_free: bool = True
+
+
 class RouterRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     timezone: Optional[str] = None
@@ -131,6 +147,7 @@ class RouterRequest(BaseModel):
     active_artifact: Optional[ActiveArtifactContext] = None
     forced_intent: Optional[Intent] = None
     state_summary: Dict[str, Any] = Field(default_factory=dict)  # curated learning state head
+    voice_session: Optional[VoiceSessionContext] = None
     conversation_id: Optional[str] = None
     session_id: Optional[str] = None
     device_id: Optional[str] = None
