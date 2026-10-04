@@ -413,7 +413,11 @@ Freshness rules:
         # Search grounding is a Gemini-native tool, so give Gemini first shot
         # whenever freshness is possible. OpenAI remains the bounded fallback.
         if enable_google_search:
-            provider_order = ["gemini-2.5-flash", "gpt-4o-mini"]
+            provider_order = (
+                ["gemini-2.5-flash"]
+                if search_required
+                else ["gemini-2.5-flash", "gpt-4o-mini"]
+            )
 
         async for chunk in ai_resilience_manager.stream_chat_completion(
             messages=messages,
