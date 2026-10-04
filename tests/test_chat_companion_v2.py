@@ -1,8 +1,9 @@
 import pytest
 
 from lyo_app.ai.executor import LyoExecutor, _source_descriptors
-from lyo_app.ai.schemas.lyo2 import Intent
+from lyo_app.ai.schemas.lyo2 import Intent, RouterRequest
 from lyo_app.teaching_runtime.interaction_contract import (
+    InteractionChannel,
     InteractionMode,
     ResponseDepth,
     interaction_contract_for_request,
@@ -179,3 +180,47 @@ def test_attachment_actions_create_real_learning_handoffs():
         "Teach this in Classroom",
         "Use this for Test Prep",
     ]
+
+
+def test_voice_is_a_channel_on_the_same_interaction_contract():
+    contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        routed_intent=Intent.EXPLAIN,
+        voice_active=True,
+    )
+
+    assert contract.mode is InteractionMode.EXPLAIN
+    assert contract.channel is InteractionChannel.VOICE
+    assert contract.fast_lane is True
+    assert any("live spoken turn" in directive.lower() for directive in contract.directives)
+
+
+def test_voice_interruption_changes_delivery_not_intent():
+    contract = interaction_contract_for_request(
+        text="what about the second example?",
+        routed_intent=Intent.CHAT,
+        voice_active=True,
+        voice_interrupted_previous_turn=True,
+    )
+
+    assert contract.mode is InteractionMode.ANSWER
+    assert contract.channel is InteractionChannel.VOICE
+    assert any("interrupted" in directive.lower() for directive in contract.directives)
+
+
+def test_router_request_accepts_voice_transport_metadata():
+    request = RouterRequest(
+        text="Explain this",
+        voice_session={
+            "active": True,
+            "locale": "en-US",
+            "turn_id": "voice-turn-1",
+            "interrupted_previous_turn": True,
+            "hands_free": True,
+        },
+    )
+
+    assert request.voice_session is not None
+    assert request.voice_session.active is True
+    assert request.voice_session.locale == "en-US"
+    assert request.voice_session.interrupted_previous_turn is True
