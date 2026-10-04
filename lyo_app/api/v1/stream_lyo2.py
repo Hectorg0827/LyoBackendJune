@@ -1379,6 +1379,15 @@ async def stream_lyo2_chat(
                 "current_time_context": current_time_for_prompt,
                 "freshness_mode": freshness_decision.mode.value,
             }
+            _stream_caps = (
+                request.state_summary.get("stream_capabilities", {})
+                if isinstance(request.state_summary, dict)
+                else {}
+            )
+            supports_text_delta = bool(
+                isinstance(_stream_caps, dict)
+                and _stream_caps.get("text_delta")
+            )
 
             # The legacy optimizer/cache is not allowed to sit in front of the
             # ordinary-chat fast lane. Complex paths retain it.
@@ -1684,14 +1693,16 @@ async def stream_lyo2_chat(
                             continue
                         if first_delta:
                             first_delta = False
-                            latency_metrics["server_ttft_ms"] = int(
-                                (time.monotonic() - request_started) * 1000
-                            )
+                            if supports_text_delta:
+                                latency_metrics["server_ttft_ms"] = int(
+                                    (time.monotonic() - request_started) * 1000
+                                )
                         streamed_text += chunk
-                        yield yield_safe_sse_event(
-                            "text_delta",
-                            {"type": "text_delta", "content": chunk},
-                        )
+                        if supports_text_delta:
+                            yield yield_safe_sse_event(
+                                "text_delta",
+                                {"type": "text_delta", "content": chunk},
+                            )
 
                 latency_metrics["model_total_ms"] = int(
                     (time.monotonic() - model_started) * 1000
@@ -1702,6 +1713,29 @@ async def stream_lyo2_chat(
                 latency_metrics["freshness_mode"] = (
                     freshness_decision.mode.value if freshness_decision else "none"
                 )
+
+                # Keep the established answer envelope as the final,
+                # authoritative snapshot. Legacy clients that did not advertise
+                # text_delta support receive only this event; updated clients
+                # stream deltas and replace/ignore this snapshot to avoid
+                # duplication.
+                if streamed_text:
+                    if "server_ttft_ms" not in latency_metrics:
+                        latency_metrics["server_ttft_ms"] = int(
+                            (time.monotonic() - request_started) * 1000
+                        )
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": streamed_text},
+                                "priority": 0,
+                            },
+                            "final_snapshot": True,
+                        },
+                    )
 
                 grounded_sources = list(model_metadata.get("sources") or [])
                 if grounded_sources:
