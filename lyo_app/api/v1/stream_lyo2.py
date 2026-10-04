@@ -1627,6 +1627,18 @@ async def stream_lyo2_chat(
                     await conversation_store.add_message(db, persistent_conversation.id,
                         role="assistant", content=text, mode_used=ChatMode.TEST_PREP.value,
                         client_message_id=assistant_client_message_id)
+                if (
+                    text
+                    and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                ):
+                    yield yield_safe_sse_event(
+                        "voice_ready",
+                        _voice_ready_payload(
+                            _voice_friendly_lesson_text(text),
+                            message_id=assistant_client_message_id,
+                            latency_ms=int((time.time() - start_time) * 1000),
+                        ),
+                    )
                 yield yield_safe_sse_event("answer", {"type": "answer", "block": {
                     "type": "TutorMessageBlock", "content": {"text": text}, "priority": 0}})
                 yield "data: [DONE]\n\n"
@@ -2081,18 +2093,32 @@ async def stream_lyo2_chat(
             
             # ── Emit plain-text answer event ─────────────────────────
             raw_llm_text = execution_response.answer_block.content.get("text", "")
-            
-            # Optimize final response text (Phase 17)
-            raw_llm_text = await ai_performance_optimizer.optimize_response(
-                agent_type=decision.intent.value,
-                response=raw_llm_text,
-                context={
-                    "user_id": current_user.id,
-                    "intent": decision.intent.value,
-                    "current_mood": "neutral"
-                }
-            )
-            
+            voice_delivery = interaction_contract.delivery_mode == DeliveryMode.VOICE
+
+            # The interaction contract already shapes spoken responses. Voice
+            # must not wait behind a second, non-authoritative prose optimizer
+            # after the canonical model answer is complete.
+            if not voice_delivery:
+                raw_llm_text = await ai_performance_optimizer.optimize_response(
+                    agent_type=decision.intent.value,
+                    response=raw_llm_text,
+                    context={
+                        "user_id": current_user.id,
+                        "intent": decision.intent.value,
+                        "current_mood": "neutral"
+                    }
+                )
+
+            if raw_llm_text and voice_delivery:
+                yield yield_safe_sse_event(
+                    "voice_ready",
+                    _voice_ready_payload(
+                        raw_llm_text,
+                        message_id=assistant_client_message_id,
+                        latency_ms=int((time.time() - start_time) * 1000),
+                    ),
+                )
+
             if raw_llm_text:
                 answer_brick = {
                     "type": "answer",
