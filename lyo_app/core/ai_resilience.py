@@ -352,19 +352,37 @@ class AIResilienceManager:
                         logger.warning(f"OpenAI client missing for {model_name}")
                         continue
                     logger.info(f"Attempting OpenAI stream for {model_name}")
+                    provider_started = time.time()
+                    streamed_tokens = 0
                     stream = await self.openai_client.chat.completions.create(
                         model=model_name,
                         messages=_openai_compatible_messages(messages),
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        stream=True
+                        stream=True,
+                        stream_options={"include_usage": True},
                     )
                     async for chunk in stream:
+                        usage = getattr(chunk, "usage", None)
+                        if usage is not None:
+                            streamed_tokens = int(
+                                getattr(usage, "total_tokens", 0) or streamed_tokens
+                            )
                         if chunk.choices and chunk.choices[0].delta.content:
                             provider_emitted = True
                             emitted_any = True
                             yield chunk.choices[0].delta.content
                     cb._on_success(None)
+                    try:
+                        from lyo_app.teaching_runtime.model_usage import capture_model_usage
+                        await capture_model_usage(
+                            model=model_name,
+                            tokens_used=streamed_tokens,
+                            latency_ms=int((time.time() - provider_started) * 1000),
+                            cache_hit=False,
+                        )
+                    except Exception:
+                        pass
                     return  # Success
                 else:
                     logger.info(f"Attempting Gemini stream for {model_name}")
@@ -403,13 +421,139 @@ class AIResilienceManager:
         if not emitted_any:
             yield "I'm having trouble responding right now. Please try again."
 
-    async def _stream_gemini(self, model_key: str, model: AIModelConfig, messages: List[Dict[str, str]], temperature: float, max_tokens: int):
-        """Internal helper for Gemini streaming."""
-        # Simple implementation using existing logic but for streaming
-        # Actually, let's just yield the full response for now if streaming is not fully wired
-        # to avoid complex SSE parsing here.
-        res = await self.chat_completion(messages, temperature, max_tokens, provider_order=[model_key])
-        yield res.get("content", "")
+    async def _stream_gemini(
+        self,
+        model_key: str,
+        model: AIModelConfig,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncGenerator[str, None]:
+        """Stream Gemini text directly from the provider SSE endpoint.
+
+        This intentionally raises provider/network failures instead of
+        converting them into Lyo's fallback prose. The outer resilience loop can
+        then try the next provider *before* anything has been spoken.
+        """
+        if not model.api_key:
+            raise RuntimeError(f"No API key configured for {model.name}")
+        if not self.session:
+            raise RuntimeError("Gemini HTTP session is not initialized")
+
+        contents: List[Dict[str, Any]] = []
+        system_parts: List[str] = []
+        for msg in messages:
+            role_name = msg.get("role")
+            content = msg.get("content", "")
+            if role_name == "system":
+                if isinstance(content, str):
+                    system_parts.append(content)
+                elif isinstance(content, list):
+                    system_parts.extend(
+                        str(item.get("text", ""))
+                        for item in content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    )
+                continue
+
+            role = "user" if role_name == "user" else "model"
+            message_parts: List[Dict[str, Any]] = []
+            if isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    item_type = item.get("type")
+                    if item_type == "text":
+                        message_parts.append({"text": str(item.get("text", ""))})
+                    elif item_type == "image_uri":
+                        message_parts.append({
+                            "fileData": {
+                                "mimeType": item.get("mime_type", "image/jpeg"),
+                                "fileUri": item.get("uri", ""),
+                            }
+                        })
+                    elif item_type in {
+                        "image_base64",
+                        "media_base64",
+                        "file_base64",
+                    }:
+                        message_parts.append({
+                            "inlineData": {
+                                "mimeType": item.get("mime_type", "image/jpeg"),
+                                "data": item.get("data", ""),
+                            }
+                        })
+            else:
+                message_parts.append({"text": str(content)})
+
+            if contents and contents[-1]["role"] == role:
+                contents[-1]["parts"].extend(message_parts)
+            else:
+                contents.append({"role": role, "parts": message_parts})
+
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+                "topP": 0.8,
+                "topK": 40,
+            },
+        }
+        if system_parts:
+            payload["systemInstruction"] = {
+                "parts": [{"text": "\n\n".join(system_parts)}]
+            }
+
+        endpoint = model.endpoint.replace(
+            ":generateContent",
+            ":streamGenerateContent",
+        )
+        endpoint = f"{endpoint}?alt=sse&key={model.api_key}"
+        provider_started = time.time()
+        total_tokens = 0
+
+        async with self.session.post(
+            endpoint,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=max(30, model.timeout)),
+        ) as response:
+            if response.status != 200:
+                body = await response.text()
+                raise RuntimeError(
+                    f"Gemini stream returned {response.status}: {body[:300]}"
+                )
+
+            async for raw_line in response.content:
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                payload_text = line[5:].strip()
+                if not payload_text:
+                    continue
+                event = json.loads(payload_text)
+                usage = event.get("usageMetadata") or {}
+                total_tokens = int(usage.get("totalTokenCount") or total_tokens or 0)
+                candidates = event.get("candidates") or []
+                if not candidates:
+                    continue
+                parts = ((candidates[0].get("content") or {}).get("parts") or [])
+                for part in parts:
+                    text_part = part.get("text") if isinstance(part, dict) else None
+                    if text_part:
+                        yield str(text_part)
+
+        try:
+            from lyo_app.teaching_runtime.model_usage import capture_model_usage
+            await capture_model_usage(
+                model=model_key,
+                tokens_used=total_tokens,
+                latency_ms=int((time.time() - provider_started) * 1000),
+                cache_hit=False,
+            )
+        except Exception:
+            pass
 
     async def chat_completion(
         self,
