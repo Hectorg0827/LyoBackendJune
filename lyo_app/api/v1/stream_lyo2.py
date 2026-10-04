@@ -1586,6 +1586,17 @@ async def stream_lyo2_chat(
                 _topic = _resolve_course_topic(
                     request.text or "", request.conversation_history, _active_topic
                 )
+                if (
+                    interaction_contract.reason == "attachment_to_classroom"
+                    and media_attachments
+                ):
+                    source_name = str(
+                        (media_attachments[0] or {}).get("name")
+                        if isinstance(media_attachments[0], dict)
+                        else ""
+                    ).strip()
+                    if source_name:
+                        _topic = source_name.rsplit(".", 1)[0].replace("_", " ").strip()
                 _explicit_level = _extract_course_level(request.text or "")
                 if not _explicit_level and _active_level:
                     normalized_active_level = _active_level.lower().strip()
@@ -1593,7 +1604,12 @@ async def stream_lyo2_chat(
                         _explicit_level = normalized_active_level
                 course_effective_text = (
                     f'Create or revise a course on "{_topic}". '
-                    f'Apply this learner request: "{request.text or ""}".'
+                    f'Apply this learner request: "{request.text or ""}". '
+                    + (
+                        "Use the attached material as the primary source for the course."
+                        if interaction_contract.reason == "attachment_to_classroom"
+                        else ""
+                    )
                 )
                 _preview_course = {
                     "id": str(uuid.uuid4()),
