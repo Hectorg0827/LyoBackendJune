@@ -159,3 +159,59 @@ async def test_gemini_stream_suppresses_hidden_thought_parts():
     ]
 
     assert chunks == ["visible answer"]
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_fallback_after_visible_output():
+    import types
+
+    from lyo_app.core.ai_resilience import CircuitBreaker, CircuitBreakerConfig
+
+    manager = AIResilienceManager()
+    manager._initialized = True
+    manager.models = {
+        "first": AIModelConfig(
+            name="First Gemini",
+            endpoint="https://example.invalid:first",
+            api_key="test-key-one",
+        ),
+        "second": AIModelConfig(
+            name="Second Gemini",
+            endpoint="https://example.invalid:second",
+            api_key="test-key-two",
+        ),
+    }
+    manager.circuit_breakers = {
+        "first": CircuitBreaker(CircuitBreakerConfig()),
+        "second": CircuitBreaker(CircuitBreakerConfig()),
+    }
+
+    calls = []
+
+    async def fake_stream_gemini(
+        self,
+        model_key,
+        model,
+        messages,
+        temperature,
+        max_tokens,
+        **kwargs,
+    ):
+        calls.append(model_key)
+        if model_key == "first":
+            yield "partial"
+            raise RuntimeError("provider dropped mid-stream")
+        yield "second provider answer"
+
+    manager._stream_gemini = types.MethodType(fake_stream_gemini, manager)
+
+    chunks = []
+    with pytest.raises(RuntimeError, match="stream interrupted after visible output"):
+        async for chunk in manager.stream_chat_completion(
+            messages=[{"role": "user", "content": "hello"}],
+            provider_order=["first", "second"],
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ["partial"]
+    assert calls == ["first"]
