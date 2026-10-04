@@ -176,6 +176,31 @@ LEARNER_PROFILES: dict[str, LearnerProfile] = {
 }
 
 
+QUALITY_RUBRIC: tuple[tuple[str, str], ...] = (
+    ("answers_learner_words", "Directly addresses the learner's actual words or misconception."),
+    ("examples_progress", "Uses concrete examples that become progressively more demanding."),
+    ("detour_then_resume", "Answers a free-form detour before resuming the original lesson coherently."),
+    ("misconception_specific_repair", "Targets the misconception instead of repeating the same explanation."),
+    ("hint_preserves_struggle", "Hints reduce difficulty without revealing the answer."),
+    ("transfer_is_novel", "Transfer requires the same principle in a genuinely new context."),
+    ("avoids_monologue_repetition", "Avoids unnecessary monologues, repeated questions, and empty praise."),
+    ("visual_adds_information", "Any visual remediation adds instructional information rather than decoration."),
+)
+
+
+def quality_rubric_template() -> list[dict[str, Any]]:
+    return [
+        {
+            "criterion": criterion,
+            "description": description,
+            "score": None,
+            "notes": "",
+            "scale": "1-5",
+        }
+        for criterion, description in QUALITY_RUBRIC
+    ]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -376,6 +401,7 @@ class Report:
     analytics_after: Optional[dict[str, Any]] = None
     analytics_delta: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    quality_rubric: list[dict[str, Any]] = field(default_factory=quality_rubric_template)
 
     def check(self, name: str, passed: Optional[bool], detail: str = "") -> None:
         self.checks.append(Check(name, passed, detail))
@@ -400,6 +426,7 @@ class Report:
                 "analytics_after": self.analytics_after,
                 "analytics_delta": self.analytics_delta,
                 "notes": self.notes,
+                "quality_rubric": self.quality_rubric,
             }
         )
 
@@ -799,8 +826,6 @@ class LiveLyo:
                 )
                 break
 
-                # no-op
-
         # Explicitly reconnect with the same learner/session identity only for
         # profiles designed to exercise continuity.
         if scenes and learner_profile.reconnect:
@@ -1028,8 +1053,11 @@ async def run(args) -> int:
                         mode="review",
                         review_concept_id=review_concept_id,
                         max_scenes=args.max_scenes,
-                        question=args.question,
-                        transfer_answer=args.transfer_answer,
+                        question=question,
+                        explanation_answer=explanation_answer,
+                        transfer_answer=transfer_answer,
+                        objective=objective,
+                        learner_profile=learner_profile,
                     )
                 except Exception as exc:
                     report.check("classroom_scene_received", False, f"{type(exc).__name__}: {exc}")
