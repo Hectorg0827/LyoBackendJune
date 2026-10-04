@@ -2083,6 +2083,7 @@ async def stream_lyo2_chat(
                     source_items.append({
                         "label": str(source.get("name") or "Attachment"),
                         "detail": detail,
+                        "url": str(source.get("url") or ""),
                     })
                 if source_items:
                     smart_blocks.append({
