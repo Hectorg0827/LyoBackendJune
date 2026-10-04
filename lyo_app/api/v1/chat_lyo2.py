@@ -264,7 +264,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         # ambiguity must not force a question before Lyo inspects the file.
         if (
             decision.needs_clarification
-            and interaction_contract.reason_code == "default_answer"
+            and not interaction_contract.attachment_authoritative
         ):
             logger.info(f"[{trace_id}] Clarification needed: {decision.clarification_question}")
             clarification = decision.clarification_question or "Could you clarify what you would like to learn?"
