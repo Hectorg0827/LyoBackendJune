@@ -52,6 +52,7 @@ def _source_descriptors(media_attachments: List[Dict[str, Any]]) -> List[Dict[st
             "page_count": item.get("page_count"),
             "available_pages": page_numbers[:50],
             "kind": str(item.get("source_kind") or "attachment"),
+            "url": str(item.get("uri") or ""),
         })
     return sources
 
