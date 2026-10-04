@@ -33,7 +33,6 @@ try:
     from lyo_app.ai_agents.multi_agent_v2.agents.test_prep_agent import TestPrepAgent
 except ModuleNotFoundError as exc:
     logger = logging.getLogger(__name__)
-_PROCESS_STARTED_MONOTONIC = time.monotonic()
     logger.warning("Test prep agent module unavailable; using fallback clarification flow: %s", exc)
 
     class _FallbackTestPrepData:
@@ -79,6 +78,7 @@ class LyoResponseBuilder:
 lyo_response_builder = LyoResponseBuilder()
 
 logger = logging.getLogger(__name__)
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
 
 def safe_json_serialize(data: Any, event_type: str = "unknown") -> str:
     """
