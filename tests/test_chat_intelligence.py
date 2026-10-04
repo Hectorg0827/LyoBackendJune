@@ -219,3 +219,13 @@ def test_permanent_chat_quality_gate_is_green():
 
     assert report["score"] == 1.0, report["failures"]
     assert report["failed"] == 0
+
+
+
+@pytest.mark.parametrize("text", ["Show visually", "Give me an example"])
+def test_optional_followups_do_not_turn_into_diagnostics(text):
+    contract = derive_interaction_contract(text)
+
+    assert contract.mode is InteractionMode.EXPLAIN
+    assert contract.answer_first is True
+    assert contract.fast_lane is True
