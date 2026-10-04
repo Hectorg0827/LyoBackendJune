@@ -412,6 +412,15 @@ class AIResilienceManager:
                 )
                 import traceback
                 logger.error(traceback.format_exc())
+                if first_token_recorded:
+                    # Once the user has seen provider A, provider B cannot be
+                    # appended safely: that would splice two independent
+                    # answers into one persisted assistant turn.
+                    if metadata_sink is not None:
+                        metadata_sink["stream_interrupted_after_output"] = True
+                    raise RuntimeError(
+                        f"{model_name} stream interrupted after visible output"
+                    ) from e
                 continue
 
         if metadata_sink is not None:
