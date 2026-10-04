@@ -1,6 +1,7 @@
 import pytest
 
 from lyo_app.ai.executor import LyoExecutor, _source_descriptors
+from lyo_app.api.v1.stream_lyo2 import _voice_friendly_lesson_text
 from lyo_app.ai.schemas.lyo2 import Intent
 from lyo_app.teaching_runtime.interaction_contract import (
     DeliveryMode,
@@ -221,3 +222,25 @@ def test_voice_prompt_is_spoken_friendly_without_changing_mode():
     assert "Delivery: voice" in prompt
     assert "live spoken turn" in prompt
     assert "Do not announce" in prompt
+
+
+def test_structured_voice_lesson_plain_text_is_spoken_friendly():
+    raw = """## Fractions
+
+**Core idea:** $\\frac{1}{2}$ is one half.
+
+| Part | Value |
+| --- | --- |
+| numerator | 1 |
+
+A) One half
+B) One third
+"""
+    spoken = _voice_friendly_lesson_text(raw)
+
+    assert "##" not in spoken
+    assert "**" not in spoken
+    assert "$" not in spoken
+    assert "|" not in spoken
+    assert "A: One half" in spoken
+    assert "Core idea:" in spoken
