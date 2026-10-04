@@ -126,6 +126,58 @@ def safe_json_serialize(data: Any, event_type: str = "unknown") -> str:
             logger.critical(f"💥 Even fallback serialization failed: {fallback_error}")
             raise ValueError(f"Complete JSON serialization failure: {fallback_error}")
 
+def _speech_text(raw: str) -> str:
+    """Deterministically turn the canonical chat answer into spoken text.
+
+    This is a delivery transform, not another model call. The on-screen answer
+    stays authoritative and can retain markdown/source markers; voice strips
+    things that sound unnatural when read aloud.
+    """
+    text = raw or ""
+    text = _re.sub(r"```[\s\S]*?```", " ", text)
+    text = _re.sub(r"【[^】]+】", " ", text)
+    text = _re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    text = _re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = _re.sub(r"(?m)^#{1,6}\s*", "", text)
+    text = _re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    text = _re.sub(r"(?m)^\s*\d+[.)]\s+", "", text)
+    text = text.replace("**", "").replace("__", "").replace("`", "")
+    return " ".join(text.split()).strip()
+
+
+def _speech_segments(raw: str, max_chars: int = 760) -> List[str]:
+    """Split one chat answer into TTS-sized, interruptible segments."""
+    text = _speech_text(raw)
+    if not text:
+        return []
+
+    sentences = [
+        part.strip()
+        for part in _re.split(r"(?<=[.!?])\s+", text)
+        if part.strip()
+    ]
+    segments: List[str] = []
+    current = ""
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            if current:
+                segments.append(current)
+                current = ""
+            for start in range(0, len(sentence), max_chars):
+                chunk = sentence[start:start + max_chars].strip()
+                if chunk:
+                    segments.append(chunk)
+            continue
+        candidate = sentence if not current else f"{current} {sentence}"
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            segments.append(current)
+            current = sentence
+    if current:
+        segments.append(current)
+    return segments
+
 def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
     """
     Yield a Server-Sent Event with guaranteed JSON safety.
