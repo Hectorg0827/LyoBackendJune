@@ -16,6 +16,7 @@ from .models import (
 )
 from .policy import POLICY_VERSION, TeachingPolicy, canonical_action_for_classroom_move
 from .interaction_contract import (
+    InteractionChannel,
     InteractionContract,
     InteractionMode,
     ResponseDepth,
@@ -41,6 +42,7 @@ __all__ = [
     "TeachingContext",
     "TeachingDecision",
     "TeachingSurface",
+    "InteractionChannel",
     "InteractionContract",
     "InteractionMode",
     "ResponseDepth",
