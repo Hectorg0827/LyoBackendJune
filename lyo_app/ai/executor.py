@@ -212,6 +212,7 @@ class LyoExecutor:
         teaching_decision = context.get("teaching_decision") or {}
         interaction_contract = context.get("interaction_contract") or {}
         memory_context = str(context.get("memory_context") or "").strip()
+        grounding_unavailable = bool(context.get("grounding_unavailable"))
         media_attachments = context.get("media_attachments", [])
         source_text, source_refs = _attachment_grounding(media_attachments)
         context["source_refs"] = source_refs
@@ -299,6 +300,7 @@ GROUNDING RULES:
 - When live web sources are present, support current factual claims with the provided labels such as [web 1]. Never invent a web source.
 - Never invent a page, source, quotation, URL, or fact that is not present.
 - If the file is scanned and no page text is available, analyze the raw attachment visually and say when a detail cannot be verified.
+- Live grounding unavailable: {grounding_unavailable}. If true and the user asked for current/latest information, state that current information could not be verified; do not present model memory as current fact.
 
 USER QUESTION:
 {original_request}
@@ -312,12 +314,18 @@ USER QUESTION:
                 
             from lyo_app.teaching_runtime.model_router import provider_order_for_tier
 
-            if media_attachments:
+            model_media_attachments = [
+                item
+                for item in media_attachments
+                if str(item.get("mime_type") or "").startswith("image/")
+                or not item.get("source_sections")
+            ]
+            if model_media_attachments:
                 messages = [{
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        *media_attachments,
+                        *model_media_attachments,
                     ],
                 }]
             else:
@@ -325,14 +333,14 @@ USER QUESTION:
 
             provider_order = provider_order_for_tier(
                 str(teaching_decision.get("model_tier") or "teaching"),
-                has_media=bool(media_attachments),
+                has_media=bool(model_media_attachments),
             )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=messages,
                     provider_order=provider_order,
-                    use_cache=not bool(media_attachments),
+                    use_cache=not bool(media_attachments) and not interaction_contract.get("requires_grounding"),
                 ),
                 timeout=30.0
             )
@@ -401,6 +409,7 @@ USER QUESTION:
             "memory_context": memory_context,
             "source_refs": [],
             "web_sources": [],
+            "grounding_unavailable": False,
         }
         
         for step in plan.steps:
@@ -422,7 +431,7 @@ USER QUESTION:
                         query=step.parameters.get("query", original_request),
                         max_results=min(int(step.parameters.get("max_results", 5)), 8),
                     )
-                    if result.success and isinstance(result.output, list):
+                    if result.success and isinstance(result.output, list) and result.output:
                         for item in result.output:
                             if not isinstance(item, dict):
                                 continue
@@ -433,11 +442,16 @@ USER QUESTION:
                                 "source_type": "web",
                             })
                             if item.get("url"):
-                                execution_context.setdefault("web_sources", []).append({
+                                source_number = len(execution_context.setdefault("web_sources", [])) + 1
+                                execution_context["web_sources"].append({
                                     "title": str(item.get("title") or item.get("url")),
                                     "url": str(item.get("url")),
+                                    "label": f"web {source_number}",
                                 })
+                    else:
+                        execution_context["grounding_unavailable"] = True
                 except Exception as exc:
+                    execution_context["grounding_unavailable"] = True
                     logger.warning("Live web grounding failed: %s", type(exc).__name__)
                 
             elif step.action_type == ActionType.CREATE_ARTIFACT:
