@@ -1,7 +1,7 @@
 import pytest
 
 from lyo_app.ai.executor import LyoExecutor, _source_descriptors
-from lyo_app.api.v1.stream_lyo2 import _voice_friendly_lesson_text
+from lyo_app.api.v1.stream_lyo2 import _voice_friendly_lesson_text, _voice_ready_payload
 from lyo_app.ai.schemas.lyo2 import Intent
 from lyo_app.teaching_runtime.interaction_contract import (
     DeliveryMode,
@@ -244,3 +244,19 @@ B) One third
     assert "|" not in spoken
     assert "A: One half" in spoken
     assert "Core idea:" in spoken
+
+
+def test_voice_ready_payload_carries_canonical_text_and_turn_identity():
+    payload = _voice_ready_payload(
+        "Photosynthesis converts light energy into chemical energy.",
+        message_id="assistant-turn-1",
+        latency_ms=742,
+    )
+
+    assert payload == {
+        "type": "voice_ready",
+        "text": "Photosynthesis converts light energy into chemical energy.",
+        "final": True,
+        "message_id": "assistant-turn-1",
+        "latency_ms": 742,
+    }
