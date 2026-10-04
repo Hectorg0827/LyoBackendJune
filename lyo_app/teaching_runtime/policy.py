@@ -109,6 +109,37 @@ class TeachingPolicy:
         has_media = bool(context.metadata.get("has_media"))
         has_current_media = bool(context.metadata.get("has_current_media"))
         attachment_referential = bool(_ATTACHMENT_REFERENCE_RE.search(text))
+        interaction_mode = str(context.metadata.get("interaction_mode") or "").lower()
+
+        # The interaction contract is chosen before pedagogy. For direct
+        # information modes, pedagogy may shape clarity but may not replace the
+        # requested activity with a calibration question or quiz.
+        if interaction_mode in {"answer", "analyze", "summarize", "compare", "continue"}:
+            depth = str(context.metadata.get("response_depth") or "standard").lower()
+            words = {"concise": 90, "standard": 180, "deep": 280}.get(depth, 180)
+            return _decision(
+                TeachingAction.ANSWER,
+                f"interaction_contract_{interaction_mode}",
+                words=words,
+                model_tier="teaching",
+                directives=[
+                    f"Honor the learner's {interaction_mode} request before any teaching move.",
+                    "Do not insert a diagnostic or quiz unless the learner explicitly asks for one.",
+                ],
+            )
+
+        if interaction_mode == "explain":
+            depth = str(context.metadata.get("response_depth") or "standard").lower()
+            words = {"concise": 100, "standard": 190, "deep": 290}.get(depth, 190)
+            return _decision(
+                TeachingAction.EXPLAIN,
+                "interaction_contract_explain",
+                words=words,
+                directives=[
+                    "Explain directly first; do not gate the explanation behind a diagnostic.",
+                    "An optional check may follow only after the explanation.",
+                ],
+            )
 
         # Files are objects the learner is asking Lyo to inspect, not concepts
         # that should be diagnosed before they are identified. A newly attached

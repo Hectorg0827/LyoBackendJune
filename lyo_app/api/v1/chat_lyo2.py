@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import time
 import uuid
 from typing import List, Dict, Any, Optional
@@ -183,12 +184,47 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
 
         from lyo_app.ai.lesson_composer import slugify_skill
         from lyo_app.teaching_runtime import (
+            InteractionMode,
             TeachingAction,
             TeachingSurface,
             decide_for_chat,
+            interaction_contract_for_request,
             record_policy_decision,
             resolve_chat_teaching_topic,
         )
+
+        interaction_contract = interaction_contract_for_request(
+            text=request.text or "",
+            routed_intent=decision.intent,
+            has_media=bool(media_attachments),
+            has_current_media=bool(request.media),
+        )
+        interaction_contract_payload = {
+            "mode": interaction_contract.mode.value,
+            "depth": interaction_contract.depth.value,
+            "fast_lane": interaction_contract.fast_lane,
+            "workflow_intent": (
+                interaction_contract.workflow_intent.value
+                if interaction_contract.workflow_intent is not None
+                else None
+            ),
+            "attachment_authoritative": interaction_contract.attachment_authoritative,
+            "reason_code": interaction_contract.reason_code,
+            "directives": list(interaction_contract.directives),
+        }
+        if (
+            interaction_contract.workflow_intent is not None
+            and interaction_contract.workflow_intent != decision.intent
+        ):
+            decision = decision.model_copy(
+                update={
+                    "intent": interaction_contract.workflow_intent,
+                    "confidence": 1.0,
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                }
+            )
+
         _policy_topic = resolve_chat_teaching_topic(
             intent=decision.intent,
             user_text=request.text or "",
@@ -211,6 +247,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             state_summary=request.state_summary,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
+            interaction_mode=interaction_contract.mode.value,
+            response_depth=interaction_contract.depth.value,
         )
         await record_policy_decision(
             db,
@@ -226,7 +264,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         # ambiguity must not force a question before Lyo inspects the file.
         if (
             decision.needs_clarification
-            and teaching_decision.reason_code != "attachment_information_request"
+            and not interaction_contract.attachment_authoritative
         ):
             logger.info(f"[{trace_id}] Clarification needed: {decision.clarification_question}")
             clarification = decision.clarification_question or "Could you clarify what you would like to learn?"
@@ -253,14 +291,14 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         # 2. Layer B: Planning
         logger.info(f"[{trace_id}] Layer B: Planning execution for intent {decision.intent}")
         if (
-            media_attachments
-            and teaching_decision.action == TeachingAction.ANSWER
-            and teaching_decision.reason_code == "attachment_information_request"
+            interaction_contract.fast_lane
+            and interaction_contract.workflow_intent is None
+            and teaching_decision.action in {TeachingAction.ANSWER, TeachingAction.EXPLAIN}
         ):
             plan = LyoPlan(steps=[
                 PlannedAction(
                     action_type=ActionType.GENERATE_TEXT,
-                    description="Inspect the attachment and answer the learner directly",
+                    description="Honor the interaction contract directly",
                     parameters={"content": None},
                 )
             ])
@@ -268,6 +306,26 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             with _model_usage_scope("orchestration"):
                 plan = await planner_agent.plan(request, decision)
         
+        personal_memory = ""
+        if (
+            authenticated_user_id
+            and not media_attachments
+            and interaction_contract.mode
+            in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
+        ):
+            try:
+                from lyo_app.services.memory_synthesis import memory_synthesis_service
+                personal_memory = await asyncio.wait_for(
+                    memory_synthesis_service.get_relevant_memory_for_prompt(
+                        int(authenticated_user_id),
+                        request.text or "",
+                        db,
+                    ),
+                    timeout=0.45,
+                )
+            except Exception:
+                personal_memory = ""
+
         # 3. Layer C: Execution
         logger.info(f"[{trace_id}] Layer C: Executing plan")
         executor = LyoExecutor(db)
@@ -282,6 +340,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 ],
                 media_attachments=media_attachments,
                 teaching_decision=teaching_decision.model_dump(mode="json"),
+                interaction_contract=interaction_contract_payload,
+                personal_memory=personal_memory,
             )
         
         # Add trace metadata
@@ -293,6 +353,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "tier": decision.suggested_tier,
             "conversation_id": request.conversation_id,
             "teaching_policy": teaching_decision.model_dump(mode="json"),
+            "interaction_contract": interaction_contract_payload,
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")

@@ -98,6 +98,10 @@ async def test_load_media_attachment_returns_inline_gemini_part(tmp_path, monkey
             "mime_type": "image/png",
             "data": base64.b64encode(payload).decode("ascii"),
             "name": "worksheet.png",
+            "uri": "/api/v1/media/file/chat/example.png",
+            "source_pages": [],
+            "page_count": None,
+            "source_kind": "attachment",
         }
     ]
 

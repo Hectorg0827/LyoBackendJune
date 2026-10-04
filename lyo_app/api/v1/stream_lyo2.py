@@ -1283,6 +1283,7 @@ async def stream_lyo2_chat(
                     yield "data: [DONE]\n\n"
                     return
 
+            historical_media = []
             if not media_attachments:
                 historical_media = recent_media_refs(request.conversation_history)
                 media_attachments = await load_media_attachments(
@@ -1433,11 +1434,67 @@ async def stream_lyo2_chat(
             # next. It reads the same durable evidence the Classroom receives.
             from lyo_app.ai.lesson_composer import slugify_skill
             from lyo_app.teaching_runtime import (
+                InteractionMode,
                 TeachingAction,
                 TeachingSurface,
                 decide_for_chat,
+                interaction_contract_for_request,
                 record_policy_decision,
                 resolve_chat_teaching_topic,
+            )
+
+            interaction_contract = interaction_contract_for_request(
+                text=request.text or "",
+                routed_intent=decision.intent,
+                has_media=bool(media_attachments),
+                has_current_media=bool(request.media),
+            )
+            interaction_contract_payload = {
+                "mode": interaction_contract.mode.value,
+                "depth": interaction_contract.depth.value,
+                "fast_lane": interaction_contract.fast_lane,
+                "workflow_intent": (
+                    interaction_contract.workflow_intent.value
+                    if interaction_contract.workflow_intent is not None
+                    else None
+                ),
+                "attachment_authoritative": interaction_contract.attachment_authoritative,
+                "reason_code": interaction_contract.reason_code,
+                "directives": list(interaction_contract.directives),
+            }
+
+            # A handoff such as "Use this for Test Prep" or "Teach this in
+            # Classroom" inherits the most recent Lyo-owned attachment instead
+            # of forcing the learner to upload the same material again.
+            if (
+                not request.media
+                and historical_media
+                and (
+                    interaction_contract.attachment_authoritative
+                    or interaction_contract.workflow_intent in {Intent.TEST_PREP, Intent.COURSE}
+                )
+            ):
+                request.media = historical_media
+
+            # Explicit learner language is more authoritative than a coarse
+            # router guess. Workflows can therefore correct the router before
+            # any pedagogical or planner decision is made.
+            if (
+                interaction_contract.workflow_intent is not None
+                and interaction_contract.workflow_intent != decision.intent
+            ):
+                decision = decision.model_copy(
+                    update={
+                        "intent": interaction_contract.workflow_intent,
+                        "confidence": 1.0,
+                        "needs_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+
+            yield yield_safe_sse_event(
+                "interaction_contract",
+                {"type": "interaction_contract", **interaction_contract_payload},
             )
 
             _policy_topic = resolve_chat_teaching_topic(
@@ -1462,6 +1519,8 @@ async def stream_lyo2_chat(
                 state_summary=request.state_summary,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
+                interaction_mode=interaction_contract.mode.value,
+                response_depth=interaction_contract.depth.value,
             )
             await record_policy_decision(
                 db,
@@ -1478,7 +1537,7 @@ async def stream_lyo2_chat(
                     **teaching_decision.model_dump(mode="json"),
                 },
             )
-            
+
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats
             # must never be hijacked by an unfinished exam elsewhere.
@@ -1580,7 +1639,7 @@ async def stream_lyo2_chat(
             if (
                 decision.needs_clarification
                 and decision.confidence > 0.3
-                and teaching_decision.reason_code != "attachment_information_request"
+                and not interaction_contract.attachment_authoritative
             ):
                 # Only ask for clarification if the router is reasonably confident
                 # that it truly cannot understand. Low-confidence clarifications
@@ -1677,7 +1736,11 @@ async def stream_lyo2_chat(
             # A self-contained "explain X" is taught right here as a lesson
             # with a server-gradeable check. Multi-session topics stay on the
             # COURSE path above and hand off to the classroom instead.
-            if decision.intent == Intent.EXPLAIN and request.text:
+            if (
+                decision.intent == Intent.EXPLAIN
+                and request.text
+                and interaction_contract.mode == InteractionMode.TEACH
+            ):
                 _force_lesson_mode = _lesson_mode_for_teaching_action(
                     teaching_decision.action
                 )
@@ -1731,18 +1794,21 @@ async def stream_lyo2_chat(
                 # chance to manufacture an assessment the learner never asked
                 # for, so execute one grounded generation step directly.
                 if (
-                    media_attachments
-                    and teaching_decision.action == TeachingAction.ANSWER
-                    and teaching_decision.reason_code == "attachment_information_request"
+                    interaction_contract.fast_lane
+                    and interaction_contract.workflow_intent is None
+                    and teaching_decision.action in {TeachingAction.ANSWER, TeachingAction.EXPLAIN}
                 ):
                     logger.info(
-                        f"⚡ [STREAM][{trace_id}] Attachment-answer fast path: "
-                        "skipping planner"
+                        f"⚡ [STREAM][{trace_id}] Contract fast lane: "
+                        f"{interaction_contract.mode.value}; skipping planner"
                     )
                     plan = LyoPlan(steps=[
                         PlannedAction(
                             action_type=ActionType.GENERATE_TEXT,
-                            description="Inspect the attachment and answer the learner directly",
+                            description=(
+                                "Honor the interaction contract directly without "
+                                "introducing another workflow"
+                            ),
                             parameters={"content": None},
                         )
                     ])
@@ -1826,6 +1892,30 @@ async def stream_lyo2_chat(
                 for turn in request.conversation_history
             ] if request.conversation_history else []
             
+            personal_memory = ""
+            if (
+                authenticated_user_id
+                and not media_attachments
+                and interaction_contract.mode
+                in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
+            ):
+                try:
+                    from lyo_app.services.memory_synthesis import memory_synthesis_service
+                    personal_memory = await asyncio.wait_for(
+                        memory_synthesis_service.get_relevant_memory_for_prompt(
+                            int(authenticated_user_id),
+                            request.text or "",
+                            db,
+                        ),
+                        timeout=0.45,
+                    )
+                except Exception as memory_exc:
+                    logger.debug(
+                        "Selective memory lookup unavailable: %s",
+                        type(memory_exc).__name__,
+                    )
+                    personal_memory = ""
+
             try:
                 with _model_usage_scope(teaching_decision.model_tier):
                     execution_response = await asyncio.wait_for(
@@ -1841,6 +1931,8 @@ async def stream_lyo2_chat(
                             intent=decision.intent.value if decision.intent else None,
                             media_attachments=media_attachments,
                             teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract=interaction_contract_payload,
+                            personal_memory=personal_memory,
                         ),
                         timeout=60.0 # Execution can take longer
                     )
@@ -1972,10 +2064,44 @@ async def stream_lyo2_chat(
             smart_blocks = _to_smart_blocks(
                 raw_llm_text, execution_response.artifact_block
             )
+            sources = list(execution_response.metadata.get("sources") or [])
+            if sources:
+                source_items = []
+                for source in sources:
+                    if not isinstance(source, dict):
+                        continue
+                    page_count = source.get("page_count")
+                    detail = str(source.get("mime_type") or "attachment")
+                    if isinstance(page_count, int) and page_count > 0:
+                        detail += f" • {page_count} page" + ("s" if page_count != 1 else "")
+                    source_items.append({
+                        "label": str(source.get("name") or "Attachment"),
+                        "detail": detail,
+                        "url": str(source.get("url") or ""),
+                    })
+                if source_items:
+                    smart_blocks.append({
+                        "id": f"sources-{trace_id[:8]}",
+                        "schema_version": 1,
+                        "type": "interactive",
+                        "subtype": "sourceNavigator",
+                        "content": {
+                            "title": "Sources used",
+                            "items": source_items,
+                        },
+                        "metadata": {"role": "grounding"},
+                    })
+
             if smart_blocks:
                 yield yield_safe_sse_event(
                     "smart_blocks",
                     {"type": "smart_blocks", "blocks": redact_blocks(smart_blocks)},
+                )
+
+            if sources:
+                yield yield_safe_sse_event(
+                    "sources",
+                    {"type": "sources", "sources": sources},
                 )
 
             # Send the normalized open_classroom payload (course creation trigger).
