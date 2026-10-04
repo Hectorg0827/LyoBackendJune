@@ -209,3 +209,13 @@ async def test_explicit_explanation_contract_beats_first_contact_diagnosis():
     assert decision.action is TeachingAction.ANSWER
     assert decision.reason_code == "interaction_contract_answer_first"
     assert decision.interaction_required is False
+
+
+
+def test_permanent_chat_quality_gate_is_green():
+    from lyo_app.ai.chat_quality import evaluate_chat_quality_gate
+
+    report = evaluate_chat_quality_gate()
+
+    assert report["score"] == 1.0, report["failures"]
+    assert report["failed"] == 0
