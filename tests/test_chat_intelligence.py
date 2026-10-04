@@ -159,7 +159,7 @@ def test_document_answer_gets_source_workspace_block():
     )
 
     source = next(block for block in blocks if block.get("subtype") == "notes")
-    assert source["content"]["title"] == "Sources used"
+    assert source["content"]["title"] == "Source material"
     assert source["content"]["items"][0]["label"] == "rent.pdf"
     assert "1" in source["content"]["items"][0]["detail"]
     assert "2" in source["content"]["items"][0]["detail"]
