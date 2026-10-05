@@ -169,10 +169,9 @@ class LyoExecutor:
                 await text_delta_callback(static_content)
             return static_content
 
-        if not self._gemini:
-            logger.warning("Gemini model unavailable – returning fallback text")
-            return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
-
+        # Text generation is provider-resilient below. Do not gate canonical
+        # Chat/voice on the legacy Gemini model object: OpenAI may be healthy
+        # even when Gemini is absent or its circuit is open.
         # Build a grounded prompt
         rag_snippets = context.get("retrieved_content", [])
         rag_text = ""
