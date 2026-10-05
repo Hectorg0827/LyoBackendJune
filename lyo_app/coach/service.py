@@ -461,7 +461,7 @@ def _action_for_skill(
             "guide",
             "application",
             "classroom",
-            9,
+            10,
             "Recognition is present; the next step is using the idea with guidance.",
         )
     if rank == evidence_rank("explanation"):
@@ -469,7 +469,7 @@ def _action_for_skill(
             "check_application",
             "application",
             "quiz",
-            6,
+            5,
             "The learner can explain it; now verify they can apply it.",
         )
     if rank == evidence_rank("application"):
@@ -477,7 +477,7 @@ def _action_for_skill(
             "check_transfer",
             "transfer",
             "quiz",
-            7,
+            10,
             "Application is demonstrated; a novel problem should test transfer.",
         )
     if rank == evidence_rank("transfer"):
