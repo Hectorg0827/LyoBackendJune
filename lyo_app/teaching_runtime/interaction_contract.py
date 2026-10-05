@@ -79,9 +79,10 @@ _TEST_PREP_RE = re.compile(
     re.IGNORECASE,
 )
 _COACH_RE = re.compile(
-    r"\b(?:what should i (?:study|work on|do next)|what do i need to work on|"
+    r"^\s*(?:what should i (?:study|work on|do next)(?: today)?|"
+    r"what do i need to work on(?: today)?|"
     r"what(?:'s| is) my mission(?: today)?|my mission today|"
-    r"how ready am i|am i ready|show me my readiness)\b",
+    r"how ready am i|am i ready|show me my readiness)\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
 _COACH_TIME_ONLY_RE = re.compile(
@@ -182,16 +183,6 @@ def interaction_contract_for_request(
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="explicit_test_prep",
-        )
-    if _COACH_RE.search(text) or _COACH_TIME_ONLY_RE.fullmatch(text):
-        return InteractionContract(
-            mode=InteractionMode.WORKFLOW,
-            depth=depth,
-            **delivery_metadata,
-            fast_lane=True,
-            workflow_intent=Intent.COACH,
-            attachment_authoritative=False,
-            reason_code="explicit_coach",
         )
     if _COURSE_RE.search(text):
         return InteractionContract(
@@ -322,6 +313,20 @@ def interaction_contract_for_request(
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_answer",
+        )
+
+    # A standalone Coach request owns the turn, but only after every
+    # explicit activity verb above. "Am I ready to submit this essay?" is an
+    # analysis request, not permission for Coach to replace it with a mission.
+    if _COACH_RE.fullmatch(text) or _COACH_TIME_ONLY_RE.fullmatch(text):
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="explicit_coach",
         )
 
     # Only after all explicit learner-authored verbs have been checked may
