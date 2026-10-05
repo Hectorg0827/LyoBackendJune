@@ -66,7 +66,10 @@ def test_live_validation_exposes_only_named_subject_and_learner_presets():
     assert "--topic" not in WORKFLOW
     assert "--chat-prompt" not in WORKFLOW
     assert "--question" not in WORKFLOW
+    assert "--explanation-answer" not in WORKFLOW
+    assert "--application-answer" not in WORKFLOW
     assert "--transfer-answer" not in WORKFLOW
+    assert "--retrieval-answer" not in WORKFLOW
 
 
 def test_live_validation_is_serialized_for_the_shared_test_learner():
