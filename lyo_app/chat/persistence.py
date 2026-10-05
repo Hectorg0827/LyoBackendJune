@@ -24,7 +24,7 @@ def _finish_write(task: asyncio.Task) -> None:
 
 
 def schedule_assistant_message(
-    db: AsyncSession, conversation_id: str, **message: Any
+    db: AsyncSession, conversation_id: str, *, store: Any = conversation_store, **message: Any
 ) -> asyncio.Task:
     """Own a bounded, idempotent write before yielding any completed answer.
 
@@ -35,13 +35,13 @@ def schedule_assistant_message(
     async def persist() -> None:
         if isinstance(db, AsyncSession):
             async with AsyncSession(bind=db.bind, expire_on_commit=False) as write_db:
-                await conversation_store.add_message(
+                await store.add_message(
                     write_db, conversation_id, role="assistant", **message
                 )
         else:
             # Lightweight adapters used by route tests implement the store,
             # rather than SQLAlchemy sessions.
-            await conversation_store.add_message(
+            await store.add_message(
                 db, conversation_id, role="assistant", **message
             )
 

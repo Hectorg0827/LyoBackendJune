@@ -813,6 +813,7 @@ async def _emit_composed_lesson(
         pending_writes.append(schedule_assistant_message(
             db,
             persistent_conversation.id,
+            store=conversation_store,
             content=lesson_text,
             mode_used=mode_used,
             client_message_id=assistant_client_message_id,
@@ -1257,7 +1258,7 @@ async def stream_lyo2_chat(
         def persist_answer(text, mode_used, **metadata):
             if persistent_conversation and text:
                 pending_writes.append(schedule_assistant_message(
-                    db, persistent_conversation.id, content=text,
+                    db, persistent_conversation.id, store=conversation_store, content=text,
                     mode_used=mode_used, client_message_id=assistant_client_message_id,
                     **metadata,
                 ))
