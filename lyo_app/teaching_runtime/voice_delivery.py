@@ -15,6 +15,10 @@ from typing import List
 
 _STRONG_BOUNDARY_RE = re.compile(r"(?<=[.!?])(?:[\"'”’)]*)\s+")
 _SOFT_BOUNDARY_RE = re.compile(r"(?<=[,;:])\s+")
+_ABBREVIATION_RE = re.compile(
+    r"(?:\b(?:dr|mr|mrs|ms|prof|sr|jr|vs|etc)\.|\b(?:[a-z]\.){2,})$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -69,14 +73,17 @@ class VoiceSegmenter:
 
     def _strong_cut(self) -> int | None:
         for match in _STRONG_BOUNDARY_RE.finditer(self._buffer):
+            prefix = self._buffer[:match.start()].rstrip("\"'”’)")
+            if prefix.endswith(".") and _ABBREVIATION_RE.search(prefix):
+                continue
             if match.start() >= self.min_chars:
                 return match.end()
-        # A provider delta can end exactly on punctuation with no trailing
-        # whitespace yet. Emit it once it is substantial enough.
+        # A terminal period needs lookahead: the next provider delta may be
+        # the rest of a decimal or abbreviation. Flush owns the final period.
         stripped = self._buffer.rstrip()
         if (
             len(stripped) >= self.min_chars
-            and stripped[-1:] in {".", "!", "?"}
+            and stripped[-1:] in {"!", "?"}
         ):
             return len(self._buffer)
         return None

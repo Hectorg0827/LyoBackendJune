@@ -14,6 +14,9 @@ on:
       - "tests/test_chat_multimodal.py"
       - "tests/test_chat_continuity.py"
       - "tests/test_voice_delivery.py"
+      - "tests/test_voice_stream_lifecycle.py"
+      - "tests/test_voice_turn_lifecycle.py"
+      - "lyo_app/chat/persistence.py"
       - ".github/workflows/chat-quality-ci.yml"
   workflow_dispatch:
 
@@ -50,8 +53,8 @@ jobs:
           python -m flake8             lyo_app/teaching_runtime             lyo_app/ai/executor.py             lyo_app/ai/multimodal.py             lyo_app/api/v1/chat_lyo2.py             lyo_app/api/v1/stream_lyo2.py             lyo_app/services/memory_synthesis.py             tests/test_chat_companion_v2.py             tests/test_voice_delivery.py             --count --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Intent directness depth and handoff contract
-        run: python -m pytest -q tests/test_chat_companion_v2.py tests/test_teaching_runtime_policy.py tests/test_voice_delivery.py
+        run: python -m pytest -q tests/test_chat_companion_v2.py tests/test_teaching_runtime_policy.py tests/test_voice_delivery.py tests/test_voice_stream_lifecycle.py
 
       - name: Grounding multimodal and continuity regressions
         run: |
-          python -m pytest -q             tests/test_chat_multimodal.py             tests/test_chat_continuity.py             tests/test_chat_check_grading.py
+          python -m pytest -q             tests/test_chat_multimodal.py             tests/test_chat_continuity.py             tests/test_chat_check_grading.py tests/test_voice_turn_lifecycle.py

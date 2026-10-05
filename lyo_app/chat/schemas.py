@@ -34,6 +34,7 @@ class ConversationMessageRead(BaseModel):
     role: str
     content: str
     mode_used: str
+    generation_status: str = "completed"
     ctas: Optional[List[Dict[str, Any]]] = None
     chip_actions: Optional[List[Dict[str, Any]]] = None
     # Structured lesson blocks, so a reloaded conversation keeps its lesson

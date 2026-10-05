@@ -230,6 +230,10 @@ class ChatMessage(TenantMixin, Base):
     # Routing info
     mode_used: Mapped[str] = mapped_column(String(50), default=ChatMode.GENERAL.value)
     action_triggered: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    @property
+    def generation_status(self) -> str:
+        return "incomplete" if self.action_triggered == "voice_incomplete" else "completed"
     
     # AI metadata
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

@@ -938,58 +938,16 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
             ai_response=response_content
         )
         
-        # Override mock AI Classroom widgets with REAL A2A Orchestrator data
-        import asyncio
+        # Keep this legacy compatibility endpoint fast. Full course generation
+        # belongs to the canonical async course workflow; synchronously invoking
+        # the multi-agent orchestrator here previously kept /api/v1/ai/chat open
+        # for ~70 seconds and caused mobile clients to disconnect.
         for ct in content_types:
             if ct.type == "course_roadmap":
-                try:
-                    from lyo_app.ai_agents.a2a.orchestrator import A2AOrchestrator
-                    from lyo_app.ai_agents.a2a.schemas import A2ACourseRequest, ArtifactType
-                    import re
-                    
-                    topic = request.message[:50] if request.message else "Learning"
-                    match = re.search(r"(?:course on|learn about|teach me) (.+)", request.message.lower())
-                    if match:
-                        topic = match.group(1).replace("please", "").replace("pls", "").strip().title()
-                    else:
-                        topic = ct.course_roadmap.topic if ct.course_roadmap else topic
-                        
-                    logger.info(f"Triggering REAL A2A orchestration for Course: {topic}")
-                    orchestrator = A2AOrchestrator()
-                    course_req = A2ACourseRequest(
-                        topic=topic,
-                        user_id="guest",
-                        level="beginner",
-                        duration_minutes=30
-                    )
-                    a2a_response = await asyncio.wait_for(orchestrator.generate_course(course_req), timeout=180.0)
-                    
-                    real_modules = []
-                    flat_modules = []
-                    for i, artifact in enumerate(a2a_response.artifacts):
-                        if artifact.type == ArtifactType.CURRICULUM_STRUCTURE and artifact.data:
-                            for j, mod in enumerate(artifact.data.get("modules", [])):
-                                t = mod.get("title", f"Module {j+1}")
-                                lesson_count = len(mod.get("lessons", [1]))
-                                real_modules.append(ModulePayload(
-                                    title=t,
-                                    description=mod.get("description", ""),
-                                    lessons=[LessonPayload(title=f"Lesson", duration="15 min")] * lesson_count
-                                ))
-                                flat_modules.append(CourseModulePayload(title=t, duration=f"{lesson_count * 15} min", isCompleted=False, isLocked=False))
-                    
-                    if real_modules:
-                        if ct.course_roadmap:
-                            ct.course_roadmap.title = f"Course: {topic}"
-                            ct.course_roadmap.topic = topic
-                            ct.course_roadmap.modules = real_modules
-                        ct.modules = flat_modules
-                        ct.totalModules = len(flat_modules)
-                        ct.completedModules = 0
-                        response_content = f"I've created a comprehensive course on {topic}! 🚀"
-                        
-                except Exception as e:
-                    logger.error(f"Failed to override mock course with A2A: {e}", exc_info=True)
+                logger.info(
+                    "Legacy public chat returned an immediate course roadmap; "
+                    "full generation stays on the canonical async workflow"
+                )
             elif ct.type == "quiz":
                 # Ensure valid Quiz format for iOS to prevent `unsupported Unknown Error`
                 ct.correctIndex = ct.correctIndex if ct.correctIndex is not None else 1
@@ -998,13 +956,12 @@ async def public_chat_endpoint(request: ChatRequest) -> ChatResponse:
                     q = ct.quiz.questions[0]
                     ct.question = q.question
                     ct.options = q.options
-                    # Find index
                     try:
                         ct.correctIndex = q.options.index(q.correct_answer)
                     except ValueError:
                         ct.correctIndex = 1
                 response_content = "Here's a quick quiz to test your knowledge! 🧠"
-        
+
         # Build updated history
         updated_history = []
         if request.conversationHistory:

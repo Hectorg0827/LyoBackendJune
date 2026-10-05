@@ -158,6 +158,8 @@ class LyoExecutor:
         and prior conversation history for multi-turn continuity.
         Falls back to the plan's static content if the model is unavailable.
         """
+        from lyo_app.core.ai_resilience import StreamingIncompleteError
+
         # If the planner already provided concrete content, use it
         static_content = step_params.get("content")
         text_delta_callback = context.get("text_delta_callback")
@@ -302,6 +304,10 @@ USER QUESTION:
             provider_order = provider_order_for_tier(
                 str(teaching_decision.get("model_tier") or "teaching"),
                 has_media=bool(media_attachments),
+                prefer_low_latency=bool(
+                    interaction_contract is not None
+                    and interaction_contract.delivery_mode is DeliveryMode.VOICE
+                ),
             )
             print(f">>> [PID {os.getpid()}] LyoExecutor: Calling AIResilience for '{prompt[:30]}...'", flush=True)
             if text_delta_callback:
@@ -344,6 +350,10 @@ USER QUESTION:
                 generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
                 if generated:
                     return generated
+        except StreamingIncompleteError:
+            # A partial answer has already reached the learner. Preserve the
+            # explicit outcome instead of substituting successful fallback prose.
+            raise
         except asyncio.TimeoutError:
             logger.error(f"Text generation TIMED OUT after 30s for request: {original_request[:100]}")
         except Exception as e:

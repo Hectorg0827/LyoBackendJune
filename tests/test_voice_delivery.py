@@ -5,6 +5,7 @@ from lyo_app.core.ai_resilience import (
     AIResilienceManager,
     CircuitBreaker,
     CircuitBreakerConfig,
+    StreamingIncompleteError,
 )
 from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
 
@@ -138,11 +139,13 @@ async def test_streaming_provider_does_not_restart_after_partial_output():
     manager.openai_client = _OpenAI(completions)
 
     output = []
-    async for delta in manager.stream_chat_completion(
-        [{"role": "user", "content": "Explain gravity"}],
-        provider_order=["first", "second"],
-    ):
-        output.append(delta)
+    with pytest.raises(StreamingIncompleteError) as incomplete:
+        async for delta in manager.stream_chat_completion(
+            [{"role": "user", "content": "Explain gravity"}],
+            provider_order=["first", "second"],
+        ):
+            output.append(delta)
+    assert incomplete.value.partial_text == "Partial answer."
 
     assert output == ["Partial answer."]
     assert completions.calls == ["first"]
@@ -192,3 +195,12 @@ async def test_gemini_stream_failure_before_output_falls_through_to_openai(monke
 
     assert output == ["Healthy fallback."]
     assert completions.calls == ["openai-second"]
+
+
+def test_segmenter_preserves_titles_and_initials_across_deltas():
+    segmenter = VoiceSegmenter()
+    segments = []
+    for part in ['This result came from Dr.', ' Smith in the U.', 'S. laboratory. Next ', 'sentence continues.']:
+        segments.extend(segmenter.feed(part))
+    segments.extend(segmenter.flush())
+    assert segments == ['This result came from Dr. Smith in the U.S. laboratory.', 'Next sentence continues.']
