@@ -1500,6 +1500,13 @@ async def stream_lyo2_chat(
                     ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
                 if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
+                elif not request.forced_intent:
+                    # "What should I study now?" is a deterministic Coach
+                    # request. Bypass the model router so the next-best action
+                    # feels instant and cannot be probabilistically reclassified.
+                    from lyo_app.coach.chat import is_coach_request
+                    if is_coach_request(request.text or ""):
+                        request.forced_intent = Intent.COACH
             
             if request.forced_intent:
                 logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
@@ -1674,6 +1681,81 @@ async def stream_lyo2_chat(
                     **teaching_decision.model_dump(mode="json"),
                 },
             )
+
+            # Lyo Coach is the shared Learning OS control plane. This path uses
+            # deterministic goal/evidence state and performs no LLM generation.
+            # Chat is only a surface for the same mission Test Prep exposes.
+            if decision.intent == Intent.COACH:
+                if not authenticated_user_id:
+                    text = (
+                        "Sign in so I can read your learning goals and evidence, "
+                        "then I can tell you exactly what to work on next."
+                    )
+                    persist_answer(text, ChatMode.GENERAL.value)
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "message_id": assistant_client_message_id,
+                            "speak": not voice_hints_enabled,
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": text},
+                                "priority": 0,
+                            },
+                        },
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+
+                from lyo_app.coach.chat import process_coach_turn
+
+                coach_view, text, time_budget = await process_coach_turn(
+                    db,
+                    int(authenticated_user_id),
+                    request.text or "",
+                )
+                # build_today_view refreshes a disposable snapshot; persist it
+                # so every surface resumes the same evidence watermark.
+                await db.commit()
+                persist_answer(text, ChatMode.GENERAL.value)
+
+                yield yield_safe_sse_event(
+                    "coach_mission",
+                    {
+                        "type": "coach_mission",
+                        "view": coach_view.model_dump(mode="json"),
+                        "time_budget_minutes": time_budget,
+                    },
+                )
+                if (
+                    text
+                    and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                    and voice_hints_enabled
+                ):
+                    yield yield_safe_sse_event(
+                        "voice_ready",
+                        _voice_ready_payload(
+                            text,
+                            message_id=assistant_client_message_id,
+                            latency_ms=int((time.time() - start_time) * 1000),
+                        ),
+                    )
+                yield yield_safe_sse_event(
+                    "answer",
+                    {
+                        "type": "answer",
+                        "message_id": assistant_client_message_id,
+                        "speak": not voice_hints_enabled,
+                        "block": {
+                            "type": "TutorMessageBlock",
+                            "content": {"text": text},
+                            "priority": 0,
+                        },
+                    },
+                )
+                yield "data: [DONE]\n\n"
+                return
 
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats
