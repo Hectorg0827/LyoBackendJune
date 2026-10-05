@@ -73,9 +73,11 @@ _QUIZ_RE = re.compile(
     re.IGNORECASE,
 )
 _TEST_PREP_RE = re.compile(
-    r"\b(?:i have (?:a|an|my) (?:test|exam)|prepare me for (?:a|my) (?:test|exam)|"
+    r"\b(?:i have (?:a|an|my) (?:test|exam|midterm|final(?: exam)?)|"
+    r"prepare me for (?:a|my) (?:test|exam|midterm|final(?: exam)?)|"
     r"use (?:this|it|the (?:file|document|pdf)) for test prep|"
-    r"study for (?:a|my) (?:test|exam)|tengo (?:un )?examen|prep[aá]rame para (?:el|un) examen)\b",
+    r"study for (?:a|my) (?:test|exam|midterm|final(?: exam)?)|"
+    r"tengo (?:un )?examen|prep[aá]rame para (?:el|un) examen)\b",
     re.IGNORECASE,
 )
 _COACH_RE = re.compile(
