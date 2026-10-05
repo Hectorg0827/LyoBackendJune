@@ -1496,10 +1496,32 @@ async def stream_lyo2_chat(
                     await db.commit()
                     continuing_prep = False
                 lower_text = (request.text or "").strip().lower()
-                explicit_prep = any(phrase in lower_text for phrase in
-                    ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
+                explicit_prep = any(
+                    phrase in lower_text
+                    for phrase in (
+                        "i have a test",
+                        "i have an exam",
+                        "i have a midterm",
+                        "i have my midterm",
+                        "i have a final",
+                        "i have my final",
+                        "final exam",
+                        "tengo un examen",
+                        "prepare for my test",
+                        "prepare for my exam",
+                        "prepare for my midterm",
+                        "prepare for my final",
+                    )
+                )
                 if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
+                elif not request.forced_intent:
+                    # "What should I study now?" is a deterministic Coach
+                    # request. Bypass the model router so the next-best action
+                    # feels instant and cannot be probabilistically reclassified.
+                    from lyo_app.coach.chat import is_coach_request
+                    if is_coach_request(request.text or ""):
+                        request.forced_intent = Intent.COACH
             
             if request.forced_intent:
                 logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
@@ -1674,6 +1696,113 @@ async def stream_lyo2_chat(
                     **teaching_decision.model_dump(mode="json"),
                 },
             )
+
+            # Lyo Coach is the shared Learning OS control plane. This path uses
+            # deterministic goal/evidence state and performs no LLM generation.
+            # Chat is only a surface for the same mission Test Prep exposes.
+            if (
+                decision.intent == Intent.COACH
+                and interaction_contract.workflow_intent == Intent.COACH
+            ):
+                if not authenticated_user_id:
+                    text = (
+                        "Sign in so I can read your learning goals and evidence, "
+                        "then I can tell you exactly what to work on next."
+                    )
+                    persist_answer(text, ChatMode.GENERAL.value)
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "message_id": assistant_client_message_id,
+                            "speak": not voice_hints_enabled,
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": text},
+                                "priority": 0,
+                            },
+                        },
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+
+                from lyo_app.coach.chat import process_coach_turn
+                from lyo_app.coach.service import CoachEvidenceUnavailable
+
+                try:
+                    coach_view, text, time_budget = await process_coach_turn(
+                        db,
+                        int(authenticated_user_id),
+                        request.text or "",
+                    )
+                except CoachEvidenceUnavailable:
+                    # Unavailable evidence is never reinterpreted as zero
+                    # mastery. Keep the learner's last valid state intact and
+                    # say that the Coach cannot safely choose a mission yet.
+                    await db.rollback()
+                    text = (
+                        "I can see that you have learning goals, but I cannot "
+                        "read your latest learning evidence right now. I will "
+                        "not guess what you should study. Try again in a moment."
+                    )
+                    persist_answer(text, ChatMode.GENERAL.value)
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "message_id": assistant_client_message_id,
+                            "speak": not voice_hints_enabled,
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": text},
+                                "priority": 0,
+                            },
+                        },
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # build_today_view refreshes a disposable snapshot; persist it
+                # so every surface resumes the same evidence watermark.
+                await db.commit()
+                persist_answer(text, ChatMode.GENERAL.value)
+
+                yield yield_safe_sse_event(
+                    "coach_mission",
+                    {
+                        "type": "coach_mission",
+                        "view": coach_view.model_dump(mode="json"),
+                        "time_budget_minutes": time_budget,
+                    },
+                )
+                if (
+                    text
+                    and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                    and voice_hints_enabled
+                ):
+                    yield yield_safe_sse_event(
+                        "voice_ready",
+                        _voice_ready_payload(
+                            text,
+                            message_id=assistant_client_message_id,
+                            latency_ms=int((time.time() - start_time) * 1000),
+                        ),
+                    )
+                yield yield_safe_sse_event(
+                    "answer",
+                    {
+                        "type": "answer",
+                        "message_id": assistant_client_message_id,
+                        "speak": not voice_hints_enabled,
+                        "block": {
+                            "type": "TutorMessageBlock",
+                            "content": {"text": text},
+                            "priority": 0,
+                        },
+                    },
+                )
+                yield "data: [DONE]\n\n"
+                return
 
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats

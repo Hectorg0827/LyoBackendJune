@@ -461,7 +461,7 @@ def _action_for_skill(
             "guide",
             "application",
             "classroom",
-            9,
+            10,
             "Recognition is present; the next step is using the idea with guidance.",
         )
     if rank == evidence_rank("explanation"):
@@ -469,7 +469,7 @@ def _action_for_skill(
             "check_application",
             "application",
             "quiz",
-            6,
+            5,
             "The learner can explain it; now verify they can apply it.",
         )
     if rank == evidence_rank("application"):
@@ -477,7 +477,7 @@ def _action_for_skill(
             "check_transfer",
             "transfer",
             "quiz",
-            7,
+            10,
             "Application is demonstrated; a novel problem should test transfer.",
         )
     if rank == evidence_rank("transfer"):
@@ -500,7 +500,7 @@ def _action_for_skill(
         "advance",
         None,
         "review",
-        3,
+        5,
         "The required evidence is already strong; keep it in light review.",
     )
 
@@ -658,6 +658,7 @@ async def build_goal_view(
     goal: LearningGoal,
     *,
     use_cache: bool = True,
+    minute_cap_override: Optional[int] = None,
 ) -> GoalCoachView:
     skills = await _skills_for_goal(db, user_id, goal.id)
     watermark = await latest_event_id(db, user_id)
@@ -673,6 +674,7 @@ async def build_goal_view(
 
     if (
         use_cache
+        and minute_cap_override is None
         and cached is not None
         and cached.source_event_id == watermark
         and cached.goal_updated_at == goal.updated_at
@@ -702,6 +704,11 @@ async def build_goal_view(
     ]
     readiness = _readiness(states)
     minute_cap = _daily_minutes(goal.constraints)
+    if minute_cap_override is not None:
+        try:
+            minute_cap = max(5, min(180, int(minute_cap_override)))
+        except (TypeError, ValueError):
+            pass
     mission = _mission_for_states(
         goal,
         states,
@@ -720,27 +727,36 @@ async def build_goal_view(
         generated_at=now,
     )
 
-    payload = view.model_dump(mode="json")
-    if cached is None:
-        cached = CoachSnapshot(
-            user_id=user_id,
-            goal_id=goal.id,
-            source_event_id=watermark,
-            goal_updated_at=goal.updated_at,
-            payload=payload,
-            generated_at=now,
-        )
-        db.add(cached)
-    else:
-        cached.source_event_id = watermark
-        cached.goal_updated_at = goal.updated_at
-        cached.payload = payload
-        cached.generated_at = now
-    await db.flush()
+    # A time-boxed mission is a per-turn projection, not canonical cached
+    # state. Caching it would make a later ordinary /today request inherit a
+    # one-off "I have 10 minutes" constraint.
+    if minute_cap_override is None:
+        payload = view.model_dump(mode="json")
+        if cached is None:
+            cached = CoachSnapshot(
+                user_id=user_id,
+                goal_id=goal.id,
+                source_event_id=watermark,
+                goal_updated_at=goal.updated_at,
+                payload=payload,
+                generated_at=now,
+            )
+            db.add(cached)
+        else:
+            cached.source_event_id = watermark
+            cached.goal_updated_at = goal.updated_at
+            cached.payload = payload
+            cached.generated_at = now
+        await db.flush()
     return view
 
 
-async def build_today_view(db: AsyncSession, user_id: int) -> TodayCoachView:
+async def build_today_view(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    minute_cap_override: Optional[int] = None,
+) -> TodayCoachView:
     goals = await active_goals(db, user_id)
     if not goals:
         return TodayCoachView(
@@ -748,7 +764,16 @@ async def build_today_view(db: AsyncSession, user_id: int) -> TodayCoachView:
             generated_at=_now(),
         )
 
-    views = [await build_goal_view(db, user_id, goal) for goal in goals]
+    views = [
+        await build_goal_view(
+            db,
+            user_id,
+            goal,
+            use_cache=minute_cap_override is None,
+            minute_cap_override=minute_cap_override,
+        )
+        for goal in goals
+    ]
     primary = views[0]
     # Cross-goal ordering prevents a long-running course from hiding an exam
     # tomorrow, while preserving each goal's own evidence-based priority.
@@ -768,8 +793,26 @@ async def build_today_view(db: AsyncSession, user_id: int) -> TodayCoachView:
     mission: List[MissionItem] = []
     minutes = 0
     cap = max(15, _daily_minutes(primary.goal.constraints))
+    if minute_cap_override is not None:
+        try:
+            cap = max(5, min(180, int(minute_cap_override)))
+        except (TypeError, ValueError):
+            pass
     for item in candidates:
-        if mission and minutes + item.estimated_minutes > cap:
+        if item.estimated_minutes > cap and not mission:
+            # A learner-provided time budget is authoritative. Rather than
+            # replying with a 10-minute task when they only have five, time-box
+            # the highest-value action and let the teaching surface shorten it.
+            item = item.model_copy(
+                update={
+                    "estimated_minutes": cap,
+                    "reason": (
+                        f"{item.reason} Time-boxed to the learner's available "
+                        f"{cap} minutes."
+                    ),
+                }
+            )
+        if minutes + item.estimated_minutes > cap:
             continue
         mission.append(item)
         minutes += item.estimated_minutes

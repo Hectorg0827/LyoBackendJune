@@ -19,6 +19,7 @@ class Intent(str, Enum):
     FLASHCARDS = "FLASHCARDS"
     STUDY_PLAN = "STUDY_PLAN"
     TEST_PREP = "TEST_PREP"
+    COACH = "COACH"  # What should I work on now? Evidence-driven Learning OS mission.
     SUMMARIZE_NOTES = "SUMMARIZE_NOTES"
     SCHEDULE_REMINDERS = "SCHEDULE_REMINDERS"
     COMMUNITY = "COMMUNITY"
