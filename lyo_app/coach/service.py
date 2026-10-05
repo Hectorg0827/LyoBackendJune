@@ -779,7 +779,20 @@ async def build_today_view(
         except (TypeError, ValueError):
             pass
     for item in candidates:
-        if mission and minutes + item.estimated_minutes > cap:
+        if item.estimated_minutes > cap and not mission:
+            # A learner-provided time budget is authoritative. Rather than
+            # replying with a 10-minute task when they only have five, time-box
+            # the highest-value action and let the teaching surface shorten it.
+            item = item.model_copy(
+                update={
+                    "estimated_minutes": cap,
+                    "reason": (
+                        f"{item.reason} Time-boxed to the learner's available "
+                        f"{cap} minutes."
+                    ),
+                }
+            )
+        if minutes + item.estimated_minutes > cap:
             continue
         mission.append(item)
         minutes += item.estimated_minutes
