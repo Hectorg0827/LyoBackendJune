@@ -195,26 +195,20 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             resolve_chat_teaching_topic,
         )
 
-        voice_session_state = (
-            request.state_summary.get("voice_session", {})
-            if isinstance(request.state_summary, dict)
-            else {}
-        )
-        voice_mode = bool(
-            isinstance(voice_session_state, dict)
-            and voice_session_state.get("active")
-        )
+        voice_context = request.resolved_voice_session
         interaction_contract = interaction_contract_for_request(
             text=request.text or "",
             routed_intent=decision.intent,
             has_media=bool(media_attachments),
             has_current_media=bool(request.media),
-            voice_mode=voice_mode,
+            voice_mode=voice_context.active,
+            voice_interrupted_previous_turn=voice_context.interrupted_previous_turn,
         )
         interaction_contract_payload = {
             "mode": interaction_contract.mode.value,
             "depth": interaction_contract.depth.value,
             "delivery_mode": interaction_contract.delivery_mode.value,
+            "voice_interrupted_previous_turn": interaction_contract.voice_interrupted_previous_turn,
             "fast_lane": interaction_contract.fast_lane,
             "workflow_intent": (
                 interaction_contract.workflow_intent.value
@@ -225,6 +219,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "reason_code": interaction_contract.reason_code,
             "directives": list(interaction_contract.directives),
         }
+        if voice_context.active:
+            interaction_contract_payload["voice_session"] = voice_context.model_dump(exclude_none=True)
         if (
             interaction_contract.workflow_intent is not None
             and interaction_contract.workflow_intent != decision.intent

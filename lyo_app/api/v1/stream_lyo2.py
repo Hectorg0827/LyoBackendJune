@@ -791,6 +791,7 @@ async def _emit_composed_lesson(
     assistant_client_message_id: Optional[str],
     mode_used: str,
     voice_delivery: bool = False,
+    voice_ready_delivery: bool = True,
 ):
     """Stream one composed lesson to the client and persist it.
 
@@ -806,6 +807,9 @@ async def _emit_composed_lesson(
         lesson_text = _voice_friendly_lesson_text(lesson_text)
     answer_brick = {
         "type": "answer",
+        "message_id": assistant_client_message_id,
+        "generation_status": "completed",
+        "speak": not (voice_delivery and voice_ready_delivery),
         "block": {
             "type": "TutorMessageBlock",
             "content": {"text": lesson_text},
@@ -824,7 +828,7 @@ async def _emit_composed_lesson(
             blocks=lesson_blocks,
         ))
     try:
-        if voice_delivery and lesson_text:
+        if voice_delivery and voice_ready_delivery and lesson_text:
             # Start speech before SmartBlocks/actions/persistence finish. The text is
             # identical to the answer below, so voice stays a delivery layer over
             # the canonical teaching turn.
@@ -1257,8 +1261,9 @@ async def stream_lyo2_chat(
         start_time = time.time()
         pending_writes = []
         assistant_write_scheduled = False
-        voice_state = request.state_summary.get("voice_session", {})
-        voice_active = isinstance(voice_state, dict) and bool(voice_state.get("active"))
+        voice_state = request.resolved_voice_session.model_dump()
+        voice_active = request.resolved_voice_session.active
+        voice_hints_enabled = voice_active and voice_state["delivery"] in {"ready", "segments"}
 
         def persist_answer(text, mode_used, **metadata):
             nonlocal assistant_write_scheduled
@@ -1353,7 +1358,7 @@ async def stream_lyo2_chat(
                 )
                 if replayed_assistant:
                     replay_complete = getattr(replayed_assistant, "generation_status", "completed") == "completed"
-                    if voice_active and replay_complete:
+                    if voice_hints_enabled and replay_complete:
                         yield yield_safe_sse_event(
                             "voice_ready",
                             {**_voice_ready_payload(
@@ -1373,6 +1378,7 @@ async def stream_lyo2_chat(
                             "replayed": True,
                             "message_id": assistant_client_message_id,
                             "generation_status": "completed" if replay_complete else "incomplete",
+                            "speak": replay_complete and not voice_hints_enabled,
                         },
                     )
                     if not replay_complete:
@@ -1439,15 +1445,7 @@ async def stream_lyo2_chat(
                 )
             if cached_full_resp:
                 logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
-                cached_voice_state = (
-                    request.state_summary.get("voice_session", {})
-                    if isinstance(request.state_summary, dict)
-                    else {}
-                )
-                cached_voice_active = bool(
-                    isinstance(cached_voice_state, dict)
-                    and cached_voice_state.get("active")
-                )
+                cached_voice_active = voice_hints_enabled
                 if cached_voice_active:
                     cached_spoken_text = ""
                     for brick in cached_full_resp:
@@ -1464,10 +1462,13 @@ async def stream_lyo2_chat(
                             "voice_ready",
                             _voice_ready_payload(
                                 cached_spoken_text,
+                                message_id=assistant_client_message_id,
                                 latency_ms=int((time.time() - start_time) * 1000),
                             ),
                         )
                 for brick in cached_full_resp:
+                    if isinstance(brick, dict) and brick.get("type") == "answer":
+                        brick = {**brick, "message_id": assistant_client_message_id, "speak": not voice_hints_enabled}
                     yield f"data: {json.dumps(brick)}\n\n"
                 yield "data: [DONE]\n\n"
                 return
@@ -1572,26 +1573,20 @@ async def stream_lyo2_chat(
                 resolve_chat_teaching_topic,
             )
 
-            voice_session_state = (
-                request.state_summary.get("voice_session", {})
-                if isinstance(request.state_summary, dict)
-                else {}
-            )
-            voice_mode = bool(
-                isinstance(voice_session_state, dict)
-                and voice_session_state.get("active")
-            )
+            voice_context = request.resolved_voice_session
             interaction_contract = interaction_contract_for_request(
                 text=request.text or "",
                 routed_intent=decision.intent,
                 has_media=bool(media_attachments),
                 has_current_media=bool(request.media),
-                voice_mode=voice_mode,
+                voice_mode=voice_context.active,
+                voice_interrupted_previous_turn=voice_context.interrupted_previous_turn,
             )
             interaction_contract_payload = {
                 "mode": interaction_contract.mode.value,
                 "depth": interaction_contract.depth.value,
                 "delivery_mode": interaction_contract.delivery_mode.value,
+                "voice_interrupted_previous_turn": interaction_contract.voice_interrupted_previous_turn,
                 "fast_lane": interaction_contract.fast_lane,
                 "workflow_intent": (
                     interaction_contract.workflow_intent.value
@@ -1602,6 +1597,8 @@ async def stream_lyo2_chat(
                 "reason_code": interaction_contract.reason_code,
                 "directives": list(interaction_contract.directives),
             }
+            if voice_context.active:
+                interaction_contract_payload["voice_session"] = voice_context.model_dump(exclude_none=True)
 
             # A handoff such as "Use this for Test Prep" or "Teach this in
             # Classroom" inherits the most recent Lyo-owned attachment instead
@@ -1692,6 +1689,7 @@ async def stream_lyo2_chat(
                 if (
                     text
                     and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                    and voice_hints_enabled
                 ):
                     yield yield_safe_sse_event(
                         "voice_ready",
@@ -1701,7 +1699,7 @@ async def stream_lyo2_chat(
                             latency_ms=int((time.time() - start_time) * 1000),
                         ),
                     )
-                yield yield_safe_sse_event("answer", {"type": "answer", "block": {
+                yield yield_safe_sse_event("answer", {"type": "answer", "message_id": assistant_client_message_id, "speak": not voice_hints_enabled, "block": {
                     "type": "TutorMessageBlock", "content": {"text": text}, "priority": 0}})
                 yield "data: [DONE]\n\n"
                 return
@@ -1798,6 +1796,7 @@ async def stream_lyo2_chat(
                 if (
                     decision.clarification_question
                     and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                    and voice_hints_enabled
                 ):
                     yield yield_safe_sse_event(
                         "voice_ready",
@@ -1807,7 +1806,7 @@ async def stream_lyo2_chat(
                             latency_ms=int((time.time() - start_time) * 1000),
                         ),
                     )
-                yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
+                yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question, 'message_id': assistant_client_message_id, 'speak': not voice_hints_enabled})}\n\n"
                 return
                 
             # Intercept TEST_PREP intent to gather structured details
@@ -1823,6 +1822,7 @@ async def stream_lyo2_chat(
                         if (
                             data.follow_up_question
                             and interaction_contract.delivery_mode == DeliveryMode.VOICE
+                            and voice_hints_enabled
                         ):
                             yield yield_safe_sse_event(
                                 "voice_ready",
@@ -1832,7 +1832,7 @@ async def stream_lyo2_chat(
                                     latency_ms=int((time.time() - start_time) * 1000),
                                 ),
                             )
-                        yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
+                        yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question, 'message_id': assistant_client_message_id, 'speak': not voice_hints_enabled})}\n\n"
                         return
                     # Optionally attach extracted data back to the request for the planner
                     request.text += f"\n[System: Extracted Test details: Subject={data.subject}, Topics={data.topics}, Date={data.test_date}]"
@@ -1874,6 +1874,7 @@ async def stream_lyo2_chat(
                                 voice_delivery=(
                                     interaction_contract.delivery_mode == DeliveryMode.VOICE
                                 ),
+                                voice_ready_delivery=voice_hints_enabled,
                             ):
                                 yield event
 
@@ -1932,6 +1933,7 @@ async def stream_lyo2_chat(
                             voice_delivery=(
                                 interaction_contract.delivery_mode == DeliveryMode.VOICE
                             ),
+                            voice_ready_delivery=voice_hints_enabled,
                         ):
                             yield event
 
@@ -2314,7 +2316,7 @@ async def stream_lyo2_chat(
                 raw_llm_text,
                 decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
             )
-            if raw_llm_text and voice_delivery:
+            if raw_llm_text and voice_delivery and voice_hints_enabled:
                 yield yield_safe_sse_event(
                     "voice_ready",
                     _voice_ready_payload(
@@ -2330,7 +2332,7 @@ async def stream_lyo2_chat(
                     "type": "answer",
                     "message_id": assistant_client_message_id,
                     "generation_status": "completed",
-                    "speak": not bool(voice_sequence),
+                    "speak": not voice_hints_enabled,
                     "block": {
                         "type": "TutorMessageBlock",
                         "content": {"text": raw_llm_text},
