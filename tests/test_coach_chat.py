@@ -1,6 +1,7 @@
 """Fast Coach chat contract tests."""
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from lyo_app.coach.chat import (
     process_coach_turn,
     requested_minutes,
 )
+from lyo_app.coach.service import build_today_view
 from lyo_app.coach.schemas import (
     LearningGoalRead,
     MissionItem,
@@ -116,6 +118,17 @@ def test_time_constraint_does_not_hijack_an_explicit_teaching_request():
     assert contract.workflow_intent is None
 
 
+def test_specific_readiness_question_is_not_forced_into_coach():
+    assert is_coach_request("Am I ready to submit this essay?") is False
+
+
+def test_midterm_intake_outranks_a_coach_question():
+    contract = interaction_contract_for_request(
+        text="I have a midterm next week; what should I study?"
+    )
+    assert contract.workflow_intent is Intent.TEST_PREP
+
+
 @pytest.mark.parametrize(
     ("text", "minutes"),
     [
@@ -158,6 +171,57 @@ async def test_coach_turn_passes_time_budget_to_receding_horizon(monkeypatch):
     assert captured == {"user_id": 7, "budget": 15}
     assert budget == 15
     assert "15-minute limit" in answer
+
+
+@pytest.mark.asyncio
+async def test_today_passes_larger_time_budget_into_each_goal_projection(monkeypatch):
+    captured = []
+    goal = SimpleNamespace(
+        id="goal-1",
+        deadline=None,
+        constraints={"daily_minutes": 15},
+    )
+    goal_read = _today().active_goals[0]
+    readiness = _today().readiness["goal-1"]
+
+    async def fake_active_goals(db, user_id):
+        return [goal]
+
+    async def fake_goal_view(
+        db,
+        user_id,
+        requested_goal,
+        *,
+        use_cache=True,
+        minute_cap_override=None,
+    ):
+        captured.append((use_cache, minute_cap_override))
+        mission = [
+            MissionItem(
+                goal_id="goal-1",
+                goal_title="Biology test",
+                skill_id=f"skill-{index}",
+                concept_id=f"concept-{index}",
+                title=f"Topic {index}",
+                action="guide",
+                target_evidence_type="application",
+                recommended_surface="classroom",
+                estimated_minutes=10,
+                priority_score=3 - index,
+                reason="Needs guided application.",
+            )
+            for index in range(3)
+        ]
+        return SimpleNamespace(goal=goal_read, readiness=readiness, mission=mission)
+
+    monkeypatch.setattr("lyo_app.coach.service.active_goals", fake_active_goals)
+    monkeypatch.setattr("lyo_app.coach.service.build_goal_view", fake_goal_view)
+
+    result = await build_today_view(object(), 7, minute_cap_override=30)
+
+    assert captured == [(False, 30)]
+    assert result.total_minutes == 30
+    assert len(result.mission) == 3
 
 
 def test_teaching_policy_does_not_replace_coach_with_a_quiz():
