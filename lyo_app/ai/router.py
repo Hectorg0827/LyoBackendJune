@@ -162,9 +162,12 @@ YOU MUST RESPOND ONLY WITH JSON.
                 "what should i study", "what should i work on", "what do i need to work on",
                 "what should i do next", "what is my mission", "what's my mission",
                 "my mission today", "how ready am i", "am i ready", "readiness",
-                "i have 5 minutes", "i have 10 minutes", "i have 15 minutes",
-                "i have 20 minutes", "i have 30 minutes", "i have 45 minutes", "i have an hour",
             ]
+            _coach_time_only = {
+                "i have 5 minutes", "i have 10 minutes", "i have 15 minutes",
+                "i have 20 minutes", "i have 30 minutes", "i have 45 minutes",
+                "i have 60 minutes", "i have half an hour", "i have an hour", "i have one hour",
+            }
 
             _reflect_kws = [
                 "reflect", "how i did", "my performance", "this was hard",
@@ -194,7 +197,10 @@ YOU MUST RESPOND ONLY WITH JSON.
             elif any(kw in text_lower for kw in _test_prep_kws):
                 fallback_intent = "TEST_PREP"
                 fallback_tier = "MEDIUM"
-            elif any(kw in text_lower for kw in _coach_kws):
+            elif (
+                any(kw in text_lower for kw in _coach_kws)
+                or text_lower.strip().rstrip(".!?") in _coach_time_only
+            ):
                 fallback_intent = "COACH"
                 fallback_tier = "TINY"
             elif any(kw in text_lower for kw in _reflect_kws):
