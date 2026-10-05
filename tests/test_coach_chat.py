@@ -108,6 +108,14 @@ def test_new_test_intake_still_outranks_coach_language():
     assert contract.workflow_intent is Intent.TEST_PREP
 
 
+def test_time_constraint_does_not_hijack_an_explicit_teaching_request():
+    text = "I have 20 minutes, teach me photosynthesis"
+    assert is_coach_request(text) is False
+    contract = interaction_contract_for_request(text=text, routed_intent=Intent.COACH)
+    assert contract.mode is InteractionMode.TEACH
+    assert contract.workflow_intent is None
+
+
 @pytest.mark.parametrize(
     ("text", "minutes"),
     [
