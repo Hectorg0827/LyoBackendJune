@@ -13,7 +13,7 @@ CoachSnapshot is only a cache for fast Chat/Home reads.
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from sqlalchemy import func, select
@@ -53,6 +53,29 @@ _TARGET_RUNG_FALLBACK = DEFAULT_REQUIRED_RUNG
 
 def _now() -> datetime:
     return datetime.utcnow()
+
+
+def _as_utc_naive(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize an aware client timestamp before storing/comparing it.
+
+    Coach persistence follows the codebase's existing naive-UTC convention.
+    Dropping tzinfo without conversion would move the instant by the submitted
+    UTC offset and corrupt deadline urgency.
+    """
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _daily_minutes(constraints: Optional[Dict[str, Any]]) -> int:
+    """Read the reserved daily-minutes constraint without trusting public JSON."""
+
+    raw = (constraints or {}).get("daily_minutes", DEFAULT_DAILY_MINUTES)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_DAILY_MINUTES
+    return max(10, min(90, value))
 
 
 def _safe_rung(value: Optional[str]) -> str:
@@ -162,7 +185,7 @@ async def create_goal(
         goal_type=body.goal_type,
         title=body.title.strip(),
         subject=(body.subject or "").strip() or None,
-        deadline=body.deadline.replace(tzinfo=None) if body.deadline and body.deadline.tzinfo else body.deadline,
+        deadline=_as_utc_naive(body.deadline),
         desired_outcome=dict(body.desired_outcome or {}),
         constraints=dict(body.constraints or {}),
         source_surface=source_surface,
@@ -263,18 +286,21 @@ async def ensure_test_goal(
         skill = existing.get(concept_id)
         weight = float(topic_weight(entry))
         if skill is None:
-            db.add(
-                GoalSkill(
-                    goal_id=goal.id,
-                    user_id=profile.user_id,
-                    concept_id=concept_id,
-                    display_name=name,
-                    weight=weight,
-                    required_rung=DEFAULT_REQUIRED_RUNG,
-                    priority=5,
-                    metadata_json={"source": "test_profile"},
-                )
+            skill = GoalSkill(
+                goal_id=goal.id,
+                user_id=profile.user_id,
+                concept_id=concept_id,
+                display_name=name,
+                weight=weight,
+                required_rung=DEFAULT_REQUIRED_RUNG,
+                priority=5,
+                metadata_json={"source": "test_profile"},
             )
+            db.add(skill)
+            # A second profile topic may canonicalize to the same slug. Make
+            # the pending row visible to this loop before flush so it updates
+            # the same requirement instead of violating uq_goal_skill_concept.
+            existing[concept_id] = skill
         else:
             skill.display_name = name
             skill.weight = weight
@@ -315,11 +341,18 @@ async def active_goals(db: AsyncSession, user_id: int) -> List[LearningGoal]:
             await db.execute(
                 select(LearningGoal)
                 .where(LearningGoal.user_id == user_id, LearningGoal.status == "active")
+                # Urgent dated goals must enter the capped set before undated
+                # or later goals. Sorting after LIMIT can silently omit the
+                # learner's exam tomorrow when many goals exist.
+                .order_by(
+                    LearningGoal.deadline.is_(None),
+                    LearningGoal.deadline.asc(),
+                    LearningGoal.created_at.asc(),
+                )
                 .limit(MAX_ACTIVE_GOALS)
             )
         ).scalars().all()
     )
-    goals.sort(key=lambda g: (g.deadline is None, g.deadline or datetime.max, g.created_at))
     return goals
 
 
@@ -362,13 +395,23 @@ async def _record_map_for_goal(
         if exact is not None:
             candidates.append(exact)
         scope = topic_scope(skill.display_name)
-        for persistent_id in scoped_ids.get(scope, []):
+        persistent_ids = scoped_ids.get(scope, [])
+        missing_scoped_evidence = False
+        for persistent_id in persistent_ids:
             item = by_id.get(persistent_id)
-            if item is not None:
+            if item is None:
+                missing_scoped_evidence = True
+            else:
                 candidates.append(item)
 
+        # Once the Classroom has defined concrete units under this topic, the
+        # goal is only as strong as its weakest unit. An absent record is an
+        # unassessed unit, not something to skip; otherwise one transferred
+        # subskill could make a multi-unit exam topic look complete.
         result[skill.concept_id] = (
-            min(candidates, key=_record_strength) if candidates else None
+            None
+            if persistent_ids and missing_scoped_evidence
+            else (min(candidates, key=_record_strength) if candidates else None)
         )
     return result
 
@@ -645,13 +688,7 @@ async def build_goal_view(
         for skill in skills
     ]
     readiness = _readiness(states)
-    minute_cap = max(
-        10,
-        min(
-            90,
-            int((goal.constraints or {}).get("daily_minutes") or DEFAULT_DAILY_MINUTES),
-        ),
-    )
+    minute_cap = _daily_minutes(goal.constraints)
     mission = _mission_for_states(
         goal,
         states,
@@ -717,13 +754,7 @@ async def build_today_view(db: AsyncSession, user_id: int) -> TodayCoachView:
     candidates.sort(key=cross_goal_score, reverse=True)
     mission: List[MissionItem] = []
     minutes = 0
-    cap = max(
-        15,
-        min(
-            90,
-            int((primary.goal.constraints or {}).get("daily_minutes") or DEFAULT_DAILY_MINUTES),
-        ),
-    )
+    cap = max(15, _daily_minutes(primary.goal.constraints))
     for item in candidates:
         if mission and minutes + item.estimated_minutes > cap:
             continue
