@@ -54,6 +54,7 @@ class InteractionContract:
     attachment_authoritative: bool = False
     reason_code: str = "general"
     directives: tuple[str, ...] = ()
+    voice_interrupted_previous_turn: bool = False
 
 
 _DEEP_RE = re.compile(
@@ -145,6 +146,7 @@ def interaction_contract_for_request(
     has_media: bool = False,
     has_current_media: bool = False,
     voice_mode: bool = False,
+    voice_interrupted_previous_turn: bool = False,
 ) -> InteractionContract:
     """Return the learner's authoritative interaction contract.
 
@@ -154,12 +156,16 @@ def interaction_contract_for_request(
     text = (text or "").strip()
     depth = _depth_for(text)
     delivery_mode = DeliveryMode.VOICE if voice_mode else DeliveryMode.TEXT
+    delivery_metadata = {
+        "delivery_mode": delivery_mode,
+        "voice_interrupted_previous_turn": bool(voice_mode and voice_interrupted_previous_turn),
+    }
 
     if _TEST_PREP_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
@@ -169,7 +175,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.COURSE,
             attachment_authoritative=has_media,
@@ -179,7 +185,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.FLASHCARDS,
             attachment_authoritative=has_media,
@@ -189,7 +195,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.QUIZ,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.QUIZ,
             attachment_authoritative=has_media,
@@ -200,7 +206,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.SEARCH,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             reason_code="explicit_search",
         )
@@ -223,7 +229,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.CONTINUE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_continue",
@@ -233,7 +239,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.COMPARE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_compare",
@@ -242,7 +248,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.SUMMARIZE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_summary",
@@ -251,7 +257,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.ANALYZE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=True,
             reason_code="attachment_analysis",
@@ -264,7 +270,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.TEACH,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             reason_code="explicit_teach",
         )
@@ -272,7 +278,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_explain",
@@ -281,7 +287,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.ANALYZE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_analyze",
@@ -290,7 +296,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.ANSWER,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="explicit_answer",
@@ -303,7 +309,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
@@ -313,7 +319,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.COURSE,
             attachment_authoritative=has_media,
@@ -323,7 +329,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.CREATE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.FLASHCARDS,
             attachment_authoritative=has_media,
@@ -333,7 +339,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.QUIZ,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=Intent.QUIZ,
             attachment_authoritative=has_media,
@@ -343,7 +349,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.EXPLAIN,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="routed_explain",
@@ -352,7 +358,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.SUMMARIZE,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=True,
             attachment_authoritative=has_media,
             reason_code="routed_summarize",
@@ -368,7 +374,7 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
-            delivery_mode=delivery_mode,
+            **delivery_metadata,
             fast_lane=False,
             workflow_intent=routed_intent,
             attachment_authoritative=has_media,
@@ -378,7 +384,7 @@ def interaction_contract_for_request(
     return InteractionContract(
         mode=InteractionMode.ANSWER,
         depth=depth,
-        delivery_mode=delivery_mode,
+        **delivery_metadata,
         fast_lane=True,
         attachment_authoritative=has_media and has_current_media,
         reason_code="default_answer",
@@ -406,6 +412,8 @@ def contract_prompt(contract: InteractionContract) -> str:
             "Do not announce interaction mechanics, policies, or that you are in voice mode.",
             "End cleanly so the learner can take the floor; do not append a forced quiz or generic follow-up question.",
         ])
+    if contract.delivery_mode is DeliveryMode.VOICE and contract.voice_interrupted_previous_turn:
+        rules.append("The learner interrupted the previous spoken answer. Follow the new request without restarting the old answer.")
     if contract.attachment_authoritative:
         rules.append("The attachment is authoritative context for this turn; inspect it before answering.")
     rules.extend(contract.directives)

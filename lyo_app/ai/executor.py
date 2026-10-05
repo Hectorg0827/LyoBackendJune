@@ -31,6 +31,7 @@ def _coerce_interaction_contract(raw: Optional[Dict[str, Any]]) -> Optional[Inte
             depth=ResponseDepth(str(raw.get("depth") or "standard")),
             fast_lane=bool(raw.get("fast_lane")),
             delivery_mode=DeliveryMode(str(raw.get("delivery_mode") or "text")),
+            voice_interrupted_previous_turn=bool(raw.get("voice_interrupted_previous_turn")),
             attachment_authoritative=bool(raw.get("attachment_authoritative")),
             reason_code=str(raw.get("reason_code") or "general"),
             directives=tuple(str(item) for item in (raw.get("directives") or [])),

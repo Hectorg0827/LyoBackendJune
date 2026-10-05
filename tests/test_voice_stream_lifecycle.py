@@ -275,3 +275,48 @@ async def test_incomplete_history_survives_reload_with_status(db_session):
         action_triggered='voice_incomplete', client_message_id='partial-turn',
     )
     assert ConversationMessageRead.model_validate(message).generation_status == 'incomplete'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider', ['openai', 'gemini'])
+async def test_token_limit_is_incomplete_without_poisoning_provider_health(monkeypatch, provider):
+    manager, capture, calls = failing_manager(monkeypatch, fail_after_output=False)
+    if provider == 'openai':
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content='A truncated answer.'), finish_reason='length')],
+                usage=SimpleNamespace(total_tokens=37),
+            )
+
+        async def create(**kwargs):
+            calls.append(kwargs['model'])
+            return chunks()
+
+        manager.openai_client.chat.completions.create = create
+    else:
+        manager.models['gpt-4o-mini'].endpoint = 'https://example.invalid/model:generateContent'
+
+        async def content():
+            yield ('data: ' + json.dumps({
+                'candidates': [{'content': {'parts': [{'text': 'A truncated answer.'}]}, 'finishReason': 'MAX_TOKENS'}],
+                'usageMetadata': {'totalTokenCount': 37},
+            }) + '\n').encode()
+
+        class Context:
+            async def __aenter__(self):
+                return SimpleNamespace(status=200, content=content())
+
+            async def __aexit__(self, *args):
+                return False
+
+        manager.session = SimpleNamespace(post=lambda *a, **kw: Context())
+
+    with pytest.raises(ai_resilience.StreamingIncompleteError) as outcome:
+        _ = [part async for part in manager.stream_chat_completion(
+            [{'role': 'user', 'content': 'Explain'}], provider_order=['gpt-4o-mini', 'gpt-4o'],
+        )]
+    assert outcome.value.partial_text == 'A truncated answer.'
+    assert manager.circuit_breakers['gpt-4o-mini'].failure_count == 0
+    assert capture.await_count == 1
+    assert capture.await_args.kwargs['completion_status'] == 'incomplete'
+    assert capture.await_args.kwargs['tokens_used'] == 37

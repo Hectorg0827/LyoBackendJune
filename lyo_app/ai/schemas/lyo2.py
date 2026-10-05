@@ -119,6 +119,19 @@ class ConversationTurn(BaseModel):
     content: str
 
 
+class VoiceSessionContext(BaseModel):
+    """Delivery metadata for a canonical Chat turn, including client capability."""
+    model_config = ConfigDict(extra="ignore")
+    active: bool = True
+    transport: str = Field(default="client_stt_tts", max_length=64)
+    locale: str = Field(default="auto", max_length=24)
+    turn_id: Optional[str] = Field(default=None, max_length=128)
+    interrupted_previous_turn: bool = False
+    hands_free: bool = True
+    # Existing clients receive only answer text; hints/segments require opt-in.
+    delivery: Literal["answer", "ready", "segments"] = "answer"
+
+
 class RouterRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     timezone: Optional[str] = None
@@ -131,6 +144,7 @@ class RouterRequest(BaseModel):
     active_artifact: Optional[ActiveArtifactContext] = None
     forced_intent: Optional[Intent] = None
     state_summary: Dict[str, Any] = Field(default_factory=dict)  # curated learning state head
+    voice_session: Optional[VoiceSessionContext] = None
     conversation_id: Optional[str] = None
     session_id: Optional[str] = None
     device_id: Optional[str] = None
@@ -140,6 +154,21 @@ class RouterRequest(BaseModel):
         validation_alias=AliasChoices("conversation_history", "history"),
         description="Recent conversation turns for multi-turn context continuity"
     )
+
+
+    @property
+    def resolved_voice_session(self) -> VoiceSessionContext:
+        """Typed metadata takes precedence; preserve existing clients' payloads."""
+        if self.voice_session is not None:
+            return self.voice_session
+        legacy = self.state_summary.get("voice_session")
+        if not isinstance(legacy, dict):
+            return VoiceSessionContext(active=False)
+        try:
+            return VoiceSessionContext.model_validate({"active": False, **legacy})
+        except ValueError:
+            # Legacy state is an optional hint, not a reason to fail a Chat turn.
+            return VoiceSessionContext(active=False)
 
 
 class RouterResponse(BaseModel):

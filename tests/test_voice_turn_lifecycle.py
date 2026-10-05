@@ -84,7 +84,7 @@ def harness(monkeypatch):
     async def response(**overrides):
         params = dict(text='Just answer: name the parts', forced_intent=Intent.CHAT,
                       conversation_id='review-conversation', client_message_id='review-turn',
-                      state_summary={'voice_session': {'active': True}})
+                      state_summary={'voice_session': {'active': True, 'delivery': 'ready'}})
         params.update(overrides)
         return await stream.stream_lyo2_chat(
             RouterRequest(**params), Request({'type': 'http', 'headers': []}),

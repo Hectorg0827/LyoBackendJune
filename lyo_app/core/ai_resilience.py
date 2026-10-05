@@ -90,6 +90,10 @@ class StreamingIncompleteError(RuntimeError):
         self.model = model
 
 
+class _StreamTokenLimitReached(RuntimeError):
+    """A healthy provider stopped at the requested output budget."""
+
+
 class CircuitState(Enum):
     CLOSED = "closed"
     OPEN = "open"
@@ -374,7 +378,10 @@ class AIResilienceManager:
                 # reason to restart an answer on another provider.
                 raise
             except Exception as exc:
-                cb._on_failure()
+                if isinstance(exc, _StreamTokenLimitReached):
+                    cb._on_success(None)
+                else:
+                    cb._on_failure()
                 logger.warning("Streaming error with %s: %s", model_name, type(exc).__name__)
                 if pieces:
                     raise StreamingIncompleteError("".join(pieces), model_name) from exc
@@ -406,6 +413,8 @@ class AIResilienceManager:
                     if choice.delta.content:
                         status = "incomplete"
                         yield choice.delta.content
+            if finish_reason == "length":
+                raise _StreamTokenLimitReached("Provider reached its output budget")
             if finish_reason and finish_reason != "stop":
                 raise RuntimeError("Provider stopped before completing its text answer")
             if status == "incomplete":
@@ -561,6 +570,8 @@ class AIResilienceManager:
                         if text_part:
                             status = "incomplete"
                             yield str(text_part)
+            if finish_reason == "MAX_TOKENS":
+                raise _StreamTokenLimitReached("Provider reached its output budget")
             if finish_reason and finish_reason != "STOP":
                 raise RuntimeError("Provider stopped before completing its text answer")
             if status == "incomplete":
