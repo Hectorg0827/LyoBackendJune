@@ -1496,8 +1496,23 @@ async def stream_lyo2_chat(
                     await db.commit()
                     continuing_prep = False
                 lower_text = (request.text or "").strip().lower()
-                explicit_prep = any(phrase in lower_text for phrase in
-                    ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
+                explicit_prep = any(
+                    phrase in lower_text
+                    for phrase in (
+                        "i have a test",
+                        "i have an exam",
+                        "i have a midterm",
+                        "i have my midterm",
+                        "i have a final",
+                        "i have my final",
+                        "final exam",
+                        "tengo un examen",
+                        "prepare for my test",
+                        "prepare for my exam",
+                        "prepare for my midterm",
+                        "prepare for my final",
+                    )
+                )
                 if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
                 elif not request.forced_intent:
