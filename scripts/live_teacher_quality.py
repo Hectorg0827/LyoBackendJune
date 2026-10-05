@@ -241,6 +241,16 @@ def preset_response(preset: ScenarioPreset, evidence_type: str) -> str:
     return responses.get(evidence_type, preset.application_answer)
 
 
+def should_request_hint(
+    profile: LearnerProfile,
+    *,
+    hint_requested: bool,
+    is_diagnostic: bool,
+) -> bool:
+    """A diagnostic help request starts teaching; it is not a hinted practice attempt."""
+    return profile.request_hint and not hint_requested and not is_diagnostic
+
+
 def quality_rubric_template() -> list[dict[str, Any]]:
     return [
         {
@@ -803,11 +813,10 @@ class LiveLyo:
                     asked = True
                     continue
 
-                if (
-                    quiz is not None
-                    and learner_profile.request_hint
-                    and not hint_requested
-                    and not is_diagnostic
+                if quiz is not None and should_request_hint(
+                    learner_profile,
+                    hint_requested=hint_requested,
+                    is_diagnostic=is_diagnostic,
                 ):
                     await send(ws, "request_hint", quiz)
                     hint_requested = True
@@ -1123,8 +1132,7 @@ async def run(args) -> int:
                         review_concept_id=review_concept_id,
                         max_scenes=args.max_scenes,
                         question=question,
-                        explanation_answer=explanation_answer,
-                        transfer_answer=transfer_answer,
+                        scenario_preset=scenario,
                         objective=objective,
                         learner_profile=learner_profile,
                     )
