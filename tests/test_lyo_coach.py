@@ -1,6 +1,6 @@
 """Lyo Coach is a goal orchestrator over canonical evidence, not a second tutor."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -8,11 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from lyo_app.coach.models import GoalSkill, LearningGoal
 from lyo_app.coach.service import (
     _action_for_skill,
+    _as_utc_naive,
+    _daily_minutes,
     _readiness,
     _state_for_skill,
     ensure_test_goal,
 )
-from lyo_app.coach.schemas import GoalSkillState
+from lyo_app.coach.schemas import GoalSkillState, LearningGoalPatch
 from lyo_app.events.concept_record import ConceptRecord, RungRecord
 from lyo_app.study_plans.models import TestProfile
 
@@ -208,5 +210,72 @@ async def test_test_prep_is_an_adapter_into_general_learning_goals_and_resyncs_e
                 ).scalars().all()
             )
             assert [s.display_name for s in skills2] == ["Genetics"]
+    finally:
+        await database.dispose()
+
+
+def test_aware_deadline_is_converted_to_same_instant_in_naive_utc():
+    local = datetime(2026, 10, 5, 10, 0, tzinfo=timezone(timedelta(hours=-7)))
+    assert _as_utc_naive(local) == datetime(2026, 10, 5, 17, 0)
+
+
+def test_invalid_daily_minutes_never_turns_a_valid_goal_into_a_500():
+    assert _daily_minutes({"daily_minutes": "thirty"}) == 30
+    assert _daily_minutes({"daily_minutes": 500}) == 90
+    assert _daily_minutes({"daily_minutes": 2}) == 10
+
+
+def test_patch_rejects_explicit_null_for_non_nullable_goal_fields():
+    with pytest.raises(ValueError):
+        LearningGoalPatch(title=None)
+    with pytest.raises(ValueError):
+        LearningGoalPatch(status=None)
+    # Omission remains a valid partial patch.
+    assert LearningGoalPatch(subject="Chemistry").title is None
+
+
+@pytest.mark.asyncio
+async def test_test_adapter_deduplicates_topics_that_share_a_canonical_slug():
+    database = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with database.begin() as conn:
+            await conn.run_sync(TestProfile.__table__.create)
+            await conn.run_sync(LearningGoal.__table__.create)
+            await conn.run_sync(GoalSkill.__table__.create)
+
+        profile = TestProfile(
+            id="profile-duplicate",
+            user_id=8,
+            subject="Algebra",
+            test_date=date.today() + timedelta(days=3),
+            test_format="mixed",
+            topics=[
+                {"name": "Solving for X", "weight": 1},
+                {"name": "solving-for-x", "weight": 2},
+            ],
+            materials=[],
+            baseline_confidence=5,
+            daily_minutes_available=20,
+            study_days_per_week=5,
+            stress_level=4,
+            intake_complete=True,
+            intake_transcript=[],
+            workflow_state={},
+        )
+
+        async with AsyncSession(database, expire_on_commit=False) as db:
+            db.add(profile)
+            await db.flush()
+            goal = await ensure_test_goal(db, profile)
+            await db.commit()
+            skills = list(
+                (
+                    await db.execute(
+                        __import__("sqlalchemy").select(GoalSkill).where(GoalSkill.goal_id == goal.id)
+                    )
+                ).scalars().all()
+            )
+            assert len(skills) == 1
+            assert skills[0].weight == 2
     finally:
         await database.dispose()
