@@ -500,7 +500,7 @@ def _action_for_skill(
         "advance",
         None,
         "review",
-        3,
+        5,
         "The required evidence is already strong; keep it in light review.",
     )
 
