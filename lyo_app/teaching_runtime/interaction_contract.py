@@ -81,8 +81,13 @@ _TEST_PREP_RE = re.compile(
 _COACH_RE = re.compile(
     r"\b(?:what should i (?:study|work on|do next)|what do i need to work on|"
     r"what(?:'s| is) my mission(?: today)?|my mission today|"
-    r"how ready am i|am i ready|show me my readiness|"
-    r"i have \d{1,3} (?:min|mins|minutes)|i have (?:half an hour|an hour|one hour))\b",
+    r"how ready am i|am i ready|show me my readiness)\b",
+    re.IGNORECASE,
+)
+_COACH_TIME_ONLY_RE = re.compile(
+    r"^\s*i have (?:\d{1,3}\s*(?:min|mins|minutes)|half an hour|an hour|one hour)"
+    r"(?:\s*[,;:-]?\s*(?:what should i (?:study|work on|do next)|what now))?"
+    r"\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
 _COURSE_RE = re.compile(
@@ -178,7 +183,7 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_test_prep",
         )
-    if _COACH_RE.search(text):
+    if _COACH_RE.search(text) or _COACH_TIME_ONLY_RE.fullmatch(text):
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
