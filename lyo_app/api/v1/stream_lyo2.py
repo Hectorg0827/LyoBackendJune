@@ -1709,12 +1709,41 @@ async def stream_lyo2_chat(
                     return
 
                 from lyo_app.coach.chat import process_coach_turn
+                from lyo_app.coach.service import CoachEvidenceUnavailable
 
-                coach_view, text, time_budget = await process_coach_turn(
-                    db,
-                    int(authenticated_user_id),
-                    request.text or "",
-                )
+                try:
+                    coach_view, text, time_budget = await process_coach_turn(
+                        db,
+                        int(authenticated_user_id),
+                        request.text or "",
+                    )
+                except CoachEvidenceUnavailable:
+                    # Unavailable evidence is never reinterpreted as zero
+                    # mastery. Keep the learner's last valid state intact and
+                    # say that the Coach cannot safely choose a mission yet.
+                    await db.rollback()
+                    text = (
+                        "I can see that you have learning goals, but I cannot "
+                        "read your latest learning evidence right now. I will "
+                        "not guess what you should study. Try again in a moment."
+                    )
+                    persist_answer(text, ChatMode.GENERAL.value)
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "message_id": assistant_client_message_id,
+                            "speak": not voice_hints_enabled,
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": text},
+                                "priority": 0,
+                            },
+                        },
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+
                 # build_today_view refreshes a disposable snapshot; persist it
                 # so every surface resumes the same evidence watermark.
                 await db.commit()
