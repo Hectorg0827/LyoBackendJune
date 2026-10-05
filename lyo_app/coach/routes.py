@@ -19,6 +19,7 @@ from .schemas import (
     TodayCoachView,
 )
 from .service import (
+    _as_utc_naive,
     _goal_read,
     _skills_for_goal,
     active_goals,
@@ -87,8 +88,8 @@ async def update_goal(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Learning goal not found")
 
     updates = body.model_dump(exclude_unset=True)
-    if "deadline" in updates and updates["deadline"] is not None and updates["deadline"].tzinfo:
-        updates["deadline"] = updates["deadline"].replace(tzinfo=None)
+    if "deadline" in updates:
+        updates["deadline"] = _as_utc_naive(updates["deadline"])
     for key, value in updates.items():
         setattr(goal, key, value)
     goal.updated_at = datetime.utcnow()
