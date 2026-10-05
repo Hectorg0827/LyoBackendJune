@@ -364,13 +364,20 @@ def create_app() -> FastAPI:
     except ImportError as e:  # noqa: BLE001
         logger.warning(f"API v1 routes not available: {e}")
 
-    # Analytics & Profiling
+    # Classroom client telemetry.
+    # iOS/native callers post to /api/v1/classroom/analytics/event. This is
+    # descriptive product telemetry only; graded Learning OS evidence is
+    # recorded separately by the authoritative classroom runtime.
     try:
-        from lyo_app.api.analytics import router as analytics_router
-        app.include_router(analytics_router, prefix="/api/v1")
-        logger.info("✅ Analytics routes integrated - Implicit Behavioral Profiling active!")
+        from lyo_app.classroom.analytics import router as classroom_analytics_router
+        app.include_router(
+            classroom_analytics_router,
+            prefix="/api/v1/classroom/analytics",
+            tags=["classroom-analytics"],
+        )
+        logger.info("✅ Classroom analytics telemetry routes integrated")
     except ImportError as e:
-        logger.warning(f"Analytics routes not available: {e}")
+        logger.warning(f"Classroom analytics telemetry routes not available: {e}")
 
     # iOS Compatibility Routes (feed alias, progress analytics)
     try:
