@@ -15,7 +15,7 @@ from lyo_app.coach.service import (
     _state_for_skill,
     ensure_test_goal,
 )
-from lyo_app.coach.schemas import GoalSkillState, LearningGoalPatch
+from lyo_app.coach.schemas import GoalSkillInput, GoalSkillState, LearningGoalCreate, LearningGoalPatch
 from lyo_app.events.concept_record import ConceptRecord, RungRecord
 from lyo_app.study_plans.models import TestProfile
 
@@ -305,3 +305,15 @@ def test_scoped_topic_uses_weakest_demonstrated_unit():
     )
     assert result is not None
     assert result.best_rung == "recognition"
+
+
+def test_public_goal_create_rejects_skills_that_canonicalize_to_same_concept():
+    with pytest.raises(ValueError):
+        LearningGoalCreate(
+            goal_type="mastery",
+            title="Algebra",
+            skills=[
+                GoalSkillInput(name="Solving for X"),
+                GoalSkillInput(name="solving-for-x"),
+            ],
+        )
