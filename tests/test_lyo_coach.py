@@ -11,6 +11,7 @@ from lyo_app.coach.service import (
     _as_utc_naive,
     _daily_minutes,
     _readiness,
+    _weakest_covered_record,
     _state_for_skill,
     ensure_test_goal,
 )
@@ -279,3 +280,28 @@ async def test_test_adapter_deduplicates_topics_that_share_a_canonical_slug():
             assert skills[0].weight == 2
     finally:
         await database.dispose()
+
+
+def test_scoped_topic_requires_evidence_for_every_defined_unit():
+    transferred = _record("transfer", "TRANSFERRED")
+    transferred.concept_id = "unit-a"
+    by_id = {"unit-a": transferred}
+
+    # Unit B exists in the topic scope but has never been demonstrated. It
+    # must count as an unassessed gap rather than disappear from readiness.
+    assert _weakest_covered_record(None, ["unit-a", "unit-b"], by_id) is None
+
+
+def test_scoped_topic_uses_weakest_demonstrated_unit():
+    transferred = _record("transfer", "TRANSFERRED")
+    transferred.concept_id = "unit-a"
+    recognized = _record("recognition", "RECOGNIZED")
+    recognized.concept_id = "unit-b"
+
+    result = _weakest_covered_record(
+        None,
+        ["unit-a", "unit-b"],
+        {"unit-a": transferred, "unit-b": recognized},
+    )
+    assert result is not None
+    assert result.best_rung == "recognition"
