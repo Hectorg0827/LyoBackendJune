@@ -1700,7 +1700,10 @@ async def stream_lyo2_chat(
             # Lyo Coach is the shared Learning OS control plane. This path uses
             # deterministic goal/evidence state and performs no LLM generation.
             # Chat is only a surface for the same mission Test Prep exposes.
-            if decision.intent == Intent.COACH:
+            if (
+                decision.intent == Intent.COACH
+                and interaction_contract.workflow_intent == Intent.COACH
+            ):
                 if not authenticated_user_id:
                     text = (
                         "Sign in so I can read your learning goals and evidence, "
