@@ -356,6 +356,22 @@ async def active_goals(db: AsyncSession, user_id: int) -> List[LearningGoal]:
     return goals
 
 
+def _weakest_covered_record(
+    exact: Optional[ConceptRecord],
+    persistent_ids: Sequence[str],
+    by_id: Dict[str, ConceptRecord],
+) -> Optional[ConceptRecord]:
+    """Return the weakest record only when every concrete scoped unit is covered."""
+
+    candidates: List[ConceptRecord] = [exact] if exact is not None else []
+    if persistent_ids:
+        scoped = [by_id.get(concept_id) for concept_id in persistent_ids]
+        if any(item is None for item in scoped):
+            return None
+        candidates.extend(item for item in scoped if item is not None)
+    return min(candidates, key=_record_strength) if candidates else None
+
+
 async def _record_map_for_goal(
     db: AsyncSession,
     user_id: int,
@@ -390,28 +406,18 @@ async def _record_map_for_goal(
 
     result: Dict[str, Optional[ConceptRecord]] = {}
     for skill in skills:
-        candidates: List[ConceptRecord] = []
         exact = by_id.get(skill.concept_id)
-        if exact is not None:
-            candidates.append(exact)
         scope = topic_scope(skill.display_name)
         persistent_ids = scoped_ids.get(scope, [])
-        missing_scoped_evidence = False
-        for persistent_id in persistent_ids:
-            item = by_id.get(persistent_id)
-            if item is None:
-                missing_scoped_evidence = True
-            else:
-                candidates.append(item)
 
         # Once the Classroom has defined concrete units under this topic, the
         # goal is only as strong as its weakest unit. An absent record is an
         # unassessed unit, not something to skip; otherwise one transferred
         # subskill could make a multi-unit exam topic look complete.
-        result[skill.concept_id] = (
-            None
-            if persistent_ids and missing_scoped_evidence
-            else (min(candidates, key=_record_strength) if candidates else None)
+        result[skill.concept_id] = _weakest_covered_record(
+            exact,
+            persistent_ids,
+            by_id,
         )
     return result
 
