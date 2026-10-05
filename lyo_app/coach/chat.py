@@ -17,13 +17,13 @@ from .service import build_today_view
 
 
 _COACH_REQUEST_RE = re.compile(
-    r"\b(?:"
-    r"what should i (?:study|work on|do next)|"
-    r"what do i need to work on|"
+    r"^\s*(?:"
+    r"what should i (?:study|work on|do next)(?: today)?|"
+    r"what do i need to work on(?: today)?|"
     r"what(?:'s| is) my mission(?: today)?|"
     r"my mission today|"
     r"how ready am i|am i ready|show me my readiness"
-    r")\b",
+    r")\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
 _TIME_ONLY_COACH_RE = re.compile(
@@ -49,7 +49,7 @@ def is_coach_request(text: str) -> bool:
     """Return True only for explicit next-best-study/readiness requests."""
 
     value = (text or "").strip()
-    return bool(_COACH_REQUEST_RE.search(value) or _TIME_ONLY_COACH_RE.fullmatch(value))
+    return bool(_COACH_REQUEST_RE.fullmatch(value) or _TIME_ONLY_COACH_RE.fullmatch(value))
 
 
 def requested_minutes(text: str) -> Optional[int]:
