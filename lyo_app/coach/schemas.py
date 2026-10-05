@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from lyo_app.ai.lesson_composer import slugify_skill
+
 
 GoalType = Literal["test", "assignment", "mastery", "course", "recovery", "certification"]
 GoalStatus = Literal["active", "paused", "completed", "archived"]
@@ -38,7 +40,7 @@ class LearningGoalCreate(StrictModel):
     def unique_skill_names(cls, value: List[GoalSkillInput]) -> List[GoalSkillInput]:
         seen = set()
         for skill in value:
-            key = (skill.concept_id or skill.name).strip().lower()
+            key = (skill.concept_id or slugify_skill(skill.name)).strip().lower()
             if key in seen:
                 raise ValueError("skills must be unique within a goal")
             seen.add(key)
