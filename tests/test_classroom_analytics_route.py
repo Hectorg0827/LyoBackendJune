@@ -7,8 +7,10 @@ from lyo_app.enhanced_main import create_app
 
 def test_native_classroom_analytics_route_is_mounted_at_client_path():
     app = create_app()
-    paths = {route.path for route in app.routes}
+    # OpenAPI resolves FastAPI's deferred included-router entries.
+    paths = app.openapi()["paths"]
     assert "/api/v1/classroom/analytics/event" in paths
+    assert "post" in paths["/api/v1/classroom/analytics/event"]
 
 
 def test_native_classroom_analytics_event_is_accepted():
