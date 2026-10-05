@@ -53,6 +53,15 @@ class LearningGoalPatch(StrictModel):
     desired_outcome: Optional[Dict[str, Any]] = None
     constraints: Optional[Dict[str, Any]] = None
 
+    @field_validator("title", "status", "desired_outcome", "constraints")
+    @classmethod
+    def non_nullable_fields_cannot_be_explicit_null(cls, value: Any) -> Any:
+        # Omission remains valid because validators are not run for defaults;
+        # explicit JSON null must not reach NOT NULL database columns.
+        if value is None:
+            raise ValueError("field may be omitted but cannot be null")
+        return value
+
 
 class GoalSkillRead(StrictModel):
     id: str
