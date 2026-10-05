@@ -1,7 +1,15 @@
+import ast
+from pathlib import Path
+
 import pytest
 
 from scripts.live_teacher_quality import (
+    LEARNER_PROFILES,
+    SCENARIOS,
+    Report,
     analytics_delta,
+    preset_response,
+    should_request_hint,
     choose_option,
     parse_sse_lines,
     require_https,
@@ -131,3 +139,151 @@ def test_analytics_delta_tracks_only_durable_counters():
     assert delta["model_tokens"] == 160
     assert delta["transfer_successes"] == 1
     assert delta["remediation_repairs"] == 1
+
+
+
+def test_subject_presets_are_coherent_and_cover_the_validation_matrix():
+    assert set(SCENARIOS) == {
+        "math_fractions",
+        "biology_photosynthesis",
+        "physics_newton2",
+        "spanish_past_tense",
+        "business_contribution_margin",
+    }
+    for preset in SCENARIOS.values():
+        assert preset.topic.strip()
+        assert preset.objective.strip()
+        assert preset.chat_prompt.strip()
+        assert preset.question.strip()
+        assert preset.explanation_answer.strip()
+        assert preset.application_answer.strip()
+        assert preset.transfer_answer.strip()
+        assert preset.retrieval_answer.strip()
+        assert preset.question != preset.transfer_answer
+
+
+def test_learner_profiles_cover_distinct_behavioral_paths():
+    assert set(LEARNER_PROFILES) == {
+        "advanced",
+        "beginner",
+        "confident_wrong",
+        "quiet_partial",
+        "curious",
+        "struggling",
+        "fast_learner",
+        "interrupter",
+    }
+    assert LEARNER_PROFILES["advanced"].wrong_attempts == 0
+    assert LEARNER_PROFILES["beginner"].request_hint is True
+    assert LEARNER_PROFILES["confident_wrong"].wrong_attempts == 1
+    assert LEARNER_PROFILES["quiet_partial"].partial_free_response is True
+    assert LEARNER_PROFILES["curious"].ask_question is True
+    assert LEARNER_PROFILES["struggling"].attempt_correct is False
+    assert LEARNER_PROFILES["struggling"].wrong_attempts >= 2
+    assert LEARNER_PROFILES["fast_learner"].reconnect is False
+    assert LEARNER_PROFILES["interrupter"].ask_question is True
+    assert LEARNER_PROFILES["interrupter"].request_hint is True
+
+
+def test_report_groups_results_by_scenario_and_learner_profile():
+    report = Report(
+        run_id="r1",
+        phase="seed",
+        base_url="https://api.lyoai.app",
+        session_id="s1",
+        scenario="biology_photosynthesis",
+        learner_profile="curious",
+        topic="photosynthesis",
+    )
+    body = report.to_dict()
+    assert body["scenario"] == "biology_photosynthesis"
+    assert body["learner_profile"] == "curious"
+    assert body["report_version"] == 2
+
+
+
+def test_report_includes_blank_human_quality_rubric():
+    report = Report(
+        run_id="r2",
+        phase="seed",
+        base_url="https://api.lyoai.app",
+        session_id="s2",
+        scenario="math_fractions",
+        learner_profile="interrupter",
+        topic="comparing fractions",
+    ).to_dict()
+    rubric = report["quality_rubric"]
+    assert len(rubric) == 8
+    assert {item["criterion"] for item in rubric} == {
+        "answers_learner_words",
+        "examples_progress",
+        "detour_then_resume",
+        "misconception_specific_repair",
+        "hint_preserves_struggle",
+        "transfer_is_novel",
+        "avoids_monologue_repetition",
+        "visual_adds_information",
+    }
+    assert all(item["score"] is None for item in rubric)
+    assert all(item["scale"] == "1-5" for item in rubric)
+
+
+
+def test_seed_and_review_classroom_calls_use_the_full_matrix_contract():
+    tree = ast.parse(
+        Path("scripts/live_teacher_quality.py").read_text(encoding="utf-8")
+    )
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "classroom"
+    ]
+    assert len(calls) == 2
+    required = {
+        "question",
+        "scenario_preset",
+        "objective",
+        "learner_profile",
+    }
+    for call in calls:
+        names = {keyword.arg for keyword in call.keywords if keyword.arg}
+        assert required <= names
+
+
+
+def test_response_fixtures_match_the_evidence_rung():
+    preset = SCENARIOS["math_fractions"]
+    assert preset_response(preset, "explanation") == preset.explanation_answer
+    assert preset_response(preset, "application") == preset.application_answer
+    assert preset_response(preset, "transfer") == preset.transfer_answer
+    assert preset_response(preset, "retrieval") == preset.retrieval_answer
+    assert preset_response(preset, "unknown") == preset.application_answer
+
+
+def test_hint_profiles_do_not_spend_their_hint_on_the_diagnostic_probe():
+    profile = LEARNER_PROFILES["interrupter"]
+    assert should_request_hint(
+        profile,
+        hint_requested=False,
+        is_diagnostic=True,
+    ) is False
+    assert should_request_hint(
+        profile,
+        hint_requested=False,
+        is_diagnostic=False,
+    ) is True
+    assert should_request_hint(
+        profile,
+        hint_requested=True,
+        is_diagnostic=False,
+    ) is False
+
+
+def test_unknown_quiz_key_tracking_is_scoped_per_checkpoint():
+    source = Path("scripts/live_teacher_quality.py").read_text(encoding="utf-8")
+    assert "unknown_quiz_components: set[str] = set()" in source
+    assert "quiz_key not in unknown_quiz_components" in source
+    assert "unknown_quiz_components.add(quiz_key)" in source
+    assert "unknown_quiz_submitted" not in source

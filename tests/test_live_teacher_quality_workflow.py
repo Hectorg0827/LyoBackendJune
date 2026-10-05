@@ -37,10 +37,39 @@ def test_live_validation_proves_harness_before_touching_production_and_keeps_rep
     assert "retention-days: 30" in WORKFLOW
 
 
-def test_live_validation_uses_one_coherent_baseline_subject():
-    assert "VALIDATION_TOPIC: comparing fractions" in WORKFLOW
-    assert "Topic used for a seed learning session" not in WORKFLOW
-    assert "VALIDATION_TOPIC: ${{ inputs.topic }}" not in WORKFLOW
+def test_live_validation_exposes_only_named_subject_and_learner_presets():
+    assert "scenario:" in WORKFLOW
+    assert "profile:" in WORKFLOW
+    for scenario in (
+        "math_fractions",
+        "biology_photosynthesis",
+        "physics_newton2",
+        "spanish_past_tense",
+        "business_contribution_margin",
+    ):
+        assert f"- {scenario}" in WORKFLOW
+    for profile in (
+        "interrupter",
+        "beginner",
+        "advanced",
+        "confident_wrong",
+        "quiet_partial",
+        "curious",
+        "struggling",
+        "fast_learner",
+    ):
+        assert f"- {profile}" in WORKFLOW
+    assert 'VALIDATION_SCENARIO: ${{ inputs.scenario }}' in WORKFLOW
+    assert 'VALIDATION_PROFILE: ${{ inputs.profile }}' in WORKFLOW
+    assert '--scenario "$VALIDATION_SCENARIO"' in WORKFLOW
+    assert '--profile "$VALIDATION_PROFILE"' in WORKFLOW
+    assert "--topic" not in WORKFLOW
+    assert "--chat-prompt" not in WORKFLOW
+    assert "--question" not in WORKFLOW
+    assert "--explanation-answer" not in WORKFLOW
+    assert "--application-answer" not in WORKFLOW
+    assert "--transfer-answer" not in WORKFLOW
+    assert "--retrieval-answer" not in WORKFLOW
 
 
 def test_live_validation_is_serialized_for_the_shared_test_learner():

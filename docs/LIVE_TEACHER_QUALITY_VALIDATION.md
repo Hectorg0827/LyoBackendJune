@@ -42,11 +42,32 @@ to `https://api.lyoai.app`, supplies the token only through the process
 environment, runs the harness safety tests first, and uploads the redacted JSON
 report as a 30-day artifact.
 
-Run **seed** first. The Actions workflow intentionally uses the single
-coherent baseline scenario **comparing fractions**, because its scripted Chat
-prompt, interruption, and transfer response are written for that subject.
-For another domain, use the CLI only when you also supply matching
-`--chat-prompt`, `--question`, and `--transfer-answer` fixtures.
+Run **seed** first. The Actions workflow now exposes named, coherent subject
+presets and learner-behavior profiles. Each subject preset carries a matching
+Chat prompt, free-form question, explanation answer, transfer answer, and
+objective; the workflow never mixes a biology prompt with a math transfer task.
+
+Available subject scenarios:
+- `math_fractions`
+- `biology_photosynthesis`
+- `physics_newton2`
+- `spanish_past_tense`
+- `business_contribution_margin`
+
+Available learner profiles:
+- `advanced`
+- `beginner`
+- `confident_wrong`
+- `quiet_partial`
+- `curious`
+- `struggling`
+- `fast_learner`
+- `interrupter`
+
+The runner records both names at the top level of every report. A requested
+wrong-answer behavior is only claimed when the live QuizCard explicitly marks
+an option incorrect. If the key is withheld, the report records that the
+behavior could not be forced instead of inventing a result.
 
 Run **review** later, only after the server reports a concept as genuinely due.
 An explicit review concept ID is treated only as a filter over the live due
@@ -60,7 +81,8 @@ export LYO_ACCESS_TOKEN="<test learner bearer token>"
 export LYO_BASE_URL="https://api.lyoai.app"
 
 python scripts/live_teacher_quality.py seed \
-  --topic "comparing fractions"
+  --scenario math_fractions \
+  --profile interrupter
 ```
 
 The seed run attempts the complete live chain:
@@ -84,7 +106,11 @@ Chat
 ```
 
 The JSON report is written under `artifacts/teacher-quality/` by default. It
-contains no bearer token.
+contains no bearer token. It also records whether free-response checkpoints
+were explanation, application, transfer, or retrieval evidence, and whether a
+remediation scene included a structured teaching visual. Those fields let later
+analysis compare visual remediation with verbal-only remediation without
+guessing from the transcript.
 
 ## Later retention run
 
@@ -144,9 +170,12 @@ not a general learning product.
 | Language | Use Spanish preterite vs imperfect | Choose tense in a new narrative context |
 | Business | Apply contribution-margin reasoning | Evaluate a changed price/cost scenario |
 
-Within each domain, run learner behaviors matching the deterministic simulation
-suite: advanced, beginner, confident-but-wrong, quiet/partial, curious,
-struggling, fast learner, and interrupter.
+Within each domain, run the matching named learner profiles from the workflow:
+advanced, beginner, confident_wrong, quiet_partial, curious, struggling,
+fast_learner, and interrupter. Do not treat repeated runs on the same dedicated
+test learner as independent learners; persistent evidence is intentionally part
+of the product. For clean between-profile comparisons, use separate dedicated
+test learner credentials or compare only states with equivalent prior evidence.
 
 ## Human teacher-quality rubric
 
