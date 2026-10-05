@@ -8,6 +8,8 @@ from scripts.live_teacher_quality import (
     SCENARIOS,
     Report,
     analytics_delta,
+    preset_response,
+    should_request_hint,
     choose_option,
     parse_sse_lines,
     require_https,
@@ -154,7 +156,9 @@ def test_subject_presets_are_coherent_and_cover_the_validation_matrix():
         assert preset.chat_prompt.strip()
         assert preset.question.strip()
         assert preset.explanation_answer.strip()
+        assert preset.application_answer.strip()
         assert preset.transfer_answer.strip()
+        assert preset.retrieval_answer.strip()
         assert preset.question != preset.transfer_answer
 
 
@@ -239,11 +243,47 @@ def test_seed_and_review_classroom_calls_use_the_full_matrix_contract():
     assert len(calls) == 2
     required = {
         "question",
-        "explanation_answer",
-        "transfer_answer",
+        "scenario_preset",
         "objective",
         "learner_profile",
     }
     for call in calls:
         names = {keyword.arg for keyword in call.keywords if keyword.arg}
         assert required <= names
+
+
+
+def test_response_fixtures_match_the_evidence_rung():
+    preset = SCENARIOS["math_fractions"]
+    assert preset_response(preset, "explanation") == preset.explanation_answer
+    assert preset_response(preset, "application") == preset.application_answer
+    assert preset_response(preset, "transfer") == preset.transfer_answer
+    assert preset_response(preset, "retrieval") == preset.retrieval_answer
+    assert preset_response(preset, "unknown") == preset.application_answer
+
+
+def test_hint_profiles_do_not_spend_their_hint_on_the_diagnostic_probe():
+    profile = LEARNER_PROFILES["interrupter"]
+    assert should_request_hint(
+        profile,
+        hint_requested=False,
+        is_diagnostic=True,
+    ) is False
+    assert should_request_hint(
+        profile,
+        hint_requested=False,
+        is_diagnostic=False,
+    ) is True
+    assert should_request_hint(
+        profile,
+        hint_requested=True,
+        is_diagnostic=False,
+    ) is False
+
+
+def test_unknown_quiz_key_tracking_is_scoped_per_checkpoint():
+    source = Path("scripts/live_teacher_quality.py").read_text(encoding="utf-8")
+    assert "unknown_quiz_components: set[str] = set()" in source
+    assert "quiz_key not in unknown_quiz_components" in source
+    assert "unknown_quiz_components.add(quiz_key)" in source
+    assert "unknown_quiz_submitted" not in source
