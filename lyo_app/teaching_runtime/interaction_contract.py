@@ -78,6 +78,13 @@ _TEST_PREP_RE = re.compile(
     r"study for (?:a|my) (?:test|exam)|tengo (?:un )?examen|prep[aá]rame para (?:el|un) examen)\b",
     re.IGNORECASE,
 )
+_COACH_RE = re.compile(
+    r"\b(?:what should i (?:study|work on|do next)|what do i need to work on|"
+    r"what(?:'s| is) my mission(?: today)?|my mission today|"
+    r"how ready am i|am i ready|show me my readiness|"
+    r"i have \d{1,3} (?:min|mins|minutes)|i have (?:half an hour|an hour|one hour))\b",
+    re.IGNORECASE,
+)
 _COURSE_RE = re.compile(
     r"\b(?:create|make|build) (?:me )?(?:a )?course\b|"
     r"\bteach (?:this|it) in (?:the )?(?:ai )?classroom\b|"
@@ -170,6 +177,16 @@ def interaction_contract_for_request(
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="explicit_test_prep",
+        )
+    if _COACH_RE.search(text):
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="explicit_coach",
         )
     if _COURSE_RE.search(text):
         return InteractionContract(
@@ -314,6 +331,16 @@ def interaction_contract_for_request(
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="routed_test_prep",
+        )
+    if routed_intent == Intent.COACH:
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="routed_coach",
         )
     if routed_intent == Intent.COURSE:
         return InteractionContract(
