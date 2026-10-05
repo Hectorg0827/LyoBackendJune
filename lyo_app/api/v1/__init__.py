@@ -208,6 +208,15 @@ except Exception as e:
     logger.error(f"Failed to load study plans router: {e}")
     logger.error(f"   Traceback: {traceback.format_exc()}")
 
+# Lyo Coach: one goal/evidence orchestration layer for Test Prep, Chat and Classroom.
+try:
+    from lyo_app.coach.routes import router as coach_router
+    api_router.include_router(coach_router)
+    logger.info("✅ Lyo Coach router loaded")
+except Exception as e:
+    logger.error(f"❌ Failed to load Lyo Coach router: {e}")
+    logger.error(f"   Traceback: {traceback.format_exc()}")
+
 logger.info(f"DEBUG: Final api_router has {len(api_router.routes)} routes")
 
 __all__ = ["api_router"]
