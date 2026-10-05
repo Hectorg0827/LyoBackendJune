@@ -740,7 +740,12 @@ async def build_goal_view(
     return view
 
 
-async def build_today_view(db: AsyncSession, user_id: int) -> TodayCoachView:
+async def build_today_view(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    minute_cap_override: Optional[int] = None,
+) -> TodayCoachView:
     goals = await active_goals(db, user_id)
     if not goals:
         return TodayCoachView(
@@ -768,6 +773,11 @@ async def build_today_view(db: AsyncSession, user_id: int) -> TodayCoachView:
     mission: List[MissionItem] = []
     minutes = 0
     cap = max(15, _daily_minutes(primary.goal.constraints))
+    if minute_cap_override is not None:
+        try:
+            cap = max(5, min(180, int(minute_cap_override)))
+        except (TypeError, ValueError):
+            pass
     for item in candidates:
         if mission and minutes + item.estimated_minutes > cap:
             continue
