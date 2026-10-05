@@ -35,6 +35,7 @@ Lyo is an Outcome Engine for learning.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.
 - TEST_PREP: User has an upcoming test or exam and needs to prepare for it. Use this instead of STUDY_PLAN when an actual exam/test is mentioned.
+- COACH: User asks Lyo what they should study/work on now or today, asks for their current readiness/next best step, or gives a time budget for an existing learning goal. Examples: "what should I study?", "what do I need to work on?", "I have 20 minutes", "what is my mission today?", "how ready am I?". This is the evidence-driven Lyo Coach, not a new test intake.
 - SUMMARIZE_NOTES: User has provided notes and wants a summary.
 - SCHEDULE_REMINDERS: User wants to set study reminders.
 - COMMUNITY: User wants to interact with the learning community.
@@ -157,6 +158,14 @@ YOU MUST RESPOND ONLY WITH JSON.
                 "upcoming test", "midterm", "final exam", "have a midterm"
             ]
 
+            _coach_kws = [
+                "what should i study", "what should i work on", "what do i need to work on",
+                "what should i do next", "what is my mission", "what's my mission",
+                "my mission today", "how ready am i", "am i ready", "readiness",
+                "i have 5 minutes", "i have 10 minutes", "i have 15 minutes",
+                "i have 20 minutes", "i have 30 minutes", "i have 45 minutes", "i have an hour",
+            ]
+
             _reflect_kws = [
                 "reflect", "how i did", "my performance", "this was hard",
                 "this was easy", "i'm confused", "feedback on my learning",
@@ -185,6 +194,9 @@ YOU MUST RESPOND ONLY WITH JSON.
             elif any(kw in text_lower for kw in _test_prep_kws):
                 fallback_intent = "TEST_PREP"
                 fallback_tier = "MEDIUM"
+            elif any(kw in text_lower for kw in _coach_kws):
+                fallback_intent = "COACH"
+                fallback_tier = "TINY"
             elif any(kw in text_lower for kw in _reflect_kws):
                 fallback_intent = "REFLECT"
                 fallback_tier = "TINY"
