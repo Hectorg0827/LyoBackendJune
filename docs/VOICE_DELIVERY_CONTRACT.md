@@ -62,7 +62,9 @@ interaction contract follows the new request without restarting the old answer.
 Providers can fall back before emitting text. After visible text, provider
 failure or truncation produces `generation_status: "incomplete"` and a
 `voice_incomplete` event. It never advertises completed readiness or starts a
-second provider from the beginning. Incomplete history retains its status on
+second provider from the beginning. Reaching the requested token limit marks
+the answer incomplete without marking the healthy provider unavailable.
+Incomplete history retains its status on
 reload and replay, and is excluded from successful assistant context.
 
 Completed answers schedule an idempotent write with an independent DB session
