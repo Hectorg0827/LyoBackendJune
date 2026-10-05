@@ -19,6 +19,7 @@ from .schemas import (
     TodayCoachView,
 )
 from .service import (
+    CoachEvidenceUnavailable,
     _as_utc_naive,
     _goal_read,
     _skills_for_goal,
@@ -30,6 +31,16 @@ from .service import (
 )
 
 router = APIRouter(prefix="/me/coach", tags=["Lyo Coach"])
+
+
+async def _require_evidence(awaitable):
+    try:
+        return await awaitable
+    except CoachEvidenceUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Learner evidence is temporarily unavailable; the last valid coach state remains authoritative.",
+        ) from exc
 
 
 @router.get("/goals", response_model=List[LearningGoalRead])
@@ -57,7 +68,9 @@ async def add_goal(
     db: AsyncSession = Depends(get_db),
 ):
     goal = await create_goal(db, current_user.id, body, source_surface="coach")
-    view = await build_goal_view(db, current_user.id, goal, use_cache=False)
+    view = await _require_evidence(
+        build_goal_view(db, current_user.id, goal, use_cache=False)
+    )
     await db.commit()
     return view
 
@@ -71,7 +84,7 @@ async def get_goal(
     goal = await owned_goal(db, current_user.id, goal_id)
     if goal is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Learning goal not found")
-    view = await build_goal_view(db, current_user.id, goal)
+    view = await _require_evidence(build_goal_view(db, current_user.id, goal))
     await db.commit()
     return view
 
@@ -95,7 +108,9 @@ async def update_goal(
     goal.updated_at = datetime.utcnow()
 
     await db.flush()
-    view = await build_goal_view(db, current_user.id, goal, use_cache=False)
+    view = await _require_evidence(
+        build_goal_view(db, current_user.id, goal, use_cache=False)
+    )
     await db.commit()
     return view
 
@@ -123,6 +138,6 @@ async def today(
 ):
     """The receding-horizon mission across every active learning goal."""
 
-    view = await build_today_view(db, current_user.id)
+    view = await _require_evidence(build_today_view(db, current_user.id))
     await db.commit()
     return view
