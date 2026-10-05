@@ -51,6 +51,10 @@ DEFAULT_REQUIRED_RUNG = "transfer"
 _TARGET_RUNG_FALLBACK = DEFAULT_REQUIRED_RUNG
 
 
+class CoachEvidenceUnavailable(RuntimeError):
+    """Canonical learner evidence could not be read; do not reinterpret as zero."""
+
+
 def _now() -> datetime:
     return datetime.utcnow()
 
@@ -388,7 +392,10 @@ async def _record_map_for_goal(
 
     record = await learner_record(db, user_id, limit=100)
     if record.unavailable:
-        return {skill.concept_id: None for skill in skills}
+        # A failed evidence query is not evidence that the learner knows
+        # nothing. Let the API fail explicitly so clients preserve the last
+        # valid mission instead of rendering a fabricated "not ready".
+        raise CoachEvidenceUnavailable("canonical learner evidence is unavailable")
 
     by_id = {item.concept_id: item for item in record.concepts}
     scopes = {topic_scope(skill.display_name): skill.concept_id for skill in skills}
