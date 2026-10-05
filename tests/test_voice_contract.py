@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai.schemas.lyo2 import Intent, RouterRequest
+from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.api.v1 import chat_lyo2 as chat, stream_lyo2 as stream
 from lyo_app.teaching_runtime.interaction_contract import (
     DeliveryMode, contract_prompt, interaction_contract_for_request,
@@ -73,6 +75,57 @@ def test_interrupt_metadata_only_affects_spoken_turn_taking():
     assert 'without restarting the old answer' in contract_prompt(interrupted)
     text_contract = interaction_contract_for_request(text=text, voice_interrupted_previous_turn=True)
     assert text_contract.voice_interrupted_previous_turn is False
+
+
+@pytest.mark.asyncio
+async def test_voice_generation_does_not_require_legacy_gemini_model(monkeypatch):
+    executor = LyoExecutor.__new__(LyoExecutor)
+    executor._gemini = None
+
+    deltas = []
+    calls = []
+
+    async def fake_stream_chat_completion(*, messages, provider_order, **kwargs):
+        calls.append({"messages": messages, "provider_order": provider_order})
+        yield "Roots "
+        yield "anchor plants."
+
+    async def on_delta(text):
+        deltas.append(text)
+
+    monkeypatch.setattr(ai_resilience_manager, "session", object())
+    monkeypatch.setattr(
+        ai_resilience_manager,
+        "stream_chat_completion",
+        fake_stream_chat_completion,
+    )
+
+    result = await executor._generate_text(
+        "Explain roots",
+        {
+            "retrieved_content": [],
+            "conversation_history": [],
+            "teaching_decision": {"model_tier": "teaching"},
+            "interaction_contract": {
+                "mode": "explain",
+                "depth": "standard",
+                "fast_lane": True,
+                "delivery_mode": "voice",
+                "reason_code": "explicit_explain",
+                "directives": [],
+            },
+            "personal_memory": "",
+            "media_attachments": [],
+            "text_delta_callback": on_delta,
+        },
+        {},
+    )
+
+    assert result == "Roots anchor plants."
+    assert deltas == ["Roots ", "anchor plants."]
+    assert len(calls) == 1
+    assert calls[0]["provider_order"]
+    assert executor._gemini is None
 
 
 @pytest.mark.asyncio
