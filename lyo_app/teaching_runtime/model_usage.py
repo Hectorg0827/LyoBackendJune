@@ -25,6 +25,8 @@ class ModelUsage:
     tokens_used: int
     latency_ms: int
     cache_hit: bool = False
+    completion_status: str = "completed"
+    usage_reported: bool = True
 
 
 UsageRecorder = Callable[[ModelUsage], Awaitable[None]]
@@ -65,6 +67,8 @@ async def capture_model_usage(
     tokens_used: object,
     latency_ms: object,
     cache_hit: bool = False,
+    completion_status: str = "completed",
+    usage_reported: bool = True,
 ) -> None:
     """Send bounded provider usage to the active Learning OS recorder.
 
@@ -88,6 +92,10 @@ async def capture_model_usage(
         tokens_used=tokens,
         latency_ms=latency,
         cache_hit=bool(cache_hit),
+        completion_status=(completion_status if completion_status in {
+            "completed", "incomplete", "cancelled", "failed"
+        } else "failed"),
+        usage_reported=bool(usage_reported),
     )
     # Observability must never sit on the learner response path. The durable
     # recorder can wait on a busy database pool without delaying a successful
@@ -143,6 +151,8 @@ def learning_event_usage_recorder(
                             "latency_ms": usage.latency_ms,
                             "cache_hit": usage.cache_hit,
                             "model_tier": bounded_tier,
+                            "completion_status": usage.completion_status,
+                            "usage_reported": usage.usage_reported,
                         },
                     )
                 )

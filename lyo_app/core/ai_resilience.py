@@ -5,10 +5,11 @@ import aiohttp
 import time
 import logging
 import random
+import inspect
 from typing import Dict, List, Optional, Any, Callable, Tuple, AsyncGenerator
 from enum import Enum
 from dataclasses import dataclass, field
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, aclosing
 from openai import AsyncOpenAI
 from lyo_app.core.config import settings
 
@@ -78,6 +79,15 @@ def _openai_compatible_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
             parts = [{"type": "text", "text": ""}]
         normalized.append({**message, "content": parts})
     return normalized
+
+
+class StreamingIncompleteError(RuntimeError):
+    """A visible canonical answer ended before its provider completed."""
+
+    def __init__(self, partial_text: str, model: str):
+        super().__init__("The response was interrupted before it completed.")
+        self.partial_text = partial_text
+        self.model = model
 
 
 class CircuitState(Enum):
@@ -327,62 +337,247 @@ class AIResilienceManager:
         max_tokens: int = 1000,
         provider_order: Optional[List[str]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Streaming chat completion with fallbacks."""
+        """Fallback only until the first canonical text delta is visible."""
         if not self._initialized:
             await self.initialize()
-
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
 
         for model_name in provider_order:
             if model_name not in self.models:
                 continue
-            
             model = self.models[model_name]
             cb = self.circuit_breakers[model_name]
-            
-            if not cb.is_closed:
+            if not cb.is_closed or (model.endpoint == "openai" and not self.openai_client):
                 continue
 
+            pieces: List[str] = []
+            provider = (
+                self._stream_openai(model_name, messages, temperature, max_tokens)
+                if model.endpoint == "openai"
+                else self._stream_gemini(model_name, model, messages, temperature, max_tokens)
+            )
             try:
-                if model.endpoint == "openai":
-                    if not self.openai_client:
-                        logger.warning(f"OpenAI client missing for {model_name}")
-                        continue
-                    logger.info(f"Attempting OpenAI stream for {model_name}")
-                    stream = await self.openai_client.chat.completions.create(
-                        model=model_name,
-                        messages=_openai_compatible_messages(messages),
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=True
-                    )
-                    async for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            yield chunk.choices[0].delta.content
-                    cb._on_success(None)
-                    return # Success
-                else:
-                    logger.info(f"Attempting Gemini stream for {model_name}")
-                    async for chunk in self._stream_gemini(model_name, model, messages, temperature, max_tokens):
-                        yield chunk
-                    return
-            except Exception as e:
+                # Closing the outer iterator must also close the provider while
+                # it is suspended at a yielded delta.
+                async with aclosing(provider):
+                    async for delta in provider:
+                        if delta:
+                            pieces.append(delta)
+                            yield delta
+                if not pieces:
+                    raise RuntimeError("Provider stream returned no text")
+                cb._on_success(None)
+                return
+            except (asyncio.CancelledError, GeneratorExit):
+                # Learner interruption is neither a circuit failure nor a
+                # reason to restart an answer on another provider.
+                raise
+            except Exception as exc:
                 cb._on_failure()
-                logger.error(f"Streaming error with {model_name} (Type: {type(e).__name__}): {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-                continue
-        
+                logger.warning("Streaming error with %s: %s", model_name, type(exc).__name__)
+                if pieces:
+                    raise StreamingIncompleteError("".join(pieces), model_name) from exc
+
         yield "I'm having trouble responding right now. Please try again."
 
-    async def _stream_gemini(self, model_key: str, model: AIModelConfig, messages: List[Dict[str, str]], temperature: float, max_tokens: int):
-        """Internal helper for Gemini streaming."""
-        # Simple implementation using existing logic but for streaming
-        # Actually, let's just yield the full response for now if streaming is not fully wired
-        # to avoid complex SSE parsing here.
-        res = await self.chat_completion(messages, temperature, max_tokens, provider_order=[model_key])
-        yield res.get("content", "")
+    async def _stream_openai(
+        self, model_name: str, messages: List[Dict[str, Any]],
+        temperature: float, max_tokens: int,
+    ) -> AsyncGenerator[str, None]:
+        provider_started = time.time()
+        tokens, usage_reported = 0, False
+        status, finish_reason = "failed", None
+        stream = None
+        try:
+            stream = await self.openai_client.chat.completions.create(
+                model=model_name, messages=_openai_compatible_messages(messages),
+                temperature=temperature, max_tokens=max_tokens, stream=True,
+                stream_options={"include_usage": True},
+            )
+            async for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    usage_reported = True
+                    tokens = int(getattr(usage, "total_tokens", 0) or tokens)
+                if chunk.choices:
+                    choice = chunk.choices[0]
+                    finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                    if choice.delta.content:
+                        status = "incomplete"
+                        yield choice.delta.content
+            if finish_reason and finish_reason != "stop":
+                raise RuntimeError("Provider stopped before completing its text answer")
+            if status == "incomplete":
+                status = "completed"
+        except (asyncio.CancelledError, GeneratorExit):
+            status = "cancelled"
+            raise
+        finally:
+            if stream is not None:
+                close = getattr(stream, "close", None) or getattr(stream, "aclose", None)
+                if callable(close):
+                    try:
+                        closed = close()
+                        if inspect.isawaitable(closed):
+                            await closed
+                    except Exception:
+                        logger.warning("OpenAI stream close failed")
+            try:
+                from lyo_app.teaching_runtime.model_usage import capture_model_usage
+                await capture_model_usage(
+                    model=model_name, tokens_used=tokens,
+                    latency_ms=int((time.time() - provider_started) * 1000),
+                    cache_hit=False, completion_status=status, usage_reported=usage_reported,
+                )
+            except Exception:
+                logger.warning("Streaming usage capture failed")
+
+    async def _stream_gemini(
+        self,
+        model_key: str,
+        model: AIModelConfig,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncGenerator[str, None]:
+        """Stream Gemini text directly from the provider SSE endpoint.
+
+        This intentionally raises provider/network failures instead of
+        converting them into Lyo's fallback prose. The outer resilience loop can
+        then try the next provider *before* anything has been spoken.
+        """
+        if not model.api_key:
+            raise RuntimeError(f"No API key configured for {model.name}")
+        if not self.session:
+            raise RuntimeError("Gemini HTTP session is not initialized")
+
+        contents: List[Dict[str, Any]] = []
+        system_parts: List[str] = []
+        for msg in messages:
+            role_name = msg.get("role")
+            content = msg.get("content", "")
+            if role_name == "system":
+                if isinstance(content, str):
+                    system_parts.append(content)
+                elif isinstance(content, list):
+                    system_parts.extend(
+                        str(item.get("text", ""))
+                        for item in content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    )
+                continue
+
+            role = "user" if role_name == "user" else "model"
+            message_parts: List[Dict[str, Any]] = []
+            if isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    item_type = item.get("type")
+                    if item_type == "text":
+                        message_parts.append({"text": str(item.get("text", ""))})
+                    elif item_type == "image_uri":
+                        message_parts.append({
+                            "fileData": {
+                                "mimeType": item.get("mime_type", "image/jpeg"),
+                                "fileUri": item.get("uri", ""),
+                            }
+                        })
+                    elif item_type in {
+                        "image_base64",
+                        "media_base64",
+                        "file_base64",
+                    }:
+                        message_parts.append({
+                            "inlineData": {
+                                "mimeType": item.get("mime_type", "image/jpeg"),
+                                "data": item.get("data", ""),
+                            }
+                        })
+            else:
+                message_parts.append({"text": str(content)})
+
+            if contents and contents[-1]["role"] == role:
+                contents[-1]["parts"].extend(message_parts)
+            else:
+                contents.append({"role": role, "parts": message_parts})
+
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": temperature,
+                "topP": 0.8,
+                "topK": 40,
+            },
+        }
+        if system_parts:
+            payload["systemInstruction"] = {
+                "parts": [{"text": "\n\n".join(system_parts)}]
+            }
+
+        endpoint = model.endpoint.replace(
+            ":generateContent",
+            ":streamGenerateContent",
+        )
+        endpoint = f"{endpoint}?alt=sse&key={model.api_key}"
+        provider_started = time.time()
+        total_tokens = 0
+
+        status, finish_reason, usage_reported = "failed", None, False
+        try:
+            async with self.session.post(
+                endpoint,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=max(30, model.timeout)),
+            ) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"Gemini stream returned {response.status}: {body[:300]}"
+                    )
+
+                async for raw_line in response.content:
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload_text = line[5:].strip()
+                    if not payload_text:
+                        continue
+                    event = json.loads(payload_text)
+                    usage = event.get("usageMetadata") or {}
+                    if "totalTokenCount" in usage:
+                        usage_reported = True
+                        total_tokens = int(usage["totalTokenCount"] or total_tokens or 0)
+                    candidates = event.get("candidates") or []
+                    if not candidates:
+                        continue
+                    finish_reason = candidates[0].get("finishReason") or finish_reason
+                    parts = ((candidates[0].get("content") or {}).get("parts") or [])
+                    for part in parts:
+                        text_part = part.get("text") if isinstance(part, dict) else None
+                        if text_part:
+                            status = "incomplete"
+                            yield str(text_part)
+            if finish_reason and finish_reason != "STOP":
+                raise RuntimeError("Provider stopped before completing its text answer")
+            if status == "incomplete":
+                status = "completed"
+        except (asyncio.CancelledError, GeneratorExit):
+            status = "cancelled"
+            raise
+        finally:
+            try:
+                from lyo_app.teaching_runtime.model_usage import capture_model_usage
+                await capture_model_usage(
+                    model=model_key, tokens_used=total_tokens,
+                    latency_ms=int((time.time() - provider_started) * 1000),
+                    cache_hit=False, completion_status=status, usage_reported=usage_reported,
+                )
+            except Exception:
+                logger.warning("Streaming usage capture failed")
 
     async def chat_completion(
         self,

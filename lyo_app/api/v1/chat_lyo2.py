@@ -110,6 +110,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 ConversationTurn(role=message.role, content=message.content)
                 for message in persisted
                 if message.role in ("user", "assistant", "system")
+                and getattr(message, "generation_status", "completed") == "completed"
                 and not (
                     request.client_message_id
                     and message.client_message_id == request.client_message_id
@@ -129,7 +130,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                     return UnifiedChatResponse(
                         answer_block=UIBlock(
                             type=UIBlockType.TUTOR_MESSAGE,
-                            content={"text": replayed.content},
+                            content={"text": replayed.content,
+                                     "generation_status": getattr(replayed, "generation_status", "completed")},
                         ),
                         metadata={
                             "trace_id": trace_id,
