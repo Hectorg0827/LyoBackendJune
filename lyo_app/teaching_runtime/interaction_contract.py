@@ -307,19 +307,10 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_analyze",
         )
-    if _DIRECT_ANSWER_RE.search(text):
-        return InteractionContract(
-            mode=InteractionMode.ANSWER,
-            depth=depth,
-            **delivery_metadata,
-            fast_lane=True,
-            attachment_authoritative=has_media,
-            reason_code="explicit_answer",
-        )
-
-    # A standalone Coach request owns the turn, but only after every
-    # explicit activity verb above. "Am I ready to submit this essay?" is an
-    # analysis request, not permission for Coach to replace it with a mission.
+    # A standalone Coach request owns the turn after the explicit activity
+    # verbs above, but before the broad "what is" direct-answer fallback.
+    # Full-match semantics keep specific questions such as
+    # "Am I ready to submit this essay?" out of Coach.
     if _COACH_RE.fullmatch(text) or _COACH_TIME_ONLY_RE.fullmatch(text):
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
@@ -329,6 +320,16 @@ def interaction_contract_for_request(
             workflow_intent=Intent.COACH,
             attachment_authoritative=False,
             reason_code="explicit_coach",
+        )
+
+    if _DIRECT_ANSWER_RE.search(text):
+        return InteractionContract(
+            mode=InteractionMode.ANSWER,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            attachment_authoritative=has_media,
+            reason_code="explicit_answer",
         )
 
     # Only after all explicit learner-authored verbs have been checked may
