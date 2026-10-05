@@ -126,7 +126,9 @@ async def refresh_goal(
     goal = await owned_goal(db, current_user.id, goal_id)
     if goal is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Learning goal not found")
-    view = await build_goal_view(db, current_user.id, goal, use_cache=False)
+    view = await _require_evidence(
+        build_goal_view(db, current_user.id, goal, use_cache=False)
+    )
     await db.commit()
     return view
 
