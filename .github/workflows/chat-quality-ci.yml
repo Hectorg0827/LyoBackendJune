@@ -13,6 +13,8 @@ on:
       - "tests/test_chat_companion_v2.py"
       - "tests/test_chat_multimodal.py"
       - "tests/test_chat_continuity.py"
+      - "tests/test_voice_turn_lifecycle.py"
+      - "lyo_app/chat/persistence.py"
       - ".github/workflows/chat-quality-ci.yml"
   workflow_dispatch:
 
@@ -53,4 +55,4 @@ jobs:
 
       - name: Grounding multimodal and continuity regressions
         run: |
-          python -m pytest -q             tests/test_chat_multimodal.py             tests/test_chat_continuity.py             tests/test_chat_check_grading.py
+          python -m pytest -q             tests/test_chat_multimodal.py             tests/test_chat_continuity.py             tests/test_chat_check_grading.py tests/test_voice_turn_lifecycle.py

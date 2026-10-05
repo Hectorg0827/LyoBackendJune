@@ -56,6 +56,7 @@ from lyo_app.ai_agents.optimization.performance_optimizer import ai_performance_
 from lyo_app.chat.models import ChatMode
 from lyo_app.ai.schemas.block_redaction import redact_blocks, redact_content
 from lyo_app.chat.stores import conversation_store
+from lyo_app.chat.persistence import schedule_assistant_message, finish_assistant_messages
 
 # Simple response builder to fix missing import
 class LyoResponseBuilder:
@@ -807,50 +808,50 @@ async def _emit_composed_lesson(
             "priority": 0,
         },
     }
-    if voice_delivery and lesson_text:
-        # Start speech before SmartBlocks/actions/persistence finish. The text is
-        # identical to the answer below, so voice stays a delivery layer over
-        # the canonical teaching turn.
-        yield yield_safe_sse_event(
-            "voice_ready",
-            _voice_ready_payload(
-                lesson_text,
-                message_id=assistant_client_message_id,
-            ),
-        )
-    collected_bricks.append(answer_brick)
-    yield yield_safe_sse_event("answer", answer_brick)
-    # Redacted on the way out only. The persisted copy keeps the answer key,
-    # because grading happens on a later request against what was stored.
-    yield yield_safe_sse_event(
-        "smart_blocks",
-        {"type": "smart_blocks", "blocks": redact_blocks(lesson_blocks)},
-    )
-
-    if lesson.next_directions:
-        actions_brick = {
-            "type": "actions",
-            "blocks": [{
-                "type": "CTARow",
-                "content": {"actions": lesson.next_directions},
-                "priority": 0,
-            }],
-        }
-        collected_bricks.append(actions_brick)
-        yield yield_safe_sse_event("actions", actions_brick)
-
+    pending_writes = []
     if persistent_conversation:
-        # Blocks are persisted so the check stays gradeable and the lesson
-        # survives a reload.
-        await conversation_store.add_message(
+        pending_writes.append(schedule_assistant_message(
             db,
             persistent_conversation.id,
-            role="assistant",
             content=lesson_text,
             mode_used=mode_used,
             client_message_id=assistant_client_message_id,
             blocks=lesson_blocks,
+        ))
+    try:
+        if voice_delivery and lesson_text:
+            # Start speech before SmartBlocks/actions/persistence finish. The text is
+            # identical to the answer below, so voice stays a delivery layer over
+            # the canonical teaching turn.
+            yield yield_safe_sse_event(
+                "voice_ready",
+                _voice_ready_payload(
+                    lesson_text,
+                    message_id=assistant_client_message_id,
+                ),
+            )
+        collected_bricks.append(answer_brick)
+        yield yield_safe_sse_event("answer", answer_brick)
+        # Redacted on the way out only. The persisted copy keeps the answer key,
+        # because grading happens on a later request against what was stored.
+        yield yield_safe_sse_event(
+            "smart_blocks",
+            {"type": "smart_blocks", "blocks": redact_blocks(lesson_blocks)},
         )
+
+        if lesson.next_directions:
+            actions_brick = {
+                "type": "actions",
+                "blocks": [{
+                    "type": "CTARow",
+                    "content": {"actions": lesson.next_directions},
+                    "priority": 0,
+                }],
+            }
+            collected_bricks.append(actions_brick)
+            yield yield_safe_sse_event("actions", actions_brick)
+    finally:
+        await finish_assistant_messages(pending_writes)
 
 
 def _grade_check_block(
@@ -1249,7 +1250,18 @@ async def stream_lyo2_chat(
     
     async def event_generator() -> AsyncGenerator[str, None]:
         start_time = time.time()
-        
+        pending_writes = []
+        voice_state = request.state_summary.get("voice_session", {})
+        voice_active = isinstance(voice_state, dict) and bool(voice_state.get("active"))
+
+        def persist_answer(text, mode_used, **metadata):
+            if persistent_conversation and text:
+                pending_writes.append(schedule_assistant_message(
+                    db, persistent_conversation.id, content=text,
+                    mode_used=mode_used, client_message_id=assistant_client_message_id,
+                    **metadata,
+                ))
+
         try:
             display_content = canonical_message_content(request.text, request.media)
             media_attachments = await load_media_attachments(request.media)
@@ -1259,7 +1271,7 @@ async def stream_lyo2_chat(
             # Resolve one server-owned conversation before any AI work.  The
             # bearer identity, never a client-supplied user_id, owns the row.
             persistent_conversation = None
-            assistant_client_message_id = None
+            assistant_client_message_id = trace_id
             replayed_assistant = None
             authenticated_user_id = (
                 str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
@@ -1331,6 +1343,14 @@ async def stream_lyo2_chat(
                     },
                 )
                 if replayed_assistant:
+                    if voice_active:
+                        yield yield_safe_sse_event(
+                            "voice_ready",
+                            {**_voice_ready_payload(
+                                replayed_assistant.content,
+                                message_id=assistant_client_message_id,
+                            ), "replayed": True},
+                        )
                     yield yield_safe_sse_event(
                         "answer",
                         {
@@ -1341,6 +1361,7 @@ async def stream_lyo2_chat(
                                 "priority": 0,
                             },
                             "replayed": True,
+                            "message_id": assistant_client_message_id,
                         },
                     )
                     yield "data: [DONE]\n\n"
@@ -1651,6 +1672,7 @@ async def stream_lyo2_chat(
                 # generate_plan model calls join the learner's Test Prep session.
                 with _model_usage_scope("teaching", "test_prep"):
                     text = await process_chat_turn(request, current_user, db)
+                persist_answer(text, ChatMode.TEST_PREP.value)
                 if (
                     text
                     and interaction_contract.delivery_mode == DeliveryMode.VOICE
@@ -1663,10 +1685,6 @@ async def stream_lyo2_chat(
                             latency_ms=int((time.time() - start_time) * 1000),
                         ),
                     )
-                if persistent_conversation:
-                    await conversation_store.add_message(db, persistent_conversation.id,
-                        role="assistant", content=text, mode_used=ChatMode.TEST_PREP.value,
-                        client_message_id=assistant_client_message_id)
                 yield yield_safe_sse_event("answer", {"type": "answer", "block": {
                     "type": "TutorMessageBlock", "content": {"text": text}, "priority": 0}})
                 yield "data: [DONE]\n\n"
@@ -1760,6 +1778,7 @@ async def stream_lyo2_chat(
                 # that it truly cannot understand. Low-confidence clarifications
                 # from fallback routing should not block the pipeline.
                 logger.info(f"🤔 [STREAM][{trace_id}] Needs clarification: {decision.clarification_question}")
+                persist_answer(decision.clarification_question, ChatMode.GENERAL.value)
                 if (
                     decision.clarification_question
                     and interaction_contract.delivery_mode == DeliveryMode.VOICE
@@ -1771,15 +1790,6 @@ async def stream_lyo2_chat(
                             message_id=assistant_client_message_id,
                             latency_ms=int((time.time() - start_time) * 1000),
                         ),
-                    )
-                if persistent_conversation and decision.clarification_question:
-                    await conversation_store.add_message(
-                        db,
-                        persistent_conversation.id,
-                        role="assistant",
-                        content=decision.clarification_question,
-                        mode_used=ChatMode.GENERAL.value,
-                        client_message_id=assistant_client_message_id,
                     )
                 yield f"data: {json.dumps({'type': 'clarification', 'text': decision.clarification_question})}\n\n"
                 return
@@ -1793,6 +1803,7 @@ async def stream_lyo2_chat(
                     if data.missing_critical_info and data.follow_up_question:
                         # Yield a clarification if critical info is missing
                         logger.info(f"🤔 [STREAM][{trace_id}] Test Prep needs clarification: missing {data.missing_critical_info}")
+                        persist_answer(data.follow_up_question, ChatMode.TEST_PREP.value)
                         if (
                             data.follow_up_question
                             and interaction_contract.delivery_mode == DeliveryMode.VOICE
@@ -1804,15 +1815,6 @@ async def stream_lyo2_chat(
                                     message_id=assistant_client_message_id,
                                     latency_ms=int((time.time() - start_time) * 1000),
                                 ),
-                            )
-                        if persistent_conversation:
-                            await conversation_store.add_message(
-                                db,
-                                persistent_conversation.id,
-                                role="assistant",
-                                content=data.follow_up_question,
-                                mode_used=ChatMode.TEST_PREP.value,
-                                client_message_id=assistant_client_message_id,
                             )
                         yield f"data: {json.dumps({'type': 'clarification', 'text': data.follow_up_question})}\n\n"
                         return
@@ -2161,6 +2163,10 @@ async def stream_lyo2_chat(
                     }
                 )
 
+            persist_answer(
+                raw_llm_text,
+                decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
+            )
             if raw_llm_text and voice_delivery:
                 yield yield_safe_sse_event(
                     "voice_ready",
@@ -2347,15 +2353,7 @@ async def stream_lyo2_chat(
                 except Exception as e:
                     logger.warning(f"⚠️ Cache save failed: {e}")
 
-            if persistent_conversation and raw_llm_text:
-                await conversation_store.add_message(
-                    db,
-                    persistent_conversation.id,
-                    role="assistant",
-                    content=raw_llm_text,
-                    mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
-                    client_message_id=assistant_client_message_id,
-                )
+            await finish_assistant_messages(pending_writes)
 
             # Completion signal
             if decision.intent == Intent.COURSE:
@@ -2376,5 +2374,7 @@ async def stream_lyo2_chat(
             import traceback
             logger.error(traceback.format_exc())
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            await finish_assistant_messages(pending_writes)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
