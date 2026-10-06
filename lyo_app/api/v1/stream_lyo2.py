@@ -80,6 +80,7 @@ class LyoResponseBuilder:
 lyo_response_builder = LyoResponseBuilder()
 
 logger = logging.getLogger(__name__)
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
 
 def safe_json_serialize(data: Any, event_type: str = "unknown") -> str:
     """
@@ -1259,6 +1260,18 @@ async def stream_lyo2_chat(
     
     async def event_generator() -> AsyncGenerator[str, None]:
         start_time = time.time()
+        request_started = time.monotonic()
+        process_uptime_ms = int(
+            (request_started - _PROCESS_STARTED_MONOTONIC) * 1000
+        )
+        latency_metrics: Dict[str, Any] = {
+            "process_uptime_ms": process_uptime_ms,
+            "cold_start_suspected": process_uptime_ms < 60_000,
+        }
+        memory_task = None
+        current_time_for_prompt = ""
+        freshness_decision = None
+        fast_intent = None
         pending_writes = []
         assistant_write_scheduled = False
         voice_state = request.resolved_voice_session.model_dump()
@@ -1417,6 +1430,73 @@ async def stream_lyo2_chat(
                     )
                 )
 
+            # Resolve Test Prep continuity before deciding whether a message may
+            # take the ordinary-chat fast lane. Short intake replies such as
+            # "Friday" must remain attached to their active Test Prep workflow.
+            continuing_prep = False
+            cancelled_prep = (request.text or "").strip().lower() in {
+                "cancel", "stop test prep", "exit test prep"
+            }
+            if authenticated_user_id:
+                from lyo_app.study_plans.routes import owned_profile
+                saved_prep = await owned_profile(db, int(authenticated_user_id))
+                saved_workflow = dict(saved_prep.workflow_state or {}) if saved_prep else {}
+                continuing_prep = bool(
+                    saved_prep
+                    and not saved_prep.intake_complete
+                    and saved_workflow.get("conversation_id") == str(request.conversation_id)
+                )
+                if continuing_prep and cancelled_prep:
+                    saved_workflow.pop("conversation_id", None)
+                    saved_prep.workflow_state = saved_workflow
+                    await db.commit()
+                    continuing_prep = False
+                lower_text = (request.text or "").strip().lower()
+                explicit_prep = any(
+                    phrase in lower_text
+                    for phrase in (
+                        "i have a test",
+                        "i have an exam",
+                        "tengo un examen",
+                        "prepare for my test",
+                        "prepare for my exam",
+                    )
+                )
+                if (
+                    not request.forced_intent
+                    and not cancelled_prep
+                    and (continuing_prep or explicit_prep)
+                ):
+                    request.forced_intent = Intent.TEST_PREP
+
+            from lyo_app.chat.fast_path import fast_route_intent
+            from lyo_app.chat.freshness import current_time_context, decide_freshness
+
+            current_time_for_prompt = current_time_context(request.timezone)
+            freshness_decision = decide_freshness(request.text or "")
+            request.state_summary = {
+                **(request.state_summary or {}),
+                "current_time_context": current_time_for_prompt,
+                "freshness_mode": freshness_decision.mode.value,
+            }
+            stream_caps = (
+                request.state_summary.get("stream_capabilities", {})
+                if isinstance(request.state_summary, dict)
+                else {}
+            )
+            supports_text_delta = bool(
+                isinstance(stream_caps, dict) and stream_caps.get("text_delta")
+            )
+            fast_intent = (
+                None
+                if voice_active
+                else fast_route_intent(
+                    request.text or "",
+                    has_media=bool(media_attachments),
+                    forced_intent=request.forced_intent,
+                )
+            )
+
             collected_bricks = []
             
             skeleton_brick = {"type": "skeleton", "blocks": ["answer", "artifact"]}
@@ -1424,83 +1504,65 @@ async def stream_lyo2_chat(
             yield yield_safe_sse_event("skeleton", skeleton_brick)
             await asyncio.sleep(0.01) # Yield to event loop
             
-            # 2. Performance & Cache Layer (New for Phase 17)
-            # Ensure optimizer is ready
-            await ai_performance_optimizer.initialize()
-            
-            # Optimize request based on system load
-            opt_data = await ai_performance_optimizer.optimize_request(
-                agent_type=request.forced_intent.value if request.forced_intent else "general",
-                request_data=request.model_dump()
-            )
-            
-            # Check for cached full response (Skip remaining layers if hit)
-            cache_key = opt_data.get("cache_key")
-            # Personalized/multi-turn answers must never be served from the
-            # global prompt cache: the cache key does not encode user history.
-            cached_full_resp = None
-            if not authenticated_user_id:
-                cached_full_resp = await ai_performance_optimizer.cache_manager.get(
-                    "full_response", key=cache_key
+            # Do not place the legacy optimizer/cache in front of ordinary
+            # chat. Structured workflows retain it.
+            cache_key = None
+            opt_config = {}
+            if fast_intent is None:
+                optimizer_started = time.monotonic()
+                await ai_performance_optimizer.initialize()
+                opt_data = await ai_performance_optimizer.optimize_request(
+                    agent_type=request.forced_intent.value if request.forced_intent else "general",
+                    request_data=request.model_dump()
                 )
-            if cached_full_resp:
-                logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
-                cached_voice_active = voice_hints_enabled
-                if cached_voice_active:
-                    cached_spoken_text = ""
+                latency_metrics["optimizer_ms"] = int(
+                    (time.monotonic() - optimizer_started) * 1000
+                )
+                cache_key = opt_data.get("cache_key")
+                cached_full_resp = None
+                if not authenticated_user_id:
+                    cached_full_resp = await ai_performance_optimizer.cache_manager.get(
+                        "full_response", key=cache_key
+                    )
+                if cached_full_resp:
+                    logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
+                    cached_voice_active = voice_hints_enabled
+                    if cached_voice_active:
+                        cached_spoken_text = ""
+                        for brick in cached_full_resp:
+                            if not isinstance(brick, dict) or brick.get("type") != "answer":
+                                continue
+                            block = brick.get("block")
+                            content = block.get("content") if isinstance(block, dict) else None
+                            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                                cached_spoken_text = content["text"].strip()
+                                if cached_spoken_text:
+                                    break
+                        if cached_spoken_text:
+                            yield yield_safe_sse_event(
+                                "voice_ready",
+                                _voice_ready_payload(
+                                    cached_spoken_text,
+                                    message_id=assistant_client_message_id,
+                                    latency_ms=int((time.time() - start_time) * 1000),
+                                ),
+                            )
                     for brick in cached_full_resp:
-                        if not isinstance(brick, dict) or brick.get("type") != "answer":
-                            continue
-                        block = brick.get("block")
-                        content = block.get("content") if isinstance(block, dict) else None
-                        if isinstance(content, dict) and isinstance(content.get("text"), str):
-                            cached_spoken_text = content["text"].strip()
-                            if cached_spoken_text:
-                                break
-                    if cached_spoken_text:
-                        yield yield_safe_sse_event(
-                            "voice_ready",
-                            _voice_ready_payload(
-                                cached_spoken_text,
-                                message_id=assistant_client_message_id,
-                                latency_ms=int((time.time() - start_time) * 1000),
-                            ),
-                        )
-                for brick in cached_full_resp:
-                    if isinstance(brick, dict) and brick.get("type") == "answer":
-                        brick = {**brick, "message_id": assistant_client_message_id, "speak": not voice_hints_enabled}
-                    yield f"data: {json.dumps(brick)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            # Apply optimized config (e.g. reduced tokens if memory is high)
-            opt_config = opt_data.get("processing_config", {})
+                        if isinstance(brick, dict) and brick.get("type") == "answer":
+                            brick = {
+                                **brick,
+                                "message_id": assistant_client_message_id,
+                                "speak": not voice_hints_enabled,
+                            }
+                        yield f"data: {json.dumps(brick)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                opt_config = opt_data.get("processing_config", {})
             
             # 2. Layer A: Routing
             logger.info(f"🔍 [STREAM][{trace_id}] Starting Routing...")
             r_start = time.time()
 
-            # Known intake continuations need no additional LLM router call.
-            # This is also what makes short replies such as "Friday" reliable.
-            continuing_prep = False
-            cancelled_prep = (request.text or "").strip().lower() in {"cancel", "stop test prep", "exit test prep"}
-            if authenticated_user_id:
-                from lyo_app.study_plans.routes import owned_profile
-                saved_prep = await owned_profile(db, int(authenticated_user_id))
-                saved_workflow = dict(saved_prep.workflow_state or {}) if saved_prep else {}
-                continuing_prep = bool(saved_prep and not saved_prep.intake_complete and
-                    saved_workflow.get("conversation_id") == str(request.conversation_id))
-                if continuing_prep and cancelled_prep:
-                    saved_workflow.pop("conversation_id", None)
-                    saved_prep.workflow_state = saved_workflow
-                    await db.commit()
-                    continuing_prep = False
-                lower_text = (request.text or "").strip().lower()
-                explicit_prep = any(phrase in lower_text for phrase in
-                    ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
-                if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
-                    request.forced_intent = Intent.TEST_PREP
-            
             if request.forced_intent:
                 logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
                 decision = RouterDecision(
@@ -1509,6 +1571,16 @@ async def stream_lyo2_chat(
                     needs_clarification=False,
                     suggested_tier="MEDIUM"
                 )
+                latency_metrics["router_path"] = "forced"
+            elif fast_intent is not None:
+                logger.info(f"⚡ [STREAM][{trace_id}] Deterministic route: {fast_intent.value}")
+                decision = RouterDecision(
+                    intent=fast_intent,
+                    confidence=1.0,
+                    needs_clarification=False,
+                    suggested_tier="FAST",
+                )
+                latency_metrics["router_path"] = "deterministic"
             else:
                 try:
                     # 2b. Fetch Proactive Nudges (New for Phase 16).
@@ -1556,6 +1628,7 @@ async def stream_lyo2_chat(
                     yield f"data: {json.dumps({'type': 'error', 'message': 'My magical circuits got a little crossed while thinking about that. Could we try again?'})}\n\n"
                     return
                 
+            latency_metrics["routing_ms"] = int((time.time() - r_start) * 1000)
             logger.info(f"✅ [STREAM][{trace_id}] Routing complete ({time.time()-r_start:.2f}s): {decision.intent} (confidence={decision.confidence})")
 
             # Shared Learning OS policy. Routing says what the learner wants;
