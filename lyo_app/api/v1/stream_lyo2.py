@@ -1774,59 +1774,111 @@ async def stream_lyo2_chat(
                     )
 
                 model_started = time.monotonic()
-                with _model_usage_scope(
-                    str(getattr(teaching_decision, "model_tier", None) or "reflex")
-                ):
-                    async for chunk in executor.stream_text(
-                        original_request=request.text or "",
-                        conversation_history=history,
-                        teaching_decision=teaching_decision.model_dump(mode="json"),
-                        interaction_contract=interaction_contract_payload,
-                        personal_memory=personal_memory,
-                        current_time_context=current_time_for_prompt,
-                        enable_google_search=enable_search,
-                        search_required=search_required,
-                        metadata_sink=model_metadata,
-                    ):
-                        if not chunk:
-                            continue
-                        if first_delta:
-                            first_delta = False
-                            if supports_text_delta:
-                                latency_metrics["server_ttft_ms"] = int(
-                                    (time.monotonic() - request_started) * 1000
+                stream_failure = None
+                try:
+                    async with asyncio.timeout(60.0):
+                        with _model_usage_scope(
+                            str(
+                                getattr(
+                                    teaching_decision,
+                                    "model_tier",
+                                    None,
                                 )
-                        streamed_text += chunk
-                        if supports_text_delta:
-                            yield yield_safe_sse_event(
-                                "text_delta",
-                                {"type": "text_delta", "content": chunk},
+                                or "reflex"
                             )
+                        ):
+                            async for chunk in executor.stream_text(
+                                original_request=request.text or "",
+                                conversation_history=history,
+                                teaching_decision=teaching_decision.model_dump(
+                                    mode="json"
+                                ),
+                                interaction_contract=interaction_contract_payload,
+                                personal_memory=personal_memory,
+                                current_time_context=current_time_for_prompt,
+                                enable_google_search=enable_search,
+                                search_required=search_required,
+                                metadata_sink=model_metadata,
+                            ):
+                                if not chunk:
+                                    continue
+                                if first_delta:
+                                    first_delta = False
+                                    if supports_text_delta:
+                                        latency_metrics["server_ttft_ms"] = int(
+                                            (
+                                                time.monotonic()
+                                                - request_started
+                                            )
+                                            * 1000
+                                        )
+                                streamed_text += chunk
+                                if supports_text_delta:
+                                    yield yield_safe_sse_event(
+                                        "text_delta",
+                                        {
+                                            "type": "text_delta",
+                                            "content": chunk,
+                                        },
+                                    )
+                except StreamingIncompleteError as exc:
+                    # The resilience layer preserves exactly what the learner
+                    # already saw. Reconcile from its canonical partial text in
+                    # case a provider failed between the final yield and error.
+                    partial = str(exc.partial_text or "").strip()
+                    if partial and len(partial) > len(streamed_text):
+                        streamed_text = partial
+                    stream_failure = "provider_interrupted"
+                    latency_metrics["stream_incomplete"] = True
+                except asyncio.TimeoutError:
+                    # Provider reads are bounded at the route level as well as
+                    # by provider clients. Any text already emitted remains a
+                    # valid incomplete answer and must not disappear.
+                    stream_failure = "timeout"
+                    latency_metrics["stream_timeout"] = True
 
                 latency_metrics["model_total_ms"] = int(
                     (time.monotonic() - model_started) * 1000
                 )
                 if model_metadata.get("model_ttft_ms") is not None:
-                    latency_metrics["provider_ttft_ms"] = model_metadata["model_ttft_ms"]
+                    latency_metrics["provider_ttft_ms"] = model_metadata[
+                        "model_ttft_ms"
+                    ]
                 latency_metrics["provider"] = model_metadata.get("provider")
                 latency_metrics["freshness_mode"] = (
-                    freshness_decision.mode.value if freshness_decision else "none"
+                    freshness_decision.mode.value
+                    if freshness_decision
+                    else "none"
                 )
 
-                # Keep the established answer envelope as the final,
-                # authoritative snapshot. Legacy clients that did not advertise
-                # text_delta support receive only this event; updated clients
-                # stream deltas and replace/ignore this snapshot to avoid
-                # duplication.
+                generation_status = (
+                    "incomplete" if stream_failure else "completed"
+                )
                 if streamed_text:
                     if "server_ttft_ms" not in latency_metrics:
                         latency_metrics["server_ttft_ms"] = int(
                             (time.monotonic() - request_started) * 1000
                         )
+                    persist_answer(
+                        streamed_text,
+                        (
+                            decision.intent.value.lower()
+                            if decision.intent
+                            else ChatMode.GENERAL.value
+                        ),
+                        action_triggered=(
+                            "stream_incomplete"
+                            if stream_failure
+                            else None
+                        ),
+                    )
                     yield yield_safe_sse_event(
                         "answer",
                         {
                             "type": "answer",
+                            "message_id": assistant_client_message_id,
+                            "generation_status": generation_status,
+                            "speak": not voice_hints_enabled,
                             "block": {
                                 "type": "TutorMessageBlock",
                                 "content": {"text": streamed_text},
@@ -1835,6 +1887,33 @@ async def stream_lyo2_chat(
                             "final_snapshot": True,
                         },
                     )
+                elif stream_failure:
+                    yield yield_safe_sse_event(
+                        "error",
+                        {
+                            "type": "error",
+                            "message": (
+                                "The response timed out. Please retry."
+                                if stream_failure == "timeout"
+                                else (
+                                    "The response was interrupted before "
+                                    "it could begin. Please retry."
+                                )
+                            ),
+                        },
+                    )
+                    latency_metrics["total_ms"] = int(
+                        (time.monotonic() - request_started) * 1000
+                    )
+                    yield yield_safe_sse_event(
+                        "latency",
+                        {
+                            "type": "latency",
+                            "metrics": latency_metrics,
+                        },
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
 
                 grounded_sources = list(model_metadata.get("sources") or [])
                 if grounded_sources:
@@ -1872,14 +1951,6 @@ async def stream_lyo2_chat(
                     yield yield_safe_sse_event(
                         "sources",
                         {"type": "sources", "sources": grounded_sources},
-                    )
-
-                if streamed_text:
-                    persist_answer(
-                        streamed_text,
-                        decision.intent.value.lower()
-                        if decision.intent
-                        else ChatMode.GENERAL.value,
                     )
 
                 latency_metrics["total_ms"] = int(
