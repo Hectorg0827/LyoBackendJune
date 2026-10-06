@@ -49,3 +49,13 @@ def provider_order_for_tier(
         return ["gpt-4o-mini", "gemini-2.5-flash"]
 
     return ["gemini-2.5-flash", "gpt-4o-mini"]
+
+
+def thinking_budget_for_tier(tier: str) -> int:
+    """Bound hidden Gemini reasoning by latency tier."""
+    normalized = (tier or "teaching").strip().lower()
+    if normalized == "reflex":
+        return 0
+    if normalized == "deliberation":
+        return -1
+    return 256
