@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from lyo_app.core.ai_resilience import AIModelConfig, AIResilienceManager
+from lyo_app.core.ai_resilience import (
+    AIModelConfig,
+    AIResilienceManager,
+    StreamingIncompleteError,
+)
 
 
 class _FakeContent:
@@ -206,7 +210,7 @@ async def test_stream_does_not_fallback_after_visible_output():
     manager._stream_gemini = types.MethodType(fake_stream_gemini, manager)
 
     chunks = []
-    with pytest.raises(RuntimeError, match="stream interrupted after visible output"):
+    with pytest.raises(StreamingIncompleteError):
         async for chunk in manager.stream_chat_completion(
             messages=[{"role": "user", "content": "hello"}],
             provider_order=["first", "second"],
