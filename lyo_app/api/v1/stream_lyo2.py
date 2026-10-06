@@ -2517,12 +2517,14 @@ async def stream_lyo2_chat(
                     for segment in voice_segmenter.flush():
                         await voice_segments.put(segment)
                     while not voice_segments.empty():
+                        segment = voice_segments.get_nowait()
                         voice_sequence += 1
                         yield yield_safe_sse_event(
                             "voice_text_segment",
                             {
                                 "type": "voice_text_segment",
-                                "text": voice_segments.get_nowait(),
+                                "text": segment,
+                                "spoken_text": prepare_spoken_text(segment) or segment,
                                 "sequence": voice_sequence,
                                 "message_id": assistant_client_message_id,
                             },
