@@ -221,6 +221,7 @@ def test_voice_interruption_stays_on_same_contract_and_follows_new_turn():
 
     prompt = contract_prompt(contract)
 
+    assert contract.mode is InteractionMode.COMPARE
     assert contract.delivery_mode is DeliveryMode.VOICE
     assert contract.voice_interrupted_previous_turn is True
     assert "interrupted" in prompt.lower()
