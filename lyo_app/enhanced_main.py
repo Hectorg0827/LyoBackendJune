@@ -931,6 +931,18 @@ def create_app() -> FastAPI:
                 },
             }
 
+    # Required native Classroom telemetry. Mount this after all other route
+    # imports are complete so initialization-order cycles cannot make it
+    # disappear. Unlike optional/legacy routers above, this is a production
+    # contract used by current clients, so an import failure must fail startup
+    # and CI rather than degrade silently to HTTP 404.
+    from lyo_app.classroom.analytics import router as classroom_analytics_router
+    app.include_router(
+        classroom_analytics_router,
+        prefix="/api/v1/classroom/analytics",
+        tags=["Classroom Analytics"],
+    )
+
     app.state.start_time = time.time()
     logger.info(
         f"FastAPI application created successfully - {settings.APP_NAME} v{settings.APP_VERSION}"
