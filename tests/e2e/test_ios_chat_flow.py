@@ -11,6 +11,7 @@ os.environ["LYO_LIGHTWEIGHT_STARTUP"] = "1"
 # Now import app
 from lyo_app.app_factory import create_app
 from lyo_app.ai.schemas.lyo2 import RouterDecision, Intent, RouterResponse
+from lyo_app.teaching_runtime import TeachingAction, TeachingDecision
 
 app = create_app()
 client = TestClient(app)
@@ -49,22 +50,35 @@ def mock_auth():
 
 @pytest.fixture
 def mock_ai_internals():
-    """Mock the AI router and streaming components"""
+    """Isolate the transport contract from learner-policy/database behavior."""
+    decision = TeachingDecision(
+        action=TeachingAction.ANSWER,
+        reason_code="transport_test",
+        model_tier="reflex",
+        policy_version="test",
+    )
+
     with patch("lyo_app.api.v1.stream_lyo2.router_agent") as mock_router:
-        # Mock ROUTE to return CHAT intent
         mock_router.route = AsyncMock(return_value=RouterResponse(
             decision=RouterDecision(intent=Intent.CHAT, confidence=0.9),
             trace_id="test-trace"
         ))
-        
-        # Mock AgentRegistry to stream immediately
-        with patch("lyo_app.chat.agents.agent_registry.process_stream") as mock_stream:
+
+        with patch(
+            "lyo_app.teaching_runtime.decide_for_chat",
+            new=AsyncMock(return_value=decision),
+        ), patch(
+            "lyo_app.teaching_runtime.record_policy_decision",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "lyo_app.api.v1.stream_lyo2.LyoExecutor.stream_text"
+        ) as mock_stream:
             async def stream_generator(*args, **kwargs):
                 yield "Hello"
                 yield " there"
                 yield "!"
             mock_stream.side_effect = stream_generator
-            
+
             yield mock_router, mock_stream
 
 # --- TEST CASES ---
@@ -100,12 +114,45 @@ async def test_ios_chat_flow_hi(mock_auth, mock_ai_internals):
             # Verify Token Streaming (Fast Track)
             assert not any('type": "clarification"' in c for c in chunks), "REGRESSION: Received clarification!"
             
-            # Verify streamed content (token chunks in fast path OR answer block fallback)
-            token_lines = [c for c in chunks if 'type": "token"' in c]
+            # This payload intentionally does NOT advertise text_delta support:
+            # legacy iOS builds must still receive the final answer envelope.
+            delta_lines = [c for c in chunks if 'type": "text_delta"' in c]
             answer_lines = [c for c in chunks if 'type": "answer"' in c]
-            assert len(token_lines) > 0 or len(answer_lines) > 0, "No streamed answer content received"
-            
-            print(f"\n✅ PASSED: Received {len(token_lines)} token chunks.")
+            assert len(delta_lines) == 0, "Legacy client unexpectedly received text deltas"
+            assert len(answer_lines) > 0, f"Legacy client did not receive final answer content: {chunks}"
+
+            print(f"\n✅ PASSED: Legacy client received {len(answer_lines)} final answer event(s).")
+
+
+@pytest.mark.asyncio
+async def test_ios_chat_flow_text_delta_capability(mock_auth, mock_ai_internals):
+    """Updated clients get incremental deltas plus one final compatibility snapshot."""
+    payload = {
+        "user_id": "test_user_123",
+        "text": "Hi",
+        "conversation_history": [],
+        "state_summary": {
+            "stream_capabilities": {"text_delta": True},
+        },
+    }
+
+    from httpx import AsyncClient, ASGITransport
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with ac.stream("POST", "/api/v1/lyo2/chat/stream", json=payload) as response:
+            assert response.status_code == 200
+            chunks = [
+                line
+                async for line in response.aiter_lines()
+                if line.strip()
+            ]
+
+    delta_lines = [line for line in chunks if 'type": "text_delta"' in line]
+    answer_lines = [line for line in chunks if 'type": "answer"' in line]
+    assert len(delta_lines) == 3, f"Expected three text deltas, got: {chunks}"
+    assert len(answer_lines) == 1
+    assert any('"final_snapshot": true' in line for line in answer_lines)
 
 if __name__ == "__main__":
     async def manual_runner():
