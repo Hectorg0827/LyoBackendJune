@@ -209,6 +209,26 @@ def test_voice_does_not_turn_answer_into_separate_voice_workflow():
     assert contract.workflow_intent is None
 
 
+def test_voice_interruption_stays_on_same_contract_and_follows_new_turn():
+    from lyo_app.teaching_runtime.interaction_contract import contract_prompt
+
+    contract = interaction_contract_for_request(
+        text="actually, compare it to meiosis instead",
+        routed_intent=Intent.CHAT,
+        voice_mode=True,
+        voice_interrupted_previous_turn=True,
+    )
+
+    prompt = contract_prompt(contract)
+
+    assert contract.mode is InteractionMode.COMPARE
+    assert contract.delivery_mode is DeliveryMode.VOICE
+    assert contract.voice_interrupted_previous_turn is True
+    assert "interrupted" in prompt.lower()
+    assert "new request" in prompt.lower()
+    assert "restart" in prompt.lower()
+
+
 def test_voice_prompt_is_spoken_friendly_without_changing_mode():
     from lyo_app.teaching_runtime.interaction_contract import contract_prompt
 
