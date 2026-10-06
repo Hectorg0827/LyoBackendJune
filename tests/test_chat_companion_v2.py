@@ -8,6 +8,7 @@ from lyo_app.teaching_runtime.interaction_contract import (
     InteractionMode,
     ResponseDepth,
     interaction_contract_for_request,
+    voice_router_shortcut_intent,
 )
 from lyo_app.teaching_runtime.models import (
     LearnerSnapshot,
@@ -207,6 +208,71 @@ def test_voice_does_not_turn_answer_into_separate_voice_workflow():
     assert contract.mode is InteractionMode.ANALYZE
     assert contract.delivery_mode is DeliveryMode.VOICE
     assert contract.workflow_intent is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("what is gravity?", Intent.CHAT),
+        ("compare mitosis and meiosis", Intent.CHAT),
+        ("explain photosynthesis", Intent.EXPLAIN),
+        ("summarize photosynthesis", Intent.CHAT),
+        ("go deeper", Intent.CHAT),
+    ],
+)
+def test_explicit_voice_turn_can_skip_semantic_router(text, expected):
+    contract = interaction_contract_for_request(text=text, voice_mode=True)
+
+    assert voice_router_shortcut_intent(contract) is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "teach me calculus",
+        "quiz me on fractions",
+        "search the web for today's AI news",
+        "create a course on marketing",
+    ],
+)
+def test_voice_workflows_and_live_search_keep_full_router(text):
+    contract = interaction_contract_for_request(text=text, voice_mode=True)
+
+    assert voice_router_shortcut_intent(contract) is None
+
+
+def test_voice_media_and_forced_workflow_never_use_router_shortcut():
+    media_contract = interaction_contract_for_request(
+        text="what is this?",
+        has_media=True,
+        has_current_media=True,
+        voice_mode=True,
+    )
+    answer_contract = interaction_contract_for_request(
+        text="what is gravity?",
+        voice_mode=True,
+    )
+
+    assert voice_router_shortcut_intent(media_contract, has_media=True) is None
+    assert (
+        voice_router_shortcut_intent(
+            answer_contract,
+            forced_intent=Intent.TEST_PREP,
+        )
+        is None
+    )
+
+
+def test_interrupted_voice_comparison_shortcuts_to_chat_without_losing_mode():
+    contract = interaction_contract_for_request(
+        text="actually, compare it to meiosis instead",
+        voice_mode=True,
+        voice_interrupted_previous_turn=True,
+    )
+
+    assert contract.mode is InteractionMode.COMPARE
+    assert contract.voice_interrupted_previous_turn is True
+    assert voice_router_shortcut_intent(contract) is Intent.CHAT
 
 
 def test_voice_prompt_is_spoken_friendly_without_changing_mode():
