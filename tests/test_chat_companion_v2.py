@@ -261,6 +261,21 @@ def test_voice_workflows_and_live_search_keep_full_router(text):
     assert voice_router_shortcut_intent(contract) is None
 
 
+def test_voice_explain_keeps_semantic_router_when_active_course_could_steal_topic():
+    contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        voice_mode=True,
+    )
+
+    assert (
+        voice_router_shortcut_intent(
+            contract,
+            has_active_course=True,
+        )
+        is None
+    )
+
+
 def test_voice_media_and_forced_workflow_never_use_router_shortcut():
     media_contract = interaction_contract_for_request(
         text="what is this?",
