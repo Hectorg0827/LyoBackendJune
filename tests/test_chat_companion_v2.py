@@ -234,10 +234,7 @@ def test_voice_interruption_stays_on_same_contract_and_follows_new_turn():
     ("text", "expected"),
     [
         ("what is gravity?", Intent.CHAT),
-        ("compare mitosis and meiosis", Intent.CHAT),
         ("explain photosynthesis", Intent.EXPLAIN),
-        ("summarize photosynthesis", Intent.CHAT),
-        ("go deeper", Intent.CHAT),
     ],
 )
 def test_explicit_voice_turn_can_skip_semantic_router(text, expected):
@@ -253,6 +250,10 @@ def test_explicit_voice_turn_can_skip_semantic_router(text, expected):
         "quiz me on fractions",
         "search the web for today's AI news",
         "create a course on marketing",
+        "compare mitosis and meiosis",
+        "summarize photosynthesis",
+        "go deeper",
+        "next",
     ],
 )
 def test_voice_workflows_and_live_search_keep_full_router(text):
@@ -307,7 +308,7 @@ def test_interrupted_voice_comparison_shortcuts_to_chat_without_losing_mode():
 
     assert contract.mode is InteractionMode.COMPARE
     assert contract.voice_interrupted_previous_turn is True
-    assert voice_router_shortcut_intent(contract) is Intent.CHAT
+    assert voice_router_shortcut_intent(contract) is None
 
 
 def test_voice_prompt_is_spoken_friendly_without_changing_mode():
