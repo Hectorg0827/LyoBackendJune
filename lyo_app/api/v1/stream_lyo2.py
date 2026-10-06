@@ -1459,7 +1459,7 @@ async def stream_lyo2_chat(
                     intent=fast_intent,
                     confidence=1.0,
                     needs_clarification=False,
-                    suggested_tier="FAST",
+                    suggested_tier="TINY",
                 )
                 latency_metrics["router_path"] = "deterministic"
             else:
