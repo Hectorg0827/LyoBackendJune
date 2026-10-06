@@ -46,13 +46,25 @@ def prepare_spoken_text(raw: str) -> str:
     text = _SOURCE_CITATION_RE.sub(" ", text)
     text = _URL_RE.sub(" ", text)
     text = _HEADING_RE.sub("", text)
+    text = re.sub(r"(?m)^\s*([A-Da-d])[.)]\s+", r"\1: ", text)
     text = _LIST_PREFIX_RE.sub("", text)
     text = re.sub(r"\x60([^\x60]+)\x60", r"\1", text)
     text = _EMPHASIS_RE.sub("", text)
+    text = re.sub(
+        r"\\frac\{([^{}]+)\}\{([^{}]+)\}",
+        r"\1 over \2",
+        text,
+    )
     text = text.replace("\\(", "").replace("\\)", "")
     text = text.replace("\\[", "").replace("\\]", "")
     text = text.replace("$", "")
+    text = re.sub(
+        r"(?m)^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$",
+        " ",
+        text,
+    )
     text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
