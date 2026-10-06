@@ -7,7 +7,30 @@ from lyo_app.core.ai_resilience import (
     CircuitBreakerConfig,
     StreamingIncompleteError,
 )
-from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
+from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter, prepare_spoken_text
+
+
+def test_spoken_text_removes_visual_markup_but_preserves_meaning():
+    canonical = (
+        "## Result\n"
+        "**Rent** is $2,100 【lease.pdf p. 1】. "
+        "See [payment schedule](https://example.com/schedule)."
+    )
+
+    assert prepare_spoken_text(canonical) == (
+        "Result Rent is 2,100. See payment schedule."
+    )
+
+
+def test_spoken_text_drops_raw_urls_images_and_code_fences():
+    canonical = (
+        "Look here: https://example.com/raw\n"
+        "![chart](https://example.com/chart.png)\n"
+        "```python\nprint('do not read this')\n```\n"
+        "The conclusion is stable."
+    )
+
+    assert prepare_spoken_text(canonical) == "Look here: The conclusion is stable."
 
 
 def test_voice_segmenter_emits_complete_sentence_before_full_answer():
