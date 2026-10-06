@@ -1,4 +1,4 @@
-from lyo_app.teaching_runtime.model_router import provider_order_for_tier
+from lyo_app.teaching_runtime.model_router import provider_order_for_tier, thinking_budget_for_tier
 
 
 def test_reflex_prefers_fast_models():
@@ -45,3 +45,9 @@ def test_voice_deliberation_keeps_strong_model_first():
     order = provider_order_for_tier("deliberation", prefer_low_latency=True)
     assert order[0] == "gpt-4o"
     assert "gemini-2.5-pro" in order
+
+
+def test_thinking_budget_matches_latency_tier():
+    assert thinking_budget_for_tier("reflex") == 0
+    assert thinking_budget_for_tier("teaching") == 256
+    assert thinking_budget_for_tier("deliberation") == -1
