@@ -744,9 +744,12 @@ def _voice_ready_payload(
     This is not a second model result. It carries the exact canonical Chat text
     that will also be rendered/persisted for the turn.
     """
+    from lyo_app.teaching_runtime.voice_delivery import prepare_spoken_text
+
     payload: Dict[str, Any] = {
         "type": "voice_ready",
         "text": text,
+        "spoken_text": prepare_spoken_text(text) or text,
         "final": True,
     }
     if segments_delivered:
@@ -759,28 +762,10 @@ def _voice_ready_payload(
 
 
 def _voice_friendly_lesson_text(raw: str) -> str:
-    """Make structured lesson fallback text natural when read aloud.
+    """Speech rendering for structured lesson fallback text."""
+    from lyo_app.teaching_runtime.voice_delivery import prepare_spoken_text
 
-    SmartBlocks are still emitted unchanged for the screen. This only adapts
-    the parallel plain-text representation used by TTS, so voice remains the
-    same lesson and evidence workflow rather than a second teaching system.
-    """
-    text = raw or ""
-    text = re.sub(r"```[\s\S]*?```", " ", text)
-    text = re.sub(r"(?m)^#{1,6}\s*", "", text)
-    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
-    text = re.sub(r"(?m)^\s*([A-Da-d])[.)]\s+", r"\1: ", text)
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
-    text = re.sub(r"__(.*?)__", r"\1", text)
-    text = re.sub(r"`([^\`]+)`", r"\1", text)
-    text = text.replace("\\(", "").replace("\\)", "")
-    text = text.replace("\\[", "").replace("\\]", "")
-    text = text.replace("$", "")
-    text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
-    text = re.sub(r"(?m)^\s*:?-{3,}:?(?:\s*,\s*:?-{3,}:?)+\s*$", "", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    return text.strip()
+    return prepare_spoken_text(raw)
 
 
 async def _emit_composed_lesson(
@@ -2459,7 +2444,10 @@ async def stream_lyo2_chat(
                     and voice_state.get("delivery") == "segments"
                 )
                 if voice_can_stream:
-                    from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
+                    from lyo_app.teaching_runtime.voice_delivery import (
+                        VoiceSegmenter,
+                        prepare_spoken_text,
+                    )
 
                     voice_segments: asyncio.Queue[str] = asyncio.Queue()
                     voice_segmenter = VoiceSegmenter()
@@ -2515,6 +2503,7 @@ async def stream_lyo2_chat(
                             {
                                 "type": "voice_text_segment",
                                 "text": segment,
+                                "spoken_text": prepare_spoken_text(segment) or segment,
                                 "sequence": voice_sequence,
                                 "message_id": assistant_client_message_id,
                             },
