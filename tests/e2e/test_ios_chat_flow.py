@@ -12,6 +12,7 @@ os.environ["LYO_LIGHTWEIGHT_STARTUP"] = "1"
 from lyo_app.app_factory import create_app
 from lyo_app.ai.schemas.lyo2 import RouterDecision, Intent, RouterResponse
 from lyo_app.teaching_runtime import TeachingAction, TeachingDecision
+from lyo_app.core.ai_resilience import StreamingIncompleteError
 
 app = create_app()
 client = TestClient(app)
@@ -153,6 +154,59 @@ async def test_ios_chat_flow_text_delta_capability(mock_auth, mock_ai_internals)
     assert len(delta_lines) == 3, f"Expected three text deltas, got: {chunks}"
     assert len(answer_lines) == 1
     assert any('"final_snapshot": true' in line for line in answer_lines)
+    assert any('"generation_status": "completed"' in line for line in answer_lines)
+    assert any('"message_id":' in line for line in answer_lines)
+
+
+@pytest.mark.asyncio
+async def test_fast_chat_preserves_partial_answer_on_provider_failure(
+    mock_auth,
+    mock_ai_internals,
+):
+    """A provider drop after visible text returns one persisted incomplete snapshot."""
+    _, mock_stream = mock_ai_internals
+
+    async def interrupted_stream(*args, **kwargs):
+        yield "Partial "
+        yield "answer"
+        raise StreamingIncompleteError("Partial answer", "gemini-2.5-flash")
+
+    mock_stream.side_effect = interrupted_stream
+    payload = {
+        "user_id": "test_user_123",
+        "text": "Hi",
+        "conversation_history": [],
+        "state_summary": {
+            "stream_capabilities": {"text_delta": True},
+        },
+    }
+
+    from httpx import AsyncClient, ASGITransport
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with ac.stream(
+            "POST",
+            "/api/v1/lyo2/chat/stream",
+            json=payload,
+        ) as response:
+            assert response.status_code == 200
+            chunks = [
+                line
+                async for line in response.aiter_lines()
+                if line.strip()
+            ]
+
+    delta_lines = [line for line in chunks if 'type": "text_delta"' in line]
+    answer_lines = [line for line in chunks if 'type": "answer"' in line]
+    assert len(delta_lines) == 2, chunks
+    assert len(answer_lines) == 1, chunks
+    assert '"generation_status": "incomplete"' in answer_lines[0]
+    assert '"message_id":' in answer_lines[0]
+    assert "Partial answer" in answer_lines[0]
+    assert not any(
+        'type": "error"' in line
+        for line in chunks
+    ), chunks
 
 if __name__ == "__main__":
     async def manual_runner():
