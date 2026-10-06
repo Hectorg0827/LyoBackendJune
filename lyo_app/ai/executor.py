@@ -210,6 +210,12 @@ class LyoExecutor:
             "--- END SELECTIVE PERSONAL MEMORY ---\n"
             if personal_memory else ""
         )
+        current_time_context = str(context.get("current_time_context") or "").strip()
+        current_time_text = (
+            f"\n--- AUTHORITATIVE CURRENT TIME ---\n{current_time_context}\n"
+            "--- END AUTHORITATIVE CURRENT TIME ---\n"
+            if current_time_context else ""
+        )
 
         media_attachments = context.get("media_attachments", [])
         source_grounding_text = _source_grounding_prompt(media_attachments)
@@ -262,7 +268,7 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{personal_memory_text}{interaction_contract_text}{teaching_policy_text}
+{rag_text}{history_text}{personal_memory_text}{current_time_text}{interaction_contract_text}{teaching_policy_text}
 {source_grounding_text}
 
 MEMORY BOUNDARIES:
@@ -361,6 +367,100 @@ USER QUESTION:
 
         return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
+    async def stream_text(
+        self,
+        *,
+        original_request: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+        personal_memory: str = "",
+        current_time_context: str = "",
+        enable_google_search: bool = False,
+        search_required: bool = False,
+        metadata_sink: Optional[Dict[str, Any]] = None,
+    ):
+        """Low-latency ordinary-chat path with genuine provider streaming.
+
+        This intentionally skips the planner and artifact machinery. Structured
+        workflows still use execute(); only ordinary conversational turns reach
+        this method.
+        """
+        from lyo_app.core.ai_resilience import ai_resilience_manager
+        from lyo_app.teaching_runtime.model_router import (
+            provider_order_for_tier,
+            thinking_budget_for_tier,
+        )
+
+        teaching_decision = teaching_decision or {}
+        interaction = _coerce_interaction_contract(interaction_contract)
+        contract_text = contract_prompt(interaction) if interaction is not None else ""
+        directives = "\n".join(
+            f"- {item}" for item in (teaching_decision.get("directives") or [])
+        )
+
+        system_prompt = f"""You are Lyo, a fast, precise, conversational learning companion.
+Answer directly. Keep ordinary chat concise and natural; expand only when the request needs it.
+Never add filler introductions. Preserve continuity with the conversation.
+{current_time_context}
+{contract_text}
+
+Server teaching action: {teaching_decision.get("action", "answer")}
+Maximum exposition: {teaching_decision.get("max_exposition_words", 120)} words
+{directives}
+
+Freshness rules:
+- You may use Google Search when it is available and the answer could have changed.
+- Current information is explicitly required for this turn: {"YES" if search_required else "NO"}.
+- If current information is explicitly required, search before making time-sensitive factual claims.
+- Do not search merely to decorate a stable answer.
+- Never claim something is current unless the grounded evidence supports it.
+"""
+
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        for turn in (conversation_history or [])[-8:]:
+            role = str(turn.get("role") or "user").lower()
+            if role not in {"user", "assistant", "system"}:
+                role = "assistant"
+            content = str(turn.get("content") or "").strip()
+            if content:
+                messages.append({"role": role, "content": content})
+
+        user_text = original_request
+        if personal_memory:
+            user_text += (
+                "\n\n[Selective durable context; use only if materially relevant: "
+                + personal_memory
+                + "]"
+            )
+        messages.append({"role": "user", "content": user_text})
+
+        # This method is only called by the ordinary-chat fast lane;
+        # explicit teaching/workflows never reach it. Force the reflex tier so
+        # a normal question does not pay a hidden reasoning budget merely
+        # because the broader teaching policy classifies ANSWER as "teaching".
+        model_tier = "reflex"
+        provider_order = provider_order_for_tier(model_tier)
+        # Search grounding is a Gemini-native tool, so give Gemini first shot
+        # whenever freshness is possible. OpenAI remains the bounded fallback.
+        if enable_google_search:
+            provider_order = (
+                ["gemini-2.5-flash"]
+                if search_required
+                else ["gemini-2.5-flash", "gpt-4o-mini"]
+            )
+
+        async for chunk in ai_resilience_manager.stream_chat_completion(
+            messages=messages,
+            provider_order=provider_order,
+            max_tokens=1200,
+            temperature=0.6,
+            thinking_budget=thinking_budget_for_tier(model_tier),
+            enable_google_search=enable_google_search,
+            metadata_sink=metadata_sink,
+        ):
+            yield chunk
+
     async def execute(
         self,
         user_id: str,
@@ -381,6 +481,7 @@ USER QUESTION:
         """
         execution_context = {
             "retrieved_content": [],
+            "web_sources": [],
             "created_artifacts": [],
             "final_text": "",
             "open_classroom_payload": None,
@@ -501,7 +602,11 @@ USER QUESTION:
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
                 "interaction_contract": interaction_contract or None,
-                "sources": _source_descriptors(media_attachments or []),
+                "retrieval_latency_ms": execution_context.get("retrieval_latency_ms"),
+                "sources": [
+                    *_source_descriptors(media_attachments or []),
+                    *execution_context.get("web_sources", []),
+                ],
             }
         )
 
