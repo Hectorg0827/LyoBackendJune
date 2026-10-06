@@ -1260,6 +1260,19 @@ async def stream_lyo2_chat(
     
     async def event_generator() -> AsyncGenerator[str, None]:
         start_time = time.time()
+        request_started = time.monotonic()
+        process_uptime_ms = int(
+            (time.monotonic() - _PROCESS_STARTED_MONOTONIC) * 1000
+        )
+        latency_metrics: Dict[str, Any] = {
+            "process_uptime_ms": process_uptime_ms,
+            "cold_start_suspected": process_uptime_ms < 60_000,
+        }
+        memory_task = None
+        current_time_for_prompt = ""
+        freshness_decision = None
+        fast_intent = None
+        supports_text_delta = False
         pending_writes = []
         assistant_write_scheduled = False
         voice_state = request.resolved_voice_session.model_dump()
@@ -1425,58 +1438,87 @@ async def stream_lyo2_chat(
             yield yield_safe_sse_event("skeleton", skeleton_brick)
             await asyncio.sleep(0.01) # Yield to event loop
             
-            # 2. Performance & Cache Layer (New for Phase 17)
-            # Ensure optimizer is ready
-            await ai_performance_optimizer.initialize()
-            
-            # Optimize request based on system load
-            opt_data = await ai_performance_optimizer.optimize_request(
-                agent_type=request.forced_intent.value if request.forced_intent else "general",
-                request_data=request.model_dump()
-            )
-            
-            # Check for cached full response (Skip remaining layers if hit)
-            cache_key = opt_data.get("cache_key")
-            # Personalized/multi-turn answers must never be served from the
-            # global prompt cache: the cache key does not encode user history.
-            cached_full_resp = None
-            if not authenticated_user_id:
-                cached_full_resp = await ai_performance_optimizer.cache_manager.get(
-                    "full_response", key=cache_key
-                )
-            if cached_full_resp:
-                logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
-                cached_voice_active = voice_hints_enabled
-                if cached_voice_active:
-                    cached_spoken_text = ""
-                    for brick in cached_full_resp:
-                        if not isinstance(brick, dict) or brick.get("type") != "answer":
-                            continue
-                        block = brick.get("block")
-                        content = block.get("content") if isinstance(block, dict) else None
-                        if isinstance(content, dict) and isinstance(content.get("text"), str):
-                            cached_spoken_text = content["text"].strip()
-                            if cached_spoken_text:
-                                break
-                    if cached_spoken_text:
-                        yield yield_safe_sse_event(
-                            "voice_ready",
-                            _voice_ready_payload(
-                                cached_spoken_text,
-                                message_id=assistant_client_message_id,
-                                latency_ms=int((time.time() - start_time) * 1000),
-                            ),
-                        )
-                for brick in cached_full_resp:
-                    if isinstance(brick, dict) and brick.get("type") == "answer":
-                        brick = {**brick, "message_id": assistant_client_message_id, "speak": not voice_hints_enabled}
-                    yield f"data: {json.dumps(brick)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
+            # 2. Fast-lane eligibility, freshness, and authoritative time.
+            from lyo_app.chat.fast_path import fast_route_intent
+            from lyo_app.chat.freshness import current_time_context, decide_freshness
 
-            # Apply optimized config (e.g. reduced tokens if memory is high)
-            opt_config = opt_data.get("processing_config", {})
-            
+            current_time_for_prompt = current_time_context(request.timezone)
+            freshness_decision = decide_freshness(request.text or "")
+            fast_intent = fast_route_intent(
+                request.text or "",
+                has_media=bool(media_attachments),
+                forced_intent=request.forced_intent,
+            )
+            request.state_summary = {
+                **(request.state_summary or {}),
+                "current_time_context": current_time_for_prompt,
+                "freshness_mode": freshness_decision.mode.value,
+            }
+            stream_caps = (
+                request.state_summary.get("stream_capabilities", {})
+                if isinstance(request.state_summary, dict)
+                else {}
+            )
+            supports_text_delta = bool(
+                isinstance(stream_caps, dict)
+                and stream_caps.get("text_delta")
+            )
+
+            # Ordinary chat does not pay the optimizer/cache setup cost.
+            # Workflow/teaching paths retain the existing behavior.
+            cache_key = None
+            opt_config = {}
+            if fast_intent is None:
+                optimizer_started = time.monotonic()
+                await ai_performance_optimizer.initialize()
+                opt_data = await ai_performance_optimizer.optimize_request(
+                    agent_type=request.forced_intent.value if request.forced_intent else "general",
+                    request_data=request.model_dump()
+                )
+                latency_metrics["optimizer_ms"] = int(
+                    (time.monotonic() - optimizer_started) * 1000
+                )
+                cache_key = opt_data.get("cache_key")
+                cached_full_resp = None
+                if not authenticated_user_id:
+                    cached_full_resp = await ai_performance_optimizer.cache_manager.get(
+                        "full_response", key=cache_key
+                    )
+                if cached_full_resp:
+                    logger.info(f"✨ [STREAM][{trace_id}] Full cache hit! Yielding optimized response.")
+                    cached_voice_active = voice_hints_enabled
+                    if cached_voice_active:
+                        cached_spoken_text = ""
+                        for brick in cached_full_resp:
+                            if not isinstance(brick, dict) or brick.get("type") != "answer":
+                                continue
+                            block = brick.get("block")
+                            content = block.get("content") if isinstance(block, dict) else None
+                            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                                cached_spoken_text = content["text"].strip()
+                                if cached_spoken_text:
+                                    break
+                        if cached_spoken_text:
+                            yield yield_safe_sse_event(
+                                "voice_ready",
+                                _voice_ready_payload(
+                                    cached_spoken_text,
+                                    message_id=assistant_client_message_id,
+                                    latency_ms=int((time.time() - start_time) * 1000),
+                                ),
+                            )
+                    for brick in cached_full_resp:
+                        if isinstance(brick, dict) and brick.get("type") == "answer":
+                            brick = {
+                                **brick,
+                                "message_id": assistant_client_message_id,
+                                "speak": not voice_hints_enabled,
+                            }
+                        yield f"data: {json.dumps(brick)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                opt_config = opt_data.get("processing_config", {})
+
             # 2. Layer A: Routing
             logger.info(f"🔍 [STREAM][{trace_id}] Starting Routing...")
             r_start = time.time()
@@ -1695,6 +1737,7 @@ async def stream_lyo2_chat(
                 fast_intent is not None
                 and decision.intent in {Intent.CHAT, Intent.GREETING}
                 and interaction_contract.workflow_intent is None
+                and interaction_contract.delivery_mode != DeliveryMode.VOICE
                 and not media_attachments
                 and not decision.needs_clarification
             ):
@@ -1831,14 +1874,12 @@ async def stream_lyo2_chat(
                         {"type": "sources", "sources": grounded_sources},
                     )
 
-                if persistent_conversation and streamed_text:
-                    await conversation_store.add_message(
-                        db,
-                        persistent_conversation.id,
-                        role="assistant",
-                        content=streamed_text,
-                        mode_used=decision.intent.value.lower(),
-                        client_message_id=assistant_client_message_id,
+                if streamed_text:
+                    persist_answer(
+                        streamed_text,
+                        decision.intent.value.lower()
+                        if decision.intent
+                        else ChatMode.GENERAL.value,
                     )
 
                 latency_metrics["total_ms"] = int(
@@ -2373,6 +2414,7 @@ async def stream_lyo2_chat(
                                 teaching_decision=teaching_decision.model_dump(mode="json"),
                                 interaction_contract=interaction_contract_payload,
                                 personal_memory=personal_memory,
+                                current_time_context=current_time_for_prompt,
                                 text_delta_callback=_on_voice_text_delta,
                             )
                         )
@@ -2442,6 +2484,7 @@ async def stream_lyo2_chat(
                                 teaching_decision=teaching_decision.model_dump(mode="json"),
                                 interaction_contract=interaction_contract_payload,
                                 personal_memory=personal_memory,
+                                current_time_context=current_time_for_prompt,
                             ),
                             timeout=60.0,
                         )
@@ -2481,6 +2524,7 @@ async def stream_lyo2_chat(
                     execution_task.cancel()
                     await asyncio.gather(execution_task, return_exceptions=True)
 
+            latency_metrics["execution_ms"] = int((time.time() - e_start) * 1000)
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             if decision.intent == Intent.COURSE:
                 topic_text = _resolve_course_topic(
@@ -2781,4 +2825,12 @@ async def stream_lyo2_chat(
         finally:
             await finish_assistant_messages(pending_writes)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
