@@ -423,7 +423,6 @@ def voice_router_shortcut_intent(
     # summaries, comparisons and analyses stay on semantic routing so voice
     # preserves the same topic/evidence/workflow semantics as typed Chat.
     mapping = {
-        InteractionMode.ANSWER: Intent.CHAT,
         InteractionMode.EXPLAIN: Intent.EXPLAIN,
     }
     return mapping.get(contract.mode)
