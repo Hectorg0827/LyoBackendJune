@@ -442,14 +442,75 @@ Freshness rules:
         # because the broader teaching policy classifies ANSWER as "teaching".
         model_tier = "reflex"
         provider_order = provider_order_for_tier(model_tier)
-        # Search grounding is a Gemini-native tool, so give Gemini first shot
-        # whenever freshness is possible. OpenAI remains the bounded fallback.
-        if enable_google_search:
-            provider_order = (
-                ["gemini-2.5-flash"]
-                if search_required
-                else ["gemini-2.5-flash", "gpt-4o-mini"]
+        native_google_search = enable_google_search
+
+        # A required-freshness turn must not depend on Gemini being healthy.
+        # Use the shared production search tool first: Tavily is preferred and
+        # Gemini Search is its grounded fallback. Once live material has been
+        # retrieved, any healthy reflex provider can synthesize the answer.
+        if search_required:
+            from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import (
+                WebSearchTool,
             )
+
+            search_result = await WebSearchTool().execute(
+                0,
+                query=original_request,
+                max_results=5,
+            )
+            if search_result.success and isinstance(search_result.output, list):
+                live_results = [
+                    item
+                    for item in search_result.output
+                    if isinstance(item, dict)
+                ]
+                live_context = []
+                sources = []
+                for index, item in enumerate(live_results, 1):
+                    title = str(item.get("title") or f"Source {index}")
+                    url = str(item.get("url") or "").strip()
+                    snippet = str(
+                        item.get("snippet")
+                        or item.get("content")
+                        or ""
+                    ).strip()
+                    live_context.append(
+                        f"[{index}] {title}\nURL: {url}\n{snippet}"
+                    )
+                    if url:
+                        sources.append({"title": title, "url": url})
+
+                if live_context:
+                    messages.insert(
+                        1,
+                        {
+                            "role": "system",
+                            "content": (
+                                "LIVE SEARCH MATERIAL (fresh for this turn):\n"
+                                + "\n\n".join(live_context)
+                                + "\n\nUse this material for current claims. "
+                                "Do not claim facts beyond what it supports."
+                            ),
+                        },
+                    )
+                if metadata_sink is not None:
+                    metadata_sink["sources"] = sources
+                    metadata_sink["search_provider"] = (
+                        str(live_results[0].get("provider") or "web_search")
+                        if live_results
+                        else "web_search"
+                    )
+                native_google_search = False
+            else:
+                # No independent live result was available. Give Gemini's
+                # native grounding one bounded attempt rather than silently
+                # answering a current question from stale model knowledge.
+                provider_order = ["gemini-2.5-flash"]
+                native_google_search = True
+        elif enable_google_search:
+            # For optional freshness, Gemini gets first opportunity to decide
+            # whether to invoke Search; OpenAI remains the pre-output fallback.
+            provider_order = ["gemini-2.5-flash", "gpt-4o-mini"]
 
         async for chunk in ai_resilience_manager.stream_chat_completion(
             messages=messages,
@@ -457,7 +518,7 @@ Freshness rules:
             max_tokens=1200,
             temperature=0.6,
             thinking_budget=thinking_budget_for_tier(model_tier),
-            enable_google_search=enable_google_search,
+            enable_google_search=native_google_search,
             metadata_sink=metadata_sink,
         ):
             yield chunk
