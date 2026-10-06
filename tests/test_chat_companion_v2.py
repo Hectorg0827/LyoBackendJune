@@ -276,6 +276,7 @@ def test_voice_ready_payload_carries_canonical_text_and_turn_identity():
     assert payload == {
         "type": "voice_ready",
         "text": "Photosynthesis converts light energy into chemical energy.",
+        "spoken_text": "Photosynthesis converts light energy into chemical energy.",
         "final": True,
         "message_id": "assistant-turn-1",
         "latency_ms": 742,
