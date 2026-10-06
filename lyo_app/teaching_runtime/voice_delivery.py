@@ -21,6 +21,42 @@ _ABBREVIATION_RE = re.compile(
 )
 
 
+_SOURCE_CITATION_RE = re.compile(r"【[^】]+】")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_CODE_FENCE_RE = re.compile(r"\x60\x60\x60[\s\S]*?\x60\x60\x60")
+_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*")
+_LIST_PREFIX_RE = re.compile(r"(?m)^\s*(?:[-*+]\s+|\d+[.)]\s+)")
+_EMPHASIS_RE = re.compile(r"[*_~]+")
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def prepare_spoken_text(raw: str) -> str:
+    """Convert canonical Chat text into a speech-only rendering.
+
+    This is deliberately presentation-only. The canonical text stays unchanged
+    for persistence, rendering, citations, memory, and evaluation. Voice clients
+    receive this field only to avoid reading markdown syntax, source markers,
+    raw URLs, or table pipes aloud.
+    """
+    text = raw or ""
+    text = _CODE_FENCE_RE.sub(" ", text)
+    text = _MARKDOWN_IMAGE_RE.sub(" ", text)
+    text = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = _SOURCE_CITATION_RE.sub(" ", text)
+    text = _URL_RE.sub(" ", text)
+    text = _HEADING_RE.sub("", text)
+    text = _LIST_PREFIX_RE.sub("", text)
+    text = re.sub(r"\x60([^\x60]+)\x60", r"\1", text)
+    text = _EMPHASIS_RE.sub("", text)
+    text = text.replace("\\(", "").replace("\\)", "")
+    text = text.replace("\\[", "").replace("\\]", "")
+    text = text.replace("$", "")
+    text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 @dataclass
 class VoiceSegmenter:
     """Incrementally group token deltas into TTS-safe phrases.
