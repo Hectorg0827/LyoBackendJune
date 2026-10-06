@@ -391,6 +391,43 @@ def interaction_contract_for_request(
     )
 
 
+def voice_router_shortcut_intent(
+    contract: InteractionContract,
+    *,
+    has_media: bool = False,
+    forced_intent: Optional[Intent] = None,
+    has_active_course: bool = False,
+) -> Optional[Intent]:
+    """Return a safe router shortcut for explicit live-voice requests.
+
+    Voice must remain on canonical Chat, but a spoken turn should not pay for
+    a second model merely to rediscover an intent the deterministic interaction
+    contract already knows. Only explicit, non-workflow, text-only contracts are
+    eligible. Ambiguous/default requests, search, teaching, quizzes, creation,
+    media analysis and forced workflows still use the normal router.
+    """
+    if (
+        contract.delivery_mode is not DeliveryMode.VOICE
+        or has_media
+        or forced_intent is not None
+        or contract.workflow_intent is not None
+        or (
+            has_active_course
+            and contract.mode is InteractionMode.EXPLAIN
+        )
+        or not contract.reason_code.startswith("explicit_")
+    ):
+        return None
+
+    # Keep this deliberately narrow. Context-sensitive continuations,
+    # summaries, comparisons and analyses stay on semantic routing so voice
+    # preserves the same topic/evidence/workflow semantics as typed Chat.
+    mapping = {
+        InteractionMode.EXPLAIN: Intent.EXPLAIN,
+    }
+    return mapping.get(contract.mode)
+
+
 def contract_prompt(contract: InteractionContract) -> str:
     """Bounded, model-facing form of the interaction contract."""
     depth_rules = {

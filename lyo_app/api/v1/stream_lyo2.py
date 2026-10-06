@@ -1500,7 +1500,36 @@ async def stream_lyo2_chat(
                     ("i have a test", "i have an exam", "tengo un examen", "prepare for my test", "prepare for my exam"))
                 if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
-            
+
+            # Live voice stays on canonical Chat, but explicit spoken requests
+            # should not pay for a second model merely to rediscover an intent
+            # already fixed by the deterministic interaction contract.
+            voice_router_shortcut = None
+            if voice_active and not request.forced_intent:
+                from lyo_app.teaching_runtime.interaction_contract import (
+                    interaction_contract_for_request as _pre_route_contract,
+                    voice_router_shortcut_intent,
+                )
+
+                _voice_context = request.resolved_voice_session
+                _voice_pre_contract = _pre_route_contract(
+                    text=request.text or "",
+                    has_media=bool(media_attachments),
+                    has_current_media=bool(request.media),
+                    voice_mode=True,
+                    voice_interrupted_previous_turn=_voice_context.interrupted_previous_turn,
+                )
+                _active_course_context = bool(
+                    isinstance(request.state_summary, dict)
+                    and request.state_summary.get("active_course")
+                )
+                voice_router_shortcut = voice_router_shortcut_intent(
+                    _voice_pre_contract,
+                    has_media=bool(media_attachments),
+                    forced_intent=request.forced_intent,
+                    has_active_course=_active_course_context,
+                )
+
             if request.forced_intent:
                 logger.info(f"🎯 [STREAM][{trace_id}] Bypassing router. Forced intent: {request.forced_intent.value}")
                 decision = RouterDecision(
@@ -1508,6 +1537,17 @@ async def stream_lyo2_chat(
                     confidence=1.0,
                     needs_clarification=False,
                     suggested_tier="MEDIUM"
+                )
+            elif voice_router_shortcut is not None:
+                logger.info(
+                    f"⚡ [STREAM][{trace_id}] Voice contract shortcut: "
+                    f"{voice_router_shortcut.value}"
+                )
+                decision = RouterDecision(
+                    intent=voice_router_shortcut,
+                    confidence=1.0,
+                    needs_clarification=False,
+                    suggested_tier="TINY",
                 )
             else:
                 try:
