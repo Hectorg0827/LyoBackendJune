@@ -1748,6 +1748,171 @@ async def stream_lyo2_chat(
                 },
             )
 
+            # Ordinary text chat has a dedicated latency lane: no planner,
+            # no response optimizer, no durable-memory synthesis. Voice stays
+            # on the canonical voice lifecycle above this lane.
+            if (
+                fast_intent is not None
+                and decision.intent in {Intent.CHAT, Intent.GREETING}
+                and interaction_contract.workflow_intent is None
+                and not media_attachments
+                and not voice_active
+                and not decision.needs_clarification
+            ):
+                history = [
+                    {"role": turn.role, "content": turn.content}
+                    for turn in request.conversation_history
+                ] if request.conversation_history else []
+
+                executor = LyoExecutor(db)
+                model_metadata: Dict[str, Any] = {}
+                streamed_text = ""
+                incomplete = False
+                first_delta = True
+                enable_search = bool(
+                    freshness_decision
+                    and freshness_decision.google_search_enabled
+                )
+                search_required = bool(
+                    freshness_decision
+                    and freshness_decision.mode.value == "require"
+                )
+
+                if search_required:
+                    yield yield_safe_sse_event(
+                        "search_status",
+                        {
+                            "type": "search_status",
+                            "status": "searching",
+                            "message": "Checking current information…",
+                        },
+                    )
+
+                model_started = time.monotonic()
+                try:
+                    with _model_usage_scope("reflex"):
+                        async for chunk in executor.stream_text(
+                            original_request=request.text or "",
+                            conversation_history=history,
+                            teaching_decision=teaching_decision.model_dump(mode="json"),
+                            interaction_contract=interaction_contract_payload,
+                            personal_memory="",
+                            current_time_context=current_time_for_prompt,
+                            enable_google_search=enable_search,
+                            search_required=search_required,
+                            metadata_sink=model_metadata,
+                        ):
+                            if not chunk:
+                                continue
+                            if first_delta:
+                                first_delta = False
+                                if supports_text_delta:
+                                    latency_metrics["server_ttft_ms"] = int(
+                                        (time.monotonic() - request_started) * 1000
+                                    )
+                            streamed_text += chunk
+                            if supports_text_delta:
+                                yield yield_safe_sse_event(
+                                    "text_delta",
+                                    {"type": "text_delta", "content": chunk},
+                                )
+                except StreamingIncompleteError as exc:
+                    incomplete = True
+                    streamed_text = exc.partial_text or streamed_text
+
+                latency_metrics["model_total_ms"] = int(
+                    (time.monotonic() - model_started) * 1000
+                )
+                if model_metadata.get("model_ttft_ms") is not None:
+                    latency_metrics["provider_ttft_ms"] = model_metadata["model_ttft_ms"]
+                latency_metrics["provider"] = model_metadata.get("provider")
+                latency_metrics["freshness_mode"] = (
+                    freshness_decision.mode.value if freshness_decision else "none"
+                )
+
+                if streamed_text:
+                    if "server_ttft_ms" not in latency_metrics:
+                        latency_metrics["server_ttft_ms"] = int(
+                            (time.monotonic() - request_started) * 1000
+                        )
+                    persist_answer(
+                        streamed_text,
+                        decision.intent.value.lower(),
+                        **({"action_triggered": "stream_incomplete"} if incomplete else {}),
+                    )
+                    yield yield_safe_sse_event(
+                        "answer",
+                        {
+                            "type": "answer",
+                            "message_id": assistant_client_message_id,
+                            "generation_status": "incomplete" if incomplete else "completed",
+                            "speak": True,
+                            "final_snapshot": True,
+                            "block": {
+                                "type": "TutorMessageBlock",
+                                "content": {"text": streamed_text},
+                                "priority": 0,
+                            },
+                        },
+                    )
+
+                grounded_sources = list(model_metadata.get("sources") or [])
+                if grounded_sources:
+                    source_items = [
+                        {
+                            "label": str(source.get("title") or "Web source"),
+                            "detail": "Live web source",
+                            "url": str(source.get("url") or ""),
+                        }
+                        for source in grounded_sources
+                        if isinstance(source, dict) and source.get("url")
+                    ]
+                    if source_items:
+                        yield yield_safe_sse_event(
+                            "smart_blocks",
+                            {
+                                "type": "smart_blocks",
+                                "blocks": [{
+                                    "id": f"sources-{trace_id[:8]}",
+                                    "schema_version": 1,
+                                    "type": "interactive",
+                                    "subtype": "sourceNavigator",
+                                    "content": {
+                                        "title": "Sources used",
+                                        "items": source_items,
+                                    },
+                                    "metadata": {
+                                        "role": "grounding",
+                                        "freshness": (
+                                            freshness_decision.mode.value
+                                            if freshness_decision else "none"
+                                        ),
+                                    },
+                                }],
+                            },
+                        )
+                    yield yield_safe_sse_event(
+                        "sources",
+                        {"type": "sources", "sources": grounded_sources},
+                    )
+
+                latency_metrics["total_ms"] = int(
+                    (time.monotonic() - request_started) * 1000
+                )
+                yield yield_safe_sse_event(
+                    "latency",
+                    {"type": "latency", "metrics": latency_metrics},
+                )
+                await finish_assistant_messages(pending_writes)
+                yield "data: [DONE]\n\n"
+                logger.info(
+                    f"⚡ [STREAM][{trace_id}] Fast chat complete in "
+                    f"{latency_metrics['total_ms']}ms "
+                    f"(TTFT={latency_metrics.get('server_ttft_ms')}ms, "
+                    f"provider={latency_metrics.get('provider')})"
+                )
+                return
+
             # Chat is an adapter onto the same account-owned intake as Test Prep.
             # Continue only the conversation that began intake; ordinary new chats
             # must never be hijacked by an unfinished exam elsewhere.
@@ -1974,6 +2139,10 @@ async def stream_lyo2_chat(
                 decision.intent == Intent.EXPLAIN
                 and request.text
                 and interaction_contract.mode == InteractionMode.TEACH
+                and not (
+                    freshness_decision
+                    and freshness_decision.mode.value == "require"
+                )
             ):
                 _force_lesson_mode = _lesson_mode_for_teaching_action(
                     teaching_decision.action
@@ -2025,6 +2194,30 @@ async def stream_lyo2_chat(
             # 3. Layer B: Planning
             logger.info(f"📋 [STREAM][{trace_id}] Starting Planning (Intent: {decision.intent})...")
             p_start = time.time()
+
+            if (
+                authenticated_user_id
+                and not media_attachments
+                and interaction_contract.mode
+                in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
+            ):
+                async def _load_planner_parallel_memory():
+                    try:
+                        from lyo_app.services.memory_synthesis import memory_synthesis_service
+                        return await memory_synthesis_service.get_relevant_memory_for_prompt(
+                            int(authenticated_user_id),
+                            request.text or "",
+                            db,
+                        )
+                    except Exception as memory_exc:
+                        logger.debug(
+                            "Planner-parallel memory lookup unavailable: %s",
+                            type(memory_exc).__name__,
+                        )
+                        return ""
+
+                memory_task = asyncio.create_task(_load_planner_parallel_memory())
+
             try:
                 # OPTIMIZATION: Attachment information requests are already
                 # resolved by the deterministic teaching policy. Sending them
@@ -2080,6 +2273,29 @@ async def stream_lyo2_chat(
                     )
                 ])
             
+            latency_metrics["planning_ms"] = int((time.time() - p_start) * 1000)
+
+            if (
+                freshness_decision
+                and freshness_decision.mode.value == "require"
+                and not any(
+                    step.action_type == ActionType.SEARCH_WEB
+                    for step in plan.steps
+                )
+            ):
+                plan.steps.insert(
+                    0,
+                    PlannedAction(
+                        action_type=ActionType.SEARCH_WEB,
+                        description="Ground explicitly current information in live web results",
+                        parameters={"query": request.text or "", "limit": 5},
+                    ),
+                )
+                latency_metrics["search_injected"] = True
+                logger.info(
+                    f"🌐 [STREAM][{trace_id}] Injected SEARCH_WEB for freshness-required turn"
+                )
+
             logger.info(f"✅ [STREAM][{trace_id}] Planning complete ({time.time()-p_start:.2f}s): {len(plan.steps)} steps")
             if decision.intent == Intent.COURSE:
                 yield yield_safe_sse_event(
@@ -2138,14 +2354,23 @@ async def stream_lyo2_chat(
                 in {InteractionMode.EXPLAIN, InteractionMode.TEACH, InteractionMode.CONTINUE}
             ):
                 try:
-                    from lyo_app.services.memory_synthesis import memory_synthesis_service
-                    personal_memory = await asyncio.wait_for(
-                        memory_synthesis_service.get_relevant_memory_for_prompt(
-                            int(authenticated_user_id),
-                            request.text or "",
-                            db,
-                        ),
-                        timeout=0.45,
+                    memory_wait_started = time.monotonic()
+                    if memory_task is not None:
+                        personal_memory = await asyncio.wait_for(
+                            memory_task, timeout=0.45
+                        )
+                    else:
+                        from lyo_app.services.memory_synthesis import memory_synthesis_service
+                        personal_memory = await asyncio.wait_for(
+                            memory_synthesis_service.get_relevant_memory_for_prompt(
+                                int(authenticated_user_id),
+                                request.text or "",
+                                db,
+                            ),
+                            timeout=0.45,
+                        )
+                    latency_metrics["memory_wait_ms"] = int(
+                        (time.monotonic() - memory_wait_started) * 1000
                     )
                 except Exception as memory_exc:
                     logger.debug(
@@ -2202,6 +2427,7 @@ async def stream_lyo2_chat(
                                 teaching_decision=teaching_decision.model_dump(mode="json"),
                                 interaction_contract=interaction_contract_payload,
                                 personal_memory=personal_memory,
+                                current_time_context=current_time_for_prompt,
                                 text_delta_callback=_on_voice_text_delta,
                             )
                         )
@@ -2271,6 +2497,7 @@ async def stream_lyo2_chat(
                                 teaching_decision=teaching_decision.model_dump(mode="json"),
                                 interaction_contract=interaction_contract_payload,
                                 personal_memory=personal_memory,
+                                current_time_context=current_time_for_prompt,
                             ),
                             timeout=60.0,
                         )
@@ -2310,6 +2537,7 @@ async def stream_lyo2_chat(
                     execution_task.cancel()
                     await asyncio.gather(execution_task, return_exceptions=True)
 
+            latency_metrics["execution_ms"] = int((time.time() - e_start) * 1000)
             logger.info(f"✅ [STREAM][{trace_id}] Execution complete ({time.time()-e_start:.2f}s)")
             if decision.intent == Intent.COURSE:
                 topic_text = _resolve_course_topic(
@@ -2592,6 +2820,13 @@ async def stream_lyo2_chat(
                         "message": "Course ready",
                     },
                 )
+            latency_metrics["total_ms"] = int(
+                (time.monotonic() - request_started) * 1000
+            )
+            yield yield_safe_sse_event(
+                "latency",
+                {"type": "latency", "metrics": latency_metrics},
+            )
             yield "data: [DONE]\n\n"
             logger.info(f"🏁 [STREAM][{trace_id}] Total session time: {time.time()-start_time:.2f}s")
 
@@ -2603,4 +2838,12 @@ async def stream_lyo2_chat(
         finally:
             await finish_assistant_messages(pending_writes)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
