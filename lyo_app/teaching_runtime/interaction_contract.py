@@ -419,13 +419,12 @@ def voice_router_shortcut_intent(
     ):
         return None
 
+    # Keep this deliberately narrow. Context-sensitive continuations,
+    # summaries, comparisons and analyses stay on semantic routing so voice
+    # preserves the same topic/evidence/workflow semantics as typed Chat.
     mapping = {
         InteractionMode.ANSWER: Intent.CHAT,
         InteractionMode.EXPLAIN: Intent.EXPLAIN,
-        InteractionMode.ANALYZE: Intent.CHAT,
-        InteractionMode.SUMMARIZE: Intent.CHAT,
-        InteractionMode.COMPARE: Intent.CHAT,
-        InteractionMode.CONTINUE: Intent.CHAT,
     }
     return mapping.get(contract.mode)
 
