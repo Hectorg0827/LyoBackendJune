@@ -1519,10 +1519,15 @@ async def stream_lyo2_chat(
                     voice_mode=True,
                     voice_interrupted_previous_turn=_voice_context.interrupted_previous_turn,
                 )
+                _active_course_context = bool(
+                    isinstance(request.state_summary, dict)
+                    and request.state_summary.get("active_course")
+                )
                 voice_router_shortcut = voice_router_shortcut_intent(
                     _voice_pre_contract,
                     has_media=bool(media_attachments),
                     forced_intent=request.forced_intent,
+                    has_active_course=_active_course_context,
                 )
 
             if request.forced_intent:
