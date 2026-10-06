@@ -336,10 +336,13 @@ class AIResilienceManager:
 
     async def stream_chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         temperature: float = 0.7,
         max_tokens: int = 1000,
         provider_order: Optional[List[str]] = None,
+        thinking_budget: Optional[int] = None,
+        enable_google_search: bool = False,
+        metadata_sink: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """Fallback only until the first canonical text delta is visible."""
         if not self._initialized:
@@ -347,11 +350,16 @@ class AIResilienceManager:
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
 
+        stream_started = time.monotonic()
+        first_token_recorded = False
+
         for model_name in provider_order:
             if model_name not in self.models:
                 continue
             model = self.models[model_name]
             cb = self.circuit_breakers[model_name]
+            if metadata_sink is not None:
+                metadata_sink["provider"] = model_name
             if not cb.is_closed or (model.endpoint == "openai" and not self.openai_client):
                 continue
 
@@ -359,7 +367,16 @@ class AIResilienceManager:
             provider = (
                 self._stream_openai(model_name, messages, temperature, max_tokens)
                 if model.endpoint == "openai"
-                else self._stream_gemini(model_name, model, messages, temperature, max_tokens)
+                else self._stream_gemini(
+                    model_name,
+                    model,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    thinking_budget=thinking_budget,
+                    enable_google_search=enable_google_search,
+                    metadata_sink=metadata_sink,
+                )
             )
             try:
                 # Closing the outer iterator must also close the provider while
@@ -368,6 +385,12 @@ class AIResilienceManager:
                     async for delta in provider:
                         if delta:
                             pieces.append(delta)
+                            if not first_token_recorded:
+                                first_token_recorded = True
+                                if metadata_sink is not None:
+                                    metadata_sink["model_ttft_ms"] = int(
+                                        (time.monotonic() - stream_started) * 1000
+                                    )
                             yield delta
                 if not pieces:
                     raise RuntimeError("Provider stream returned no text")
@@ -384,8 +407,12 @@ class AIResilienceManager:
                     cb._on_failure()
                 logger.warning("Streaming error with %s: %s", model_name, type(exc).__name__)
                 if pieces:
+                    if metadata_sink is not None:
+                        metadata_sink["stream_interrupted_after_output"] = True
                     raise StreamingIncompleteError("".join(pieces), model_name) from exc
 
+        if metadata_sink is not None:
+            metadata_sink["provider"] = "fallback"
         yield "I'm having trouble responding right now. Please try again."
 
     async def _stream_openai(
@@ -449,6 +476,10 @@ class AIResilienceManager:
         messages: List[Dict[str, Any]],
         temperature: float,
         max_tokens: int,
+        *,
+        thinking_budget: Optional[int] = None,
+        enable_google_search: bool = False,
+        metadata_sink: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """Stream Gemini text directly from the provider SSE endpoint.
 
@@ -512,19 +543,27 @@ class AIResilienceManager:
             else:
                 contents.append({"role": role, "parts": message_parts})
 
+        generation_config: Dict[str, Any] = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.8,
+            "topK": 40,
+        }
+        if thinking_budget is not None:
+            generation_config["thinkingConfig"] = {
+                "thinkingBudget": int(thinking_budget)
+            }
+
         payload: Dict[str, Any] = {
             "contents": contents,
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-                "topP": 0.8,
-                "topK": 40,
-            },
+            "generationConfig": generation_config,
         }
         if system_parts:
             payload["systemInstruction"] = {
                 "parts": [{"text": "\n\n".join(system_parts)}]
             }
+        if enable_google_search:
+            payload["tools"] = [{"google_search": {}}]
 
         endpoint = model.endpoint.replace(
             ":generateContent",
@@ -535,6 +574,7 @@ class AIResilienceManager:
         total_tokens = 0
 
         status, finish_reason, usage_reported = "failed", None, False
+        unique_sources: Dict[str, Dict[str, str]] = {}
         try:
             async with self.session.post(
                 endpoint,
@@ -563,13 +603,42 @@ class AIResilienceManager:
                     candidates = event.get("candidates") or []
                     if not candidates:
                         continue
-                    finish_reason = candidates[0].get("finishReason") or finish_reason
-                    parts = ((candidates[0].get("content") or {}).get("parts") or [])
+                    candidate = candidates[0]
+                    finish_reason = candidate.get("finishReason") or finish_reason
+
+                    grounding = candidate.get("groundingMetadata") or {}
+                    for grounding_chunk in grounding.get("groundingChunks", []) or []:
+                        web = (
+                            grounding_chunk.get("web")
+                            if isinstance(grounding_chunk, dict)
+                            else None
+                        )
+                        if not isinstance(web, dict):
+                            continue
+                        uri = str(web.get("uri") or "").strip()
+                        if not uri:
+                            continue
+                        unique_sources[uri] = {
+                            "url": uri,
+                            "title": str(web.get("title") or uri),
+                        }
+                    queries = grounding.get("webSearchQueries") or []
+                    if metadata_sink is not None and queries:
+                        metadata_sink["search_queries"] = [
+                            str(query) for query in queries if query
+                        ]
+
+                    parts = ((candidate.get("content") or {}).get("parts") or [])
                     for part in parts:
-                        text_part = part.get("text") if isinstance(part, dict) else None
+                        if not isinstance(part, dict) or part.get("thought"):
+                            continue
+                        text_part = part.get("text")
                         if text_part:
                             status = "incomplete"
                             yield str(text_part)
+
+                    if metadata_sink is not None and unique_sources:
+                        metadata_sink["sources"] = list(unique_sources.values())
             if finish_reason == "MAX_TOKENS":
                 raise _StreamTokenLimitReached("Provider reached its output budget")
             if finish_reason and finish_reason != "STOP":

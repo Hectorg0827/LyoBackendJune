@@ -2,9 +2,10 @@ import logging
 import json
 import uuid
 import asyncio
+import time
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 import google.generativeai as genai
-from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType
+from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType, PlannedAction
 from lyo_app.services.rag_service import RAGService
 from lyo_app.services.artifact_service import ArtifactService
 from lyo_app.services.mutator import FollowUpMutator
@@ -210,6 +211,12 @@ class LyoExecutor:
             "--- END SELECTIVE PERSONAL MEMORY ---\n"
             if personal_memory else ""
         )
+        current_time_context = str(context.get("current_time_context") or "").strip()
+        current_time_text = (
+            f"\n--- AUTHORITATIVE CURRENT TIME ---\n{current_time_context}\n"
+            "--- END AUTHORITATIVE CURRENT TIME ---\n"
+            if current_time_context else ""
+        )
 
         media_attachments = context.get("media_attachments", [])
         source_grounding_text = _source_grounding_prompt(media_attachments)
@@ -262,7 +269,7 @@ TEACHING RULES — read the conversation history before you write a single word:
 4. If they're right: don't just confirm it and toss out an unrelated new drill. Briefly name the principle they just used, then raise the stakes — a slightly harder variant, a "why does this work" follow-up, or a real-world hook — so understanding keeps building instead of resetting to zero each turn.
 5. Prefer asking before telling only when the teaching policy calls for an instructional interaction. Never use this rule to delay an explicit information request, an attachment analysis, or an ANSWER action. For those turns, answer the learner's question first; any optional check comes afterward.
 6. Never lapse into a flat quiz-loop ("here's the answer, want another?" on repeat) — that is banter, not teaching. Every turn should either deepen understanding or genuinely check it. If you notice you are about to send the same shape of message you just sent, change the angle instead.
-{rag_text}{history_text}{personal_memory_text}{interaction_contract_text}{teaching_policy_text}
+{rag_text}{history_text}{personal_memory_text}{current_time_text}{interaction_contract_text}{teaching_policy_text}
 {source_grounding_text}
 
 MEMORY BOUNDARIES:
@@ -361,6 +368,161 @@ USER QUESTION:
 
         return static_content or "My magical circuits got a little crossed while thinking about that. Could we try again?"
 
+    async def stream_text(
+        self,
+        *,
+        original_request: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        teaching_decision: Optional[Dict[str, Any]] = None,
+        interaction_contract: Optional[Dict[str, Any]] = None,
+        personal_memory: str = "",
+        current_time_context: str = "",
+        enable_google_search: bool = False,
+        search_required: bool = False,
+        metadata_sink: Optional[Dict[str, Any]] = None,
+    ):
+        """Low-latency ordinary-chat path with genuine provider streaming.
+
+        This intentionally skips the planner and artifact machinery. Structured
+        workflows still use execute(); only ordinary conversational turns reach
+        this method.
+        """
+        from lyo_app.core.ai_resilience import ai_resilience_manager
+        from lyo_app.teaching_runtime.model_router import (
+            provider_order_for_tier,
+            thinking_budget_for_tier,
+        )
+
+        teaching_decision = teaching_decision or {}
+        interaction = _coerce_interaction_contract(interaction_contract)
+        contract_text = contract_prompt(interaction) if interaction is not None else ""
+        directives = "\n".join(
+            f"- {item}" for item in (teaching_decision.get("directives") or [])
+        )
+
+        system_prompt = f"""You are Lyo, a fast, precise, conversational learning companion.
+Answer directly. Keep ordinary chat concise and natural; expand only when the request needs it.
+Never add filler introductions. Preserve continuity with the conversation.
+{current_time_context}
+{contract_text}
+
+Server teaching action: {teaching_decision.get("action", "answer")}
+Maximum exposition: {teaching_decision.get("max_exposition_words", 120)} words
+{directives}
+
+Freshness rules:
+- You may use Google Search when it is available and the answer could have changed.
+- Current information is explicitly required for this turn: {"YES" if search_required else "NO"}.
+- If current information is explicitly required, search before making time-sensitive factual claims.
+- Do not search merely to decorate a stable answer.
+- Never claim something is current unless the grounded evidence supports it.
+"""
+
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        for turn in (conversation_history or [])[-8:]:
+            role = str(turn.get("role") or "user").lower()
+            if role not in {"user", "assistant", "system"}:
+                role = "assistant"
+            content = str(turn.get("content") or "").strip()
+            if content:
+                messages.append({"role": role, "content": content})
+
+        user_text = original_request
+        if personal_memory:
+            user_text += (
+                "\n\n[Selective durable context; use only if materially relevant: "
+                + personal_memory
+                + "]"
+            )
+        messages.append({"role": "user", "content": user_text})
+
+        # This method is only called by the ordinary-chat fast lane;
+        # explicit teaching/workflows never reach it. Force the reflex tier so
+        # a normal question does not pay a hidden reasoning budget merely
+        # because the broader teaching policy classifies ANSWER as "teaching".
+        model_tier = "reflex"
+        provider_order = provider_order_for_tier(model_tier)
+        native_google_search = enable_google_search
+
+        # A required-freshness turn must not depend on Gemini being healthy.
+        # Use the shared production search tool first: Tavily is preferred and
+        # Gemini Search is its grounded fallback. Once live material has been
+        # retrieved, any healthy reflex provider can synthesize the answer.
+        if search_required:
+            from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import (
+                WebSearchTool,
+            )
+
+            search_result = await WebSearchTool().execute(
+                0,
+                query=original_request,
+                max_results=5,
+            )
+            if search_result.success and isinstance(search_result.output, list):
+                live_results = [
+                    item
+                    for item in search_result.output
+                    if isinstance(item, dict)
+                ]
+                live_context = []
+                sources = []
+                for index, item in enumerate(live_results, 1):
+                    title = str(item.get("title") or f"Source {index}")
+                    url = str(item.get("url") or "").strip()
+                    snippet = str(
+                        item.get("snippet")
+                        or item.get("content")
+                        or ""
+                    ).strip()
+                    live_context.append(
+                        f"[{index}] {title}\nURL: {url}\n{snippet}"
+                    )
+                    if url:
+                        sources.append({"title": title, "url": url})
+
+                if live_context:
+                    messages.insert(
+                        1,
+                        {
+                            "role": "system",
+                            "content": (
+                                "LIVE SEARCH MATERIAL (fresh for this turn):\n"
+                                + "\n\n".join(live_context)
+                                + "\n\nUse this material for current claims. "
+                                "Do not claim facts beyond what it supports."
+                            ),
+                        },
+                    )
+                if metadata_sink is not None:
+                    metadata_sink["sources"] = sources
+                    metadata_sink["search_provider"] = (
+                        str(live_results[0].get("provider") or "web_search")
+                        if live_results
+                        else "web_search"
+                    )
+                native_google_search = False
+            else:
+                # No independent live result was available. Give Gemini's
+                # native grounding one bounded attempt rather than silently
+                # answering a current question from stale model knowledge.
+                provider_order = ["gemini-2.5-flash"]
+                native_google_search = True
+        elif enable_google_search:
+            # For optional freshness, Gemini gets first opportunity to decide
+            # whether to invoke Search; OpenAI remains the pre-output fallback.
+            provider_order = ["gemini-2.5-flash", "gpt-4o-mini"]
+
+        async for chunk in ai_resilience_manager.stream_chat_completion(
+            messages=messages,
+            provider_order=provider_order,
+            max_tokens=1200,
+            temperature=0.6,
+            thinking_budget=thinking_budget_for_tier(model_tier),
+            enable_google_search=native_google_search,
+            metadata_sink=metadata_sink,
+        ):
+            yield chunk
+
     async def execute(
         self,
         user_id: str,
@@ -372,6 +534,7 @@ USER QUESTION:
         teaching_decision: Optional[Dict[str, Any]] = None,
         interaction_contract: Optional[Dict[str, Any]] = None,
         personal_memory: str = "",
+        current_time_context: str = "",
         text_delta_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> UnifiedChatResponse:
         """
@@ -381,6 +544,7 @@ USER QUESTION:
         """
         execution_context = {
             "retrieved_content": [],
+            "web_sources": [],
             "created_artifacts": [],
             "final_text": "",
             "open_classroom_payload": None,
@@ -389,18 +553,83 @@ USER QUESTION:
             "teaching_decision": teaching_decision or {},
             "interaction_contract": interaction_contract or {},
             "personal_memory": personal_memory or "",
+            "current_time_context": current_time_context or "",
             "text_delta_callback": text_delta_callback,
         }
         
-        for step in plan.steps:
-            logger.info(f"Executing step: {step.description} ({step.action_type})")
-            
+        # Grounding lookups are independent once the planner has produced
+        # concrete query parameters. Launch RAG and live web retrieval together
+        # instead of paying their latency serially before generation.
+        retrieval_steps = [
+            step
+            for step in plan.steps
+            if step.action_type in {ActionType.RAG_RETRIEVE, ActionType.SEARCH_WEB}
+        ]
+
+        async def _run_retrieval(step: PlannedAction):
             if step.action_type == ActionType.RAG_RETRIEVE:
                 query = step.parameters.get("query", original_request)
                 limit = step.parameters.get("limit", 3)
                 content = await self.rag.retrieve(query, limit=limit)
-                execution_context["retrieved_content"].extend(content)
-                
+                return {"content": list(content or []), "sources": []}
+
+            from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+            query = step.parameters.get("query", original_request)
+            limit = int(step.parameters.get("limit", 5) or 5)
+            result = await WebSearchTool().execute(
+                int(user_id) if str(user_id).isdigit() else 0,
+                query=query,
+                max_results=limit,
+            )
+            if not result.success or not isinstance(result.output, list):
+                logger.warning(
+                    "SEARCH_WEB step could not retrieve live context: %s",
+                    result.message,
+                )
+                return {"content": [], "sources": []}
+            sources = [
+                {
+                    "name": str(item.get("title") or "Web source"),
+                    "url": str(item.get("url") or ""),
+                    "mime_type": "text/html",
+                    "kind": "web",
+                }
+                for item in result.output
+                if isinstance(item, dict) and item.get("url")
+            ]
+            return {"content": list(result.output), "sources": sources}
+
+        if retrieval_steps:
+            retrieval_started = time.monotonic()
+            retrieval_results = await asyncio.gather(
+                *(_run_retrieval(step) for step in retrieval_steps),
+                return_exceptions=True,
+            )
+            for result in retrieval_results:
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "Parallel grounding lookup failed: %s",
+                        type(result).__name__,
+                    )
+                    continue
+                execution_context["retrieved_content"].extend(
+                    result.get("content") or []
+                )
+                execution_context["web_sources"].extend(
+                    result.get("sources") or []
+                )
+            execution_context["retrieval_latency_ms"] = int(
+                (time.monotonic() - retrieval_started) * 1000
+            )
+
+        for step in plan.steps:
+            logger.info(f"Executing step: {step.description} ({step.action_type})")
+
+            if step.action_type in {ActionType.RAG_RETRIEVE, ActionType.SEARCH_WEB}:
+                # Already executed concurrently above.
+                continue
+
             elif step.action_type == ActionType.CREATE_ARTIFACT:
                 # ... creation logic ...
                 art_type_str = step.parameters.get("type", "QUIZ")
@@ -501,7 +730,11 @@ USER QUESTION:
                 "latency_ms": 100,
                 "teaching_policy": teaching_decision or None,
                 "interaction_contract": interaction_contract or None,
-                "sources": _source_descriptors(media_attachments or []),
+                "retrieval_latency_ms": execution_context.get("retrieval_latency_ms"),
+                "sources": [
+                    *_source_descriptors(media_attachments or []),
+                    *execution_context.get("web_sources", []),
+                ],
             }
         )
 

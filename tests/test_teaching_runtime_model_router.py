@@ -1,4 +1,4 @@
-from lyo_app.teaching_runtime.model_router import provider_order_for_tier
+from lyo_app.teaching_runtime.model_router import provider_order_for_tier, thinking_budget_for_tier
 
 
 def test_reflex_prefers_fast_models():
@@ -31,6 +31,12 @@ def test_media_has_redundant_multimodal_provider_fallbacks():
 
 def test_unknown_tier_fails_safe_to_teaching():
     assert provider_order_for_tier("future-tier") == provider_order_for_tier("teaching")
+
+
+def test_thinking_budget_matches_latency_tier():
+    assert thinking_budget_for_tier("reflex") == 0
+    assert thinking_budget_for_tier("teaching") == 256
+    assert thinking_budget_for_tier("deliberation") == -1
 
 
 def test_voice_prefers_low_latency_provider_without_changing_contract_tier():
