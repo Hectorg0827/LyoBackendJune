@@ -396,6 +396,7 @@ def voice_router_shortcut_intent(
     *,
     has_media: bool = False,
     forced_intent: Optional[Intent] = None,
+    has_active_course: bool = False,
 ) -> Optional[Intent]:
     """Return a safe router shortcut for explicit live-voice requests.
 
@@ -410,6 +411,10 @@ def voice_router_shortcut_intent(
         or has_media
         or forced_intent is not None
         or contract.workflow_intent is not None
+        or (
+            has_active_course
+            and contract.mode is InteractionMode.EXPLAIN
+        )
         or not contract.reason_code.startswith("explicit_")
     ):
         return None
