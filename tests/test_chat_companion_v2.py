@@ -233,7 +233,6 @@ def test_voice_interruption_stays_on_same_contract_and_follows_new_turn():
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("what is gravity?", Intent.CHAT),
         ("explain photosynthesis", Intent.EXPLAIN),
     ],
 )
@@ -246,6 +245,7 @@ def test_explicit_voice_turn_can_skip_semantic_router(text, expected):
 @pytest.mark.parametrize(
     "text",
     [
+        "what is gravity?",
         "teach me calculus",
         "quiz me on fractions",
         "search the web for today's AI news",
