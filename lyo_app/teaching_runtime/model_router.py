@@ -49,3 +49,17 @@ def provider_order_for_tier(
         return ["gpt-4o-mini", "gemini-2.5-flash"]
 
     return ["gemini-2.5-flash", "gpt-4o-mini"]
+
+
+def thinking_budget_for_tier(tier: str) -> int:
+    """Bound hidden Gemini reasoning so everyday chat stays responsive.
+
+    Gemini 2.5 Flash accepts 0 to disable thinking. Deliberation keeps dynamic
+    thinking (-1), while teaching gets a small bounded budget.
+    """
+    normalized = (tier or "teaching").strip().lower()
+    if normalized == "reflex":
+        return 0
+    if normalized == "deliberation":
+        return -1
+    return 256
