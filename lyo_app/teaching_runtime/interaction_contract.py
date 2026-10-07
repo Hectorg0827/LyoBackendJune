@@ -64,7 +64,7 @@ _DEEP_RE = re.compile(
 )
 _CONCISE_RE = re.compile(
     r"\b(?:brief|briefly|short answer|concise|quickly|in one sentence|"
-    r"tldr|tl;dr|resumen corto|breve)\b",
+    r"tldr|tl;dr|resumen corto|breve|brevemente)\b",
     re.IGNORECASE,
 )
 _QUIZ_RE = re.compile(
