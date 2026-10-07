@@ -13,6 +13,14 @@ _TABLE_RE = re.compile(
     re.MULTILINE,
 )
 _NUMBERED_RE = re.compile(r"(?m)^\s*(?P<n>\d+)[.)]\s+(?P<text>.+)$")
+_TIMELINE_RE = re.compile(
+    r"(?m)^\s*[-*]?\s*(?P<label>(?:\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?))\s*[-:–—]\s*(?P<detail>.+)$",
+    re.IGNORECASE,
+)
+_DISPLAY_MATH_RE = re.compile(
+    r"(?P<full>\$\$(?P<dollar>.+?)\$\$|\\\[(?P<bracket>.+?)\\\])",
+    re.DOTALL,
+)
 
 
 def promote_answer_representations(
@@ -71,5 +79,70 @@ def promote_answer_representations(
         text = "\n".join(
             line for line in lines if not _NUMBERED_RE.match(line)
         )
+
+    # A dated sequence is a timeline, not merely another prose list.
+    timeline_matches = list(_TIMELINE_RE.finditer(text))
+    if len(timeline_matches) >= 2:
+        blocks.append(
+            SmartBlock(
+                type="interactive",
+                subtype="timeline",
+                content={
+                    "title": "Timeline",
+                    "items": [
+                        {
+                            "label": match.group("label").strip(),
+                            "detail": match.group("detail").strip(),
+                        }
+                        for match in timeline_matches
+                    ],
+                },
+            ).model_dump()
+        )
+        lines = text.splitlines()
+        text = "\n".join(line for line in lines if not _TIMELINE_RE.match(line))
+
+    # Promote the first display equation into a native math block. Worked
+    # examples keep their surrounding explanation/steps in prose/step blocks.
+    math_match = _DISPLAY_MATH_RE.search(text)
+    if math_match:
+        source = (math_match.group("dollar") or math_match.group("bracket") or "").strip()
+        if source:
+            blocks.append(
+                SmartBlock.data_viz(source=source, fmt="math", title="Worked math").model_dump()
+            )
+            text = text[: math_match.start()] + "\n" + text[math_match.end() :]
+
+    # Comparisons are always represented structurally. A markdown table is the
+    # preferred form above; this deterministic fallback prevents a model that
+    # chose prose from collapsing the workspace back into an ordinary bubble.
+    if interaction_mode == "compare" and not any(
+        block.get("subtype") in {"table", "comparison"}
+        or (
+            block.get("type") == "dataViz"
+            and (block.get("content") or {}).get("format") == "table"
+        )
+        for block in blocks
+    ):
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", text.strip())
+            if sentence.strip()
+        ]
+        if sentences:
+            blocks.append(
+                SmartBlock(
+                    type="interactive",
+                    subtype="comparison",
+                    content={
+                        "title": "Comparison",
+                        "items": [
+                            {"label": f"Difference {index + 1}", "detail": sentence}
+                            for index, sentence in enumerate(sentences[:6])
+                        ],
+                    },
+                ).model_dump()
+            )
+            text = ""
 
     return text.strip(), blocks
