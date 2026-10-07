@@ -59,6 +59,10 @@ def prepare_spoken_text(raw: str) -> str:
     text = _LIST_PREFIX_RE.sub("", text)
     text = re.sub(r"\x60([^\x60]+)\x60", r"\1", text)
     text = _EMPHASIS_RE.sub("", text)
+    # Protect currency in the original canonical text, before LaTeX is
+    # converted. A math opener such as "$\\frac" cannot be mistaken for a
+    # currency marker at this stage, while "$2,100" can be protected safely.
+    text = _CURRENCY_DOLLAR_RE.sub(_CURRENCY_DOLLAR_SENTINEL, text)
     text = re.sub(
         r"\\frac\{([^{}]+)\}\{([^{}]+)\}",
         r"\1 over \2",
@@ -66,10 +70,6 @@ def prepare_spoken_text(raw: str) -> str:
     )
     text = text.replace("\\(", "").replace("\\)", "")
     text = text.replace("\\[", "").replace("\\]", "")
-    # Protect semantic currency markers before stripping paired math delimiters.
-    # Otherwise "$2,100. Half is $\\frac{1}{2}$" can be misread as one giant
-    # inline-math span stretching from the price to the formula.
-    text = _CURRENCY_DOLLAR_RE.sub(_CURRENCY_DOLLAR_SENTINEL, text)
     text = _MATH_BLOCK_RE.sub(r"\1", text)
     text = _INLINE_MATH_RE.sub(r"\1", text)
     text = text.replace(_CURRENCY_DOLLAR_SENTINEL, "$")
