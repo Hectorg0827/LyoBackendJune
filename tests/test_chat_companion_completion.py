@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from lyo_app.chat.document_grounding import (
     document_navigator_content,
@@ -9,6 +10,8 @@ from lyo_app.chat.representation import promote_answer_representations
 from lyo_app.chat.response_depth import (
     apply_learned_depth,
     explicit_depth_preference,
+    learned_depth_for_user,
+    record_explicit_depth_preference,
 )
 from lyo_app.chat.verification import (
     selectively_verify_answer,
@@ -79,6 +82,39 @@ def test_learned_depth_applies_only_when_user_did_not_override_it():
     )
     assert explicit_depth_preference("Briefly explain gravity") is ResponseDepth.CONCISE
     assert preserved.depth is ResponseDepth.CONCISE
+
+
+@pytest.mark.asyncio
+async def test_explicit_depth_is_durably_recorded_and_read_back():
+    db = MagicMock()
+    db.execute = AsyncMock()
+    db.commit = AsyncMock()
+    db.add = MagicMock()
+
+    empty = MagicMock()
+    empty.scalar_one_or_none.return_value = None
+    db.execute.return_value = empty
+
+    saved = await record_explicit_depth_preference(
+        db,
+        7,
+        "Please be concise.",
+        source_session_id="conversation-1",
+    )
+    assert saved is ResponseDepth.CONCISE
+    db.add.assert_called_once()
+    added = db.add.call_args.args[0]
+    assert added.category == "response_depth"
+    assert added.insight_text == "Preferred response depth: concise"
+    db.commit.assert_awaited_once()
+
+    row = MagicMock()
+    row.insight_text = "Preferred response depth: deep"
+    found = MagicMock()
+    found.scalar_one_or_none.return_value = row
+    db.execute.return_value = found
+
+    assert await learned_depth_for_user(db, 7) is ResponseDepth.DEEP
 
 
 def test_representation_promotion_turns_table_and_mermaid_into_workspace_blocks():
