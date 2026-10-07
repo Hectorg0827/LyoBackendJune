@@ -1,9 +1,11 @@
 import logging
 import asyncio
+import json
 import time
 import uuid
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user_or_guest, get_db
@@ -33,6 +35,52 @@ router = APIRouter()
 # In production, these might be singletons or injected via dependencies
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
+
+
+class VoiceQualityEvent(BaseModel):
+    """Privacy-bounded telemetry for live conversational-voice validation.
+
+    Raw transcripts and audio are intentionally not accepted. The goal is to
+    measure turn-taking quality in production without turning QA telemetry into
+    a second conversation store.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=128)
+    turn_id: Optional[str] = Field(default=None, max_length=128)
+    conversation_id: Optional[str] = Field(default=None, max_length=128)
+    platform: str = Field(min_length=1, max_length=32)
+    event: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    locale: Optional[str] = Field(default=None, max_length=32)
+    scenario: Optional[str] = Field(default=None, max_length=64)
+    metrics: Dict[str, float | int | bool | str] = Field(default_factory=dict)
+
+
+@router.post("/voice/quality")
+async def report_voice_quality(
+    payload: VoiceQualityEvent,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+):
+    """Record one live voice-quality timing/behavior event in structured logs."""
+    safe_metrics = dict(list(payload.metrics.items())[:24])
+    record = {
+        "session_id": payload.session_id,
+        "turn_id": payload.turn_id,
+        "conversation_id": payload.conversation_id,
+        "platform": payload.platform,
+        "event": payload.event,
+        "locale": payload.locale,
+        "scenario": payload.scenario,
+        "metrics": safe_metrics,
+        "authenticated": getattr(current_user, "id", 0) not in (0, "0", None),
+    }
+    logger.info(
+        "VOICE_QUALITY %s",
+        json.dumps(record, separators=(",", ":"), ensure_ascii=False),
+    )
+    return {"status": "recorded"}
+
 
 @router.post("/chat", response_model=UnifiedChatResponse)
 async def lyo2_chat(
