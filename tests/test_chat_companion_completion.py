@@ -37,6 +37,14 @@ def _pdf():
     }
 
 
+def test_current_information_is_an_explicit_search_contract():
+    contract = interaction_contract_for_request(
+        text="Who is the current president of France?"
+    )
+    assert contract.mode is InteractionMode.SEARCH
+    assert contract.fast_lane is False
+
+
 def test_document_grounding_preserves_only_real_page_citations():
     text = "Rent is due monthly 【lease.pdf p. 1】 and fee is listed 【lease.pdf p. 2】."
     normalized = normalize_attachment_citations(text, [_pdf()])
