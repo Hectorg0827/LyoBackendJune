@@ -357,14 +357,22 @@ async def _try_compose_lesson(
 
 
 def _to_smart_blocks(
-    answer_text: Optional[str], artifact: Optional[UIBlock]
+    answer_text: Optional[str],
+    artifact: Optional[UIBlock],
+    interaction_mode: str = "",
 ) -> List[Dict[str, Any]]:
-    """Convert a plain answer plus optional legacy UIBlock artifact into
-    SmartBlock dicts — the unified block vocabulary all three clients render.
-    Unknown artifact types are skipped rather than guessed at."""
+    """Convert a canonical answer into cross-platform workspace SmartBlocks."""
+    from lyo_app.chat.representation import promote_answer_representations
+
     blocks: List[Dict[str, Any]] = []
     if answer_text:
-        blocks.append(SmartBlock.text(answer_text).model_dump())
+        prose, representation_blocks = promote_answer_representations(
+            answer_text,
+            interaction_mode=interaction_mode,
+        )
+        if prose:
+            blocks.append(SmartBlock.text(prose).model_dump())
+        blocks.extend(representation_blocks)
 
     if artifact is None:
         return blocks
@@ -1638,6 +1646,37 @@ async def stream_lyo2_chat(
                 voice_mode=voice_context.active,
                 voice_interrupted_previous_turn=voice_context.interrupted_previous_turn,
             )
+            if authenticated_user_id:
+                try:
+                    from lyo_app.chat.response_depth import (
+                        apply_learned_depth,
+                        explicit_depth_preference,
+                        learned_depth_for_user,
+                        record_explicit_depth_preference,
+                    )
+
+                    explicit_depth = explicit_depth_preference(request.text or "")
+                    if explicit_depth is not None:
+                        await record_explicit_depth_preference(
+                            db,
+                            int(authenticated_user_id),
+                            request.text or "",
+                            source_session_id=str(request.conversation_id or trace_id),
+                        )
+                    else:
+                        learned_depth = await learned_depth_for_user(
+                            db, int(authenticated_user_id)
+                        )
+                        interaction_contract = apply_learned_depth(
+                            interaction_contract,
+                            user_text=request.text or "",
+                            learned=learned_depth,
+                        )
+                except Exception as depth_exc:
+                    logger.debug(
+                        "Response-depth preference unavailable: %s",
+                        type(depth_exc).__name__,
+                    )
             interaction_contract_payload = {
                 "mode": interaction_contract.mode.value,
                 "depth": interaction_contract.depth.value,
@@ -1854,6 +1893,24 @@ async def stream_lyo2_chat(
                 generation_status = (
                     "incomplete" if stream_failure else "completed"
                 )
+                if streamed_text and not stream_failure:
+                    from lyo_app.chat.verification import selectively_verify_answer
+
+                    verification_started = time.monotonic()
+                    verification = await selectively_verify_answer(
+                        question=request.text or "",
+                        answer=streamed_text,
+                        interaction_mode=interaction_contract.mode.value,
+                        media_attachments=media_attachments,
+                        sources=model_metadata.get("sources") or [],
+                        search_required=search_required,
+                    )
+                    streamed_text = verification.text
+                    latency_metrics["verification_ms"] = int(
+                        (time.monotonic() - verification_started) * 1000
+                    )
+                    latency_metrics["verification"] = verification.reason
+                    latency_metrics["verification_revised"] = verification.revised
                 if streamed_text:
                     if "server_ttft_ms" not in latency_metrics:
                         latency_metrics["server_ttft_ms"] = int(
@@ -1914,6 +1971,17 @@ async def stream_lyo2_chat(
                     )
                     yield "data: [DONE]\n\n"
                     return
+
+                fast_workspace_blocks = _to_smart_blocks(
+                    streamed_text,
+                    None,
+                    interaction_mode=interaction_contract.mode.value,
+                )
+                if fast_workspace_blocks:
+                    yield yield_safe_sse_event(
+                        "smart_blocks",
+                        {"type": "smart_blocks", "blocks": redact_blocks(fast_workspace_blocks)},
+                    )
 
                 grounded_sources = list(model_metadata.get("sources") or [])
                 if grounded_sources:
@@ -2671,6 +2739,34 @@ async def stream_lyo2_chat(
                     }
                 )
 
+            from lyo_app.chat.document_grounding import normalize_attachment_citations
+            from lyo_app.chat.verification import selectively_verify_answer
+
+            raw_llm_text = normalize_attachment_citations(
+                raw_llm_text,
+                media_attachments,
+            )
+            verification_started = time.monotonic()
+            verification = await selectively_verify_answer(
+                question=request.text or "",
+                answer=raw_llm_text,
+                interaction_mode=interaction_contract.mode.value,
+                media_attachments=media_attachments,
+                sources=execution_response.metadata.get("sources") or [],
+                search_required=bool(
+                    freshness_decision and freshness_decision.mode.value == "require"
+                ),
+            )
+            raw_llm_text = normalize_attachment_citations(
+                verification.text,
+                media_attachments,
+            )
+            latency_metrics["verification_ms"] = int(
+                (time.monotonic() - verification_started) * 1000
+            )
+            latency_metrics["verification"] = verification.reason
+            latency_metrics["verification_revised"] = verification.revised
+
             persist_answer(
                 raw_llm_text,
                 decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
@@ -2739,34 +2835,23 @@ async def stream_lyo2_chat(
             # answer/artifact events above, in the versioned block vocabulary
             # shared by all three clients. Additive — v1 consumers ignore it.
             smart_blocks = _to_smart_blocks(
-                raw_llm_text, execution_response.artifact_block
+                raw_llm_text,
+                execution_response.artifact_block,
+                interaction_mode=interaction_contract.mode.value,
             )
             sources = list(execution_response.metadata.get("sources") or [])
-            if sources:
-                source_items = []
-                for source in sources:
-                    if not isinstance(source, dict):
-                        continue
-                    page_count = source.get("page_count")
-                    detail = str(source.get("mime_type") or "attachment")
-                    if isinstance(page_count, int) and page_count > 0:
-                        detail += f" • {page_count} page" + ("s" if page_count != 1 else "")
-                    source_items.append({
-                        "label": str(source.get("name") or "Attachment"),
-                        "detail": detail,
-                        "url": str(source.get("url") or ""),
-                    })
-                if source_items:
+            if media_attachments:
+                from lyo_app.chat.document_grounding import document_navigator_content
+
+                navigator = document_navigator_content(media_attachments)
+                if navigator.get("items"):
                     smart_blocks.append({
                         "id": f"sources-{trace_id[:8]}",
                         "schema_version": 1,
                         "type": "interactive",
                         "subtype": "sourceNavigator",
-                        "content": {
-                            "title": "Sources used",
-                            "items": source_items,
-                        },
-                        "metadata": {"role": "grounding"},
+                        "content": navigator,
+                        "metadata": {"role": "grounding", "page_aware": True},
                     })
 
             if smart_blocks:
@@ -2839,6 +2924,15 @@ async def stream_lyo2_chat(
             for action_block in execution_response.next_actions:
                 if action_block.content and "actions" in action_block.content:
                     action_labels.extend(action_block.content["actions"])
+            if media_attachments:
+                for label in (
+                    "Summarize this document",
+                    "Show key dates",
+                    "Show key numbers",
+                    "Ask about a page",
+                ):
+                    if label not in action_labels:
+                        action_labels.append(label)
             if action_labels:
                 actions_brick = {
                     "type": "actions",
