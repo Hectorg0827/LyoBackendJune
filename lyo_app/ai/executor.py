@@ -19,6 +19,11 @@ from lyo_app.teaching_runtime.interaction_contract import (
     ResponseDepth,
     contract_prompt,
 )
+from lyo_app.chat.document_grounding import (
+    attachment_grounding_prompt,
+    normalize_attachment_citations,
+    source_descriptors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,51 +47,11 @@ def _coerce_interaction_contract(raw: Optional[Dict[str, Any]]) -> Optional[Inte
 
 
 def _source_descriptors(media_attachments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    sources: List[Dict[str, Any]] = []
-    for item in media_attachments or []:
-        pages = item.get("source_pages") or []
-        page_numbers = [
-            int(page.get("page"))
-            for page in pages
-            if isinstance(page, dict) and isinstance(page.get("page"), int)
-        ]
-        sources.append({
-            "name": str(item.get("name") or "Attachment"),
-            "mime_type": str(item.get("mime_type") or ""),
-            "page_count": item.get("page_count"),
-            "available_pages": page_numbers[:50],
-            "kind": str(item.get("source_kind") or "attachment"),
-            "url": str(item.get("uri") or ""),
-        })
-    return sources
+    return source_descriptors(media_attachments)
 
 
 def _source_grounding_prompt(media_attachments: List[Dict[str, Any]]) -> str:
-    if not media_attachments:
-        return ""
-    lines = [
-        "--- ATTACHMENT SOURCE GROUNDING ---",
-        "When a factual claim comes from an attached document, cite its location inline.",
-        "Use the exact form 【filename p. N】 when page-aware extracted text supports the claim.",
-        "For images or documents without page text, cite 【filename】.",
-        "Never invent a page number. If the attachment does not support a claim, say so.",
-    ]
-    for item in media_attachments:
-        name = str(item.get("name") or "Attachment")
-        pages = item.get("source_pages") or []
-        page_count = item.get("page_count")
-        if pages:
-            page_numbers = [
-                str(page.get("page"))
-                for page in pages[:50]
-                if isinstance(page, dict) and page.get("page") is not None
-            ]
-            suffix = f"; extracted pages: {', '.join(page_numbers)}" if page_numbers else ""
-            lines.append(f"Source: {name} ({page_count or len(pages)} pages{suffix})")
-        else:
-            lines.append(f"Source: {name} (native attachment; no extracted page text available)")
-    lines.append("--- END ATTACHMENT SOURCE GROUNDING ---")
-    return "\n".join(lines)
+    return attachment_grounding_prompt(media_attachments)
 
 
 def _get_gemini_model():
@@ -333,7 +298,7 @@ USER QUESTION:
                     await text_delta_callback(delta)
                 generated = "".join(pieces).strip()
                 if generated:
-                    return generated
+                    return normalize_attachment_citations(generated, media_attachments)
             else:
                 ai_response = await asyncio.wait_for(
                     ai_resilience_manager.chat_completion(
@@ -356,7 +321,7 @@ USER QUESTION:
                     )
                 generated = ai_response.get("content", "").strip() if ai_response.get("content") else None
                 if generated:
-                    return generated
+                    return normalize_attachment_citations(generated, media_attachments)
         except StreamingIncompleteError:
             # A partial answer has already reached the learner. Preserve the
             # explicit outcome instead of substituting successful fallback prose.
