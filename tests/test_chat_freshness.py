@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from lyo_app.chat.freshness import (
     FreshnessMode,
     current_time_context,
@@ -68,3 +70,46 @@ def test_capability_and_definition_questions_do_not_trigger_a_forecast():
     for text in ("Bit how can you generare weather update", "What is weather?", "How do weather forecasts work?"):
         assert decide_freshness(text).mode is FreshnessMode.NONE
     assert decide_freshness("What is the weather today?").mode is FreshnessMode.REQUIRE
+
+
+@pytest.mark.parametrize("query", [
+    "Summarize the news article I attached",
+    "Translate the weather forecast below",
+    "Rewrite my news article",
+    "Resume el artículo de noticias adjunto",
+    "What does this uploaded document say about current regulations?",
+])
+def test_supplied_content_and_transformations_do_not_trigger_web_lookup(query):
+    assert decide_freshness(query).mode is FreshnessMode.NONE
+
+
+@pytest.mark.parametrize("query", [
+    "Summarize the latest news in Dominican Republic",
+    "Verify this attached article against current web sources",
+    "What is the latest FastAPI version?",
+    "Current iPhone pricing",
+    "New research on batteries",
+    "What are the visa requirements for Spain?",
+])
+def test_changing_information_requires_search_across_topics(query):
+    assert decide_freshness(query).mode is FreshnessMode.REQUIRE
+
+
+@pytest.mark.parametrize("query", [
+    "Tell me about retrieval augmented generation",
+    "Who invented the transistor?",
+    "Compare Python and JavaScript",
+])
+def test_general_informational_questions_have_web_access(query):
+    assert decide_freshness(query).mode is FreshnessMode.ALLOW
+
+
+def test_general_information_follow_up_keeps_the_requested_topic():
+    history = [{"role": "user", "content": "Tell me about retrieval augmented generation"}]
+    assert decide_freshness("What about embeddings?", history).mode is FreshnessMode.ALLOW
+
+
+def test_arithmetic_and_conversation_memory_do_not_search():
+    assert decide_freshness("What is 2+2?").mode is FreshnessMode.NONE
+    assert decide_freshness("What did I tell you about my preferences?").mode is FreshnessMode.NONE
+    assert decide_freshness("How are you?").mode is FreshnessMode.NONE

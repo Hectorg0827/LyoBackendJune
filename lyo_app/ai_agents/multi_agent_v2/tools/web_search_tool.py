@@ -172,9 +172,14 @@ class WebSearchTool(BaseTool):
             "contents": [{"role": "user", "parts": [{"text": query}]}],
             "tools": [{"google_search": {}}],
             "systemInstruction": {"parts": [{"text": (
-                "Retrieve web evidence for the requested place and date. "
+                "Search the web for authoritative evidence relevant to the question, "
+                "across any topic. Prefer official current documentation, product, "
+                "research and organization sources for changing facts. "
+                "Retrieve evidence for the requested place and date when relevant. "
                 "Include publication dates for news and explicit forecast dates and "
                 "locations for weather in the cited text. Do not reuse old forecasts. "
+                "General documentation and research need not have been published "
+                "today to be relevant. Distinguish historical from current claims. "
                 "If Search finds no supporting current sources, say so."
             )}]},
             "generationConfig": {

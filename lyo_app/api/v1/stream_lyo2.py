@@ -1772,7 +1772,7 @@ async def stream_lyo2_chat(
                     freshness_decision
                     and freshness_decision.mode.value == "require"
                 )
-                if search_required:
+                if enable_search:
                     yield yield_safe_sse_event(
                         "search_status",
                         {
@@ -1867,7 +1867,7 @@ async def stream_lyo2_chat(
 
                 grounded_sources = list(model_metadata.get("sources") or [])
                 grounded_blocks = source_navigator(grounded_sources, f"sources-{trace_id[:8]}")
-                if search_required:
+                if enable_search:
                     final_search_status = model_metadata.get("search_status") or "unavailable"
                     latency_metrics["search_status"] = final_search_status
                     yield yield_safe_sse_event("search_status", {

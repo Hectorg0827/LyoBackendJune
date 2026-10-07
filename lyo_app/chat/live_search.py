@@ -21,6 +21,11 @@ LIVE_SEARCH_UNAVAILABLE = (
     "I couldn't verify current information for this request. "
     "Please try again in a moment."
 )
+WEB_BACKGROUND_NOTICE = (
+    "I couldn't verify web sources for this answer. "
+    "The following is background information from the model's knowledge, "
+    "which may be out of date.\n\n"
+)
 WEATHER_LOCATION_REQUIRED = "Which city or location should I check the weather for?"
 _WEATHER = re.compile(r"\b(weather|forecast|clima|pron[oó]stico)\b", re.I)
 _NEWS = re.compile(r"\b(news|headlines?|trending|noticias|titulares|actualidad)\b", re.I)
@@ -28,6 +33,11 @@ _RECENCY = re.compile(
     r"\b(today|tonight|yesterday|tomorrow|latest|recent|current(?:ly)?|"
     r"right now|real[- ]?time|live|hoy|ayer|mañana|ahora|últim[oa]s?|"
     r"score|stock price|share price|exchange rate)\b", re.I,
+)
+_DAILY_RECENCY = re.compile(
+    r"\b(today|tonight|yesterday|tomorrow|this morning|this afternoon|"
+    r"right now|real[- ]?time|live|hoy|ayer|mañana|ahora|"
+    r"scores?|standings|stock price|share price|exchange rate|traffic|open now)\b", re.I,
 )
 _MONTHS = {
     name: i for i, names in enumerate((
@@ -93,18 +103,20 @@ def _normalize(text: str) -> str:
 
 def _location(text: str) -> str:
     # The last location in a follow-up overrides the earlier city.
-    matches = re.findall(r"\b(?:in|for|at|en|para|what about|how about)\s+([^\n?]+)", text, re.I)
+    matches = list(re.finditer(r"\b(?:in|for|at|en|para|what about|how about)\s+", text, re.I))
+    for match in reversed(matches):
+        value = re.split(r"[\n?]", text[match.end():], maxsplit=1)[0]
+        value = re.split(
+            r"\s*(?:(?:for|para)\s+)?\b(?:today|tonight|tomorrow|yesterday|right now|hoy|mañana|ayer|on|weather|forecast)\b",
+            value, maxsplit=1, flags=re.I,
+        )[0].strip(" ,.!:")
+        if value:
+            return value
     if not matches:
         prefix = re.match(r"^([\w ,.-]+?)\s+(?:weather|forecast|clima)\b", text, re.I)
         if prefix and not re.search(r"\b(what|how|the|today|tomorrow|give|show|check)\b", prefix.group(1), re.I):
             return prefix.group(1).strip()
-        return ""
-    value = matches[-1]
-    value = re.split(
-        r"\b(?:today|tonight|tomorrow|yesterday|right now|hoy|mañana|ayer|on|weather|forecast)\b",
-        value, maxsplit=1, flags=re.I,
-    )[0]
-    return value.strip(" ,.!:")
+    return ""
 
 
 @dataclass(frozen=True)
@@ -124,6 +136,14 @@ class LiveSearchRequest:
     def provider_query(self) -> str:
         if not self.current:
             return self.query
+        if self.topic == "general" and not _DAILY_RECENCY.search(self.query):
+            return (
+                f"{self.query}\nAs of local date: {self.now.date().isoformat()}. "
+                "Find relevant authoritative web evidence, including official "
+                "documentation and product or organization pages when appropriate. "
+                "Use current editions for changing facts; include publication or "
+                "update dates when available. Historical background may be older."
+            )
         return (
             f"{self.query}\nCurrent local date: {self.now.date().isoformat()}. "
             f"Requested date: {self.target_day.isoformat()}. "
@@ -181,9 +201,13 @@ def usable_search_results(output: Any, request: LiveSearchRequest) -> list[dict]
         title = str(item.get("title") or url)
         published = _parse_time(item.get("published_at") or item.get("published_date"))
         raw_published = str(item.get("published_at") or item.get("published_date") or "")
+        date_only = bool(re.fullmatch(r"20\d{2}-\d{2}-\d{2}", raw_published))
         if raw_published and not published:
             continue
-        if request.current and re.fullmatch(r"20\d{2}-\d{2}-\d{2}", raw_published):
+        if date_only:
+            # A calendar date is not a UTC instant; do not shift it a day west.
+            published = published.replace(tzinfo=request.now.tzinfo)
+        if request.current and date_only:
             if date.fromisoformat(raw_published) > request.now.date():
                 continue
         title_dates = _dates_in(f"{title} {url}", request.now.date())
@@ -192,7 +216,7 @@ def usable_search_results(output: Any, request: LiveSearchRequest) -> list[dict]
         if request.current and published and published > request.now + timedelta(minutes=10):
             continue
         if request.current and (
-            request.topic == "news" or (request.topic == "general" and _RECENCY.search(request.query))
+            request.topic == "news" or (request.topic == "general" and _DAILY_RECENCY.search(request.query))
         ):
             dated = published.astimezone(request.now.tzinfo).date() if published else max(title_dates + content_dates, default=None)
             if dated is None or not request.now.date() - timedelta(days=2) <= dated <= request.now.date():
@@ -230,7 +254,7 @@ def usable_search_results(output: Any, request: LiveSearchRequest) -> list[dict]
             "retrieved_at": request.now.isoformat(timespec="seconds"),
         }
         if published:
-            result["published_at"] = published.isoformat(timespec="seconds")
+            result["published_at"] = raw_published if date_only else published.isoformat(timespec="seconds")
         if request.topic == "weather" and request.current:
             result["forecast_date"] = request.target_day.isoformat()
         usable.append(result)

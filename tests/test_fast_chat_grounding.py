@@ -4,7 +4,7 @@ from lyo_app.ai.executor import LyoExecutor
 from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from lyo_app.ai_agents.multi_agent_v2.tools.base import ToolResult
-from lyo_app.chat.live_search import LIVE_SEARCH_UNAVAILABLE, WEATHER_LOCATION_REQUIRED
+from lyo_app.chat.live_search import LIVE_SEARCH_UNAVAILABLE, WEATHER_LOCATION_REQUIRED, WEB_BACKGROUND_NOTICE
 from lyo_app.ai.schemas.lyo2 import ActionType, LyoPlan, PlannedAction
 from unittest.mock import AsyncMock
 
@@ -203,3 +203,89 @@ async def test_planner_search_cannot_replace_current_user_query_with_july(monkey
     assert response.answer_block.content["text"] == "Fresh grounded weather"
     assert response.metadata["sources"][0]["forecast_date"] == "2026-10-06"
     assert executor._generate_text.await_args.args[1]["requires_live_search"] is True
+
+
+@pytest.mark.asyncio
+async def test_general_factual_stream_uses_shared_sources_with_any_answer_provider(monkeypatch):
+    source = {"title": "Official documentation", "url": "https://example.com/docs", "snippet": "Maintained documentation describes the feature.", "provider": "tavily"}
+    search = AsyncMock(return_value=ToolResult(success=True, output=[source], message="Found documentation"))
+    captured = {}
+    async def generate(**kwargs):
+        captured.update(kwargs)
+        yield "A grounded explanation."
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    monkeypatch.setattr(ai_resilience_manager, "stream_chat_completion", generate)
+    metadata = {}
+    chunks = [part async for part in LyoExecutor.__new__(LyoExecutor).stream_text(
+        original_request="Tell me about retrieval augmented generation",
+        enable_google_search=True, search_required=False, metadata_sink=metadata,
+    )]
+    assert chunks == ["A grounded explanation."]
+    search.assert_awaited_once()
+    assert captured["enable_google_search"] is False
+    assert "gpt-4o-mini" in captured["provider_order"]
+    assert metadata["search_status"] == "complete"
+    assert metadata["sources"][0]["url"] == source["url"]
+    assert any(source["snippet"] in str(m["content"]) for m in captured["messages"])
+
+
+@pytest.mark.asyncio
+async def test_optional_search_failure_discloses_background_before_streaming(monkeypatch):
+    monkeypatch.setattr(WebSearchTool, "execute", AsyncMock(return_value=ToolResult(success=False, output=None, message="Unavailable")))
+    async def generate(**kwargs):
+        assert kwargs["enable_google_search"] is False
+        assert any("Web retrieval failed" in str(m["content"]) for m in kwargs["messages"])
+        yield "Stable background."
+    monkeypatch.setattr(ai_resilience_manager, "stream_chat_completion", generate)
+    metadata = {}
+    chunks = [part async for part in LyoExecutor.__new__(LyoExecutor).stream_text(
+        original_request="Who invented the transistor?", enable_google_search=True,
+        search_required=False, metadata_sink=metadata,
+    )]
+    assert chunks == [WEB_BACKGROUND_NOTICE, "Stable background."]
+    assert metadata["search_status"] == "unavailable"
+    assert metadata["sources"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["Latest FastAPI version", "Current iPhone pricing", "New research on batteries"])
+async def test_general_current_information_cannot_bypass_shared_search(monkeypatch, query):
+    search = AsyncMock(return_value=ToolResult(success=True, output=[], message="No results"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    executor = LyoExecutor.__new__(LyoExecutor)
+    executor._generate_text = AsyncMock(return_value="Unsupported fact")
+    response = await executor.execute(user_id="1", intent="CHAT", original_request=query,
+        plan=LyoPlan(steps=[PlannedAction(action_type=ActionType.GENERATE_TEXT, description="Answer", parameters={"content": "Old static fact"})]))
+    assert response.answer_block.content["text"] == LIVE_SEARCH_UNAVAILABLE
+    executor._generate_text.assert_not_awaited()
+    search.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_planner_general_question_retrieves_sources_even_without_a_search_step(monkeypatch):
+    source = {"title": "Documentation", "url": "https://example.com/docs", "snippet": "A feature explanation."}
+    search = AsyncMock(return_value=ToolResult(success=True, output=[source], message="Found evidence"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    executor = LyoExecutor.__new__(LyoExecutor)
+    executor._generate_text = AsyncMock(return_value="Grounded explanation")
+    response = await executor.execute(user_id="1", intent="CHAT", original_request="Tell me about retrieval augmented generation",
+        plan=LyoPlan(steps=[PlannedAction(action_type=ActionType.GENERATE_TEXT, description="Answer")]))
+    search.assert_awaited_once()
+    assert response.metadata["search_status"] == "complete"
+    assert response.metadata["sources"][0]["url"] == source["url"]
+    assert executor._generate_text.await_args.args[1]["uses_web_search"] is True
+
+
+@pytest.mark.asyncio
+async def test_attachment_verification_still_requires_successful_web_retrieval(monkeypatch):
+    search = AsyncMock(return_value=ToolResult(success=False, output=None, message="Unavailable"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    executor = LyoExecutor.__new__(LyoExecutor)
+    executor._generate_text = AsyncMock(return_value="Unsupported verification")
+    response = await executor.execute(user_id="1", intent="CHAT",
+        original_request="Verify this attached article against current web sources",
+        media_attachments=[{"name": "article.txt", "extracted_text": "An old claim."}],
+        plan=LyoPlan(steps=[PlannedAction(action_type=ActionType.GENERATE_TEXT, description="Answer")]))
+    assert response.answer_block.content["text"] == LIVE_SEARCH_UNAVAILABLE
+    search.assert_awaited_once()
+    executor._generate_text.assert_not_awaited()

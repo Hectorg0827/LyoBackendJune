@@ -1,9 +1,8 @@
 """Freshness routing for low-latency chat.
 
-The deterministic layer only handles obvious cases. For ordinary factual
-questions it returns ALLOW, which means the model may invoke Google Search
-itself if its knowledge could be stale. This avoids brittle keyword-only
-search routing while keeping casual/creative turns off the paid search path.
+Current questions require evidence. Ordinary informational questions also
+get a shared web lookup, with a disclosed background-only fallback when
+retrieval fails. Casual, creative and local tasks do not need a lookup.
 """
 
 from __future__ import annotations
@@ -35,7 +34,9 @@ class FreshnessDecision:
 _EXPLICIT_CURRENT = re.compile(
     r"\b("
     r"today|tonight|this morning|this afternoon|this evening|"
-    r"yesterday|tomorrow|right now|currently|latest|most recent|recently|"
+    r"yesterday|tomorrow|right now|current|currently|latest|most recent|recent|recently|"
+    r"this (?:week|month|year)|as of|new (?:information|research|discoveries|"
+    r"developments|features|versions?|releases?|products?|updates?)|"
     r"breaking|live|real[- ]?time|up[- ]?to[- ]?date|"
     r"news|headlines?|trending|noticias|titulares|actualidad|"
     r"hoy|ayer|mañana|ahora|actualmente|últim[oa]s?|recientes?|"
@@ -43,7 +44,9 @@ _EXPLICIT_CURRENT = re.compile(
     r"clima|pronóstico|pronostico|"
     r"stock price|share price|market price|exchange rate|price today|"
     r"president|prime minister|ceo|governor|mayor|election|polls?|"
-    r"release date|availability|in stock|open now|hours today"
+    r"release date|availability|in stock|open now|hours today|"
+    r"pricing|prices?|specifications?|specs|software versions?|"
+    r"laws?|regulations?|visa requirements|entry requirements"
     r")\b",
     re.IGNORECASE,
 )
@@ -57,14 +60,47 @@ _WORKFLOW_OR_CREATIVE = re.compile(
     r"\b("
     r"write|rewrite|draft|translate|summari[sz]e|brainstorm|poem|story|"
     r"roleplay|role-play|quiz me|flashcards?|course|study plan|"
-    r"i have (?:a )?(?:test|exam)|prepare me for"
+    r"i have (?:a )?(?:test|exam)|prepare me for|"
+    r"redacta|reescribe|traduce|resume|resumir|poema"
     r")\b",
     re.IGNORECASE,
+)
+
+_SUPPLIED_SOURCE = re.compile(
+    r"\b(attached|attachment|uploaded|pasted|provided|this (?:article|document|file|text)|"
+    r"(?:article|document|text) (?:below|above)|adjunt[oa]|subid[oa]|este (?:artículo|documento|texto))\b",
+    re.I,
+)
+_WEB_REQUEST = re.compile(
+    r"\b(online|web|internet|browse|look(?:\s+\w+){0,3}\s+up|"
+    r"verify|fact[- ]?check|verifica|busca en internet)\b", re.I,
+)
+_TEMPORAL_LOOKUP = re.compile(
+    r"\b(today|tonight|yesterday|tomorrow|current(?:ly)?|latest|most recent|recent(?:ly)?|"
+    r"breaking|live|real[- ]?time|up[- ]?to[- ]?date|right now|"
+    r"hoy|ayer|mañana|ahora|actualmente|últim[oa]s?|recientes?)\b", re.I,
 )
 
 _FACTUAL_SHAPE = re.compile(
     r"^(?:who|what|when|where|which|how many|how much|is|are|does|do|did|can)\b",
     re.IGNORECASE,
+)
+
+_INFORMATIONAL = re.compile(
+    r"^(?:tell me about|give me (?:information|details)|explain|describe|"
+    r"help me understand|learn about|information (?:on|about)|research|"
+    r"compare|recommend|cuéntame|explica|información sobre)\b", re.I,
+)
+
+_LOCAL_CONTEXT = re.compile(
+    r"\b(?:my (?:notes|files?|documents?|preferences?|profile|conversation)|"
+    r"(?:I|we) (?:said|told you|discussed)|(?:this|our|the previous) conversation|"
+    r"attached (?:file|document|image)|uploaded (?:file|document|image))\b", re.I,
+)
+
+_CASUAL = re.compile(
+    r"^(?:hi|hey|hello|hola|thanks|thank you|gracias|"
+    r"how are you|what can you do|can you help me|cómo estás)[?!. ]*$", re.I,
 )
 
 
@@ -84,13 +120,13 @@ def live_search_capability_response(text: str) -> Optional[str]:
     normalized = (text or "").strip()
     if (
         _SEARCH_CAPABILITY.search(normalized)
-        and re.search(r"\b(weather|news|internet|browse|live|real[- ]?time)\b", normalized, re.I)
+        and re.search(r"\b(weather|news|internet|browse|live|real[- ]?time|new information|web|online)\b", normalized, re.I)
         and not re.search(r"\b(tell me|give me|show me|temperature|headlines)\b", normalized, re.I)
     ):
         return (
-            "I can try a live search for news, weather, and other current information. "
-            "I'll only present it as current when the lookup returns supporting "
-            "sources for the requested place and date."
+            "I can try a live search for information across topics, beyond the model's "
+            "training data. I'll use supporting sources and check dates when they "
+            "matter. If a lookup fails, I'll say what I couldn't verify."
         )
     return None
 
@@ -113,7 +149,12 @@ def contextual_lookup_text(text: str, history: Optional[Sequence[dict]] = None) 
         previous = str(turn.get("content") or "").strip()
         if not previous or _FOLLOW_UP.search(previous):
             continue
-        if _EXPLICIT_CURRENT.search(previous) and not _WORKFLOW_OR_CREATIVE.search(previous):
+        if (
+            (_EXPLICIT_CURRENT.search(previous) or _FACTUAL_SHAPE.search(previous)
+             or _INFORMATIONAL.search(previous) or "?" in previous)
+            and not _WORKFLOW_OR_CREATIVE.search(previous)
+            and not _LOCAL_CONTEXT.search(previous)
+        ):
             follow_up = f"weather in {normalized}" if awaiting_location else normalized
             return f"{previous}\nFollow-up request: {follow_up}"
         # Do not inherit a weather/news lookup across a subject change.
@@ -128,8 +169,17 @@ def decide_freshness(
     if not normalized:
         return FreshnessDecision(FreshnessMode.NONE, "empty")
 
+    if _CASUAL.fullmatch(normalized):
+        return FreshnessDecision(FreshnessMode.NONE, "casual")
+
     if live_search_capability_response(normalized):
         return FreshnessDecision(FreshnessMode.NONE, "search_capability_question")
+
+    if (_LOCAL_CONTEXT.search(normalized) or _SUPPLIED_SOURCE.search(normalized)) and not _WEB_REQUEST.search(normalized):
+        return FreshnessDecision(FreshnessMode.NONE, "conversation_or_document_context")
+
+    if re.fullmatch(r"(?:what is\s+)?[\d\s()+*/.%-]+(?:\s*[+=×÷-]\s*[\d\s()+*/.%-]+)+\??", normalized, re.I):
+        return FreshnessDecision(FreshnessMode.NONE, "arithmetic")
 
     if re.fullmatch(
         r"(?:what is (?:the )?(?:weather|news|forecasting)|"
@@ -141,20 +191,25 @@ def decide_freshness(
     if _EXPLICIT_SEARCH.search(normalized):
         return FreshnessDecision(FreshnessMode.REQUIRE, "explicit_search")
 
+    if _WORKFLOW_OR_CREATIVE.search(normalized) and not _TEMPORAL_LOOKUP.search(normalized):
+        return FreshnessDecision(FreshnessMode.NONE, "workflow_or_creative")
+
     if _EXPLICIT_CURRENT.search(normalized):
         return FreshnessDecision(FreshnessMode.REQUIRE, "time_sensitive")
+
+    if re.search(rf"\b(?:in|for|as of|en)\s+{datetime.now(timezone.utc).year}\b", normalized, re.I):
+        return FreshnessDecision(FreshnessMode.REQUIRE, "current_year_information")
 
     if _WORKFLOW_OR_CREATIVE.search(normalized):
         return FreshnessDecision(FreshnessMode.NONE, "workflow_or_creative")
 
-    if contextual_lookup_text(normalized, conversation_history) != normalized:
-        return FreshnessDecision(FreshnessMode.REQUIRE, "current_lookup_follow_up")
+    lookup = contextual_lookup_text(normalized, conversation_history)
+    if lookup != normalized:
+        mode = FreshnessMode.REQUIRE if _EXPLICIT_CURRENT.search(lookup) else FreshnessMode.ALLOW
+        return FreshnessDecision(mode, "informational_lookup_follow_up")
 
-    # The deterministic layer deliberately does not decide whether these need
-    # the web. It merely makes Search available; Gemini decides whether to call
-    # it based on the actual semantic request and its confidence/freshness.
-    if "?" in normalized or _FACTUAL_SHAPE.search(normalized):
-        return FreshnessDecision(FreshnessMode.ALLOW, "model_may_search")
+    if "?" in normalized or _FACTUAL_SHAPE.search(normalized) or _INFORMATIONAL.search(normalized):
+        return FreshnessDecision(FreshnessMode.ALLOW, "informational_web_lookup")
 
     return FreshnessDecision(FreshnessMode.NONE, "no_freshness_signal")
 

@@ -59,6 +59,25 @@ def test_tomorrow_forecast_uses_local_day_and_requested_place():
     assert usable_search_results([weather_source()], request) == []
 
 
+@pytest.mark.parametrize("query,location", [
+    ("Weather for tomorrow in New York", "New York"),
+    ("Weather tomorrow in New York", "New York"),
+    ("Weather in New York for tomorrow", "New York"),
+    ("Pronóstico para mañana en Nueva York", "Nueva York"),
+    ("Clima en Nueva York para mañana", "Nueva York"),
+])
+def test_temporal_weather_qualifiers_do_not_remove_the_supplied_city(query, location):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == location
+    assert not request.needs_location
+    assert request.target_day.isoformat() == "2026-10-07"
+    source = weather_source(
+        title="New York forecast October 7, 2026",
+        snippet="New York forecast for October 7, 2026: 60 F.",
+    )
+    assert usable_search_results([source], request)
+
+
 def test_historical_weather_is_not_forced_into_current_date_window():
     request = prepare_live_search("Weather in New York on July 10, 2026", current_time_context=NOW)
     result = weather_source(title="July 10, 2026 weather", snippet="July 10, 2026 in New York: 85 F.", published_at="2026-07-10")
@@ -89,6 +108,35 @@ def test_news_dates_are_compared_in_users_timezone():
     request = prepare_live_search("Noticias de hoy en República Dominicana", current_time_context=NOW)
     result = {"title": "República Dominicana", "url": "https://example.com/news", "snippet": "Noticias de República Dominicana.", "published_at": "Wed, 07 Oct 2026 01:00:00 GMT"}
     assert usable_search_results([result], request)
+
+
+@pytest.mark.parametrize("offset", ["-04:00", "-07:00", "+00:00", "+09:00"])
+def test_date_only_news_stays_on_its_calendar_day_and_preserves_date_precision(offset):
+    request = prepare_live_search("News today", current_time_context=f"Current date/time: 2026-10-06T15:00:00{offset}")
+    source = {"title": "Headlines", "url": "https://example.com/news", "snippet": "A news update.", "published_at": "2026-10-06"}
+    result = usable_search_results([source], request)[0]
+    assert result["published_at"] == "2026-10-06"
+    assert usable_search_results([{**source, "published_at": "2026-10-07"}], request) == []
+    assert usable_search_results([{**source, "published_at": "2026-10-05"}], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "Latest FastAPI version", "Current iPhone pricing", "New research on batteries",
+    "Tell me about retrieval augmented generation",
+])
+def test_general_web_lookup_accepts_maintained_pages_without_news_date_rules(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    source = {"title": "Official reference", "url": "https://example.com/docs", "snippet": "Relevant information from maintained documentation."}
+    assert request.topic == "general"
+    assert usable_search_results([source], request)
+    assert "authoritative" in request.provider_query
+    assert "exclude archived forecasts" not in request.provider_query
+
+
+def test_live_financial_quotes_still_require_dated_evidence():
+    request = prepare_live_search("Stock price right now", current_time_context=NOW)
+    source = {"title": "Market data", "url": "https://example.com/quote", "snippet": "Stock price: 100."}
+    assert usable_search_results([source], request) == []
 
 
 def test_today_news_cannot_be_replaced_with_yesterdays_article():

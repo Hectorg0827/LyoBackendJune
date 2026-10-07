@@ -31,9 +31,9 @@ def current_chat(harness, monkeypatch):
     return harness
 
 
-async def turn(control):
+async def turn(control, text="Today's weather in New York"):
     response = await control.response(
-        text="Today's weather in New York", forced_intent=None,
+        text=text, forced_intent=None,
         timezone="America/New_York",
         state_summary={"stream_capabilities": {"text_delta": True}},
     )
@@ -83,3 +83,16 @@ async def test_retry_restores_saved_source_dates_without_claiming_a_new_lookup(c
     assert next(e for e in events if e["type"] == "smart_blocks")["blocks"] == blocks
     assert current_chat.model_calls == []
     assert not any(e["type"] == "search_status" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_general_question_stream_exposes_search_status_and_saved_sources(current_chat, monkeypatch):
+    source = {"title": "Official reference", "url": "https://example.com/docs", "snippet": "Relevant documentation.", "provider": "tavily"}
+    search = AsyncMock(return_value=ToolResult(success=True, output=[source], message="Found reference"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    events = await turn(current_chat, "What is retrieval augmented generation?")
+    assert [e["status"] for e in events if e["type"] == "search_status"] == ["searching", "complete"]
+    search.assert_awaited_once()
+    blocks = next(e["blocks"] for e in events if e["type"] == "smart_blocks")
+    assert blocks[0]["content"]["items"][0]["url"] == source["url"]
+    assert next(w for w in current_chat.writes if w["role"] == "assistant")["blocks"] == blocks
