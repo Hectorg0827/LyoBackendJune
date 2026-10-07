@@ -116,6 +116,13 @@ def test_direct_explanation_cannot_be_replaced_by_first_contact_quiz():
     assert decision.reason_code == "interaction_contract_explain"
 
 
+def test_search_contract_cannot_be_replaced_by_first_contact_quiz():
+    decision = TeachingPolicy.decide(_policy_context("search"))
+    assert decision.action is TeachingAction.ANSWER
+    assert decision.interaction_required is False
+    assert decision.reason_code == "interaction_contract_search"
+
+
 def test_direct_answer_contract_cannot_be_replaced_by_first_contact_quiz():
     decision = TeachingPolicy.decide(_policy_context("answer"))
     assert decision.action is TeachingAction.ANSWER
