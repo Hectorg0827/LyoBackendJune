@@ -1400,6 +1400,11 @@ async def stream_lyo2_chat(
                             "type": "voice_incomplete", "message_id": assistant_client_message_id,
                             "generation_status": "incomplete", "replayed": True, "speak": False,
                         })
+                    replayed_blocks = getattr(replayed_assistant, "blocks", None) or []
+                    if replayed_blocks:
+                        yield yield_safe_sse_event("smart_blocks", {
+                            "type": "smart_blocks", "blocks": redact_blocks(replayed_blocks),
+                        })
                     yield "data: [DONE]\n\n"
                     return
 
@@ -1443,7 +1448,11 @@ async def stream_lyo2_chat(
             from lyo_app.chat.freshness import current_time_context, decide_freshness
 
             current_time_for_prompt = current_time_context(request.timezone)
-            freshness_decision = decide_freshness(request.text or "")
+            freshness_decision = decide_freshness(
+                request.text or "",
+                [{"role": turn.role, "content": turn.content}
+                 for turn in (request.conversation_history or [])],
+            )
             fast_intent = fast_route_intent(
                 request.text or "",
                 has_media=bool(media_attachments),
@@ -1763,13 +1772,13 @@ async def stream_lyo2_chat(
                     freshness_decision
                     and freshness_decision.mode.value == "require"
                 )
-                if search_required:
+                if enable_search:
                     yield yield_safe_sse_event(
                         "search_status",
                         {
                             "type": "search_status",
                             "status": "searching",
-                            "message": "Checking current information…",
+                            "message": "Checking web sources…",
                         },
                     )
 
@@ -1854,6 +1863,16 @@ async def stream_lyo2_chat(
                 generation_status = (
                     "incomplete" if stream_failure else "completed"
                 )
+                from lyo_app.chat.live_search import source_navigator
+
+                grounded_sources = list(model_metadata.get("sources") or [])
+                grounded_blocks = source_navigator(grounded_sources, f"sources-{trace_id[:8]}")
+                if enable_search:
+                    final_search_status = model_metadata.get("search_status") or "unavailable"
+                    latency_metrics["search_status"] = final_search_status
+                    yield yield_safe_sse_event("search_status", {
+                        "type": "search_status", "status": final_search_status,
+                    })
                 if streamed_text:
                     if "server_ttft_ms" not in latency_metrics:
                         latency_metrics["server_ttft_ms"] = int(
@@ -1871,6 +1890,7 @@ async def stream_lyo2_chat(
                             if stream_failure
                             else None
                         ),
+                        blocks=grounded_blocks,
                     )
                     yield yield_safe_sse_event(
                         "answer",
@@ -1915,37 +1935,13 @@ async def stream_lyo2_chat(
                     yield "data: [DONE]\n\n"
                     return
 
-                grounded_sources = list(model_metadata.get("sources") or [])
                 if grounded_sources:
-                    source_items = [
-                        {
-                            "label": str(source.get("title") or "Web source"),
-                            "detail": "Live web source",
-                            "url": str(source.get("url") or ""),
-                        }
-                        for source in grounded_sources
-                        if isinstance(source, dict) and source.get("url")
-                    ]
-                    if source_items:
+                    if grounded_blocks:
                         yield yield_safe_sse_event(
                             "smart_blocks",
                             {
                                 "type": "smart_blocks",
-                                "blocks": [{
-                                    "id": f"sources-{trace_id[:8]}",
-                                    "schema_version": 1,
-                                    "type": "interactive",
-                                    "subtype": "sourceNavigator",
-                                    "content": {
-                                        "title": "Sources used",
-                                        "items": source_items,
-                                    },
-                                    "metadata": {
-                                        "role": "grounding",
-                                        "freshness": freshness_decision.mode.value
-                                        if freshness_decision else "none",
-                                    },
-                                }],
+                                "blocks": grounded_blocks,
                             },
                         )
                     yield yield_safe_sse_event(
@@ -2660,7 +2656,7 @@ async def stream_lyo2_chat(
             # The interaction contract already shapes spoken responses. Voice
             # must not wait behind a second, non-authoritative prose optimizer
             # after the canonical model answer is complete.
-            if not voice_delivery:
+            if not voice_delivery and not execution_response.metadata.get("search_status"):
                 raw_llm_text = await ai_performance_optimizer.optimize_response(
                     agent_type=decision.intent.value,
                     response=raw_llm_text,
@@ -2675,6 +2671,11 @@ async def stream_lyo2_chat(
                 raw_llm_text,
                 decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
             )
+            if execution_response.metadata.get("search_status"):
+                yield yield_safe_sse_event("search_status", {
+                    "type": "search_status",
+                    "status": execution_response.metadata["search_status"],
+                })
             if raw_llm_text and voice_delivery and voice_hints_enabled:
                 yield yield_safe_sse_event(
                     "voice_ready",
@@ -2749,6 +2750,9 @@ async def stream_lyo2_chat(
                         continue
                     page_count = source.get("page_count")
                     detail = str(source.get("mime_type") or "attachment")
+                    if source.get("kind") == "web":
+                        from lyo_app.chat.live_search import source_detail
+                        detail = source_detail(source)
                     if isinstance(page_count, int) and page_count > 0:
                         detail += f" • {page_count} page" + ("s" if page_count != 1 else "")
                     source_items.append({

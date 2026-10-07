@@ -26,6 +26,7 @@ from lyo_app.ai.multimodal import (
 from lyo_app.api.v1.chat import ChatRequest, ConversationMessage
 from lyo_app.chat.models import ChatMode
 from lyo_app.chat.stores import conversation_store
+from lyo_app.chat.freshness import current_time_context
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +392,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 user_id=str(current_user.id),
                 plan=plan,
                 original_request=request.text or "",
+                intent=decision.intent.value if decision.intent else None,
                 conversation_history=[
                     {"role": turn.role, "content": turn.content}
                     for turn in request.conversation_history
@@ -399,6 +401,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 teaching_decision=teaching_decision.model_dump(mode="json"),
                 interaction_contract=interaction_contract_payload,
                 personal_memory=personal_memory,
+                current_time_context=current_time_context(request.timezone),
             )
         
         # Add trace metadata
