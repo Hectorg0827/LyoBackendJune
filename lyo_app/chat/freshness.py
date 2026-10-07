@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 
@@ -37,7 +37,10 @@ _EXPLICIT_CURRENT = re.compile(
     r"today|tonight|this morning|this afternoon|this evening|"
     r"yesterday|tomorrow|right now|currently|latest|most recent|recently|"
     r"breaking|live|real[- ]?time|up[- ]?to[- ]?date|"
+    r"news|headlines?|trending|noticias|titulares|actualidad|"
+    r"hoy|ayer|mañana|ahora|actualmente|últim[oa]s?|recientes?|"
     r"score|standings|schedule|weather|forecast|traffic|"
+    r"clima|pronóstico|pronostico|"
     r"stock price|share price|market price|exchange rate|price today|"
     r"president|prime minister|ceo|governor|mayor|election|polls?|"
     r"release date|availability|in stock|open now|hours today"
@@ -65,10 +68,75 @@ _FACTUAL_SHAPE = re.compile(
 )
 
 
-def decide_freshness(text: str) -> FreshnessDecision:
+_FOLLOW_UP = re.compile(
+    r"^(?:what about|how about|and\b|again\b|try again\b|update\b|"
+    r"are you sure|that (?:is|was)|that's|same\b|y en\b|otra vez\b)",
+    re.IGNORECASE,
+)
+
+_SEARCH_CAPABILITY = re.compile(
+    r"^(?:(?:but|bit)\s+)?(?:how (?:can|do) you|do you have|can you access)\b",
+    re.IGNORECASE,
+)
+
+
+def live_search_capability_response(text: str) -> Optional[str]:
+    normalized = (text or "").strip()
+    if (
+        _SEARCH_CAPABILITY.search(normalized)
+        and re.search(r"\b(weather|news|internet|browse|live|real[- ]?time)\b", normalized, re.I)
+        and not re.search(r"\b(tell me|give me|show me|temperature|headlines)\b", normalized, re.I)
+    ):
+        return (
+            "I can try a live search for news, weather, and other current information. "
+            "I'll only present it as current when the lookup returns supporting "
+            "sources for the requested place and date."
+        )
+    return None
+
+
+def contextual_lookup_text(text: str, history: Optional[Sequence[dict]] = None) -> str:
+    """Resolve short lookup follow-ups from user turns, never old AI claims."""
+    normalized = (text or "").strip()
+    turns = list(history or [])[-8:]
+    awaiting_location = bool(
+        turns and turns[-1].get("role") == "assistant"
+        and re.search(r"which city or location.*weather", str(turns[-1].get("content") or ""), re.I)
+        and len(normalized.split()) <= 8
+        and not _FACTUAL_SHAPE.search(normalized)
+    )
+    if (not _FOLLOW_UP.search(normalized) and not awaiting_location) or len(normalized.split()) > 18:
+        return normalized
+    for turn in reversed(turns):
+        if turn.get("role") != "user":
+            continue
+        previous = str(turn.get("content") or "").strip()
+        if not previous or _FOLLOW_UP.search(previous):
+            continue
+        if _EXPLICIT_CURRENT.search(previous) and not _WORKFLOW_OR_CREATIVE.search(previous):
+            follow_up = f"weather in {normalized}" if awaiting_location else normalized
+            return f"{previous}\nFollow-up request: {follow_up}"
+        # Do not inherit a weather/news lookup across a subject change.
+        break
+    return normalized
+
+
+def decide_freshness(
+    text: str, conversation_history: Optional[Sequence[dict]] = None
+) -> FreshnessDecision:
     normalized = (text or "").strip()
     if not normalized:
         return FreshnessDecision(FreshnessMode.NONE, "empty")
+
+    if live_search_capability_response(normalized):
+        return FreshnessDecision(FreshnessMode.NONE, "search_capability_question")
+
+    if re.fullmatch(
+        r"(?:what is (?:the )?(?:weather|news|forecasting)|"
+        r"how do weather forecasts work|define (?:weather|news))\??",
+        normalized, re.I,
+    ):
+        return FreshnessDecision(FreshnessMode.NONE, "stable_definition")
 
     if _EXPLICIT_SEARCH.search(normalized):
         return FreshnessDecision(FreshnessMode.REQUIRE, "explicit_search")
@@ -78,6 +146,9 @@ def decide_freshness(text: str) -> FreshnessDecision:
 
     if _WORKFLOW_OR_CREATIVE.search(normalized):
         return FreshnessDecision(FreshnessMode.NONE, "workflow_or_creative")
+
+    if contextual_lookup_text(normalized, conversation_history) != normalized:
+        return FreshnessDecision(FreshnessMode.REQUIRE, "current_lookup_follow_up")
 
     # The deterministic layer deliberately does not decide whether these need
     # the web. It merely makes Search available; Gemini decides whether to call
