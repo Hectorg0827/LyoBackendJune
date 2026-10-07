@@ -8,6 +8,7 @@ from lyo_app.teaching_runtime.interaction_contract import (
     InteractionMode,
     ResponseDepth,
     interaction_contract_for_request,
+    voice_router_shortcut_intent,
 )
 from lyo_app.teaching_runtime.models import (
     LearnerSnapshot,
@@ -227,6 +228,66 @@ def test_voice_interruption_stays_on_same_contract_and_follows_new_turn():
     assert "interrupted" in prompt.lower()
     assert "new request" in prompt.lower()
     assert "restart" in prompt.lower()
+
+
+def test_explicit_voice_explanation_can_skip_semantic_router():
+    contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        voice_mode=True,
+    )
+
+    assert voice_router_shortcut_intent(contract) is Intent.EXPLAIN
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what is gravity?",
+        "teach me calculus",
+        "quiz me on fractions",
+        "search the web for today's AI news",
+        "create a course on marketing",
+        "compare mitosis and meiosis",
+        "summarize photosynthesis",
+        "go deeper",
+        "next",
+    ],
+)
+def test_context_sensitive_voice_turns_keep_full_semantic_router(text):
+    contract = interaction_contract_for_request(text=text, voice_mode=True)
+
+    assert voice_router_shortcut_intent(contract) is None
+
+
+def test_voice_explanation_keeps_full_router_with_active_course():
+    contract = interaction_contract_for_request(
+        text="explain photosynthesis",
+        voice_mode=True,
+    )
+
+    assert voice_router_shortcut_intent(
+        contract,
+        has_active_course=True,
+    ) is None
+
+
+def test_voice_media_and_forced_workflow_never_shortcut_router():
+    media_contract = interaction_contract_for_request(
+        text="what is this?",
+        has_media=True,
+        has_current_media=True,
+        voice_mode=True,
+    )
+    explain_contract = interaction_contract_for_request(
+        text="explain gravity",
+        voice_mode=True,
+    )
+
+    assert voice_router_shortcut_intent(media_contract, has_media=True) is None
+    assert voice_router_shortcut_intent(
+        explain_contract,
+        forced_intent=Intent.TEST_PREP,
+    ) is None
 
 
 def test_voice_prompt_is_spoken_friendly_without_changing_mode():
