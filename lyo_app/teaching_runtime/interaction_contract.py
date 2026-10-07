@@ -101,7 +101,9 @@ _COMPARE_RE = re.compile(
 )
 _SEARCH_RE = re.compile(
     r"\b(?:search (?:the )?(?:web|internet)|look (?:this|it) up|find current|"
-    r"latest|today's|current price|current news|busca en internet)\b",
+    r"latest|today(?:'s)?|current (?:price|news|weather|president|prime minister|"
+    r"ceo|version|release|law|rule|schedule|score|standings)|"
+    r"busca en internet|informaci[oó]n actual|actualmente)\b",
     re.IGNORECASE,
 )
 _TEACH_RE = re.compile(
