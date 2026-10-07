@@ -34,6 +34,10 @@ _INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
 _TABLE_SEPARATOR_RE = re.compile(
     r"(?m)^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
 )
+_CURRENCY_DOLLAR_RE = re.compile(
+    r"\$(?=\d[\d,]*(?:\.\d+)?(?:\s|[.,!?)]|$))"
+)
+_CURRENCY_DOLLAR_SENTINEL = "__LYO_CURRENCY_DOLLAR__"
 
 
 def prepare_spoken_text(raw: str) -> str:
@@ -62,9 +66,13 @@ def prepare_spoken_text(raw: str) -> str:
     )
     text = text.replace("\\(", "").replace("\\)", "")
     text = text.replace("\\[", "").replace("\\]", "")
-    # Strip paired math delimiters but preserve semantic currency such as $2,100.
+    # Protect semantic currency markers before stripping paired math delimiters.
+    # Otherwise "$2,100. Half is $\\frac{1}{2}$" can be misread as one giant
+    # inline-math span stretching from the price to the formula.
+    text = _CURRENCY_DOLLAR_RE.sub(_CURRENCY_DOLLAR_SENTINEL, text)
     text = _MATH_BLOCK_RE.sub(r"\1", text)
     text = _INLINE_MATH_RE.sub(r"\1", text)
+    text = text.replace(_CURRENCY_DOLLAR_SENTINEL, "$")
     text = _TABLE_SEPARATOR_RE.sub(" ", text)
     text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
