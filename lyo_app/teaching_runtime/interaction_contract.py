@@ -113,7 +113,7 @@ _TEACH_RE = re.compile(
 )
 _EXPLAIN_RE = re.compile(
     r"\b(?:explain|why does|how does|how do|what does .* mean|"
-    r"expl[ií]ca|por qu[eé]|c[oó]mo funciona)\b",
+    r"expl[ií]ca(?:me)?|por qu[eé]|c[oó]mo funciona)\b",
     re.IGNORECASE,
 )
 _ANALYZE_RE = re.compile(
