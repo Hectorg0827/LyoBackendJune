@@ -64,7 +64,7 @@ _DEEP_RE = re.compile(
 )
 _CONCISE_RE = re.compile(
     r"\b(?:brief|briefly|short answer|concise|quickly|in one sentence|"
-    r"tldr|tl;dr|resumen corto|breve)\b",
+    r"tldr|tl;dr|resumen corto|breve|brevemente)\b",
     re.IGNORECASE,
 )
 _QUIZ_RE = re.compile(
@@ -101,7 +101,9 @@ _COMPARE_RE = re.compile(
 )
 _SEARCH_RE = re.compile(
     r"\b(?:search (?:the )?(?:web|internet)|look (?:this|it) up|find current|"
-    r"latest|today's|current price|current news|busca en internet)\b",
+    r"latest|today(?:'s)?|current (?:price|news|weather|president|prime minister|"
+    r"ceo|version|release|law|rule|schedule|score|standings)|"
+    r"busca en internet|informaci[oó]n actual|actualmente)\b",
     re.IGNORECASE,
 )
 _TEACH_RE = re.compile(
@@ -111,7 +113,7 @@ _TEACH_RE = re.compile(
 )
 _EXPLAIN_RE = re.compile(
     r"\b(?:explain|why does|how does|how do|what does .* mean|"
-    r"expl[ií]ca|por qu[eé]|c[oó]mo funciona)\b",
+    r"expl[ií]ca(?:me)?|por qu[eé]|c[oó]mo funciona)\b",
     re.IGNORECASE,
 )
 _ANALYZE_RE = re.compile(
