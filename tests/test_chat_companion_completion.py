@@ -241,6 +241,13 @@ async def test_selective_critic_can_replace_a_materially_wrong_answer(monkeypatc
         answer="The current value is 41, according to today's source listing and supporting technical analysis.",
         interaction_mode="search",
         search_required=True,
+        sources=[
+            {
+                "title": "Fresh source",
+                "url": "https://example.test/current",
+                "snippet": "The current verified value is 42.",
+            }
+        ],
     )
 
     assert result.checked is True
