@@ -37,6 +37,14 @@ def _pdf():
     }
 
 
+def test_spanish_explain_request_keeps_explain_mode_and_concise_depth():
+    contract = interaction_contract_for_request(
+        text="Explícame brevemente qué es la gravedad."
+    )
+    assert contract.mode is InteractionMode.EXPLAIN
+    assert contract.depth is ResponseDepth.CONCISE
+
+
 def test_current_information_is_an_explicit_search_contract():
     contract = interaction_contract_for_request(
         text="Who is the current president of France?"
