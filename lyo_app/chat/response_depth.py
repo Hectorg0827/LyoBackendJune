@@ -112,7 +112,7 @@ async def record_explicit_depth_preference(
         if source_session_id:
             row.source_session_id = source_session_id
 
-    await db.flush()
+    await db.commit()
     return preference
 
 
