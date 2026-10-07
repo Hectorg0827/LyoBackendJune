@@ -746,12 +746,15 @@ def _voice_ready_payload(
     """
     from lyo_app.teaching_runtime.voice_delivery import prepare_spoken_text
 
+    spoken_text = prepare_spoken_text(text)
     payload: Dict[str, Any] = {
         "type": "voice_ready",
         "text": text,
-        "spoken_text": prepare_spoken_text(text) or text,
+        "spoken_text": spoken_text,
         "final": True,
     }
+    if not spoken_text:
+        payload["speak"] = False
     if segments_delivered:
         payload.update(speak=False, delivery="segments", sequence=segments_delivered)
     if message_id:
@@ -2497,13 +2500,16 @@ async def stream_lyo2_chat(
                             )
                         except asyncio.TimeoutError:
                             continue
+                        spoken_segment = prepare_spoken_text(segment)
+                        if not spoken_segment:
+                            continue
                         voice_sequence += 1
                         yield yield_safe_sse_event(
                             "voice_text_segment",
                             {
                                 "type": "voice_text_segment",
                                 "text": segment,
-                                "spoken_text": prepare_spoken_text(segment) or segment,
+                                "spoken_text": spoken_segment,
                                 "sequence": voice_sequence,
                                 "message_id": assistant_client_message_id,
                             },
@@ -2518,13 +2524,16 @@ async def stream_lyo2_chat(
                         await voice_segments.put(segment)
                     while not voice_segments.empty():
                         segment = voice_segments.get_nowait()
+                        spoken_segment = prepare_spoken_text(segment)
+                        if not spoken_segment:
+                            continue
                         voice_sequence += 1
                         yield yield_safe_sse_event(
                             "voice_text_segment",
                             {
                                 "type": "voice_text_segment",
                                 "text": segment,
-                                "spoken_text": prepare_spoken_text(segment) or segment,
+                                "spoken_text": spoken_segment,
                                 "sequence": voice_sequence,
                                 "message_id": assistant_client_message_id,
                             },
