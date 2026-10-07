@@ -10,7 +10,7 @@ from lyo_app.ai_agents.multi_agent_v2.tools.base import ToolResult
 from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
 from lyo_app.api.v1 import stream_lyo2 as stream
 from lyo_app.chat import freshness
-from lyo_app.chat.live_search import LIVE_SEARCH_UNAVAILABLE
+from lyo_app.chat.live_search import LIVE_SEARCH_UNAVAILABLE, WEB_BACKGROUND_NOTICE
 from lyo_app.core.ai_resilience import ai_resilience_manager
 from tests.test_live_search import NOW, weather_source
 from tests.test_voice_turn_lifecycle import harness, event_payload  # noqa: F401
@@ -86,6 +86,40 @@ async def test_retry_restores_saved_source_dates_without_claiming_a_new_lookup(c
 
 
 @pytest.mark.asyncio
+async def test_general_knowledge_stream_fetches_and_persists_web_sources(current_chat, monkeypatch):
+    search = AsyncMock(return_value=ToolResult(success=True, output=[{
+        "title": "Research reference", "url": "https://example.com/research",
+        "snippet": "External information relevant to the question.",
+    }], message="Retrieved external source"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    response = await current_chat.response(
+        text="Who invented the transistor?", forced_intent=None,
+        state_summary={"stream_capabilities": {"text_delta": True}},
+    )
+    events = [event_payload(c) async for c in response.body_iterator]
+    search.assert_awaited_once()
+    assert [e["status"] for e in events if e["type"] == "search_status"] == ["searching", "complete"]
+    saved = next(w for w in current_chat.writes if w["role"] == "assistant")
+    assert saved["blocks"][0]["content"]["items"][0]["url"] == "https://example.com/research"
+    assert current_chat.model_calls[0]["enable_google_search"] is False
+    assert "External information relevant" in str(current_chat.model_calls[0]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_general_background_stream_discloses_failed_lookup(current_chat, monkeypatch):
+    monkeypatch.setattr(WebSearchTool, "execute", AsyncMock(return_value=ToolResult(
+        success=False, output=None, message="Unavailable",
+    )))
+    response = await current_chat.response(
+        text="Who invented the transistor?", forced_intent=None,
+        state_summary={"stream_capabilities": {"text_delta": True}},
+    )
+    events = [event_payload(c) async for c in response.body_iterator]
+    answer = next(e for e in events if e["type"] == "answer")["block"]["content"]["text"]
+    assert answer.startswith(WEB_BACKGROUND_NOTICE)
+    assert [e["status"] for e in events if e["type"] == "search_status"] == ["searching", "unavailable"]
+    assert len(current_chat.model_calls) == 1
+    assert not any(e["type"] == "sources" for e in events)
 async def test_general_question_stream_exposes_search_status_and_saved_sources(current_chat, monkeypatch):
     source = {"title": "Official reference", "url": "https://example.com/docs", "snippet": "Relevant documentation.", "provider": "tavily"}
     search = AsyncMock(return_value=ToolResult(success=True, output=[source], message="Found reference"))

@@ -245,3 +245,54 @@ async def test_gemini_keeps_only_cited_text_for_each_source(monkeypatch):
     assert result.success
     assert len(result.output) == 1
     assert "July" not in result.output[0]["snippet"]
+
+
+@pytest.mark.parametrize("query", [
+    "What are the latest Python features?", "What are the current visa requirements?",
+    "What are the specs of this phone?", "Tell me about new battery research",
+])
+def test_general_sources_are_not_incorrectly_limited_to_daily_news(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    source = {"title": "Official documentation", "url": "https://example.com/docs",
+              "snippet": "Relevant documented facts.", "published_at": "2026-09-01"}
+    assert usable_search_results([source], request)
+    assert "official" in request.provider_query
+    assert "Requested date" not in request.provider_query
+
+
+def test_daily_general_facts_still_require_recent_dated_evidence():
+    request = prepare_live_search("What is the exchange rate right now?", current_time_context=NOW)
+    source = {"title": "Exchange rate", "url": "https://example.com/rates",
+              "snippet": "A rate from September.", "published_at": "2026-09-01"}
+    assert usable_search_results([source], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "Weather for tomorrow in New York", "Weather in New York for tomorrow",
+    "Weather for October 7 in New York",
+])
+def test_weather_location_survives_temporal_prepositions(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == "New York"
+    assert request.needs_location is False
+
+
+@pytest.mark.parametrize("stamp", [
+    "Current date/time: 2026-10-06T22:00:00-04:00", "Current date/time: 2026-10-06T08:00:00+09:00",
+])
+def test_date_only_news_publication_keeps_its_calendar_day(stamp):
+    request = prepare_live_search("News today", current_time_context=stamp)
+    result = usable_search_results([{
+        "title": "Today's report", "url": "https://example.com/news", "snippet": "A verified report.",
+        "published_at": "2026-10-06",
+    }], request)
+    assert len(result) == 1
+    assert result[0]["published_at"] == "2026-10-06"
+
+
+@pytest.mark.parametrize("query", ["What is the exchange rate right now?", "What is the current price of Bitcoin?"])
+def test_daily_market_facts_cannot_use_yesterdays_publication(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    source = {"title": "Market quote", "url": "https://example.com/quote", "snippet": "A market quote.",
+              "published_at": "2026-10-05"}
+    assert usable_search_results([source], request) == []

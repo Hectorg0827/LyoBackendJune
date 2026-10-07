@@ -72,6 +72,54 @@ def test_capability_and_definition_questions_do_not_trigger_a_forecast():
     assert decide_freshness("What is the weather today?").mode is FreshnessMode.REQUIRE
 
 
+@pytest.mark.parametrize("text", [
+    "What are the latest Python features?", "Tell me about new research in batteries",
+    "What are the visa requirements for Japan?", "What does this software cost? What is its pricing?",
+    "What are the specs of the newest phone?", "What changed this year in quantum computing?",
+    f"Tell me about discoveries in {datetime.now(timezone.utc).year}",
+])
+def test_new_information_across_topics_requires_web_evidence(text):
+    assert decide_freshness(text).mode is FreshnessMode.REQUIRE
+
+
+@pytest.mark.parametrize("text", [
+    "Tell me about CRISPR", "Describe superconductors", "Compare lithium and sodium batteries",
+    "Explain quantum entanglement", "Information about fusion energy",
+])
+def test_general_informational_requests_get_a_web_lookup(text):
+    assert decide_freshness(text).mode is FreshnessMode.ALLOW
+
+
+@pytest.mark.parametrize("text", [
+    "What did I tell you recently?", "What are my preferences?", "What is in my notes?",
+    "How are you?", "What is 2 + 2?",
+])
+def test_private_context_casual_chat_and_arithmetic_do_not_go_to_web(text):
+    assert decide_freshness(text).mode is FreshnessMode.NONE
+
+
+@pytest.mark.parametrize("text", [
+    "Summarize the news article I attached", "Write a story about the weather",
+    "Summarize the current news article I uploaded",
+])
+def test_topic_words_do_not_override_supplied_material_or_creative_work(text):
+    assert decide_freshness(text).mode is FreshnessMode.NONE
+
+
+def test_summarize_latest_news_still_requires_external_information():
+    assert decide_freshness("Summarize the latest news").mode is FreshnessMode.REQUIRE
+
+
+@pytest.mark.parametrize("text", [
+    "Can you access new information?", "Are you limited to your training data?",
+    "Can you search the web?", "Do you have access to updated information?",
+])
+def test_general_web_capability_questions_are_handled_without_inventing_a_cutoff(text):
+    from lyo_app.chat.freshness import live_search_capability_response
+    assert decide_freshness(text).mode is FreshnessMode.NONE
+    reply = live_search_capability_response(text)
+    assert "across topics" in reply
+    assert "If a lookup fails" in reply
 @pytest.mark.parametrize("query", [
     "Summarize the news article I attached",
     "Translate the weather forecast below",

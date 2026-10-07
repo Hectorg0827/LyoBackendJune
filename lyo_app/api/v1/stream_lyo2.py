@@ -1778,7 +1778,7 @@ async def stream_lyo2_chat(
                         {
                             "type": "search_status",
                             "status": "searching",
-                            "message": "Checking current information…",
+                            "message": "Checking web sources…",
                         },
                     )
 

@@ -94,9 +94,17 @@ _INFORMATIONAL = re.compile(
 
 _LOCAL_CONTEXT = re.compile(
     r"\b(?:my (?:notes|files?|documents?|preferences?|profile|conversation)|"
-    r"(?:I|we) (?:said|told you|discussed)|(?:this|our|the previous) conversation|"
-    r"attached (?:file|document|image)|uploaded (?:file|document|image))\b", re.I,
+    r"(?:I|we) (?:said|told you|tell you|discussed|talked about|attached|uploaded)|"
+    r"(?:this|our|the previous) conversation|"
+    r"attached (?:file|document|image|(?:news )?article)|uploaded (?:file|document|image))\b", re.I,
 )
+
+_RECENT_INTENT = re.compile(
+    r"\b(today|tonight|yesterday|tomorrow|this (?:week|month|year)|"
+    r"current|currently|latest|recent|recently|live|new (?:research|information|"
+    r"developments|updates|discoveries)|hoy|ahora|últim[oa]s?|recientes?)\b", re.I,
+)
+
 
 _CASUAL = re.compile(
     r"^(?:hi|hey|hello|hola|thanks|thank you|gracias|"
@@ -111,7 +119,9 @@ _FOLLOW_UP = re.compile(
 )
 
 _SEARCH_CAPABILITY = re.compile(
-    r"^(?:(?:but|bit)\s+)?(?:how (?:can|do) you|do you have|can you access)\b",
+    r"^(?:(?:but|bit)\s+)?(?:how (?:can|do) you|do you have|"
+    r"can you (?:access|search|browse|get)|are you (?:limited|confined)|"
+    r"is your (?:information|knowledge)|what is your (?:knowledge|training))\b",
     re.IGNORECASE,
 )
 
@@ -120,11 +130,12 @@ def live_search_capability_response(text: str) -> Optional[str]:
     normalized = (text or "").strip()
     if (
         _SEARCH_CAPABILITY.search(normalized)
-        and re.search(r"\b(weather|news|internet|browse|live|real[- ]?time|new information|web|online)\b", normalized, re.I)
+        and re.search(r"\b(weather|news|internet|browse|live|real[- ]?time|"
+                      r"(?:new|updated|external|current) information|web|online|training data)\b", normalized, re.I)
         and not re.search(r"\b(tell me|give me|show me|temperature|headlines)\b", normalized, re.I)
     ):
         return (
-            "I can try a live search for information across topics, beyond the model's "
+            "I can try a web search for information across topics, beyond the model's "
             "training data. I'll use supporting sources and check dates when they "
             "matter. If a lookup fails, I'll say what I couldn't verify."
         )
@@ -175,6 +186,9 @@ def decide_freshness(
     if live_search_capability_response(normalized):
         return FreshnessDecision(FreshnessMode.NONE, "search_capability_question")
 
+    if re.fullmatch(r"(?:how are you|what['’]?s up|who are you|what can you do|how can you help me)[?.!]*", normalized, re.I):
+        return FreshnessDecision(FreshnessMode.NONE, "casual_or_capability")
+
     if (_LOCAL_CONTEXT.search(normalized) or _SUPPLIED_SOURCE.search(normalized)) and not _WEB_REQUEST.search(normalized):
         return FreshnessDecision(FreshnessMode.NONE, "conversation_or_document_context")
 
@@ -188,10 +202,10 @@ def decide_freshness(
     ):
         return FreshnessDecision(FreshnessMode.NONE, "stable_definition")
 
-    if _EXPLICIT_SEARCH.search(normalized):
+    if _EXPLICIT_SEARCH.search(normalized) or _WEB_REQUEST.search(normalized):
         return FreshnessDecision(FreshnessMode.REQUIRE, "explicit_search")
 
-    if _WORKFLOW_OR_CREATIVE.search(normalized) and not _TEMPORAL_LOOKUP.search(normalized):
+    if _WORKFLOW_OR_CREATIVE.search(normalized) and not (_RECENT_INTENT.search(normalized) or _TEMPORAL_LOOKUP.search(normalized)):
         return FreshnessDecision(FreshnessMode.NONE, "workflow_or_creative")
 
     if _EXPLICIT_CURRENT.search(normalized):

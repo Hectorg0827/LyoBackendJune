@@ -158,19 +158,23 @@ async def test_search_capability_reply_does_not_invent_access_or_cutoff(monkeypa
     chunks = [chunk async for chunk in LyoExecutor.__new__(LyoExecutor).stream_text(
         original_request="Bit how can you generare weather update", search_required=False,
     )]
-    assert "try a live search" in chunks[0]
+    assert "try a web search" in chunks[0]
     assert "October 2023" not in chunks[0]
     search.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_planner_path_cannot_answer_current_news_without_live_evidence(monkeypatch):
+@pytest.mark.parametrize("query", [
+    "Trending news in Dominican Republic", "What are the latest Python features?",
+    "What are the current visa requirements for Japan?",
+])
+async def test_planner_path_cannot_answer_current_information_without_live_evidence(monkeypatch, query):
     search = AsyncMock(return_value=ToolResult(success=True, output=[], message="No results"))
     monkeypatch.setattr(WebSearchTool, "execute", search)
     executor = LyoExecutor.__new__(LyoExecutor)
     executor._generate_text = AsyncMock(return_value="Unsupported current news")
     response = await executor.execute(
-        user_id="1", intent="CHAT", original_request="Trending news in Dominican Republic",
+        user_id="1", intent="CHAT", original_request=query,
         plan=LyoPlan(steps=[PlannedAction(action_type=ActionType.GENERATE_TEXT,
             description="Answer", parameters={"content": "Old planner answer"})]),
         current_time_context="Current date/time: 2026-10-06T22:00:00-04:00",
@@ -206,6 +210,92 @@ async def test_planner_search_cannot_replace_current_user_query_with_july(monkey
 
 
 @pytest.mark.asyncio
+async def test_general_information_fetches_web_before_any_model_provider(monkeypatch):
+    search = AsyncMock(return_value=ToolResult(success=True, output=[{
+        "title": "Official research page", "url": "https://example.com/research",
+        "snippet": "A development not present in the model's training data.",
+    }], message="Retrieved web page"))
+    captured = {}
+    async def generate(**kwargs):
+        captured.update(kwargs)
+        yield "Answer from retrieved research"
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    monkeypatch.setattr(ai_resilience_manager, "stream_chat_completion", generate)
+    metadata = {}
+    chunks = [c async for c in LyoExecutor.__new__(LyoExecutor).stream_text(
+        original_request="What is this research about?", enable_google_search=True,
+        search_required=False, current_time_context="Current date/time: 2026-10-06T22:00:00-04:00",
+        metadata_sink=metadata,
+    )]
+    assert chunks == ["Answer from retrieved research"]
+    search.assert_awaited_once()
+    assert captured["enable_google_search"] is False
+    assert "not present in the model's training data" in str(captured["messages"])
+    assert metadata["search_status"] == "complete"
+    assert metadata["sources"][0]["url"] == "https://example.com/research"
+
+
+@pytest.mark.asyncio
+async def test_background_fallback_discloses_failed_web_lookup(monkeypatch):
+    search = AsyncMock(return_value=ToolResult(success=False, output=None, message="Unavailable"))
+    captured = {}
+    async def generate(**kwargs):
+        captured.update(kwargs)
+        yield "Historical background"
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    monkeypatch.setattr(ai_resilience_manager, "stream_chat_completion", generate)
+    metadata = {}
+    chunks = [c async for c in LyoExecutor.__new__(LyoExecutor).stream_text(
+        original_request="Who invented the transistor?", enable_google_search=True,
+        search_required=False, metadata_sink=metadata,
+    )]
+    assert chunks == [WEB_BACKGROUND_NOTICE, "Historical background"]
+    assert metadata["sources"] == []
+    assert metadata["search_status"] == "unavailable"
+    assert captured["enable_google_search"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planner_search", [False, True])
+async def test_planner_general_information_injects_search_and_uses_new_evidence(monkeypatch, planner_search):
+    source = {"title": "Research", "url": "https://example.com/research", "snippet": "Newly retrieved evidence."}
+    search = AsyncMock(return_value=ToolResult(success=True, output=[source], message="Retrieved"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    executor = LyoExecutor.__new__(LyoExecutor)
+    executor._generate_text = AsyncMock(return_value="Answer from web research")
+    response = await executor.execute(
+        user_id="1", intent="CHAT", original_request="Tell me about fusion energy",
+        plan=LyoPlan(steps=[
+            *([PlannedAction(action_type=ActionType.SEARCH_WEB, description="Search",
+                parameters={"query": "An unrelated archived topic"})] if planner_search else []),
+            PlannedAction(action_type=ActionType.GENERATE_TEXT,
+            description="Answer", parameters={"content": "Old planner knowledge"})]),
+    )
+    search.assert_awaited_once()
+    assert search.await_args.kwargs["query"] == "Tell me about fusion energy"
+    context = executor._generate_text.await_args.args[1]
+    assert context["requires_live_search"] is True
+    assert context["retrieved_content"][0]["snippet"] == "Newly retrieved evidence."
+    assert response.metadata["sources"][0]["url"] == source["url"]
+    assert response.answer_block.content["text"] == "Answer from web research"
+
+
+@pytest.mark.asyncio
+async def test_planner_background_fallback_is_also_disclosed_in_stream_and_answer(monkeypatch):
+    search = AsyncMock(return_value=ToolResult(success=False, output=None, message="Unavailable"))
+    monkeypatch.setattr(WebSearchTool, "execute", search)
+    executor = LyoExecutor.__new__(LyoExecutor)
+    executor._generate_text = AsyncMock(return_value="Historical background")
+    callback = AsyncMock()
+    response = await executor.execute(
+        user_id="1", intent="CHAT", original_request="Who invented the transistor?",
+        plan=LyoPlan(steps=[PlannedAction(action_type=ActionType.GENERATE_TEXT, description="Answer")]),
+        text_delta_callback=callback,
+    )
+    callback.assert_awaited_once_with(WEB_BACKGROUND_NOTICE)
+    assert response.answer_block.content["text"] == WEB_BACKGROUND_NOTICE + "Historical background"
+    assert response.metadata["search_status"] == "unavailable"
+    assert response.metadata["sources"] == []
 async def test_general_factual_stream_uses_shared_sources_with_any_answer_provider(monkeypatch):
     source = {"title": "Official documentation", "url": "https://example.com/docs", "snippet": "Maintained documentation describes the feature.", "provider": "tavily"}
     search = AsyncMock(return_value=ToolResult(success=True, output=[source], message="Found documentation"))
