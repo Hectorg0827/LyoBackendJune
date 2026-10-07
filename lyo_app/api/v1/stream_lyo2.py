@@ -2430,6 +2430,23 @@ async def stream_lyo2_chat(
             canonical_voice_parts = []
             answer_mode = decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value
 
+            def voice_segment_payload(segment: str, spoken_segment: str) -> Dict[str, Any]:
+                nonlocal voice_sequence
+                voice_sequence += 1
+                elapsed_ms = int((time.monotonic() - request_started) * 1000)
+                if voice_sequence == 1:
+                    latency_metrics["voice_first_segment_ms"] = elapsed_ms
+                latency_metrics["voice_segment_count"] = voice_sequence
+                return {
+                    "type": "voice_text_segment",
+                    "text": segment,
+                    "spoken_text": spoken_segment,
+                    "sequence": voice_sequence,
+                    "message_id": assistant_client_message_id,
+                    "turn_id": voice_state.get("turn_id") if isinstance(voice_state, dict) else None,
+                    "server_elapsed_ms": elapsed_ms,
+                }
+
             def persist_completed_voice(task):
                 if not task.cancelled() and task.exception() is None:
                     persist_answer(task.result().answer_block.content.get("text", ""), answer_mode)
@@ -2503,16 +2520,9 @@ async def stream_lyo2_chat(
                         spoken_segment = prepare_spoken_text(segment)
                         if not spoken_segment:
                             continue
-                        voice_sequence += 1
                         yield yield_safe_sse_event(
                             "voice_text_segment",
-                            {
-                                "type": "voice_text_segment",
-                                "text": segment,
-                                "spoken_text": spoken_segment,
-                                "sequence": voice_sequence,
-                                "message_id": assistant_client_message_id,
-                            },
+                            voice_segment_payload(segment, spoken_segment),
                         )
 
                     execution_response = await execution_task
@@ -2527,16 +2537,9 @@ async def stream_lyo2_chat(
                         spoken_segment = prepare_spoken_text(segment)
                         if not spoken_segment:
                             continue
-                        voice_sequence += 1
                         yield yield_safe_sse_event(
                             "voice_text_segment",
-                            {
-                                "type": "voice_text_segment",
-                                "text": segment,
-                                "spoken_text": spoken_segment,
-                                "sequence": voice_sequence,
-                                "message_id": assistant_client_message_id,
-                            },
+                            voice_segment_payload(segment, spoken_segment),
                         )
                 else:
                     with _model_usage_scope(teaching_decision.model_tier):
