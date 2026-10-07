@@ -74,16 +74,18 @@ async def record_explicit_depth_preference(
     *,
     source_session_id: Optional[str] = None,
 ) -> Optional[ResponseDepth]:
-    """Persist only learner-authored explicit preferences.
+    """Accumulate explicit depth signals and learn only after repetition.
 
-    We update the latest row rather than creating an unbounded preference log.
-    Embeddings are unnecessary for this deterministic preference lane.
+    A one-off "briefly" or "go deeper" formats the current turn but does not
+    rewrite the user's durable default. Two explicit requests for the same
+    depth are required before a response_depth preference is created or
+    changed.
     """
     preference = explicit_depth_preference(text)
     if preference is None:
         return None
 
-    result = await db.execute(
+    durable_result = await db.execute(
         select(MemoryInsight)
         .where(
             MemoryInsight.user_id == user_id,
@@ -92,25 +94,58 @@ async def record_explicit_depth_preference(
         .order_by(desc(MemoryInsight.created_at), desc(MemoryInsight.id))
         .limit(1)
     )
-    row = result.scalar_one_or_none()
-    insight_text = f"Preferred response depth: {preference.value}"
+    durable = durable_result.scalar_one_or_none()
+    desired = f"Preferred response depth: {preference.value}"
 
-    if row is None:
-        db.add(
-            MemoryInsight(
-                user_id=user_id,
-                category="response_depth",
-                insight_text=insight_text,
-                embedding=None,
-                confidence=1.0,
-                source_session_id=source_session_id,
-            )
+    # If the durable default already matches, the current explicit wording
+    # needs no further learning evidence.
+    if durable is not None and str(durable.insight_text or "") == desired:
+        return preference
+
+    signal_result = await db.execute(
+        select(MemoryInsight)
+        .where(
+            MemoryInsight.user_id == user_id,
+            MemoryInsight.category == "response_depth_signal",
         )
-    else:
-        row.insight_text = insight_text
-        row.confidence = 1.0
-        if source_session_id:
-            row.source_session_id = source_session_id
+        .order_by(desc(MemoryInsight.created_at), desc(MemoryInsight.id))
+        .limit(8)
+    )
+    prior_signals = list(signal_result.scalars().all())
+    signal_text = f"Requested response depth: {preference.value}"
+    repeated = any(
+        str(row.insight_text or "") == signal_text
+        for row in prior_signals
+    )
+
+    db.add(
+        MemoryInsight(
+            user_id=user_id,
+            category="response_depth_signal",
+            insight_text=signal_text,
+            embedding=None,
+            confidence=1.0,
+            source_session_id=source_session_id,
+        )
+    )
+
+    if repeated:
+        if durable is None:
+            db.add(
+                MemoryInsight(
+                    user_id=user_id,
+                    category="response_depth",
+                    insight_text=desired,
+                    embedding=None,
+                    confidence=1.0,
+                    source_session_id=source_session_id,
+                )
+            )
+        else:
+            durable.insight_text = desired
+            durable.confidence = 1.0
+            if source_session_id:
+                durable.source_session_id = source_session_id
 
     await db.commit()
     return preference
