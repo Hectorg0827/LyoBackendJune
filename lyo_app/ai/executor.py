@@ -443,7 +443,12 @@ Freshness rules:
                         f"[{index}] {title}\nURL: {url}\n{snippet}"
                     )
                     if url:
-                        sources.append({"title": title, "url": url})
+                        sources.append({
+                            "title": title,
+                            "url": url,
+                            "snippet": snippet[:600],
+                            "provider": str(item.get("provider") or "web_search"),
+                        })
 
                 if live_context:
                     messages.insert(
@@ -556,9 +561,14 @@ Freshness rules:
             sources = [
                 {
                     "name": str(item.get("title") or "Web source"),
+                    "title": str(item.get("title") or "Web source"),
                     "url": str(item.get("url") or ""),
                     "mime_type": "text/html",
                     "kind": "web",
+                    "snippet": str(
+                        item.get("snippet") or item.get("content") or ""
+                    )[:600],
+                    "provider": str(item.get("provider") or "web_search"),
                 }
                 for item in result.output
                 if isinstance(item, dict) and item.get("url")
