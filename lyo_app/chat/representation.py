@@ -18,7 +18,11 @@ _TIMELINE_RE = re.compile(
     re.IGNORECASE,
 )
 _DISPLAY_MATH_RE = re.compile(
-    r"(?P<full>\$\$(?P<dollar>.+?)\$\$|\\\[(?P<bracket>.+?)\\\])",
+    r"(?P<full>"
+    r"\$\$(?P<dollar>.+?)\$\$"
+    r"|\\\[(?P<bracket>.+?)\\\]"
+    r"|(?m:^\s*\$(?!\$)(?P<single>[^$\n]+)\$\s*$)"
+    r")",
     re.DOTALL,
 )
 
@@ -106,7 +110,12 @@ def promote_answer_representations(
     # examples keep their surrounding explanation/steps in prose/step blocks.
     math_match = _DISPLAY_MATH_RE.search(text)
     if math_match:
-        source = (math_match.group("dollar") or math_match.group("bracket") or "").strip()
+        source = (
+            math_match.group("dollar")
+            or math_match.group("bracket")
+            or math_match.group("single")
+            or ""
+        ).strip()
         if source:
             blocks.append(
                 SmartBlock.data_viz(source=source, fmt="math", title="Worked math").model_dump()
