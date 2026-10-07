@@ -101,29 +101,58 @@ def test_learned_depth_applies_only_when_user_did_not_override_it():
 
 
 @pytest.mark.asyncio
-async def test_explicit_depth_is_durably_recorded_and_read_back():
+async def test_explicit_depth_requires_repetition_before_becoming_durable():
     db = MagicMock()
     db.execute = AsyncMock()
     db.commit = AsyncMock()
     db.add = MagicMock()
 
-    empty = MagicMock()
-    empty.scalar_one_or_none.return_value = None
-    db.execute.return_value = empty
+    no_durable = MagicMock()
+    no_durable.scalar_one_or_none.return_value = None
+    no_signals = MagicMock()
+    no_signals.scalars.return_value.all.return_value = []
+    db.execute.side_effect = [no_durable, no_signals]
 
     saved = await record_explicit_depth_preference(
         db,
         7,
         "Please be concise.",
-        source_session_id="conversation-1",
+        source_session_id="turn-1",
     )
     assert saved is ResponseDepth.CONCISE
-    db.add.assert_called_once()
-    added = db.add.call_args.args[0]
-    assert added.category == "response_depth"
-    assert added.insight_text == "Preferred response depth: concise"
+    added_categories = [call.args[0].category for call in db.add.call_args_list]
+    assert added_categories == ["response_depth_signal"]
     db.commit.assert_awaited_once()
 
+    db.execute.reset_mock()
+    db.add.reset_mock()
+    db.commit.reset_mock()
+
+    prior_signal = MagicMock()
+    prior_signal.insight_text = "Requested response depth: concise"
+    prior_signals = MagicMock()
+    prior_signals.scalars.return_value.all.return_value = [prior_signal]
+    db.execute.side_effect = [no_durable, prior_signals]
+
+    await record_explicit_depth_preference(
+        db,
+        7,
+        "Keep it concise.",
+        source_session_id="turn-2",
+    )
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert [row.category for row in added] == [
+        "response_depth_signal",
+        "response_depth",
+    ]
+    assert added[-1].insight_text == "Preferred response depth: concise"
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_learned_depth_reads_only_durable_preference():
+    db = MagicMock()
+    db.execute = AsyncMock()
     row = MagicMock()
     row.insight_text = "Preferred response depth: deep"
     found = MagicMock()
