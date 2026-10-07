@@ -70,7 +70,16 @@ def _source_context(
             continue
         title = str(source.get("title") or source.get("name") or "Source")
         url = str(source.get("url") or "")
-        pieces.append(f"- {title}: {url}".strip())
+        snippet = str(
+            source.get("snippet")
+            or source.get("content")
+            or source.get("excerpt")
+            or ""
+        ).strip()[:1000]
+        entry = f"- {title}: {url}".strip()
+        if snippet:
+            entry += f"\n  Evidence: {snippet}"
+        pieces.append(entry)
 
     budget = 6000
     for item in media_attachments or []:
@@ -114,7 +123,62 @@ async def selectively_verify_answer(
     ):
         return VerificationResult(False, False, answer, "not_required")
 
-    context = _source_context(media_attachments or [], sources or [])
+    source_list = [
+        source for source in (sources or []) if isinstance(source, Mapping)
+    ]
+    has_fresh_evidence = any(
+        str(
+            source.get("snippet")
+            or source.get("content")
+            or source.get("excerpt")
+            or ""
+        ).strip()
+        for source in source_list
+    )
+
+    if search_required and not has_fresh_evidence:
+        # Native provider grounding often returns titles/URLs only. Run one
+        # bounded independent retrieval so the critic checks current claims
+        # against evidence instead of its own training cutoff.
+        try:
+            from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+
+            search_result = await asyncio.wait_for(
+                WebSearchTool().execute(0, query=question, max_results=5),
+                timeout=min(timeout_seconds, 3.5),
+            )
+            if search_result.success and isinstance(search_result.output, list):
+                for item in search_result.output:
+                    if not isinstance(item, Mapping):
+                        continue
+                    snippet = str(
+                        item.get("snippet") or item.get("content") or ""
+                    ).strip()
+                    if not snippet:
+                        continue
+                    source_list.append(
+                        {
+                            "title": str(item.get("title") or "Live source"),
+                            "url": str(item.get("url") or ""),
+                            "snippet": snippet[:1000],
+                        }
+                    )
+                has_fresh_evidence = any(
+                    str(source.get("snippet") or "").strip()
+                    for source in source_list
+                )
+        except Exception:
+            has_fresh_evidence = False
+
+    if search_required and not has_fresh_evidence:
+        return VerificationResult(
+            True,
+            False,
+            answer,
+            "fresh_evidence_unavailable",
+        )
+
+    context = _source_context(media_attachments or [], source_list)
     prompt = f"""You are a factual verification gate for a learning assistant.
 Do not provide reasoning or commentary.
 
