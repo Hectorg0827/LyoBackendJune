@@ -204,6 +204,37 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             voice_mode=voice_context.active,
             voice_interrupted_previous_turn=voice_context.interrupted_previous_turn,
         )
+        if authenticated_user_id:
+            try:
+                from lyo_app.chat.response_depth import (
+                    apply_learned_depth,
+                    explicit_depth_preference,
+                    learned_depth_for_user,
+                    record_explicit_depth_preference,
+                )
+
+                explicit_depth = explicit_depth_preference(request.text or "")
+                if explicit_depth is not None:
+                    await record_explicit_depth_preference(
+                        db,
+                        int(authenticated_user_id),
+                        request.text or "",
+                        source_session_id=str(request.conversation_id or trace_id),
+                    )
+                else:
+                    learned_depth = await learned_depth_for_user(
+                        db, int(authenticated_user_id)
+                    )
+                    interaction_contract = apply_learned_depth(
+                        interaction_contract,
+                        user_text=request.text or "",
+                        learned=learned_depth,
+                    )
+            except Exception as depth_exc:
+                logger.debug(
+                    "Response-depth preference unavailable: %s",
+                    type(depth_exc).__name__,
+                )
         interaction_contract_payload = {
             "mode": interaction_contract.mode.value,
             "depth": interaction_contract.depth.value,
@@ -353,6 +384,44 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 personal_memory=personal_memory,
             )
         
+        # Canonical final-answer grounding and selective verification.
+        from lyo_app.chat.document_grounding import normalize_attachment_citations
+        from lyo_app.chat.verification import selectively_verify_answer
+
+        answer_text = normalize_attachment_citations(
+            execution_response.answer_block.content.get("text", ""),
+            media_attachments,
+        )
+        verification = await selectively_verify_answer(
+            question=request.text or "",
+            answer=answer_text,
+            interaction_mode=interaction_contract.mode.value,
+            media_attachments=media_attachments,
+            sources=execution_response.metadata.get("sources") or [],
+            search_required=interaction_contract.mode.value == "search",
+        )
+        answer_text = normalize_attachment_citations(
+            verification.text,
+            media_attachments,
+        )
+        execution_response.answer_block.content["text"] = answer_text
+
+        if media_attachments:
+            existing_actions = []
+            for block in execution_response.next_actions:
+                existing_actions.extend(block.content.get("actions") or [])
+            document_actions = [
+                "Summarize this document",
+                "Show key dates",
+                "Show key numbers",
+                "Ask about a page",
+            ]
+            missing = [label for label in document_actions if label not in existing_actions]
+            if missing:
+                execution_response.next_actions.append(
+                    UIBlock(type=UIBlockType.CTA_ROW, content={"actions": missing})
+                )
+
         # Add trace metadata
         latency_ms = int((time.time() - start_time) * 1000)
         execution_response.metadata.update({
@@ -363,6 +432,8 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
             "conversation_id": request.conversation_id,
             "teaching_policy": teaching_decision.model_dump(mode="json"),
             "interaction_contract": interaction_contract_payload,
+            "verification": verification.reason,
+            "verification_revised": verification.revised,
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")
