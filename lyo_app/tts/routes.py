@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 import logging
+import time
 
 from lyo_app.auth.dependencies import get_current_user_or_guest
 from lyo_app.auth.schemas import UserRead
@@ -214,6 +215,7 @@ async def synthesize_stream(
 ):
     """Return the first provider audio bytes without waiting for the recording."""
     stream = None
+    synthesis_started = time.monotonic()
     try:
         service = await get_tts_service()
         stream = service.synthesize_streaming(
@@ -247,13 +249,26 @@ async def synthesize_stream(
         finally:
             await stream.aclose()
 
+    first_byte_ms = max(
+        0,
+        int((time.monotonic() - synthesis_started) * 1000),
+    )
     media_type = {
         "mp3": "audio/mpeg", "opus": "audio/opus", "aac": "audio/aac",
         "flac": "audio/flac", "wav": "audio/wav", "pcm": "audio/pcm",
     }.get(request.format, "audio/mpeg")
     return StreamingResponse(
-        audio_chunks(), media_type=media_type,
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        audio_chunks(),
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+            "X-Lyo-TTS-First-Byte-Ms": str(first_byte_ms),
+            "Server-Timing": f"tts-first-byte;dur={first_byte_ms}",
+            "Access-Control-Expose-Headers": (
+                "X-Lyo-TTS-First-Byte-Ms, Server-Timing"
+            ),
+        },
     )
 
 
