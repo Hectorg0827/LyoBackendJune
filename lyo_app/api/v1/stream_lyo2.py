@@ -2747,25 +2747,33 @@ async def stream_lyo2_chat(
                 media_attachments,
             )
             verification_started = time.monotonic()
-            verification = await selectively_verify_answer(
-                question=request.text or "",
-                answer=raw_llm_text,
-                interaction_mode=interaction_contract.mode.value,
-                media_attachments=media_attachments,
-                sources=execution_response.metadata.get("sources") or [],
-                search_required=bool(
-                    freshness_decision and freshness_decision.mode.value == "require"
-                ),
-            )
-            raw_llm_text = normalize_attachment_citations(
-                verification.text,
-                media_attachments,
-            )
+            if voice_delivery:
+                # Spoken deltas may already be audible. Never revise the final
+                # snapshot after the learner heard a different canonical turn.
+                verification_reason = "voice_latency_preserved"
+                verification_revised = False
+            else:
+                verification = await selectively_verify_answer(
+                    question=request.text or "",
+                    answer=raw_llm_text,
+                    interaction_mode=interaction_contract.mode.value,
+                    media_attachments=media_attachments,
+                    sources=execution_response.metadata.get("sources") or [],
+                    search_required=bool(
+                        freshness_decision and freshness_decision.mode.value == "require"
+                    ),
+                )
+                raw_llm_text = normalize_attachment_citations(
+                    verification.text,
+                    media_attachments,
+                )
+                verification_reason = verification.reason
+                verification_revised = verification.revised
             latency_metrics["verification_ms"] = int(
                 (time.monotonic() - verification_started) * 1000
             )
-            latency_metrics["verification"] = verification.reason
-            latency_metrics["verification_revised"] = verification.revised
+            latency_metrics["verification"] = verification_reason
+            latency_metrics["verification_revised"] = verification_revised
 
             persist_answer(
                 raw_llm_text,
