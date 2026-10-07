@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 from lyo_app.chat.document_grounding import (
@@ -102,6 +100,36 @@ A --> B
     assert [block["type"] for block in blocks] == ["dataViz", "dataViz"]
     assert blocks[0]["content"]["format"] == "mermaid"
     assert blocks[1]["content"]["format"] == "table"
+
+
+def test_representation_promotion_creates_timeline_and_math_blocks():
+    answer = """2024 - Foundation launched
+2025 - Pilot expanded
+
+The relationship is:
+
+$E = mc^2$
+"""
+    prose, blocks = promote_answer_representations(answer, interaction_mode="explain")
+
+    assert "2024 - Foundation launched" not in prose
+    assert "$E = mc^2$" not in prose
+    assert any(block.get("subtype") == "timeline" for block in blocks)
+    assert any(
+        block.get("type") == "dataViz"
+        and block.get("content", {}).get("format") == "math"
+        for block in blocks
+    )
+
+
+def test_compare_always_has_a_structured_representation_even_if_model_used_prose():
+    prose, blocks = promote_answer_representations(
+        "Mitosis produces two similar cells. Meiosis produces four genetically varied cells.",
+        interaction_mode="compare",
+    )
+
+    assert prose == ""
+    assert any(block.get("subtype") == "comparison" for block in blocks)
 
 
 def test_verification_gate_skips_simple_turns_and_selects_risky_factual_turns():
