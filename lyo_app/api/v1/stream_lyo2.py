@@ -1537,6 +1537,33 @@ async def stream_lyo2_chat(
                 has_media=bool(media_attachments),
                 forced_intent=request.forced_intent,
             )
+            if fast_intent is None and voice_active and not request.forced_intent:
+                from lyo_app.teaching_runtime.interaction_contract import (
+                    interaction_contract_for_request as _voice_pre_contract,
+                    voice_router_shortcut_intent,
+                )
+
+                voice_pre_contract = _voice_pre_contract(
+                    text=request.text or "",
+                    has_media=bool(media_attachments),
+                    has_current_media=bool(request.media),
+                    voice_mode=True,
+                    voice_interrupted_previous_turn=bool(
+                        request.resolved_voice_session.interrupted_previous_turn
+                    ),
+                )
+                fast_intent = voice_router_shortcut_intent(
+                    voice_pre_contract,
+                    has_media=bool(media_attachments),
+                    forced_intent=request.forced_intent,
+                    has_active_course=bool(
+                        isinstance(request.state_summary, dict)
+                        and request.state_summary.get("active_course")
+                    ),
+                )
+                if fast_intent is not None:
+                    latency_metrics["voice_router_shortcut"] = True
+
             request.state_summary = {
                 **(request.state_summary or {}),
                 "current_time_context": current_time_for_prompt,
