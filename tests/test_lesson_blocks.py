@@ -231,7 +231,7 @@ def test_non_structural_or_injected_diagram_is_rejected_without_losing_prose():
     from lyo_app.api.v1.stream_lyo2 import _valid_teaching_mermaid
     assert _valid_teaching_mermaid("flowchart TD\n  A[Start] --> B[Finish]")
     assert not _valid_teaching_mermaid("A[Start] --> B[Finish]")
-    assert not _valid_teaching_mermaid("flowchart TD\nclick A \\"javascript:alert(1)\\"")
+    assert not _valid_teaching_mermaid('flowchart TD\nclick A "javascript:alert(1)"')
     assert not _valid_teaching_mermaid("%%{init:{}}%%\nflowchart TD\nA-->B")
     lesson = _lesson()
     lesson.sections[2].mermaid = "flowchart LR\n  A[<img src=x>]"
