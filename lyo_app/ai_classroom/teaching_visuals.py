@@ -186,7 +186,7 @@ def visual_from_numbered_steps(title: str, board_content: str) -> TeachingVisual
         return None
     return TeachingVisual(
         kind="process_flow",
-        title=(title or "Steps in this process")[:100],
+        title=(title.strip() if title and len(title.strip()) >= 3 else "Steps in this process")[:100],
         caption="Follow these ordered steps to see how the process unfolds.",
         description=("Ordered steps: " + "; ".join(steps))[:600],
         entries=[VisualItem(label=f"Step {index}", detail=step[:240])
