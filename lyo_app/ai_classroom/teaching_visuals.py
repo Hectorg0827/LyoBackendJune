@@ -176,7 +176,7 @@ def visual_from_numbered_steps(title: str, board_content: str) -> TeachingVisual
     """
     steps: list[str] = []
     for line in (board_content or "").splitlines():
-        match = re.match(r"^\\s*(\\d+)[.)]\\s+(.+?)\\s*$", line)
+        match = re.match(r"^\s*(\d+)[.)]\s+(.+?)\s*$", line)
         if not match:
             continue
         if int(match.group(1)) != len(steps) + 1:
