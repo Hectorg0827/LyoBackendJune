@@ -1,9 +1,11 @@
 import logging
 import asyncio
+import json
 import time
 import uuid
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user_or_guest, get_db
@@ -11,6 +13,7 @@ from lyo_app.auth.schemas import UserRead
 from lyo_app.ai.router import MultimodalRouter
 from lyo_app.ai.planner import LyoPlanner
 from lyo_app.ai.executor import LyoExecutor
+from lyo_app.ai.schemas.block_redaction import redact_blocks
 from lyo_app.ai.schemas.lyo2 import (
     RouterRequest, RouterResponse, UnifiedChatResponse, ActiveArtifactContext,
     ConversationTurn, MediaRef, UIBlock, UIBlockType, Intent,
@@ -24,6 +27,7 @@ from lyo_app.ai.multimodal import (
 from lyo_app.api.v1.chat import ChatRequest, ConversationMessage
 from lyo_app.chat.models import ChatMode
 from lyo_app.chat.stores import conversation_store
+from lyo_app.chat.freshness import current_time_context
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,52 @@ router = APIRouter()
 # In production, these might be singletons or injected via dependencies
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
+
+
+class VoiceQualityEvent(BaseModel):
+    """Privacy-bounded telemetry for live conversational-voice validation.
+
+    Raw transcripts and audio are intentionally not accepted. The goal is to
+    measure turn-taking quality in production without turning QA telemetry into
+    a second conversation store.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=128)
+    turn_id: Optional[str] = Field(default=None, max_length=128)
+    conversation_id: Optional[str] = Field(default=None, max_length=128)
+    platform: str = Field(min_length=1, max_length=32)
+    event: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    locale: Optional[str] = Field(default=None, max_length=32)
+    scenario: Optional[str] = Field(default=None, max_length=64)
+    metrics: Dict[str, float | int | bool | str] = Field(default_factory=dict)
+
+
+@router.post("/voice/quality")
+async def report_voice_quality(
+    payload: VoiceQualityEvent,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+):
+    """Record one live voice-quality timing/behavior event in structured logs."""
+    safe_metrics = dict(list(payload.metrics.items())[:24])
+    record = {
+        "session_id": payload.session_id,
+        "turn_id": payload.turn_id,
+        "conversation_id": payload.conversation_id,
+        "platform": payload.platform,
+        "event": payload.event,
+        "locale": payload.locale,
+        "scenario": payload.scenario,
+        "metrics": safe_metrics,
+        "authenticated": getattr(current_user, "id", 0) not in (0, "0", None),
+    }
+    logger.info(
+        "VOICE_QUALITY %s",
+        json.dumps(record, separators=(",", ":"), ensure_ascii=False),
+    )
+    return {"status": "recorded"}
+
 
 @router.post("/chat", response_model=UnifiedChatResponse)
 async def lyo2_chat(
@@ -137,6 +187,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                             "trace_id": trace_id,
                             "conversation_id": persistent_conversation.id,
                             "replayed": True,
+                            "smart_blocks": redact_blocks(getattr(replayed, "blocks", None) or []),
                         },
                     )
             if display_content:
@@ -374,6 +425,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 user_id=str(current_user.id),
                 plan=plan,
                 original_request=request.text or "",
+                intent=decision.intent.value if decision.intent else None,
                 conversation_history=[
                     {"role": turn.role, "content": turn.content}
                     for turn in request.conversation_history
@@ -382,6 +434,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 teaching_decision=teaching_decision.model_dump(mode="json"),
                 interaction_contract=interaction_contract_payload,
                 personal_memory=personal_memory,
+                current_time_context=current_time_context(request.timezone),
             )
         
         # Canonical final-answer grounding and selective verification.
@@ -437,6 +490,16 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
         })
 
         answer_text = execution_response.answer_block.content.get("text", "")
+        from lyo_app.api.v1.stream_lyo2 import _canonical_answer_blocks
+
+        canonical_blocks = _canonical_answer_blocks(
+            answer_text, execution_response.artifact_block,
+            interaction_mode=interaction_contract.mode.value,
+            media_attachments=media_attachments,
+            sources=list(execution_response.metadata.get("sources") or []),
+            source_id=f"sources-{trace_id[:8]}",
+        )
+        execution_response.metadata["smart_blocks"] = redact_blocks(canonical_blocks)
         if persistent_conversation and answer_text:
             await conversation_store.add_message(
                 db,
@@ -445,6 +508,7 @@ async def _process_lyo2_request(request: RouterRequest, current_user: UserRead, 
                 answer_text,
                 mode_used=decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
                 client_message_id=assistant_client_message_id,
+                blocks=canonical_blocks,
             )
         
         return execution_response

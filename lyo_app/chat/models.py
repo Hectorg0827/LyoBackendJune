@@ -233,7 +233,11 @@ class ChatMessage(TenantMixin, Base):
 
     @property
     def generation_status(self) -> str:
-        return "incomplete" if self.action_triggered == "voice_incomplete" else "completed"
+        return (
+            "incomplete"
+            if self.action_triggered in {"voice_incomplete", "stream_incomplete"}
+            else "completed"
+        )
     
     # AI metadata
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

@@ -19,7 +19,7 @@ from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
-from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, hydrate_turn_visuals
+from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, hydrate_turn_visuals, visual_from_numbered_steps
 
 logger = logging.getLogger(__name__)
 
@@ -1311,6 +1311,16 @@ class AdaptiveTeacher:
                         raise TeachingContractError("Demonstrate the missing step before another attempt")
                 if turn.task is not None and not await self.claim_question(context, state, move, turn.task):
                     raise TeachingContractError("Previously seen checkpoint; ask a new question")
+                # Preferred visual beats should not become plain text when
+                # the model omitted an optional diagram but already wrote
+                # a genuine numbered process. Construct the illustration
+                # strictly from those existing steps; never invent facts.
+                if move in {"orient", "reteach", "prerequisite", "guided"}:
+                    for beat in [turn, *turn.demonstration]:
+                        if beat.visual is None:
+                            beat.visual = visual_from_numbered_steps(
+                                beat.board_title, beat.board_content
+                            )
                 # Resolve any real-image request through the trusted server
                 # resolver only after the pedagogical content has passed all
                 # validation. Failure to find media degrades to text; it never
