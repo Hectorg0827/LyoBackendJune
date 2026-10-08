@@ -124,6 +124,16 @@ def _location(text: str) -> str:
     return ""
 
 
+def _news_location(text: str) -> str:
+    # "What happened in AI news?" names a topic, not a place. Only take
+    # regional qualifiers following the news noun, including follow-ups.
+    match = re.search(r"\b(?:news|headlines?|noticias|titulares)\b(.*)", text, re.I | re.S)
+    if not match:
+        return ""
+    qualifier = re.sub(r"\bfrom\b", "in", match.group(1), flags=re.I)
+    return _location(qualifier)
+
+
 @dataclass(frozen=True)
 class LiveSearchRequest:
     query: str
@@ -182,7 +192,8 @@ def prepare_live_search(
         or (requested_year and int(requested_year.group(1)) < now.year)
         or (requested_dates and target < now.date() - timedelta(days=2))
     )
-    location = _location(query) if topic in {"weather", "news"} else ""
+    location = (_location(query) if topic == "weather"
+                else _news_location(query) if topic == "news" else "")
     return LiveSearchRequest(query, now, topic, target, not historical, location)
 
 

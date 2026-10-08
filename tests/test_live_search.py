@@ -297,3 +297,27 @@ def test_daily_market_facts_cannot_use_yesterdays_publication(query):
     source = {"title": "Market quote", "url": "https://example.com/quote", "snippet": "A market quote.",
               "published_at": "2026-10-05"}
     assert usable_search_results([source], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "What happened in AI news today?", "What's new in artificial intelligence news today?",
+    "What happened in tech news today?", "What happened in AI news today? Include current sources.",
+])
+def test_news_topic_is_not_mistaken_for_a_geographic_location(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == ""
+    evidence = {"title": "Artificial intelligence research published today",
+                "url": "https://example.com/research", "snippet": "Researchers published new model findings.",
+                "published_at": "2026-10-06"}
+    assert usable_search_results([evidence], request)
+
+
+@pytest.mark.parametrize("query", [
+    "Trending news in Dominican Republic", "AI news from Dominican Republic today",
+])
+def test_news_region_still_excludes_wrong_location_evidence(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == "Dominican Republic"
+    evidence = {"title": "Today's report", "url": "https://example.com/news",
+                "snippet": "France today.", "published_at": "2026-10-06"}
+    assert usable_search_results([evidence], request) == []

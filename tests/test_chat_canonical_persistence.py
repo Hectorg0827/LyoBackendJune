@@ -1,6 +1,7 @@
 """Actual route/save/replay regressions for completed and interrupted Chat."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import asyncio
 
 import pytest
 
@@ -33,6 +34,7 @@ async def test_comparison_and_dated_sources_saved_exactly_as_emitted(harness, mo
     monkeypatch.setattr(stream.LyoExecutor, "execute", fake_execute)
     response = await harness.response(
         text="Compare mitosis and meiosis.",
+        forced_intent=None,
         state_summary={"stream_capabilities": {"text_delta": incremental}},
     )
     events = [event_payload(chunk) async for chunk in response.body_iterator]
@@ -141,3 +143,53 @@ async def test_rest_delivers_persists_and_replays_canonical_blocks(
     assert replay.json()["metadata"]["smart_blocks"] == blocks
     assert replay.json()["metadata"]["replayed"] is True
     execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_actual_sse_route_delivers_text_before_completion_through_gzip(harness, monkeypatch):
+    from fastapi import FastAPI
+    from starlette.middleware.gzip import GZipMiddleware
+    from lyo_app.api.v1 import stream_lyo2 as stream
+
+    first_text = asyncio.Event()
+    finish = asyncio.Event()
+    headers = []
+
+    async def generate(self, **kwargs):
+        yield "The robot "
+        await finish.wait()
+        yield "plants a tree."
+
+    monkeypatch.setattr(stream.LyoExecutor, "stream_text", generate, raising=False)
+    app = FastAPI()
+
+    @app.get("/test-stream")
+    async def endpoint():
+        return await harness.response(
+            text="Write one sentence about a robot.",
+            forced_intent=None,
+            state_summary={"stream_capabilities": {"text_delta": True}},
+        )
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            headers.extend(message["headers"])
+        if message["type"] == "http.response.body" and b'"type": "text_delta"' in message.get("body", b""):
+            first_text.set()
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(GZipMiddleware(app, minimum_size=1)(
+        {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
+         "method": "GET", "path": "/test-stream", "root_path": "", "query_string": b"",
+         "scheme": "https", "server": ("example.com", 443), "client": ("127.0.0.1", 1),
+         "headers": [(b"accept-encoding", b"gzip")]}, receive, send,
+    ))
+    try:
+        await asyncio.wait_for(first_text.wait(), timeout=2)
+        assert not task.done(), "first text must arrive before model completion"
+        assert (b"content-encoding", b"identity") in headers
+    finally:
+        finish.set()
+        await asyncio.wait_for(task, timeout=2)

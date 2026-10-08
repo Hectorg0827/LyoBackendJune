@@ -3108,6 +3108,7 @@ async def stream_lyo2_chat(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
+            "Content-Encoding": "identity",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
