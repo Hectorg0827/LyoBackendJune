@@ -167,6 +167,33 @@ class TeachingVisual(BaseModel):
         return False
 
 
+def visual_from_numbered_steps(title: str, board_content: str) -> TeachingVisual | None:
+    """Conservative Classroom visual fallback built from existing numbered steps.
+
+    The fallback reuses the teacher's own facts. It does not invent events,
+    relationships, or media when the authored model omits an optional visual.
+    Only explicitly ordered, consecutive steps qualify.
+    """
+    steps: list[str] = []
+    for line in (board_content or "").splitlines():
+        match = re.match(r"^\\s*(\\d+)[.)]\\s+(.+?)\\s*$", line)
+        if not match:
+            continue
+        if int(match.group(1)) != len(steps) + 1:
+            return None
+        steps.append(match.group(2).strip())
+    if len(steps) < 2 or len(steps) > 8 or any(len(x) < 5 for x in steps):
+        return None
+    return TeachingVisual(
+        kind="process_flow",
+        title=(title or "Steps in this process")[:100],
+        caption="Follow these ordered steps to see how the process unfolds.",
+        description=("Ordered steps: " + "; ".join(steps))[:600],
+        entries=[VisualItem(label=f"Step {index}", detail=step[:240])
+                 for index, step in enumerate(steps, start=1)],
+    )
+
+
 async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
     """Resolve an annotated-image query through a fixed, trusted endpoint.
 
