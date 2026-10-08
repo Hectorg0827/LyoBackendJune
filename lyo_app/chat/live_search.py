@@ -148,6 +148,24 @@ class LiveSearchRequest:
         return self.topic == "weather" and not self.location
 
     @property
+    def search_query(self) -> str:
+        """Keyword search APIs need the question, not model instructions."""
+        query = self.query
+        if self.current and (self.topic in {"weather", "news"} or _DAILY_RECENCY.search(query)):
+            query += f" {self.target_day.isoformat()}"
+        return query
+
+    @property
+    def source_domains(self) -> list[str]:
+        domains = re.findall(
+            r"(?:https?://|\b(?:site:|check\s+|on\s+|from\s+|visit\s+|use\s+))"
+            r"(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})\b", self.query, re.I,
+        )
+        if re.search(r"\bofficial\s+[ÉE]lys[ée]e\s+website\b", self.query, re.I):
+            domains.append("elysee.fr")
+        return list(dict.fromkeys(domain.lower() for domain in domains))
+
+    @property
     def provider_query(self) -> str:
         if not self.current:
             return self.query
@@ -213,6 +231,11 @@ def usable_search_results(output: Any, request: LiveSearchRequest) -> list[dict]
             continue
         snippet = str(item.get("snippet") or item.get("content") or "").strip()
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname or not snippet or url in seen:
+            continue
+        if request.source_domains and not any(
+            parsed_url.hostname.lower() == domain or parsed_url.hostname.lower().endswith("." + domain)
+            for domain in request.source_domains
+        ):
             continue
         title = str(item.get("title") or url)
         published = _parse_time(item.get("published_at") or item.get("published_date"))

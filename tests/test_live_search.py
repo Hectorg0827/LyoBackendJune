@@ -321,3 +321,53 @@ def test_news_region_still_excludes_wrong_location_evidence(query):
     evidence = {"title": "Today's report", "url": "https://example.com/news",
                 "snippet": "France today.", "published_at": "2026-10-06"}
     assert usable_search_results([evidence], request) == []
+
+
+@pytest.mark.asyncio
+async def test_tavily_uses_question_without_llm_boilerplate_and_honors_official_site(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "offline-test")
+    captured = {}
+    mock_http(monkeypatch, {"results": [{"title": "Emmanuel Macron",
+        "url": "https://www.elysee.fr/en/emmanuel-macron", "content": "The President of France."}]}, captured)
+    question = "Who is the current president of France? Verify with the official Elysée website."
+    result = await WebSearchTool().execute(0, query=question, current_time_context=NOW)
+    assert result.success
+    assert captured["query"] == question
+    assert captured["include_domains"] == ["elysee.fr"]
+    assert "documentation and product" not in captured["query"]
+
+
+def test_requested_official_site_cannot_be_satisfied_by_an_unrelated_url():
+    request = prepare_live_search("What is the latest stable Python version? Check python.org.", current_time_context=NOW)
+    assert request.source_domains == ["python.org"]
+    source = {"title": "Python", "url": "https://unrelated.example/python",
+              "snippet": "Python 3.14.8 is available."}
+    assert usable_search_results([source], request) == []
+    source["url"] = "https://www.python.org/downloads/"
+    assert usable_search_results([source], request)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_gemini_credential_does_not_hide_distinct_configured_google_key(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-first")
+    monkeypatch.setenv("GOOGLE_API_KEY", "offline-second")
+    gemini = AsyncMock(side_effect=[
+        ToolResult(success=False, output=None, message="Permission denied"),
+        ToolResult(success=True, output=[weather_source(provider="gemini_google_search")], message="Grounded evidence"),
+    ])
+    monkeypatch.setattr(WebSearchTool, "_execute_gemini_grounded", gemini)
+    result = await WebSearchTool().execute(0, query="Weather in New York today", current_time_context=NOW)
+    assert result.success
+    assert [call.args[2] for call in gemini.await_args_list] == ["offline-first", "offline-second"]
+
+
+@pytest.mark.asyncio
+async def test_identical_google_credentials_are_not_retried(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-same")
+    monkeypatch.setenv("GOOGLE_API_KEY", "offline-same")
+    gemini = AsyncMock(return_value=ToolResult(success=False, output=None, message="Unavailable"))
+    monkeypatch.setattr(WebSearchTool, "_execute_gemini_grounded", gemini)
+    await WebSearchTool().execute(0, query="News today", current_time_context=NOW)
+    gemini.assert_awaited_once()

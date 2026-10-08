@@ -68,7 +68,7 @@ class WebSearchTool(BaseTool):
         tavily_key = os.getenv("TAVILY_API_KEY")
         if tavily_key:
             result = await self._execute_tavily(
-                request.provider_query, max_results, tavily_key, request=request,
+                request.search_query, max_results, tavily_key, request=request,
                 search_depth=search_depth,
             )
             usable = usable_search_results(result.output, request) if result.success else []
@@ -83,15 +83,17 @@ class WebSearchTool(BaseTool):
                     "output": usable, "data": {"search_status": "complete"},
                 })
 
-        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if gemini_key:
+        gemini_keys = list(dict.fromkeys(
+            key for key in (os.getenv("GEMINI_API_KEY"), os.getenv("GOOGLE_API_KEY")) if key
+        ))
+        for credential_slot, gemini_key in enumerate(gemini_keys, 1):
             result = await self._execute_gemini_grounded(
                 request.provider_query, max_results, gemini_key, request=request
             )
             usable = usable_search_results(result.output, request) if result.success else []
             logger.info(
-                "LIVE_SEARCH provider=gemini_google_search topic=%s target_day=%s usable=%s",
-                request.topic, request.target_day, len(usable),
+                "LIVE_SEARCH provider=gemini_google_search credential_slot=%s topic=%s target_day=%s usable=%s",
+                credential_slot, request.topic, request.target_day, len(usable),
             )
             if usable:
                 return result.model_copy(update={
@@ -125,6 +127,8 @@ class WebSearchTool(BaseTool):
                     "search_depth": search_depth,
                     "include_published_date": True,
                 }
+                if request and request.source_domains:
+                    payload["include_domains"] = request.source_domains
                 if request and request.current and request.topic in {"news", "weather"}:
                     payload.update({
                         "topic": "news" if request.topic == "news" else "general",
