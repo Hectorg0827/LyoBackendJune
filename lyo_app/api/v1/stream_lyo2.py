@@ -155,6 +155,27 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
 
 import re as _re
 
+def _valid_teaching_mermaid(source: str) -> bool:
+    """Accept only bounded static flowcharts authored as lesson representations.
+
+    Client renderers use Mermaid in strict mode. Directives and interactive
+    click handlers do not belong in teacher-produced learning diagrams.
+    """
+    if not isinstance(source, str) or not 0 < len(source) <= 2500:
+        return False
+    first_line = source.lstrip().splitlines()[0].strip().lower()
+    if not re.fullmatch(r"(flowchart|graph)\\s+(td|tb|lr|rl|bt)", first_line):
+        return False
+    if re.search(r"(?im)^\\s*(?:click|accdescr|acccTitle|%%\\{|style|classdef|linkstyle)\\b", source):
+        return False
+    if "<" in source or ">" in source or "javascript:" in source.lower():
+        # Mermaid arrows contain >; reject HTML syntax, not arrowheads.
+        without_arrows = source.replace("-->", "").replace("==>", "").replace("-.->", "")
+        if "<" in without_arrows or ">" in without_arrows or "javascript:" in source.lower():
+            return False
+    return True
+
+
 def _lesson_to_smart_blocks(
     lesson: "ChatLesson",
     source_surface: str = "chat",
@@ -189,6 +210,12 @@ def _lesson_to_smart_blocks(
             if section.latex:
                 blocks.append(
                     SmartBlock.data_viz(section.latex, fmt="math").model_dump()
+                )
+            # Send a real diagram source as a typed Smart Block. Never replace
+            # the explanatory prose: older clients still need the lesson.
+            if section.kind in {SectionKind.representation, SectionKind.example} and _valid_teaching_mermaid(section.mermaid):
+                blocks.append(
+                    SmartBlock.data_viz(section.mermaid, fmt="mermaid").model_dump()
                 )
             # A representation the learner can move through, when the topic
             # genuinely has that shape. The composer omits it otherwise rather
