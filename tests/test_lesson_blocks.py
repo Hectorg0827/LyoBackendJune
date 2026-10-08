@@ -211,3 +211,49 @@ def test_only_diagnose_can_fall_back_to_probe_mode():
 def test_non_teaching_actions_do_not_start_structured_lesson_composition():
     assert _lesson_mode_for_teaching_action(TeachingAction.ANSWER) is None
     assert _lesson_mode_for_teaching_action(TeachingAction.PAUSE) is None
+
+
+# --- visual teaching blocks --------------------------------------------------
+
+def test_structural_representation_is_sent_as_renderable_mermaid():
+    lesson = _lesson()
+    lesson.is_probe = False
+    diagram = "flowchart LR\n  A[Water evaporates] --> B[Clouds form]\n  B --> C[Rain]"
+    lesson.sections[2].mermaid = diagram
+    blocks = _lesson_to_smart_blocks(lesson)
+    visuals = [b for b in blocks if b["type"] == "dataViz" and b["content"]["format"] == "mermaid"]
+    assert len(visuals) == 1
+    assert visuals[0]["content"]["source"] == diagram
+    assert _by_subtype(blocks, "representation")[0]["content"]["text"]
+
+
+def test_non_structural_or_injected_diagram_is_rejected_without_losing_prose():
+    from lyo_app.api.v1.stream_lyo2 import _valid_teaching_mermaid
+    assert _valid_teaching_mermaid("flowchart TD\n  A[Start] --> B[Finish]")
+    assert not _valid_teaching_mermaid("\n\t  ")
+    assert not _valid_teaching_mermaid("A[Start] --> B[Finish]")
+    assert not _valid_teaching_mermaid('flowchart TD\nclick A "javascript:alert(1)"')
+    assert not _valid_teaching_mermaid("%%{init:{}}%%\nflowchart TD\nA-->B")
+    assert not _valid_teaching_mermaid("flowchart TD\n%%{init:{'securityLevel':'loose'}}%%\nA-->B")
+    lesson = _lesson()
+    lesson.sections[2].mermaid = "flowchart LR\n  A[<img src=x>]"
+    blocks = _lesson_to_smart_blocks(lesson)
+    assert not [b for b in blocks if b["content"].get("format") == "mermaid"]
+    assert _by_subtype(blocks, "representation")
+
+
+def test_verified_media_has_caption_and_is_supplementary_to_prose():
+    lesson = _lesson()
+    lesson.sections[2].image_query = "historical water cycle illustration"
+    lesson.sections[2].image_url = "https://upload.wikimedia.org/example.jpg"
+    lesson.sections[2].image_source_url = "https://commons.wikimedia.org/wiki/File:example.jpg"
+    lesson.sections[2].image_attribution = "Wikimedia Commons / CC BY"
+    blocks = _lesson_to_smart_blocks(lesson)
+    photos = [b for b in blocks if b["type"] == "media"]
+    assert len(photos) == 1
+    assert photos[0]["subtype"] == "image"
+    assert photos[0]["content"]["caption"] == "Wikimedia Commons / CC BY"
+    assert photos[0]["metadata"]["source_url"].startswith("https://commons.wikimedia.org/")
+    assert _by_subtype(blocks, "representation")
+    lesson.sections[2].image_url = "https://arbitrary.example/unsourced.png"
+    assert not [b for b in _lesson_to_smart_blocks(lesson) if b["type"] == "media"]

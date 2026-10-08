@@ -155,6 +155,63 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
 
 import re as _re
 
+def _valid_teaching_mermaid(source: str) -> bool:
+    """Accept only bounded static flowcharts authored as lesson representations.
+
+    Client renderers use Mermaid in strict mode. Directives and interactive
+    click handlers do not belong in teacher-produced learning diagrams.
+    """
+    if not isinstance(source, str) or not 0 < len(source) <= 2500:
+        return False
+    stripped = source.strip()
+    if not stripped:
+        return False
+    first_line = stripped.splitlines()[0].strip().lower()
+    if not re.fullmatch(r"(flowchart|graph)\s+(td|tb|lr|rl|bt)", first_line):
+        return False
+    if re.search(r"(?im)^\s*(?:click\b|accdescr\b|acctitle\b|%%\{|style\b|classdef\b|linkstyle\b)", source):
+        return False
+    if "<" in source or ">" in source or "javascript:" in source.lower():
+        # Mermaid arrows contain >; reject HTML syntax, not arrowheads.
+        without_arrows = source.replace("-->", "").replace("==>", "").replace("-.->", "")
+        if "<" in without_arrows or ">" in without_arrows or "javascript:" in source.lower():
+            return False
+    return True
+
+
+async def _hydrate_lesson_images(lesson: ChatLesson) -> None:
+    """Resolve at most one teaching photo against the same trusted source
+    as Classroom. Never trust media URLs provided in model output.
+    Bounded lookup means image retrieval cannot stall the lesson indefinitely.
+    """
+    for section in lesson.sections:
+        section.image_url = None
+        section.image_source_url = None
+        section.image_attribution = None
+
+    for section in lesson.sections:
+        if (section.kind is not SectionKind.representation
+                or not section.image_query or len(section.text.strip()) < 10):
+            continue
+        try:
+            from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, resolve_visual_media
+            visual = TeachingVisual(
+                kind="annotated_image",
+                title=(lesson.topic or "Learning illustration")[:100],
+                caption=("Inspect this real example of " + lesson.topic)[:350],
+                description=section.text[:600],
+                image_query=section.image_query,
+            )
+            resolved = await asyncio.wait_for(resolve_visual_media(visual), timeout=1.8)
+            if resolved.image_url:
+                section.image_url = resolved.image_url
+                section.image_source_url = resolved.source_url
+                section.image_attribution = resolved.attribution
+        except Exception as exc:
+            logger.debug("Optional lesson image lookup skipped: %s", exc)
+        break  # One meaningful image per lesson, not a distracting gallery.
+
+
 def _lesson_to_smart_blocks(
     lesson: "ChatLesson",
     source_surface: str = "chat",
@@ -190,6 +247,26 @@ def _lesson_to_smart_blocks(
                 blocks.append(
                     SmartBlock.data_viz(section.latex, fmt="math").model_dump()
                 )
+            # Send a real diagram source as a typed Smart Block. Never replace
+            # the explanatory prose: older clients still need the lesson.
+            if section.kind in {SectionKind.representation, SectionKind.example} and _valid_teaching_mermaid(section.mermaid):
+                blocks.append(
+                    SmartBlock.data_viz(section.mermaid, fmt="mermaid").model_dump()
+                )
+            if (section.kind is SectionKind.representation and section.image_url
+                    and section.image_url.startswith("https://upload.wikimedia.org/")):
+                # Source and attribution travel with the image; the image is
+                # supplementary, and the textual description still renders.
+                blocks.append(SmartBlock(
+                    type=SmartBlockType.media,
+                    subtype="image",
+                    content={
+                        "url": section.image_url,
+                        "alt": section.image_query or section.text[:120],
+                        "caption": section.image_attribution or "Wikimedia Commons",
+                    },
+                    metadata={"source_url": section.image_source_url},
+                ).model_dump())
             # A representation the learner can move through, when the topic
             # genuinely has that shape. The composer omits it otherwise rather
             # than decorating every lesson with a widget.
@@ -348,6 +425,8 @@ async def _try_compose_lesson(
     )
     if lesson is None:
         return [], None
+    if mode == "teach":
+        await _hydrate_lesson_images(lesson)
     return _lesson_to_smart_blocks(
         lesson,
         source_surface=source_surface,
