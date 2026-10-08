@@ -166,7 +166,7 @@ def _valid_teaching_mermaid(source: str) -> bool:
     first_line = source.lstrip().splitlines()[0].strip().lower()
     if not re.fullmatch(r"(flowchart|graph)\s+(td|tb|lr|rl|bt)", first_line):
         return False
-    if re.search(r"(?im)^\s*(?:click|accdescr|acctitle|%%\{|style|classdef|linkstyle)\b", source):
+    if re.search(r"(?im)^\s*(?:click\b|accdescr\b|acctitle\b|%%\{|style\b|classdef\b|linkstyle\b)", source):
         return False
     if "<" in source or ">" in source or "javascript:" in source.lower():
         # Mermaid arrows contain >; reject HTML syntax, not arrowheads.
