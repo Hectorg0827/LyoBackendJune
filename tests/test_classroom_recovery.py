@@ -83,7 +83,10 @@ async def test_valid_authored_guided_question_always_reaches_the_learner(boundar
     elif boundary == "title":
         examples = [c for c in scene.components if isinstance(c, ExampleBlock)]
         assert all(len(c.title) <= 100 for c in examples)
-        assert examples[0].title.startswith("Hagámoslo juntos" if language.startswith("es") else "Let's do it together")
+        # Persistent board memory is intentionally rendered before the active
+        # example. Assert the active teaching card, not list position.
+        active = next(c for c in examples if c.component_id != "classroom-board-memory")
+        assert active.title.startswith("Hagámoslo juntos" if language.startswith("es") else "Let's do it together")
     else:
         content = "\n".join(c.content for c in scene.components if isinstance(c, ExampleBlock))
         assert authored[0].board_content in content and authored[0].visual.description in content
