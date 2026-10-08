@@ -124,6 +124,52 @@ def _location(text: str) -> str:
     return ""
 
 
+def _news_location(text: str) -> str:
+    # A region can precede any news keyword. "In AI news" names a topic;
+    # "for investors" names an audience; "from Reuters" names a publisher.
+    # The ambiguous from/de forms only filter known geographic aliases.
+    regions_from = {
+        value.strip() for value in (
+            "dominican republic;republica dominicana;france;spain;espana;"
+            "united states;united kingdom;usa;us;uk;canada;mexico;brazil;"
+            "argentina;chile;colombia;peru;venezuela;cuba;haiti;puerto rico;"
+            "germany;alemania;italy;italia;portugal;ireland;netherlands;"
+            "belgium;switzerland;austria;poland;ukraine;russia;greece;"
+            "sweden;norway;denmark;finland;iceland;turkey;china;japan;"
+            "india;pakistan;bangladesh;south korea;north korea;taiwan;"
+            "singapore;indonesia;malaysia;philippines;thailand;vietnam;"
+            "australia;new zealand;israel;palestine;iran;iraq;saudi arabia;"
+            "egypt;morocco;south africa;nigeria;kenya;ethiopia;ghana;"
+            "new york;new york city;nyc;boston;washington;los angeles;"
+            "london;paris;madrid;barcelona;tokyo;beijing;santo domingo"
+        ).split(";")
+    }
+    candidates = re.findall(
+        r"\b(in|en|from|desde|de)\s+([^\n?!;]+?)"
+        r"(?=\b(?:in|en|from|desde|de)\s+|[\n?!;]|$)", text, re.I,
+    )
+    for prep, candidate in reversed(candidates):
+        candidate = _NEWS.split(candidate, maxsplit=1)[0]
+        candidate = re.split(
+            r"\b(?:today|tonight|tomorrow|yesterday|hoy|mañana|ayer|"
+            r"for|para|about|on|include|with|summarize)\b",
+            candidate, maxsplit=1, flags=re.I,
+        )[0].strip(" ,.!:")
+        normalized = _normalize(candidate)
+        if not normalized or re.match(
+            r"^(?:ai|artificial intelligence|tech|technology|business|science|"
+            r"politics|sports|finance|investors|the world|around the world|"
+            r"worldwide|global|general|202\d)\b", normalized,
+        ):
+            continue
+        if prep.lower() in {"from", "desde", "de"} and normalized not in regions_from:
+            continue
+        if re.match(rf"^(?:20\d{{2}}|\d{{1,2}}[/-]|(?:{_MONTH_PATTERN})\s+\d)", candidate, re.I):
+            continue
+        return candidate
+    return ""
+
+
 @dataclass(frozen=True)
 class LiveSearchRequest:
     query: str
@@ -136,6 +182,24 @@ class LiveSearchRequest:
     @property
     def needs_location(self) -> bool:
         return self.topic == "weather" and not self.location
+
+    @property
+    def search_query(self) -> str:
+        """Keyword search APIs need the question, not model instructions."""
+        query = self.query
+        if self.current and (self.topic in {"weather", "news"} or _DAILY_RECENCY.search(query)):
+            query += f" {self.target_day.isoformat()}"
+        return query
+
+    @property
+    def source_domains(self) -> list[str]:
+        domains = re.findall(
+            r"(?:https?://|\b(?:site:|check\s+|on\s+|from\s+|visit\s+|use\s+))"
+            r"(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})\b", self.query, re.I,
+        )
+        if re.search(r"\bofficial\s+[ÉE]lys[ée]e\s+website\b", self.query, re.I):
+            domains.append("elysee.fr")
+        return list(dict.fromkeys(domain.lower() for domain in domains))
 
     @property
     def provider_query(self) -> str:
@@ -182,7 +246,8 @@ def prepare_live_search(
         or (requested_year and int(requested_year.group(1)) < now.year)
         or (requested_dates and target < now.date() - timedelta(days=2))
     )
-    location = _location(query) if topic in {"weather", "news"} else ""
+    location = (_location(query) if topic == "weather"
+                else _news_location(query) if topic == "news" else "")
     return LiveSearchRequest(query, now, topic, target, not historical, location)
 
 
@@ -202,6 +267,11 @@ def usable_search_results(output: Any, request: LiveSearchRequest) -> list[dict]
             continue
         snippet = str(item.get("snippet") or item.get("content") or "").strip()
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname or not snippet or url in seen:
+            continue
+        if request.source_domains and not any(
+            parsed_url.hostname.lower() == domain or parsed_url.hostname.lower().endswith("." + domain)
+            for domain in request.source_domains
+        ):
             continue
         title = str(item.get("title") or url)
         published = _parse_time(item.get("published_at") or item.get("published_date"))

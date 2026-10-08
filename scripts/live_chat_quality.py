@@ -378,6 +378,11 @@ def main() -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"chat quality: {report['passed']}/{report['total']} passed")
+    for item in report.get("observations", []):
+        print(f"{item['scenario']}: passed={item['passed']} first_text_ms={item.get('first_token_ms')} "
+              f"wall_ms={item.get('latency_ms')} failures={item.get('failures', [])}")
+    if report.get("preflight_error"):
+        print(f"preflight: {report['preflight_error']}")
     print(f"report: {path}")
     if "authentication" in str(report.get("preflight_error", "")):
         return 2
