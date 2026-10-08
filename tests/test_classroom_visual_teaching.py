@@ -141,3 +141,29 @@ def test_visual_board_memory_reemits_the_latest_prior_visual():
     assert len(memory_visuals) == 1
     assert memory_visuals[0].block["visual_id"] == visual.visual_id
     assert memory_visuals[0].block["kind"] == "process_flow"
+
+
+
+def test_numbered_classroom_explanation_gets_real_process_visual_fallback():
+    from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+
+    visual = visual_from_numbered_steps(
+        "How a campaign works",
+        "1. Identify the target audience\\n"
+        "2. Choose the marketing channel\\n"
+        "3. Measure the campaign outcome",
+    )
+    assert visual is not None
+    assert visual.kind == "process_flow"
+    assert [item.label for item in visual.entries] == ["Step 1", "Step 2", "Step 3"]
+    assert "target audience" in visual.description
+
+
+def test_unsupported_classroom_list_does_not_invent_flow_relationships():
+    from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+
+    assert visual_from_numbered_steps("Overview", "Marketing has many goals.") is None
+    assert visual_from_numbered_steps(
+        "Examples", "2. Run an experiment\\n4. Learn what happened"
+    ) is None
+    assert visual_from_numbered_steps("Short", "1. A\\n2. B") is None
