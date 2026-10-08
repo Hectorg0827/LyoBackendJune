@@ -388,6 +388,38 @@ def _lesson_mode_for_teaching_action(action: Any) -> Optional[str]:
     return None
 
 
+def _requested_teaching_visuals(text: str) -> Tuple[bool, bool]:
+    """Recognize an explicit visual-delivery request, not merely a topic.
+
+    Opt-in only: an ordinary explanation stays on its existing fast path.
+    Negative requests like 'without images' must not start image retrieval.
+    """
+    value = (text or "").strip()
+    if not re.search(r"\b(?:teach|explain|show|draw|illustrate|visualize|walk me through)\b", value, re.I):
+        return False, False
+    diagram = bool(re.search(r"\b(?:diagram|flowchart|flow[ -]chart|process[ -]flow)\b", value, re.I))
+    image = bool(re.search(r"\b(?:image|photo|photograph|picture|illustration)\b", value, re.I))
+    if re.search(r"\b(?:without|no|don't|do not)\s+(?:a\s+|any\s+)?(?:diagram|flowchart|flow[ -]chart|process[ -]flow)s?\b", value, re.I):
+        diagram = False
+    if re.search(r"\b(?:without|no|don't|do not)\s+(?:a\s+|any\s+)?(?:images?|photos?|pictures?|illustrations?)\b", value, re.I):
+        image = False
+    return diagram, image
+
+
+def _visual_lesson_topic(text: str) -> str:
+    """Remove output-format instructions from the concept used for teaching."""
+    subject = re.sub(
+        r"^\s*(?:teach me(?: about)?|explain(?: to me)?|show me|walk me through|illustrate)\s+",
+        "", (text or "").strip(), flags=re.I,
+    )
+    subject = re.split(
+        r"\s+(?:using|with|as)\s+(?:(?:a|an|the|real|supporting)\s+)*"
+        r"(?:process[ -]flow|flow[ -]chart|flowchart|diagram|image|photo|picture|illustration)\b",
+        subject, maxsplit=1, flags=re.I,
+    )[0].strip(" .,:;")
+    return subject[:180] or (text or "")[:180]
+
+
 async def _try_compose_lesson(
     db: AsyncSession,
     user_id: Optional[str],
@@ -407,7 +439,11 @@ async def _try_compose_lesson(
     """
     from lyo_app.ai.lesson_composer import slugify_skill
 
-    topic = (topic or "").strip() or _extract_course_topic(user_text or "")
+    requested_diagram, requested_image = _requested_teaching_visuals(user_text)
+    topic = (topic or "").strip() or (
+        _visual_lesson_topic(user_text) if (requested_diagram or requested_image)
+        else _extract_course_topic(user_text or "")
+    )
     if not topic:
         return [], None
 
@@ -422,6 +458,8 @@ async def _try_compose_lesson(
         user_id=user_id,
         mode=mode,
         target_evidence_type=target_evidence_type,
+        requested_diagram=requested_diagram,
+        requested_image=requested_image,
     )
     if lesson is None:
         return [], None
@@ -2361,14 +2399,22 @@ async def stream_lyo2_chat(
             if (
                 decision.intent == Intent.EXPLAIN
                 and request.text
-                and interaction_contract.mode == InteractionMode.TEACH
+                and (
+                    interaction_contract.mode == InteractionMode.TEACH
+                    or (
+                        interaction_contract.mode == InteractionMode.EXPLAIN
+                        and any(_requested_teaching_visuals(request.text))
+                    )
+                )
                 and not (
                     freshness_decision
                     and freshness_decision.mode.value == "require"
                 )
             ):
-                _force_lesson_mode = _lesson_mode_for_teaching_action(
-                    teaching_decision.action
+                _visual_request = any(_requested_teaching_visuals(request.text))
+                _force_lesson_mode = (
+                    "teach" if _visual_request
+                    else _lesson_mode_for_teaching_action(teaching_decision.action)
                 )
                 if _force_lesson_mode is not None:
                     from lyo_app.teaching_runtime.service import (
@@ -2387,6 +2433,14 @@ async def stream_lyo2_chat(
                             ),
                         )
                     if lesson is not None:
+                        if interaction_contract.mode == InteractionMode.EXPLAIN:
+                            # An explicit explanation, even with visuals, is not
+                            # permission to administer an unsolicited quiz.
+                            lesson.check = None
+                            lesson_blocks = [
+                                block for block in lesson_blocks
+                                if block.get("type") != SmartBlockType.quiz.value
+                            ]
                         async for event in _emit_composed_lesson(
                             db,
                             lesson,
