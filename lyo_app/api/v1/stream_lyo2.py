@@ -163,7 +163,10 @@ def _valid_teaching_mermaid(source: str) -> bool:
     """
     if not isinstance(source, str) or not 0 < len(source) <= 2500:
         return False
-    first_line = source.lstrip().splitlines()[0].strip().lower()
+    stripped = source.strip()
+    if not stripped:
+        return False
+    first_line = stripped.splitlines()[0].strip().lower()
     if not re.fullmatch(r"(flowchart|graph)\s+(td|tb|lr|rl|bt)", first_line):
         return False
     if re.search(r"(?im)^\s*(?:click\b|accdescr\b|acctitle\b|%%\{|style\b|classdef\b|linkstyle\b)", source):
