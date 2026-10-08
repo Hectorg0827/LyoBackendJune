@@ -233,6 +233,7 @@ def test_non_structural_or_injected_diagram_is_rejected_without_losing_prose():
     assert not _valid_teaching_mermaid("A[Start] --> B[Finish]")
     assert not _valid_teaching_mermaid('flowchart TD\nclick A "javascript:alert(1)"')
     assert not _valid_teaching_mermaid("%%{init:{}}%%\nflowchart TD\nA-->B")
+    assert not _valid_teaching_mermaid("flowchart TD\n%%{init:{'securityLevel':'loose'}}%%\nA-->B")
     lesson = _lesson()
     lesson.sections[2].mermaid = "flowchart LR\n  A[<img src=x>]"
     blocks = _lesson_to_smart_blocks(lesson)
