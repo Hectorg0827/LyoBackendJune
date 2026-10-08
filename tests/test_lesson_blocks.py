@@ -1,3 +1,4 @@
+import pytest
 """Lesson -> SmartBlock rendering, and the emit/grade round trip.
 
 The round-trip test is the important one: it proves the blocks the stream
@@ -257,3 +258,113 @@ def test_verified_media_has_caption_and_is_supplementary_to_prose():
     assert _by_subtype(blocks, "representation")
     lesson.sections[2].image_url = "https://arbitrary.example/unsourced.png"
     assert not [b for b in _lesson_to_smart_blocks(lesson) if b["type"] == "media"]
+
+
+# --- regression: real production text-only visual response (2026-10-08) ---
+
+def test_optional_check_explanation_does_not_discard_structured_lesson():
+    from lyo_app.ai.lesson_composer import CheckItem
+    check = CheckItem.model_validate({
+        "question": "What absorbs the sunlight in a leaf?",
+        "options": [
+            {"text": "Chlorophyll"}, {"text": "Nitrogen"},
+            {"text": "Carbon dioxide"}, {"text": "I am not sure"},
+        ],
+        "correct_index": 0,
+        "bailout_index": 3,
+        # Omitted by the live provider; used to fail the entire ChatLesson.
+    })
+    assert check.explanation == "Correct answer: Chlorophyll"
+    assert check.grade(1) is False
+    assert check.grade(0) is True
+
+
+def test_invalid_check_answer_key_still_rejected():
+    from pydantic import ValidationError
+    from lyo_app.ai.lesson_composer import CheckItem
+    import pytest
+    with pytest.raises(ValidationError):
+        CheckItem.model_validate({
+            "question": "Question?",
+            "options": [{"text": "A"}, {"text": "B"}],
+            "correct_index": 7,
+        })
+
+
+def test_explicit_visual_teaching_request_identified_and_topic_cleaned():
+    from lyo_app.api.v1.stream_lyo2 import (
+        _requested_teaching_visuals, _visual_lesson_topic,
+    )
+    text = "Teach me photosynthesis using a process-flow diagram and a real supporting image"
+    assert _requested_teaching_visuals(text) == (True, True)
+    assert _visual_lesson_topic(text) == "photosynthesis"
+    assert _requested_teaching_visuals("Teach me photosynthesis without images") == (False, False)
+    assert _requested_teaching_visuals("Teach me photosynthesis") == (False, False)
+    assert _requested_teaching_visuals("Explain osmosis with a diagram") == (True, False)
+
+
+def test_requested_diagram_is_grounded_in_actual_numbered_lesson_steps():
+    from lyo_app.ai.lesson_composer import LessonSection
+    from lyo_app.api.v1.stream_lyo2 import _complete_requested_lesson_visuals
+    lesson = _lesson()
+    lesson.topic = "photosynthesis"
+    lesson.sections.append(LessonSection(
+        kind="method",
+        text=(
+            "1. Chlorophyll captures sunlight\n"
+            "2. Water splits, releasing oxygen\n"
+            "3. Carbon is fixed into sugar\n"
+        ),
+    ))
+    _complete_requested_lesson_visuals(lesson, diagram=True, image=True)
+    blocks = _lesson_to_smart_blocks(lesson)
+    diagrams = [block for block in blocks
+                if block.get("type") == "dataViz" and
+                block.get("content", {}).get("format") == "mermaid"]
+    assert len(diagrams) == 1
+    assert "Chlorophyll captures sunlight" in diagrams[0]["content"]["source"]
+    assert "Carbon is fixed into sugar" in diagrams[0]["content"]["source"]
+    assert lesson.sections[2].image_query == "photosynthesis"
+    assert not [block for block in blocks if block["type"] == "media"]
+
+
+def test_requested_visual_does_not_invent_unstated_process_steps():
+    from lyo_app.api.v1.stream_lyo2 import _complete_requested_lesson_visuals
+    lesson = _lesson()
+    lesson.sections[2].mermaid = None
+    _complete_requested_lesson_visuals(lesson, diagram=True, image=False)
+    assert lesson.sections[2].mermaid is None
+
+
+@pytest.mark.asyncio
+async def test_visual_teaching_request_composer_receives_structured_visual_requirements(monkeypatch):
+    from lyo_app.ai import lesson_composer
+    prompts = []
+
+    async def fake_generate(prompt):
+        prompts.append(prompt)
+        return {
+            "sections": [
+                {"kind": "core", "text": "Photosynthesis turns light into chemical energy."},
+                {"kind": "representation", "text": "Light and water support sugar production."},
+            ],
+            "check": {
+                "question": "What is captured by chlorophyll?",
+                "options": [{"text": "Light"}, {"text": "Heat only"}],
+                "correct_index": 0,
+                # Production provider omits explanatory copy.
+            },
+        }
+
+    monkeypatch.setattr(lesson_composer, "_generate_json", fake_generate)
+    lesson = await lesson_composer.compose(
+        "photosynthesis",
+        mode="teach",
+        requested_diagram=True,
+        requested_image=True,
+    )
+    assert lesson is not None
+    assert lesson.check.explanation == "Correct answer: Light"
+    assert "VISUAL OUTPUT IS EXPLICITLY REQUESTED" in prompts[0]
+    assert "image_query" in prompts[0]
+    assert "mermaid" in prompts[0]
