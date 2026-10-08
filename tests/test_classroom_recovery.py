@@ -312,3 +312,50 @@ async def test_a_generation_failure_is_shown_to_the_learner_but_never_spoken_by_
 
     # Nothing was graded, lost, or claimed by the failure.
     assert current(progress).outbox == [] and not current(progress).completed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en-US", "es-ES"])
+async def test_a_step_that_will_not_author_stops_offering_the_same_retry(language):
+    """A Retry button that is the only control on screen must not be a trap.
+
+    The recovery scene carries one action. When the step behind it fails the
+    same way every time — a contract the provider keeps missing, a dependency
+    that is down for the rest of the session — pressing Retry returns the
+    identical screen, for ever. The learner cannot reach the rest of their
+    lesson, cannot finish, and nothing on screen says so: the class is simply
+    over without ending.
+
+    So the second consecutive failure of one step stops asking for it. The
+    skill is kept for practice later, exactly as if the learner had skipped
+    the question, and the recap's own action carries them onward.
+    """
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = None
+    teacher.plan.return_value = plan(2)
+    runner, progress, ctx, _ = await final_example(teacher)
+    ctx.language_code = language
+    teacher.turn.side_effect = TeachingUnavailable("providers down")
+
+    paused = await runner.run(ctx, progress, action(component_id=current(progress).step_id))
+    assert any(c.action_intent == ActionIntent.RETRY
+               for c in paused.components if isinstance(c, CTAButton))
+    assert not current(progress).unit_done
+
+    # The first retry is honoured as it stands; the second failure ends it.
+    moved_on = await runner.run(ctx, progress, retry(paused))
+    assert not any(c.action_intent == ActionIntent.RETRY
+                   for c in moved_on.components if isinstance(c, CTAButton))
+    onward = next(c for c in moved_on.components if isinstance(c, CTAButton))
+    assert onward.action_intent in (ActionIntent.CONTINUE, ActionIntent.REQUEST_REVIEW)
+
+    # Kept for practice, never graded or failed, and the lesson stays open.
+    state = current(progress)
+    assert state.unit_done and state.skipped == [0] and state.completed == []
+    assert state.pending is None and all(not event["correct"] for event in state.outbox)
+    assert state.review_outbox and not state.authoring_failures
+
+    # And the next unit is reachable, which is the whole point of moving on.
+    teacher.turn.side_effect = teacher._turn
+    await runner.run(ctx, progress, action(component_id=onward.component_id))
+    assert current(progress).unit_index == 1 and not current(progress).unit_done

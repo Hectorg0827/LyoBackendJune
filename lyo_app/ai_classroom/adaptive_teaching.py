@@ -706,6 +706,14 @@ class GuidedState(StrictModel):
     next_move: str = "orient"
     # Retain the learner's question across a failed generation and reconnect.
     generation_input: str = ""
+    # How many times in a row authoring this same step has failed, and which
+    # step that was. A first failure is usually a provider hiccup and is worth
+    # retrying exactly as it stands. A second is the shape of something that
+    # will not come right by being asked again, and a Retry button that is the
+    # only control on screen then leaves the learner with no way out of the
+    # lesson at all. Counted per move so a different step starts over.
+    authoring_failures: int = 0
+    failed_move: str = ""
     outbox: list[dict[str, Any]] = Field(default_factory=list)
     # One spaced-review write per unit, drained by the engine like `outbox`.
     # Retention is the one thing a lesson cannot demonstrate on the day, so it
@@ -896,7 +904,17 @@ class AdaptiveTeacher:
         skill_id = self.saved_skill(state, move)
         if self.package_cache is None or skill_id is None:
             return True
-        return await self.package_cache.claim_question(context.user_id, skill_id, task)
+        try:
+            return await self.package_cache.claim_question(context.user_id, skill_id, task)
+        except Exception as exc:
+            # This bookkeeping keeps one learner from being asked the same
+            # question twice, which would overstate what their answer proves.
+            # It is worth a repeated question; it is not worth a lesson. Failing
+            # closed rejected every authored turn for as long as the table was
+            # unreachable — a paused class, for the duration of an outage in
+            # something the teaching itself does not depend on.
+            logger.warning("Classroom question claim unavailable: %s", type(exc).__name__)
+            return True
 
     async def build_package(self, context, unit: LearningUnit, level_band: int) -> UnitPackage:
         """Generate and check the complete path before showing any of its tasks."""
@@ -987,11 +1005,18 @@ class AdaptiveTeacher:
                 classroom_unit_package_events.labels("repeated").inc()
                 return None
             return turn
-        except TeachingUnavailable:
-            raise
         except Exception as exc:
+            # Reusing an authored unit is an optimization, and this selection
+            # runs *outside* the live authoring loop in `turn`. Raising here
+            # therefore paused a class that was never out of teaching: one
+            # unreadable row, one database hiccup, one question claim that
+            # could not be written, and the learner met a Retry button while
+            # ordinary single-move authoring was still perfectly able to teach
+            # the next step. `build_package` already degrades this way a few
+            # lines above; the cache around it now does the same.
+            classroom_unit_package_events.labels("fallback").inc()
             logger.warning("Classroom unit package unavailable: %s", type(exc).__name__)
-            raise TeachingUnavailable("Could not load a validated unit package") from exc
+            return None
 
     def cancel_package_prefetch(self) -> None:
         """Give current learner work priority over speculative unit preparation."""

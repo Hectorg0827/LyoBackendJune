@@ -536,10 +536,61 @@ class AdaptiveSession:
             return self.accept_turn(context, progress, state, turn, move)
         except (TeachingUnavailable, ValidationError) as exc:
             logger.warning("Classroom step unavailable: move=%s cause=%s", move, validation_summary(exc))
+            before_generation.authoring_failures = (
+                before_generation.authoring_failures + 1
+                if before_generation.failed_move == move else 1
+            )
+            before_generation.failed_move = move
+            if before_generation.authoring_failures >= self._MAX_AUTHORING_FAILURES:
+                return self.save(progress, before_generation,
+                                 self.move_on_from_unauthorable(context, before_generation))
             return self.save(progress, before_generation, self.unavailable(context, before_generation))
+
+    #: How many times one step may fail to author before the lesson stops
+    #: offering to retry it. Each attempt here is already two provider attempts
+    #: with a repair instruction between them, so this is four tries at the same
+    #: step before the class moves on.
+    _MAX_AUTHORING_FAILURES = 2
+
+    def move_on_from_unauthorable(self, context, state):
+        """Leave a step that will not author, rather than offer Retry forever.
+
+        The recovery screen carries exactly one control, so a step that fails
+        the same way every time turns that control into a trap: the learner
+        presses Retry, waits, and is handed the identical screen, with nothing
+        else on it and no way to reach the rest of their lesson. The work they
+        have already done is saved and is not the problem — the next step is —
+        so the honest move is to stop asking for it.
+
+        This is the route a learner takes when they skip a question they do not
+        want: the skill is kept for practice later rather than marked failed,
+        the session's recap is shown, and its Continue carries them into the
+        next unit or lesson, which is authored from scratch and has no reason
+        to fail with it.
+        """
+        state.pending = None
+        state.return_to_checkpoint = False
+        if state.unit_index not in state.skipped and state.unit_index not in state.completed:
+            state.skipped.append(state.unit_index)
+        self.schedule_review(context, state, passed=False)
+        self.event(state, "practise_later", phase=state.phase, reason="authoring_unavailable")
+        self.finish_unit(state)
+        state.authoring_failures = 0
+        state.failed_move = ""
+        state.last_feedback = self.copy(
+            context,
+            "That step wouldn't load, so we'll come back to it another time. "
+            "Nothing you've done is lost, and this doesn't count as a wrong answer.",
+            "Ese paso no se cargó, así que volveremos a él en otro momento. "
+            "No se ha perdido nada de tu trabajo y esto no cuenta como error.",
+        )
+        return self.summary(context, state)
 
     def accept_turn(self, context, progress, state, turn, move):
         state.generation_input = ""
+        # The step authored, so nothing is owed to the failure that preceded it.
+        state.authoring_failures = 0
+        state.failed_move = ""
         self.remember_beat(state, turn)
         if turn.task is None:
             if not state.return_to_checkpoint:

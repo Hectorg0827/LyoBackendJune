@@ -441,6 +441,37 @@ async def test_live_cache_miss_authors_only_the_next_scene(db, move):
     assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing", ["get", "claim_question"])
+async def test_an_unreachable_package_cache_still_teaches_the_next_step(db, failing):
+    """A cache the class does not need must never be able to pause the class.
+
+    Selecting a pre-authored unit happens before — and outside — the live
+    authoring loop, so an exception raised while reading the cache or claiming
+    a question used to arrive at the learner as `TeachingUnavailable`: the
+    paused-lesson screen and a Retry button, although ordinary single-move
+    authoring had not been asked for the step at all and was perfectly able to
+    produce it. One unreadable row or one database hiccup between two turns
+    ended the lesson.
+    """
+    ctx, unit = context(target_duration_minutes=8), plan(1).units[0]
+    skill = (await resolve_skill_plan(db, ctx, LearningPlan(units=[unit]))).unit_ids[0]
+    state = GuidedState(owner=ctx.user_id, plan=LearningPlan(units=[unit]),
+                        skill_ids=[skill], identity_required=True, record_scope="unit")
+    scripted = ScriptedTeacher()
+    generated = AsyncMock(side_effect=lambda _prompt, payload, _schema:
+                          scripted._turn(ctx, state, payload["move"]))
+    cache = DatabaseUnitPackageCache(db)
+    setattr(cache, failing, AsyncMock(side_effect=RuntimeError("cache unavailable")))
+    teacher = AdaptiveTeacher(generate=generated, package_cache=cache)
+
+    turn = await teacher.turn(ctx, state, "guided")
+
+    assert turn.task is not None and turn.task.target_index == 0
+    assert generated.await_args.args[2] is not UnitPackage
+    assert state.outbox == [] and state.completed == []
+
+
 def test_package_rejects_repeated_questions_and_wrong_target():
     ctx, unit = context(), plan(1).units[0]
     package = scripted_package(ctx, unit)
