@@ -114,7 +114,7 @@ class TeachingPolicy:
         # The interaction contract is chosen before pedagogy. For direct
         # information modes, pedagogy may shape clarity but may not replace the
         # requested activity with a calibration question or quiz.
-        if interaction_mode in {"answer", "analyze", "summarize", "compare", "continue"}:
+        if interaction_mode in {"answer", "analyze", "summarize", "compare", "search", "continue"}:
             depth = str(context.metadata.get("response_depth") or "standard").lower()
             words = {"concise": 90, "standard": 180, "deep": 280}.get(depth, 180)
             return _decision(

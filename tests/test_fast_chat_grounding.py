@@ -64,6 +64,7 @@ async def test_required_search_uses_shared_grounding_before_model(monkeypatch):
             "title": "Fresh Source",
             "url": "https://example.com/fresh",
             "provider": "tavily",
+            "snippet": "Fresh verified fact.",
             "retrieved_at": "2026-10-06T06:00:00-04:00",
             "published_at": "2026-10-06T05:00:00-04:00",
         }

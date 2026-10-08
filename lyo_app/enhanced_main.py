@@ -775,6 +775,7 @@ def create_app() -> FastAPI:
             "environment": settings.ENVIRONMENT,
             "features": settings.get_feature_flags(),
             "services": {},
+            "commit_sha": os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_SHA") or None,
         }
         # DB
         try:
@@ -1004,7 +1005,8 @@ async def db_check():
 @app.get("/healthz")
 async def healthz_alias():
     """Compatibility health endpoint."""
-    return {"status": "healthy", "service": settings.APP_NAME}
+    return {"status": "healthy", "service": settings.APP_NAME,
+            "commit_sha": os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_SHA") or None}
 
 
 if __name__ == "__main__":  # pragma: no cover

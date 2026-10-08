@@ -192,7 +192,11 @@ def decide_freshness(
     if (_LOCAL_CONTEXT.search(normalized) or _SUPPLIED_SOURCE.search(normalized)) and not _WEB_REQUEST.search(normalized):
         return FreshnessDecision(FreshnessMode.NONE, "conversation_or_document_context")
 
-    if re.fullmatch(r"(?:what is\s+)?[\d\s()+*/.%-]+(?:\s*[+=×÷-]\s*[\d\s()+*/.%-]+)+\??", normalized, re.I):
+    arithmetic_text = re.sub(
+        r"^(?:please\s+)?(?:(?:just|simply|only)\s+)?(?:answer|calculate|compute)\s*:\s*",
+        "", normalized, flags=re.I,
+    )
+    if re.fullmatch(r"(?:what is\s+)?[\d\s()+*/.%-]+(?:\s*[+=×÷-]\s*[\d\s()+*/.%-]+)+\??", arithmetic_text, re.I):
         return FreshnessDecision(FreshnessMode.NONE, "arithmetic")
 
     if re.fullmatch(

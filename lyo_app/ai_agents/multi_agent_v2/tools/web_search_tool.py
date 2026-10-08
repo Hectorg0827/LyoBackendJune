@@ -28,8 +28,8 @@ class SearchParameters(BaseModel):
     query: str = Field(..., description="The search query to perform.")
     max_results: int = Field(5, description="Maximum number of results to return.")
     search_depth: str = Field(
-        "balanced",
-        description="Search depth: 'basic' (fast) or 'advanced' (thorough).",
+        "fast",
+        description="Search depth: 'fast', 'basic', 'ultra-fast', or 'advanced'.",
     )
 
 
@@ -44,6 +44,9 @@ class WebSearchTool(BaseTool):
     async def execute(self, user_id: int, **kwargs) -> ToolResult:
         query = str(kwargs.get("query") or "").strip()
         max_results = int(kwargs.get("max_results", 5) or 5)
+        search_depth = str(kwargs.get("search_depth") or "fast")
+        if search_depth not in {"fast", "basic", "advanced", "ultra-fast"}:
+            search_depth = "fast"
         if not query:
             return ToolResult(
                 success=False,
@@ -65,9 +68,16 @@ class WebSearchTool(BaseTool):
         tavily_key = os.getenv("TAVILY_API_KEY")
         if tavily_key:
             result = await self._execute_tavily(
-                request.provider_query, max_results, tavily_key, request=request
+                request.provider_query, max_results, tavily_key, request=request,
+                search_depth=search_depth,
             )
             usable = usable_search_results(result.output, request) if result.success else []
+            logger.info(
+                "LIVE_SEARCH provider=tavily topic=%s target_day=%s retrieved=%s usable=%s",
+                request.topic, request.target_day,
+                len(result.output or []) if isinstance(result.output, list) else 0,
+                len(usable),
+            )
             if usable:
                 return result.model_copy(update={
                     "output": usable, "data": {"search_status": "complete"},
@@ -79,6 +89,10 @@ class WebSearchTool(BaseTool):
                 request.provider_query, max_results, gemini_key, request=request
             )
             usable = usable_search_results(result.output, request) if result.success else []
+            logger.info(
+                "LIVE_SEARCH provider=gemini_google_search topic=%s target_day=%s usable=%s",
+                request.topic, request.target_day, len(usable),
+            )
             if usable:
                 return result.model_copy(update={
                     "output": usable, "data": {"search_status": "complete"},
@@ -98,6 +112,7 @@ class WebSearchTool(BaseTool):
         api_key: str,
         *,
         request: Optional[LiveSearchRequest] = None,
+        search_depth: str = "fast",
     ) -> ToolResult:
         import httpx
 
@@ -107,7 +122,7 @@ class WebSearchTool(BaseTool):
                     "api_key": api_key,
                     "query": query,
                     "max_results": max_results,
-                    "search_depth": "advanced",
+                    "search_depth": search_depth,
                     "include_published_date": True,
                 }
                 if request and request.current and request.topic in {"news", "weather"}:
@@ -146,7 +161,9 @@ class WebSearchTool(BaseTool):
                     message=f"Found {len(formatted)} results via Tavily.",
                 )
         except Exception as exc:
-            logger.warning("Tavily search failed; trying Gemini grounding: %s", type(exc).__name__)
+            response = getattr(exc, "response", None)
+            logger.warning("LIVE_SEARCH provider=tavily error=%s http_status=%s",
+                           type(exc).__name__, getattr(response, "status_code", None))
             return ToolResult(
                 success=False,
                 output=None,
@@ -252,7 +269,18 @@ class WebSearchTool(BaseTool):
                 ),
             )
         except Exception as exc:
-            logger.error("Gemini Google Search error: %s", type(exc).__name__)
+            response = getattr(exc, "response", None)
+            error_status = None
+            if response is not None:
+                try:
+                    status = response.json().get("error", {}).get("status")
+                    if status in {"INVALID_ARGUMENT", "UNAUTHENTICATED", "PERMISSION_DENIED",
+                                  "RESOURCE_EXHAUSTED", "NOT_FOUND", "UNAVAILABLE"}:
+                        error_status = status
+                except Exception:
+                    pass
+            logger.error("LIVE_SEARCH provider=gemini_google_search error=%s http_status=%s code=%s",
+                         type(exc).__name__, getattr(response, "status_code", None), error_status)
             return ToolResult(
                 success=False,
                 output=None,

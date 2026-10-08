@@ -215,6 +215,7 @@ async def test_tavily_receives_date_window_and_preserves_publication_date(monkey
     assert captured["time_range"] == "day"
     assert captured["filter_by_published_date"] is True
     assert captured["include_published_date"] is True
+    assert captured["search_depth"] == "fast"
     assert "2026-10-06" in captured["query"]
     assert result.output[0]["published_at"] == "Tue, 06 Oct 2026 20:00:00 GMT"
 

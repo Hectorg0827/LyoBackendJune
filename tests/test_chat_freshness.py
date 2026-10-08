@@ -33,6 +33,14 @@ def test_creative_and_workflow_requests_do_not_pay_search_cost():
     assert decide_freshness("Create a course on marketing").mode is FreshnessMode.NONE
 
 
+@pytest.mark.parametrize("prompt", [
+    "2 + 2?", "What is 2 + 2?", "Just answer: what is 2 + 2?",
+    "Please just answer: what is 2 + 2?", "Calculate: 5 * 10",
+])
+def test_direct_arithmetic_does_not_retrieve_irrelevant_web_sources(prompt):
+    assert decide_freshness(prompt).mode is FreshnessMode.NONE
+
+
 def test_current_time_context_uses_client_timezone():
     now = datetime(2026, 10, 4, 19, 12, tzinfo=timezone.utc)
     value = current_time_context("America/New_York", now=now)

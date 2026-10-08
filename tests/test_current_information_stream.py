@@ -49,9 +49,11 @@ async def test_current_sources_have_dates_and_are_saved_with_canonical_answer(cu
     statuses = [e["status"] for e in events if e["type"] == "search_status"]
     assert statuses == ["searching", "complete"]
     saved = next(w for w in current_chat.writes if w["role"] == "assistant")
-    emitted = next(e["blocks"] for e in events if e["type"] == "smart_blocks")
+    emitted = [block for event in events if event["type"] == "smart_blocks"
+               for block in event["blocks"]]
     assert saved["blocks"] == emitted
-    assert "Forecast for 2026-10-06" in emitted[0]["content"]["items"][0]["detail"]
+    navigator = next(block for block in emitted if block.get("subtype") == "sourceNavigator")
+    assert "Forecast for 2026-10-06" in navigator["content"]["items"][0]["detail"]
     assert current_chat.model_calls[0]["enable_google_search"] is False
 
 
@@ -100,7 +102,8 @@ async def test_general_knowledge_stream_fetches_and_persists_web_sources(current
     search.assert_awaited_once()
     assert [e["status"] for e in events if e["type"] == "search_status"] == ["searching", "complete"]
     saved = next(w for w in current_chat.writes if w["role"] == "assistant")
-    assert saved["blocks"][0]["content"]["items"][0]["url"] == "https://example.com/research"
+    navigator = next(block for block in saved["blocks"] if block.get("subtype") == "sourceNavigator")
+    assert navigator["content"]["items"][0]["url"] == "https://example.com/research"
     assert current_chat.model_calls[0]["enable_google_search"] is False
     assert "External information relevant" in str(current_chat.model_calls[0]["messages"])
 
@@ -127,6 +130,8 @@ async def test_general_question_stream_exposes_search_status_and_saved_sources(c
     events = await turn(current_chat, "What is retrieval augmented generation?")
     assert [e["status"] for e in events if e["type"] == "search_status"] == ["searching", "complete"]
     search.assert_awaited_once()
-    blocks = next(e["blocks"] for e in events if e["type"] == "smart_blocks")
-    assert blocks[0]["content"]["items"][0]["url"] == source["url"]
+    blocks = [block for event in events if event["type"] == "smart_blocks"
+              for block in event["blocks"]]
+    navigator = next(block for block in blocks if block.get("subtype") == "sourceNavigator")
+    assert navigator["content"]["items"][0]["url"] == source["url"]
     assert next(w for w in current_chat.writes if w["role"] == "assistant")["blocks"] == blocks
