@@ -125,6 +125,12 @@ class LessonSection(BaseModel):
     # Structured, renderable flowchart of the represented idea (not an image
     # prompt or a textual description of a diagram).
     mermaid: Optional[str] = Field(default=None, max_length=2500)
+    # The model may request a specific, real educational image. Trusted
+    # URLs are resolved server-side; the model must never author image URLs.
+    image_query: Optional[str] = Field(default=None, max_length=140)
+    image_url: Optional[str] = None
+    image_source_url: Optional[str] = None
+    image_attribution: Optional[str] = None
     # Set on `reference` only: a GitHub-flavored markdown table.
     table_markdown: Optional[str] = None
     # Set on `representation` when the idea has a shape the learner can move
@@ -325,6 +331,10 @@ genuinely does not apply to this topic):
      B --> C[Effect]
    This must contain the lesson's own correct facts, not generic placeholders.
    Omit "mermaid" if this material has no meaningful structural diagram.
+   When a real object, location, organism, work of art, instrument, or physical
+   mechanism is best inspected in a genuine photograph, add "image_query"
+   describing that particular subject. Keep this specific and checkable;
+   no stock scenery or generic decorative photos. NEVER invent URLs.
 4. kind "example" — one worked instance, with "latex" if useful.
 5. kind "trap" — the mistakes learners actually make here. Be specific.
 6. kind "method" — how the learner does this themselves, as ordered steps.
