@@ -149,8 +149,8 @@ def test_numbered_classroom_explanation_gets_real_process_visual_fallback():
 
     visual = visual_from_numbered_steps(
         "How a campaign works",
-        "1. Identify the target audience\\n"
-        "2. Choose the marketing channel\\n"
+        "1. Identify the target audience\n"
+        "2. Choose the marketing channel\n"
         "3. Measure the campaign outcome",
     )
     assert visual is not None
@@ -164,6 +164,6 @@ def test_unsupported_classroom_list_does_not_invent_flow_relationships():
 
     assert visual_from_numbered_steps("Overview", "Marketing has many goals.") is None
     assert visual_from_numbered_steps(
-        "Examples", "2. Run an experiment\\n4. Learn what happened"
+        "Examples", "2. Run an experiment\n4. Learn what happened"
     ) is None
-    assert visual_from_numbered_steps("Short", "1. A\\n2. B") is None
+    assert visual_from_numbered_steps("Short", "1. A\n2. B") is None
