@@ -314,6 +314,7 @@ def test_news_topic_is_not_mistaken_for_a_geographic_location(query):
 
 @pytest.mark.parametrize("query", [
     "Trending news in Dominican Republic", "AI news from Dominican Republic today",
+    "Trending in Dominican Republic", "What happened in Dominican Republic news today?",
 ])
 def test_news_region_still_excludes_wrong_location_evidence(query):
     request = prepare_live_search(query, current_time_context=NOW)
@@ -321,6 +322,32 @@ def test_news_region_still_excludes_wrong_location_evidence(query):
     evidence = {"title": "Today's report", "url": "https://example.com/news",
                 "snippet": "France today.", "published_at": "2026-10-06"}
     assert usable_search_results([evidence], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "Actualidad en España", "Noticias de España hoy", "En España, noticias de hoy",
+])
+def test_spanish_news_aliases_and_leading_regions_keep_geographic_evidence(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == "España"
+    right = {"title": "Noticias de España", "url": "https://example.com/spain",
+             "snippet": "España publicó una actualización.", "published_at": "2026-10-06"}
+    wrong = {**right, "title": "France", "url": "https://example.com/france", "snippet": "France today."}
+    assert usable_search_results([right, wrong], request) == [
+        {**right, "retrieved_at": "2026-10-06T22:00:00-04:00"}
+    ]
+
+
+@pytest.mark.parametrize("query", [
+    "AI news from Reuters today", "News from around the world today",
+    "News for investors today", "Noticias para inversores hoy",
+])
+def test_news_publishers_global_scope_and_audiences_do_not_become_places(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == ""
+    source = {"title": "A new AI report", "url": "https://example.com/report",
+              "snippet": "Researchers published findings.", "published_at": "2026-10-06"}
+    assert usable_search_results([source], request)
 
 
 @pytest.mark.asyncio

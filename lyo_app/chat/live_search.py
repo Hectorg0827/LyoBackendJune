@@ -125,13 +125,49 @@ def _location(text: str) -> str:
 
 
 def _news_location(text: str) -> str:
-    # "What happened in AI news?" names a topic, not a place. Only take
-    # regional qualifiers following the news noun, including follow-ups.
-    match = re.search(r"\b(?:news|headlines?|noticias|titulares)\b(.*)", text, re.I | re.S)
-    if not match:
-        return ""
-    qualifier = re.sub(r"\bfrom\b", "in", match.group(1), flags=re.I)
-    return _location(qualifier)
+    # A region can precede any news keyword. "In AI news" names a topic;
+    # "for investors" names an audience; "from Reuters" names a publisher.
+    # The ambiguous from/de forms only filter known geographic aliases.
+    regions_from = {
+        value.strip() for value in (
+            "dominican republic;republica dominicana;france;spain;espana;"
+            "united states;united kingdom;usa;us;uk;canada;mexico;brazil;"
+            "argentina;chile;colombia;peru;venezuela;cuba;haiti;puerto rico;"
+            "germany;alemania;italy;italia;portugal;ireland;netherlands;"
+            "belgium;switzerland;austria;poland;ukraine;russia;greece;"
+            "sweden;norway;denmark;finland;iceland;turkey;china;japan;"
+            "india;pakistan;bangladesh;south korea;north korea;taiwan;"
+            "singapore;indonesia;malaysia;philippines;thailand;vietnam;"
+            "australia;new zealand;israel;palestine;iran;iraq;saudi arabia;"
+            "egypt;morocco;south africa;nigeria;kenya;ethiopia;ghana;"
+            "new york;new york city;nyc;boston;washington;los angeles;"
+            "london;paris;madrid;barcelona;tokyo;beijing;santo domingo"
+        ).split(";")
+    }
+    candidates = re.findall(
+        r"\b(in|en|from|desde|de)\s+([^\n?!;]+?)"
+        r"(?=\b(?:in|en|from|desde|de)\s+|[\n?!;]|$)", text, re.I,
+    )
+    for prep, candidate in reversed(candidates):
+        candidate = _NEWS.split(candidate, maxsplit=1)[0]
+        candidate = re.split(
+            r"\b(?:today|tonight|tomorrow|yesterday|hoy|mañana|ayer|"
+            r"for|para|about|on|include|with|summarize)\b",
+            candidate, maxsplit=1, flags=re.I,
+        )[0].strip(" ,.!:")
+        normalized = _normalize(candidate)
+        if not normalized or re.match(
+            r"^(?:ai|artificial intelligence|tech|technology|business|science|"
+            r"politics|sports|finance|investors|the world|around the world|"
+            r"worldwide|global|general|202\d)\b", normalized,
+        ):
+            continue
+        if prep.lower() in {"from", "desde", "de"} and normalized not in regions_from:
+            continue
+        if re.match(rf"^(?:20\d{{2}}|\d{{1,2}}[/-]|(?:{_MONTH_PATTERN})\s+\d)", candidate, re.I):
+            continue
+        return candidate
+    return ""
 
 
 @dataclass(frozen=True)
