@@ -266,6 +266,14 @@ B) One third
     assert "Core idea:" in spoken
 
 
+def test_voice_ready_does_not_restore_visual_only_content():
+    payload = _voice_ready_payload("https://example.com/raw")
+
+    assert payload["text"] == "https://example.com/raw"
+    assert payload["spoken_text"] == ""
+    assert payload["speak"] is False
+
+
 def test_voice_ready_payload_carries_canonical_text_and_turn_identity():
     payload = _voice_ready_payload(
         "Photosynthesis converts light energy into chemical energy.",
@@ -276,6 +284,7 @@ def test_voice_ready_payload_carries_canonical_text_and_turn_identity():
     assert payload == {
         "type": "voice_ready",
         "text": "Photosynthesis converts light energy into chemical energy.",
+        "spoken_text": "Photosynthesis converts light energy into chemical energy.",
         "final": True,
         "message_id": "assistant-turn-1",
         "latency_ms": 742,

@@ -823,11 +823,17 @@ def _voice_ready_payload(
     This is not a second model result. It carries the exact canonical Chat text
     that will also be rendered/persisted for the turn.
     """
+    from lyo_app.teaching_runtime.voice_delivery import prepare_spoken_text
+
+    spoken_text = prepare_spoken_text(text)
     payload: Dict[str, Any] = {
         "type": "voice_ready",
         "text": text,
+        "spoken_text": spoken_text,
         "final": True,
     }
+    if not spoken_text:
+        payload["speak"] = False
     if segments_delivered:
         payload.update(speak=False, delivery="segments", sequence=segments_delivered)
     if message_id:
@@ -838,28 +844,10 @@ def _voice_ready_payload(
 
 
 def _voice_friendly_lesson_text(raw: str) -> str:
-    """Make structured lesson fallback text natural when read aloud.
+    """Speech rendering for structured lesson fallback text."""
+    from lyo_app.teaching_runtime.voice_delivery import prepare_spoken_text
 
-    SmartBlocks are still emitted unchanged for the screen. This only adapts
-    the parallel plain-text representation used by TTS, so voice remains the
-    same lesson and evidence workflow rather than a second teaching system.
-    """
-    text = raw or ""
-    text = re.sub(r"```[\s\S]*?```", " ", text)
-    text = re.sub(r"(?m)^#{1,6}\s*", "", text)
-    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
-    text = re.sub(r"(?m)^\s*([A-Da-d])[.)]\s+", r"\1: ", text)
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
-    text = re.sub(r"__(.*?)__", r"\1", text)
-    text = re.sub(r"`([^\`]+)`", r"\1", text)
-    text = text.replace("\\(", "").replace("\\)", "")
-    text = text.replace("\\[", "").replace("\\]", "")
-    text = text.replace("$", "")
-    text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
-    text = re.sub(r"(?m)^\s*:?-{3,}:?(?:\s*,\s*:?-{3,}:?)+\s*$", "", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    return text.strip()
+    return prepare_spoken_text(raw)
 
 
 async def _emit_composed_lesson(
@@ -2517,6 +2505,23 @@ async def stream_lyo2_chat(
             canonical_voice_parts = []
             answer_mode = decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value
 
+            def voice_segment_payload(segment: str, spoken_segment: str) -> Dict[str, Any]:
+                nonlocal voice_sequence
+                voice_sequence += 1
+                elapsed_ms = int((time.monotonic() - request_started) * 1000)
+                if voice_sequence == 1:
+                    latency_metrics["voice_first_segment_ms"] = elapsed_ms
+                latency_metrics["voice_segment_count"] = voice_sequence
+                return {
+                    "type": "voice_text_segment",
+                    "text": segment,
+                    "spoken_text": spoken_segment,
+                    "sequence": voice_sequence,
+                    "message_id": assistant_client_message_id,
+                    "turn_id": voice_state.get("turn_id") if isinstance(voice_state, dict) else None,
+                    "server_elapsed_ms": elapsed_ms,
+                }
+
             def persist_completed_voice(task):
                 if not task.cancelled() and task.exception() is None:
                     persist_answer(task.result().answer_block.content.get("text", ""), answer_mode)
@@ -2534,7 +2539,10 @@ async def stream_lyo2_chat(
                     and voice_state.get("delivery") == "segments"
                 )
                 if voice_can_stream:
-                    from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
+                    from lyo_app.teaching_runtime.voice_delivery import (
+                        VoiceSegmenter,
+                        prepare_spoken_text,
+                    )
 
                     voice_segments: asyncio.Queue[str] = asyncio.Queue()
                     voice_segmenter = VoiceSegmenter()
@@ -2584,15 +2592,12 @@ async def stream_lyo2_chat(
                             )
                         except asyncio.TimeoutError:
                             continue
-                        voice_sequence += 1
+                        spoken_segment = prepare_spoken_text(segment)
+                        if not spoken_segment:
+                            continue
                         yield yield_safe_sse_event(
                             "voice_text_segment",
-                            {
-                                "type": "voice_text_segment",
-                                "text": segment,
-                                "sequence": voice_sequence,
-                                "message_id": assistant_client_message_id,
-                            },
+                            voice_segment_payload(segment, spoken_segment),
                         )
 
                     execution_response = await execution_task
@@ -2603,15 +2608,13 @@ async def stream_lyo2_chat(
                     for segment in voice_segmenter.flush():
                         await voice_segments.put(segment)
                     while not voice_segments.empty():
-                        voice_sequence += 1
+                        segment = voice_segments.get_nowait()
+                        spoken_segment = prepare_spoken_text(segment)
+                        if not spoken_segment:
+                            continue
                         yield yield_safe_sse_event(
                             "voice_text_segment",
-                            {
-                                "type": "voice_text_segment",
-                                "text": voice_segments.get_nowait(),
-                                "sequence": voice_sequence,
-                                "message_id": assistant_client_message_id,
-                            },
+                            voice_segment_payload(segment, spoken_segment),
                         )
                 else:
                     with _model_usage_scope(teaching_decision.model_tier):
