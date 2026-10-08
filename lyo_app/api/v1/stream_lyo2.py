@@ -406,6 +406,49 @@ def _requested_teaching_visuals(text: str) -> Tuple[bool, bool]:
     return diagram, image
 
 
+def _complete_requested_lesson_visuals(
+    lesson: ChatLesson, *, diagram: bool, image: bool,
+) -> None:
+    """Enforce explicit visual preferences without inventing teaching facts.
+
+    If the model omitted diagram syntax, derive one ONLY from consecutive
+    numbered steps already in its lesson. Media still requires the trusted
+    Wikimedia resolver; a model-authored URL is never accepted.
+    """
+    representation = next(
+        (section for section in lesson.sections
+         if section.kind is SectionKind.representation), None,
+    )
+    if representation is None:
+        return
+
+    if diagram and not any(_valid_teaching_mermaid(section.mermaid)
+                           for section in lesson.sections):
+        from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+        method = next(
+            (section.text for section in lesson.sections
+             if section.kind is SectionKind.method), "",
+        )
+        visual = visual_from_numbered_steps(lesson.topic, method)
+        if visual is not None and visual.entries:
+            labels = [
+                re.sub(r"[^\w\s,;:.()\-+/%]", "", item.detail or "")[:90].strip()
+                for item in visual.entries
+            ]
+            if all(len(label) >= 5 for label in labels):
+                lines = ["flowchart TD"]
+                lines.extend(f'  S{i}["{label}"]' for i, label in enumerate(labels, 1))
+                lines.extend(f"  S{i} --> S{i+1}" for i in range(1, len(labels)))
+                candidate = "\n".join(lines)
+                if _valid_teaching_mermaid(candidate):
+                    representation.mermaid = candidate
+
+    if image and not representation.image_query and len(lesson.topic.strip()) >= 5:
+        # Topic is user supplied. Wikimedia must verify the actual media and
+        # attribution before any image block is emitted.
+        representation.image_query = lesson.topic.strip()[:140]
+
+
 def _visual_lesson_topic(text: str) -> str:
     """Remove output-format instructions from the concept used for teaching."""
     subject = re.sub(
@@ -464,6 +507,9 @@ async def _try_compose_lesson(
     if lesson is None:
         return [], None
     if mode == "teach":
+        _complete_requested_lesson_visuals(
+            lesson, diagram=requested_diagram, image=requested_image,
+        )
         await _hydrate_lesson_images(lesson)
     return _lesson_to_smart_blocks(
         lesson,
