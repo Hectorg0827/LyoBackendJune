@@ -15,7 +15,9 @@ provider is handed the shape it actually understands.
 import pytest
 
 from lyo_app.ai_classroom import adaptive_teaching
-from lyo_app.ai_classroom.adaptive_teaching import LOOSE_JSON, PracticeTurn, strict_response_format
+from lyo_app.ai_classroom.adaptive_teaching import (
+    LOOSE_JSON, PracticeTurn, TeachingUnavailable, strict_response_format,
+)
 
 
 #: A task that satisfies the real contract, so these tests exercise the code
@@ -64,6 +66,56 @@ def test_a_contract_that_cannot_be_enforced_asks_the_old_way(monkeypatch):
     assert strict_response_format(PracticeTurn, recursive) is None
 
 
+def test_only_an_actual_schema_rejection_is_read_as_one():
+    """`is_fallback` means every provider was exhausted, for any reason.
+
+    Only the last exception says whether the schema was refused or the
+    providers were simply unreachable, and the two want opposite responses.
+    """
+    from lyo_app.ai_classroom.strict_schema import looks_like_schema_rejection
+
+    for rejection in [
+        "Error code: 400 - Invalid parameter: 'response_format' of type 'json_schema' is not supported",
+        "Invalid schema for response_format 'PracticeTurn'",
+        "GenerateContentRequest.generation_config.responseSchema: invalid schema",
+    ]:
+        assert looks_like_schema_rejection(rejection), rejection
+
+    for outage in [
+        "Error code: 429 - Rate limit reached for gpt-4o-mini",
+        "Error code: 401 - Incorrect API key provided",
+        "Cannot connect to host generativelanguage.googleapis.com",
+        "Circuit breaker is OPEN",
+        "",
+        None,
+    ]:
+        assert not looks_like_schema_rejection(outage), outage
+
+
+@pytest.mark.asyncio
+async def test_an_outage_is_not_retried_loosely(monkeypatch):
+    """The cost of getting this wrong is paid by a learner who is waiting.
+
+    Retrying an outage sends the identical request through the identical
+    unhealthy providers: a 45-second classroom call becomes 90, and the extra
+    load lands exactly when there is least to spare.
+    """
+    monkeypatch.setenv("CLASSROOM_STRICT_SCHEMA", "1")
+    seen = []
+
+    async def chat_completion(**kwargs):
+        seen.append(kwargs["response_format"]["type"])
+        return {"is_fallback": True, "content": "",
+                "error": "Error code: 429 - Rate limit reached for gpt-4o-mini"}
+
+    import lyo_app.core.ai_resilience as resilience
+    monkeypatch.setattr(resilience.ai_resilience_manager, "chat_completion", chat_completion)
+
+    with pytest.raises(TeachingUnavailable):
+        await adaptive_teaching.model_json("system", {"a": 1}, PracticeTurn)
+    assert seen == ["json_schema"], "an outage must cost one attempt, not two"
+
+
 @pytest.mark.asyncio
 async def test_a_provider_that_refuses_the_schema_costs_the_old_behaviour_not_the_lesson(monkeypatch):
     """The safety property the whole change rests on.
@@ -85,7 +137,9 @@ async def test_a_provider_that_refuses_the_schema_costs_the_old_behaviour_not_th
     async def chat_completion(**kwargs):
         seen.append(kwargs["response_format"])
         if kwargs["response_format"]["type"] == "json_schema":
-            return {"is_fallback": True, "content": ""}
+            return {"is_fallback": True, "content": "",
+                    "error": "Error code: 400 - Invalid parameter: 'response_format' of type "
+                             "'json_schema' is not supported with this model"}
         return {"content": turn.model_dump_json(), "model_used": "gpt-4o-mini", "tokens_used": 10}
 
     monkeypatch.setattr(adaptive_teaching, "ai_resilience_manager", None, raising=False)

@@ -55,6 +55,45 @@ _DROPPED_KEYWORDS = frozenset({
 _MAX_DEPTH = 24
 
 
+#: Phrases that identify a provider refusing the *request* because of the
+#: schema it carried, as opposed to the provider being down, rate limited,
+#: unreachable or behind an open circuit.
+#:
+#: Deliberately narrow. A provider that cannot be reached has not told us
+#: anything about our schema, and treating silence as a schema rejection is
+#: what would make an ordinary outage cost two full attempts instead of one.
+_SCHEMA_REJECTION_MARKERS = (
+    "response_format",
+    "json_schema",
+    "responseschema",
+    "response schema",
+    "invalid schema",
+    "invalid_schema",
+    "unsupported schema",
+    "schema is invalid",
+    "schema is not supported",
+)
+
+
+def looks_like_schema_rejection(error: object) -> bool:
+    """Did the provider refuse the enforced schema, or just fail?
+
+    `chat_completion` reports both the same way — every provider exhausted,
+    `is_fallback` set — so the only thing separating "this dialect is not
+    accepted here" from "nothing is working right now" is what the last
+    exception said.
+
+    The difference matters because the two want opposite responses. A schema
+    rejection is permanent for this call and worth one immediate retry in the
+    loose mode. An outage is neither: retrying sends the identical request
+    through the identical unhealthy providers, doubles a 45-second classroom
+    call to 90 (or a package call from 100 to 200), and adds load at exactly
+    the moment there is least to spare.
+    """
+    text = str(error or "").lower()
+    return any(marker in text for marker in _SCHEMA_REJECTION_MARKERS)
+
+
 class SchemaNotStrictable(ValueError):
     """This contract cannot be expressed in a provider's strict dialect.
 

@@ -20,7 +20,9 @@ from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
-from lyo_app.ai_classroom.strict_schema import SchemaNotStrictable, strict_json_schema
+from lyo_app.ai_classroom.strict_schema import (
+    SchemaNotStrictable, looks_like_schema_rejection, strict_json_schema,
+)
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, hydrate_turn_visuals, visual_from_numbered_steps
 
 logger = logging.getLogger(__name__)
@@ -896,9 +898,22 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
             # existed bounds the worst case at the old behaviour rather than at
             # an outage - which matters because nothing short of calling the
             # providers can prove a given dialect is accepted.
-            logger.warning("Structured output rejected for %s; retrying without an enforced schema",
-                           schema.__name__)
-            result = await call(LOOSE_JSON)
+            #
+            # Only on an actual rejection, though. `is_fallback` means every
+            # provider was exhausted, for any reason at all: rate limits, auth
+            # failures, open circuits, a network outage. Retrying those sends
+            # the same request back through the same unhealthy providers and
+            # doubles the time a learner waits - 45 seconds becomes 90, a unit
+            # package 100 becomes 200 - while adding load exactly when there
+            # is least to spare. The last exception is the only thing that
+            # tells the two apart.
+            if looks_like_schema_rejection(result.get("error")):
+                logger.warning("Structured output rejected for %s; retrying without an enforced schema",
+                               schema.__name__)
+                result = await call(LOOSE_JSON)
+            else:
+                logger.warning("Enforced schema call for %s failed without a schema rejection (%s); "
+                               "not retrying loosely", schema.__name__, result.get("error"))
         if result.get("is_fallback"):
             raise TeachingUnavailable("Providers unavailable")
         responding_provider = result.get("model_used") or result.get("model")
