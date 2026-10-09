@@ -312,3 +312,52 @@ async def test_a_generation_failure_is_shown_to_the_learner_but_never_spoken_by_
 
     # Nothing was graded, lost, or claimed by the failure.
     assert current(progress).outbox == [] and not current(progress).completed
+
+
+@pytest.mark.asyncio
+async def test_a_step_that_keeps_failing_teaches_instead_of_repeating_the_same_request():
+    """A Retry that cannot work must stop being the only thing on offer.
+
+    Every input to a teaching turn is saved state — the move, the unit, the
+    learner's words — so a step the model could not compose once it could not
+    compose again. The paused board was honest that the step had failed and
+    silent about the fact that pressing Retry would fail the same way for
+    ever. A learner hit it, pressed the button, and the class was over without
+    ever saying so.
+
+    The first Retry still asks for the step the learner was promised. The
+    second stops asking the same way and teaches the material the session
+    already holds, which is what a learner stuck at a checkpoint most likely
+    needs anyway. The move earns no evidence and completes no unit, so this
+    costs the learner nothing it should not.
+    """
+    teacher = ScriptedTeacher()
+    runner, progress, ctx, _ = await final_example(teacher)
+    teacher.turn.side_effect = TeachingUnavailable("provider temporarily unavailable")
+
+    failed = await runner.run(ctx, progress, action(component_id=current(progress).step_id))
+    assert current(progress).next_move == "guided"
+    assert current(progress).recovery_attempts == 1
+
+    # The first Retry is still the real step: a provider blip is common, and
+    # this attempt carries a stronger model behind it.
+    again = await runner.run(ctx, progress, retry(failed))
+    assert teacher.turn.await_args.args[2] == "guided"
+    assert current(progress).recovery_attempts == 2
+
+    # The second is not. Asking this way has now demonstrably stopped working,
+    # so the class teaches rather than repeating a request that cannot land.
+    teacher.turn.side_effect = teacher._turn
+    scene = await runner.run(ctx, progress, retry(again))
+    assert teacher.turn.await_args.args[2] == "reteach"
+    assert any(isinstance(c, TeacherMessage) for c in scene.components)
+    # A real teaching beat, not the paused board wearing one: the recovery
+    # notice is gone and there is no Retry left to press.
+    assert not any(isinstance(c, CTAButton) and c.action_intent == ActionIntent.RETRY
+                   for c in scene.components)
+    # Nothing was awarded for getting unstuck.
+    assert not current(progress).completed
+    # And a step that lands clears the count, so the next failure gets its own
+    # full retry rather than inheriting this one's.
+    assert current(progress).recovery_attempts == 0
+

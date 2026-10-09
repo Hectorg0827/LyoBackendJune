@@ -681,6 +681,18 @@ class GuidedState(StrictModel):
     beat_index: int = -1
     step_id: str = Field(default_factory=lambda: str(uuid4()))
     return_to_checkpoint: bool = False
+    #: Consecutive failures to compose this one step, reset by any success.
+    #:
+    #: A step that cannot be generated leaves the learner on a paused board
+    #: with a Retry. That Retry used to resend the identical request — same
+    #: move, same unit, same learner input, same provider order — so a failure
+    #: the model could not get past the first time it could not get past the
+    #: hundredth either. The lesson was dead and the button said otherwise.
+    #:
+    #: This is what lets each attempt differ from the last: see `turn()` for
+    #: the model escalation and `AdaptiveSession.run` for the move it falls
+    #: back to once asking the same way has demonstrably stopped working.
+    recovery_attempts: int = 0
     practice_events: list[dict[str, Any]] = Field(default_factory=list)
     task_kinds: list[str] = Field(default_factory=list)
     recent_questions: list[str] = Field(default_factory=list)
@@ -809,6 +821,18 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                             ["gpt-4o-mini", "gpt-4o", "gemini-2.5-flash"]
                             if schema is Evaluation else
                             ["gpt-4o-mini", "gemini-2.5-flash"])
+    # A step the learner has already watched fail is worth a more capable
+    # model. The ordinary order leads with the small, fast one because most
+    # turns do not need more than that; a turn that has now failed every
+    # attempt of a previous request is, by observation, one that does.
+    #
+    # This only ever reorders providers that were already configured and
+    # already in use elsewhere in this module — it adds no provider, no
+    # credential and no client. Without it a teaching turn could only ever be
+    # attempted by `gpt-4o-mini` and `gemini-2.5-flash`, so a unit neither of
+    # them could author was a unit no amount of retrying would ever teach.
+    if payload.get("_escalate") and not issubclass(schema, UnitPackage):
+        configured_providers = ["gpt-4o", *[p for p in configured_providers if p != "gpt-4o"]]
     rejected_provider = payload.get("_rejected_provider")
     providers = [p for p in configured_providers if p != rejected_provider]
     if rejected_provider in configured_providers:
@@ -1232,6 +1256,9 @@ class AdaptiveTeacher:
             "open_question": state.open_question[:2000],
             "compress_demonstration": focused,
         }
+        # Internal routing only — stripped before anything reaches a model.
+        if state.recovery_attempts:
+            payload["_escalate"] = True
         for attempt in range(2):
             try:
                 turn = await self.generate(
