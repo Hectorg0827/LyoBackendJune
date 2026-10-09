@@ -368,3 +368,43 @@ async def test_visual_teaching_request_composer_receives_structured_visual_requi
     assert "VISUAL OUTPUT IS EXPLICITLY REQUESTED" in prompts[0]
     assert "image_query" in prompts[0]
     assert "mermaid" in prompts[0]
+
+
+@pytest.mark.parametrize("request,expected", [
+    ("Explain photosynthesis with diagrams and images", (True, True)),
+    ("Explain photosynthesis with a diagram but don't use an image", (True, False)),
+    ("Show me diagrams and photographs of the water cycle", (True, True)),
+    ("Explain photosynthesis without using any pictures", (False, False)),
+    ("Explain photosynthesis with a diagram, but do not show an image", (True, False)),
+    ("Show me an image of photosynthesis without a flowchart", (False, True)),
+    ("Explain photosynthesis without photos", (False, False)),
+])
+def test_visual_request_plurals_and_opt_outs(request, expected):
+    from lyo_app.api.v1.stream_lyo2 import _requested_teaching_visuals
+    assert _requested_teaching_visuals(request) == expected
+
+
+@pytest.mark.parametrize("request,expected", [
+    ("Show me a diagram of photosynthesis", "photosynthesis"),
+    ("Draw a diagram of photosynthesis", "photosynthesis"),
+    ("Can you explain photosynthesis using diagrams and images?", "photosynthesis"),
+    ("Please visualize the water cycle with a flowchart", "the water cycle"),
+    ("Could you draw a picture of a leaf?", "a leaf"),
+    ("Explain osmosis with diagrams", "osmosis"),
+])
+def test_visual_lesson_topic_excludes_format_instructions(request, expected):
+    from lyo_app.api.v1.stream_lyo2 import _visual_lesson_topic
+    assert _visual_lesson_topic(request) == expected
+
+
+def test_provider_null_explanation_recovers_without_losing_gradeable_lesson():
+    from lyo_app.ai.lesson_composer import ChatLesson
+    result = ChatLesson.model_validate({
+        "topic": "photosynthesis", "skill_id": "photosynthesis",
+        "sections": [{"kind": "representation", "text": "Light supports sugar formation."}],
+        "check": {"question": "Which pigment absorbs light?",
+                  "options": [{"text": "Chlorophyll"}, {"text": "Melanin"}],
+                  "correct_index": 0, "explanation": None},
+    })
+    assert result.check.explanation == "Correct answer: Chlorophyll"
+    assert result.check.grade(1) is False
