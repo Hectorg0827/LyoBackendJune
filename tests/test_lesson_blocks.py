@@ -258,6 +258,14 @@ def test_verified_media_has_caption_and_is_supplementary_to_prose():
     assert _by_subtype(blocks, "representation")
     lesson.sections[2].image_url = "https://arbitrary.example/unsourced.png"
     assert not [b for b in _lesson_to_smart_blocks(lesson) if b["type"] == "media"]
+    lesson.sections[2].image_url = "https://images.pexels.com/photos/123/leaf.jpeg"
+    lesson.sections[2].image_source_url = "https://www.pexels.com/photo/green-leaf-123/"
+    lesson.sections[2].image_attribution = "Photo by Jane Artist on Pexels · Pexels License"
+    approved = [b for b in _lesson_to_smart_blocks(lesson) if b["type"] == "media"]
+    assert len(approved) == 1
+    assert approved[0]["metadata"]["source_url"] == "https://www.pexels.com/photo/green-leaf-123/"
+    lesson.sections[2].image_source_url = "https://untrusted.example/bad"
+    assert not [b for b in _lesson_to_smart_blocks(lesson) if b["type"] == "media"]
 
 
 # --- regression: real production text-only visual response (2026-10-08) ---
