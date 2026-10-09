@@ -5,7 +5,11 @@ on:
     branches: [main]
     paths:
       - "lyo_app/ai_classroom/**"
+      - "lyo_app/chat/visuals.py"
+      - "lyo_app/api/v1/stream_lyo2.py"
       - "tests/test_*classroom*.py"
+      - "tests/test_chat_visual_storage.py"
+      - "tests/test_interactive_fraction_pie.py"
       - "tests/adaptive_fixtures.py"
       - ".github/workflows/classroom-ci.yml"
 
@@ -26,7 +30,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U visual_test -d visual_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
