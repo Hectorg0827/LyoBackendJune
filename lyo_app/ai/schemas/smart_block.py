@@ -218,6 +218,26 @@ class SmartBlock(BaseModel):
         return cls(type=SmartBlockType.data_viz, subtype="diagram", content=DataVizBlockContent(format=fmt, source=source, **kwargs).model_dump())
 
     @classmethod
+    def teaching_visual(cls, visual, concept_id: Optional[str] = None, source_surface: str = "chat") -> "SmartBlock":
+        """The same validated manipulative used in Classroom and Test Prep.
+
+        Older clients can still display the title and text equivalent through
+        the existing interactive/items fallback. Exploration has no grading or
+        mastery-award contract.
+        """
+        from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
+
+        validated = TeachingVisual.model_validate(visual)
+        return cls(
+            type=SmartBlockType.interactive, subtype="teaching_visual",
+            content={"title": validated.title,
+                     "items": [{"label": validated.title, "detail": validated.description}],
+                     "visual": validated.model_dump(mode="json")},
+            metadata={"instructional_role": "representation", "source_surface": source_surface,
+                      **({"concept_id": concept_id} if concept_id else {})},
+        )
+
+    @classmethod
     def mastery_map(cls, title: str, nodes: List[MasteryNode], **kwargs) -> "SmartBlock":
         return cls(type=SmartBlockType.mastery_map, content=MasteryMapBlockContent(title=title, nodes=nodes, **kwargs).model_dump())
 
