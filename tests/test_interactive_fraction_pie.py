@@ -20,12 +20,12 @@ from lyo_app.chat.visuals import update_visual_blocks
 
 
 def pie(**changes):
-    return TeachingVisual(
-        kind="fraction_pie", title="Explore the fraction",
-        caption="Tap slices or change the numerator and denominator.",
-        description="One whole has four equal slices, with three shaded.",
-        **{"parts": 4, "value": 3, **changes},
-    )
+    return TeachingVisual(**{
+        "kind": "fraction_pie", "title": "Explore the fraction",
+        "caption": "Tap slices or change the numerator and denominator.",
+        "description": "One whole has four equal slices, with three shaded.",
+        "parts": 4, "value": 3, **changes,
+    })
 
 
 @pytest.mark.parametrize("parts,value", [(1, 0), (1, 1), (20, 20), (4, 0)])
@@ -86,7 +86,44 @@ def test_spanish_text_and_saved_description_keep_the_same_language():
     visual = fraction_pie_from_text("Fracciones", "La fracción 3/4 tiene tres partes sombreadas.")
     assert "numerador" in visual.caption
     assert visual.update({"parts": 8, "value": 3})
-    assert "partes sombreadas" in visual.description
+    assert visual.caption in visual.description
+    assert "3/8" in visual.description
+
+
+def test_updated_text_equivalent_preserves_authored_language_and_quantity():
+    visual = pie(
+        title="Les fractions de pommes",
+        caption="Touchez les parts pour changer la fraction de pommes.",
+        description="Trois quarts de douze pommes représentent neuf pommes.",
+        whole=12, unit="pommes",
+    )
+    assert visual.update({"parts": 8, "value": 2})
+    assert visual.caption in visual.description
+    assert "2/8" in visual.description
+    assert "12 pommes" in visual.description
+    assert "3 pommes" in visual.description
+    assert "shaded" not in visual.description
+    assert "neuf" not in visual.description  # The old amount must not remain.
+    assert TeachingVisual.model_validate(visual.model_dump()) == visual
+
+
+def test_every_supported_pie_update_keeps_a_valid_bounded_text_equivalent():
+    visual = pie(title="t" * 100, caption="c" * 350, unit="u" * 40, whole=1000000)
+    for parts in range(1, 21):
+        for value in range(parts + 1):
+            assert visual.update({"parts": parts, "value": value})
+            assert TeachingVisual.model_validate(visual.model_dump()) == visual
+            assert f"{value}/{parts}" in visual.description
+
+
+@pytest.mark.parametrize("content", [None, "Legacy plain text", ["legacy"], {"visual": None}])
+def test_malformed_saved_visual_is_rejected_without_mutating_other_blocks(content):
+    block = SmartBlock.teaching_visual(pie()).model_dump(mode="json")
+    block["content"] = content
+    before = deepcopy(block)
+    with pytest.raises(ValueError):
+        update_visual_blocks([block], block["id"], {"value": 1})
+    assert block == before
 
 
 def test_authored_classroom_visuals_are_preserved_and_missing_beats_get_a_pie():

@@ -16,10 +16,25 @@ jobs:
   classroom:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: visual_test
+          POSTGRES_PASSWORD: visual_test
+          POSTGRES_DB: visual_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       TESTING: "true"
       SECRET_KEY: test-secret-key-for-classroom-ci-at-least-32-characters
       ENVIRONMENT: development
+      CHAT_VISUAL_POSTGRES_URL: postgresql+asyncpg://visual_test:visual_test@localhost:5432/visual_test
 
     steps:
       - uses: actions/checkout@v4

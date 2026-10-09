@@ -20,6 +20,8 @@ def update_visual_blocks(blocks: list[dict], block_id: str, values: dict) -> tup
         if block.get("type") != "interactive" or block.get("subtype") != "teaching_visual":
             raise LookupError("This block is not an exploratory visual")
         content = block.get("content") or {}
+        if not isinstance(content, dict):
+            raise ValueError("Invalid stored visual content")
         visual = TeachingVisual.model_validate(content.get("visual"))
         allowed = {"parts", "value"} if visual.kind == "fraction_pie" else {"params"} if visual.kind == "graph" else {"value"}
         if not isinstance(values, dict) or not values or set(values) - allowed or not visual.update(values):

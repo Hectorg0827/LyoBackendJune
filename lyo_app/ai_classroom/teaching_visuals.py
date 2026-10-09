@@ -162,9 +162,16 @@ class TeachingVisual(BaseModel):
                     or not 1 <= parts <= 20 or not 0 <= value <= parts):
                 return False
             self.parts, self.value = parts, value
-            spanish = re.search(r"\b(?:fracci[oó]n|numerador)\b", self.title + " " + self.caption, re.I)
-            self.description = (f"{value}/{parts}: {value} partes sombreadas de {parts} partes iguales."
-                                if spanish else f"{value}/{parts}: {value} shaded slices out of {parts} equal slices.")
+            # Keep the author's language and instructions, then describe the
+            # current fraction and quantity using universal mathematical
+            # notation. Keeping the old description would retain stale counts;
+            # replacing it with English would discard the authored locale.
+            quantity = self.whole * value / parts
+            self.description = (
+                f"{self.title}. {self.caption} "
+                f"{value}/{parts} = {self.whole:g} {self.unit} × {value}/{parts} "
+                f"≈ {quantity:.6g} {self.unit}."
+            )
             return True
         if self.kind == "graph":
             values = payload.get("params")
