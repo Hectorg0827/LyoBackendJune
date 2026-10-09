@@ -150,7 +150,7 @@ class CheckItem(BaseModel):
     question: str
     options: List[CheckOption]
     correct_index: int
-    explanation: str
+    explanation: str = ""  # optional presentation copy, not the grading answer key
     hint: Optional[str] = None
     # Index of an "I'm not sure — just explain it" option, when present. It is
     # neither correct nor a misconception: selecting it skips grading entirely
@@ -171,6 +171,21 @@ class CheckItem(BaseModel):
         if options and not (0 <= v < len(options)):
             raise ValueError(f"correct_index {v} out of range for {len(options)} options")
         return v
+
+    @field_validator("explanation", mode="before")
+    @classmethod
+    def _null_explanation_is_missing_copy(cls, value):
+        return "" if value is None else value
+
+    @model_validator(mode="after")
+    def _recover_optional_explanation(self):
+        # Some providers return a valid question and answer key but omit the
+        # explanatory sentence. Preserve the server-gradeable lesson instead
+        # of discarding every structured visual and reverting to prose.
+        # Use ONLY the validated correct option, never an invented rationale.
+        if not self.explanation.strip():
+            self.explanation = "Correct answer: " + self.options[self.correct_index].text
+        return self
 
     def is_bailout(self, index: int) -> bool:
         return self.bailout_index is not None and index == self.bailout_index
@@ -286,6 +301,8 @@ def _teach_prompt(
     learner_context: str,
     entry_note: str,
     target_evidence_type: str = "application",
+    requested_diagram: bool = False,
+    requested_image: bool = False,
 ) -> str:
     evidence_instruction = {
         "recognition": (
@@ -302,7 +319,21 @@ def _teach_prompt(
     }.get(target_evidence_type, (
         "Use a fresh but familiar scenario that requires applying the idea, not repeating the worked example."
     ))
+    visual_instruction = (
+        "VISUAL OUTPUT IS EXPLICITLY REQUESTED. Do not substitute ASCII art, "
+        "a code block described in prose, or advice to search for an image. "
+        + ("Set a valid mermaid field on the representation section with the actual "
+           "ordered relationships taught in this lesson. " if requested_diagram else "")
+        + ("Set a specific image_query on the representation section naming a real "
+           "relevant object or process to inspect; the server will resolve a trusted "
+           "image and its license. Do not invent URLs. " if requested_image else "")
+        + "If no reliable visual is possible, preserve truthful prose; never claim "
+        "an image was displayed when none was resolved."
+        if requested_diagram or requested_image else ""
+    )
     return f"""You are Lyo, teaching "{topic}" to one specific learner.
+
+{visual_instruction}
 
 {entry_note}
 
@@ -479,6 +510,8 @@ async def compose(
     mode: str = "probe",
     probe_result: Optional[Dict[str, Any]] = None,
     target_evidence_type: Optional[str] = None,
+    requested_diagram: bool = False,
+    requested_image: bool = False,
 ) -> Optional[ChatLesson]:
     """Compose a lesson, or None to fall back to the existing prose path.
 
@@ -505,6 +538,8 @@ async def compose(
             learner_context,
             _entry_note(probe_result),
             check_target,
+            requested_diagram=requested_diagram,
+            requested_image=requested_image,
         )
 
     raw = await _generate_json(prompt)
