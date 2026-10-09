@@ -205,7 +205,7 @@ def fraction_pie_from_text(title: str, text: str, language: str | None = None) -
     def standalone(start: int) -> bool:
         return not re.search(r"(?:\d+\s*|[-−]\s*)$", text[:start])
 
-    for match in re.finditer(r"(?<![\w./\-−])(\d{1,2})\s*/\s*(\d{1,2})(?![\w./])", text):
+    for match in re.finditer(r"(?<![\w./\-−])(\d{1,2})\s*/\s*(\d{1,2})(?![\w/]|\.\d)", text):
         if standalone(match.start()):
             candidates.append((match.start(), int(match[1]), int(match[2])))
     for match in re.finditer(r"\\(?:d?frac)\s*\{(\d{1,2})\}\s*\{(\d{1,2})\}", text):

@@ -63,6 +63,8 @@ def test_invalid_or_grading_values_leave_both_controls_unchanged(values):
 
 @pytest.mark.parametrize("text,expected", [
     ("The fraction 3/4 has three shaded slices.", (3, 4)),
+    ("The fraction is 3/4.", (3, 4)),
+    ("The fraction denominator is not a decimal: 3/4.5.", None),
     (r"The fraction \frac{2}{4} is one half.", (2, 4)),
     ("The fraction ¾ has three shaded slices.", (3, 4)),
     ("The fraction 0/5 has no shaded slices.", (0, 5)),
@@ -164,7 +166,7 @@ async def test_visual_endpoint_enforces_owner_and_validates_updates_before_savin
     app.dependency_overrides[stream.get_db] = lambda: db
     app.dependency_overrides[stream.get_current_user_or_guest] = lambda: SimpleNamespace(id=42)
     body = {"conversation_id": "conversation-1", "block_id": block["id"], "values": {"parts": 8, "value": 3}}
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/v1/lyo2/chat/visual", json=body)
         assert response.status_code == 200
         assert response.json()["block"]["content"]["visual"]["parts"] == 8
