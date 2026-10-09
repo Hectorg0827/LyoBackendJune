@@ -389,19 +389,29 @@ def _lesson_mode_for_teaching_action(action: Any) -> Optional[str]:
 
 
 def _requested_teaching_visuals(text: str) -> Tuple[bool, bool]:
-    """Recognize an explicit visual-delivery request, not merely a topic.
-
-    Opt-in only: an ordinary explanation stays on its existing fast path.
-    Negative requests like 'without images' must not start image retrieval.
-    """
+    """Detect user-requested diagrams and images, including plurals and opt-outs."""
     value = (text or "").strip()
-    if not re.search(r"\b(?:teach|explain|show|draw|illustrate|visualize|walk me through)\b", value, re.I):
+    diagram_nouns = r"(?:diagrams?|flow[ -]?charts?|process[ -]?flows?)"
+    image_nouns = r"(?:images?|photos?|photographs?|pictures?|illustrations?)"
+    if not (
+        re.search(r"\b(?:teach|explain|show|draw|illustrate|visualize|walk me through)\b", value, re.I)
+        or re.match(r"^\s*(?:(?:a|an|the)\s+)?(?:diagram|flowchart|image|photo)\s+of\b", value, re.I)
+    ):
         return False, False
-    diagram = bool(re.search(r"\b(?:diagram|flowchart|flow[ -]chart|process[ -]flow)\b", value, re.I))
-    image = bool(re.search(r"\b(?:image|photo|photograph|picture|illustration)\b", value, re.I))
-    if re.search(r"\b(?:without|no|don't|do not)\s+(?:a\s+|any\s+)?(?:diagram|flowchart|flow[ -]chart|process[ -]flow)s?\b", value, re.I):
+
+    diagram = bool(re.search(r"\b" + diagram_nouns + r"\b", value, re.I))
+    image = bool(re.search(r"\b" + image_nouns + r"\b", value, re.I))
+    # Covers "without using any photos" and "don't show an image" without
+    # mistaking unrelated words for a request to retrieve media.
+    negation = (
+        r"\b(?:without|no|don't|do not|not|avoid|skip)\s+"
+        r"(?:(?:use|using|include|including|show|showing|add|adding|"
+        r"display|displaying|provide|providing|generate|generating)\s+)?"
+        r"(?:(?:a|an|any|the|real|supporting)\s+)*"
+    )
+    if re.search(negation + diagram_nouns + r"\b", value, re.I):
         diagram = False
-    if re.search(r"\b(?:without|no|don't|do not)\s+(?:a\s+|any\s+)?(?:images?|photos?|pictures?|illustrations?)\b", value, re.I):
+    if re.search(negation + image_nouns + r"\b", value, re.I):
         image = False
     return diagram, image
 
@@ -450,16 +460,31 @@ def _complete_requested_lesson_visuals(
 
 
 def _visual_lesson_topic(text: str) -> str:
-    """Remove output-format instructions from the concept used for teaching."""
+    """Keep the underlying subject, not a request for its visual format."""
+    subject = (text or "").strip()
+    # Conversational preambles are not part of the knowledge concept.
     subject = re.sub(
-        r"^\s*(?:teach me(?: about)?|explain(?: to me)?|show me|walk me through|illustrate)\s+",
-        "", (text or "").strip(), flags=re.I,
+        r"^\s*(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?",
+        "", subject, flags=re.I,
+    )
+    subject = re.sub(
+        r"^\s*(?:teach me(?: about)?|explain(?: to me)?|show me|"
+        r"draw(?: me)?|visualize|illustrate|walk me through)\s+",
+        "", subject, flags=re.I,
+    )
+    # "Show me a diagram of photosynthesis" is about photosynthesis, not
+    # the document type "a diagram of photosynthesis".
+    format_nouns = r"(?:process[ -]?flows?|flow[ -]?charts?|diagrams?|images?|photos?|photographs?|pictures?|illustrations?)"
+    subject = re.sub(
+        r"^\s*(?:(?:a|an|the)\s+)?" + format_nouns + r"\s+(?:of|for|showing)\s+",
+        "", subject, flags=re.I,
     )
     subject = re.split(
-        r"\s+(?:using|with|as)\s+(?:(?:a|an|the|real|supporting)\s+)*"
-        r"(?:process[ -]flow|flow[ -]chart|flowchart|diagram|image|photo|picture|illustration)\b",
+        r"\s+(?:using|with|as|in)\s+"
+        r"(?:(?:a|an|the|real|supporting|multiple|several)\s+)*"
+        + format_nouns + r"\b",
         subject, maxsplit=1, flags=re.I,
-    )[0].strip(" .,:;")
+    )[0].strip(" .,:;?!")
     return subject[:180] or (text or "")[:180]
 
 
