@@ -46,7 +46,7 @@ class VisualParameter(BaseModel):
 
 
 _TRUSTED_IMAGE_HOSTS = {"upload.wikimedia.org", "commons.wikimedia.org"}
-_IMAGE_CACHE: dict[str, tuple[str, str, str] | None] = {}
+_IMAGE_CACHE: dict[str, tuple[str, str, str]] = {}
 
 
 def _trusted_https(url: str | None) -> bool:
@@ -208,9 +208,7 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
         return visual.model_copy(update={"image_url": None, "source_url": None, "attribution": None})
 
     cached = _IMAGE_CACHE.get(query.casefold())
-    if cached is not None or query.casefold() in _IMAGE_CACHE:
-        if not cached:
-            return visual.model_copy(update={"image_url": None, "source_url": None, "attribution": None})
+    if cached:
         return visual.model_copy(update={
             "image_url": cached[0], "source_url": cached[1], "attribution": cached[2],
         })
@@ -262,9 +260,14 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
     except Exception:
         resolved = None
 
-    if len(_IMAGE_CACHE) >= 128:
-        _IMAGE_CACHE.pop(next(iter(_IMAGE_CACHE)))
-    _IMAGE_CACHE[query.casefold()] = resolved
+    if resolved:
+        # Cache successful trusted media, not transient upstream failures.
+        # Concurrent failed lookups must never overwrite a successful one.
+        if len(_IMAGE_CACHE) >= 128 and query.casefold() not in _IMAGE_CACHE:
+            _IMAGE_CACHE.pop(next(iter(_IMAGE_CACHE)))
+        _IMAGE_CACHE[query.casefold()] = resolved
+    else:
+        resolved = _IMAGE_CACHE.get(query.casefold())
     if not resolved:
         return visual.model_copy(update={"image_url": None, "source_url": None, "attribution": None})
     return visual.model_copy(update={
