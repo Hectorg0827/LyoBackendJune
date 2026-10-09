@@ -32,30 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg15
-        env:
-          POSTGRES_PASSWORD: testpass
-          POSTGRES_USER: testuser
-          POSTGRES_DB: testdb
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
     env:
       PYTHONPATH: .
       ENVIRONMENT: development
@@ -64,6 +40,48 @@ jobs:
       SECRET_KEY: test-secret-key-for-ci-cd-at-least-32-characters-long
 
     steps:
+      # Native services are pulled before steps run, so configure the cache
+      # first and start the same service images explicitly. Docker falls back
+      # to Docker Hub when an image is absent from Google's public cache.
+      - name: Start test services with Docker Hub cache fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          config_path = Path('/etc/docker/daemon.json')
+          config = json.loads(config_path.read_text()) if config_path.exists() else {}
+          mirrors = config.get('registry-mirrors', [])
+          config['registry-mirrors'] = ['https://mirror.gcr.io'] + [
+              mirror for mirror in mirrors if mirror != 'https://mirror.gcr.io'
+          ]
+          config_path.parent.mkdir(parents=True, exist_ok=True)
+          config_path.write_text(json.dumps(config))
+          PY
+          sudo systemctl restart docker
+          docker run --detach --name lyo-ci-postgres --publish 5432:5432 \
+            --env POSTGRES_PASSWORD=testpass --env POSTGRES_USER=testuser \
+            --env POSTGRES_DB=testdb --health-cmd pg_isready \
+            --health-interval 10s --health-timeout 5s --health-retries 5 \
+            pgvector/pgvector:pg15
+          docker run --detach --name lyo-ci-redis --publish 6379:6379 \
+            --health-cmd 'redis-cli ping' --health-interval 10s \
+            --health-timeout 5s --health-retries 5 redis:7-alpine
+          for service in lyo-ci-postgres lyo-ci-redis; do
+            for attempt in {1..30}; do
+              health=$(docker inspect --format '{{.State.Health.Status}}' "$service")
+              if [ "$health" = healthy ]; then break; fi
+              if [ "$health" = unhealthy ]; then break; fi
+              sleep 2
+            done
+            if [ "$health" != healthy ]; then
+              docker logs "$service"
+              echo "Test service $service did not become healthy"
+              exit 1
+            fi
+          done
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -114,6 +132,10 @@ jobs:
       - name: Record type-checking debt
         run: mypy lyo_app --ignore-missing-imports
         continue-on-error: true
+
+      - name: Stop test services
+        if: always()
+        run: docker rm --force lyo-ci-postgres lyo-ci-redis || true
 
   build:
     name: Build immutable release image
