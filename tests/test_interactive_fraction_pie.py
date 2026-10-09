@@ -102,6 +102,7 @@ def test_updated_text_equivalent_preserves_authored_language_and_quantity():
     assert "2/8" in visual.description
     assert "12 pommes" in visual.description
     assert "3 pommes" in visual.description
+    assert "2/8; 12 pommes × 2/8 ≈ 3 pommes" in visual.description
     assert "shaded" not in visual.description
     assert "neuf" not in visual.description  # The old amount must not remain.
     assert TeachingVisual.model_validate(visual.model_dump()) == visual

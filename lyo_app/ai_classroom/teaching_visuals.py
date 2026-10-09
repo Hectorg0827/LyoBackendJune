@@ -169,7 +169,7 @@ class TeachingVisual(BaseModel):
             quantity = self.whole * value / parts
             self.description = (
                 f"{self.title}. {self.caption} "
-                f"{value}/{parts} = {self.whole:g} {self.unit} × {value}/{parts} "
+                f"{value}/{parts}; {self.whole:g} {self.unit} × {value}/{parts} "
                 f"≈ {quantity:.6g} {self.unit}."
             )
             return True
