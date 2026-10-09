@@ -885,8 +885,7 @@ class AIResilienceManager:
             },
         }
         
-        if response_format and response_format.get("type") == "json_object":
-            payload["generationConfig"]["responseMimeType"] = "application/json"
+        self.apply_structured_output(payload["generationConfig"], response_format)
         
         # Add system instruction if present
         if system_parts:
@@ -1022,13 +1021,43 @@ class AIResilienceManager:
             oldest = min(self.request_cache, key=lambda k: self.request_cache[k]["timestamp"])
             del self.request_cache[oldest]
 
+    @staticmethod
+    def apply_structured_output(
+        generation_config: Dict[str, Any],
+        response_format: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Put the caller's JSON instruction into Gemini's vocabulary.
+
+        Callers build OpenAI's shape, because that is the one the OpenAI
+        client takes verbatim. Gemini wants the same two ideas under different
+        keys — and the bare schema, not the wrapper around it. Translating
+        here is what stops every caller having to know both dialects.
+
+        `json_object` is "reply with some JSON", which is all this ever asked
+        for before schemas could be enforced. `json_schema` additionally hands
+        over the contract itself, so the provider rejects a shape the server
+        would only have rejected later, after a learner had waited for it.
+
+        Returns the config it modified, so it reads as a transformation at the
+        call site rather than something that happens invisibly.
+        """
+        kind = (response_format or {}).get("type")
+        if kind not in ("json_object", "json_schema"):
+            return generation_config
+        generation_config["responseMimeType"] = "application/json"
+        if kind == "json_schema":
+            enforced = (response_format.get("json_schema") or {}).get("schema")
+            if enforced:
+                generation_config["responseSchema"] = enforced
+        return generation_config
+
     def _get_fallback_response(self, message: str, error: str, response_format: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Generate fallback response when ALL AI providers fail."""
         logger.error(f"🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}")
         print(f">>> [PID {os.getpid()}] 🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}", flush=True)
         
         lower_msg = message.lower()
-        is_json = (response_format and response_format.get("type") == "json_object") or "json" in lower_msg or "schema" in lower_msg or "{" in lower_msg or "provide:" in lower_msg or "respond with" in lower_msg
+        is_json = (response_format and response_format.get("type") in ("json_object", "json_schema")) or "json" in lower_msg or "schema" in lower_msg or "{" in lower_msg or "provide:" in lower_msg or "respond with" in lower_msg
         
         if is_json:
             if "intake" in lower_msg or "test-prep intake" in lower_msg:
