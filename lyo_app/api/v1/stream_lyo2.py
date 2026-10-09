@@ -228,6 +228,8 @@ def _lesson_to_smart_blocks(
     a later request that only has the stored block to go on, so anything the
     verdict needs has to be written down here.
     """
+    from lyo_app.ai_classroom.visual_library import trusted_media_url, trusted_source_url
+
     blocks: List[Dict[str, Any]] = []
 
     for section in lesson.sections:
@@ -254,7 +256,8 @@ def _lesson_to_smart_blocks(
                     SmartBlock.data_viz(section.mermaid, fmt="mermaid").model_dump()
                 )
             if (section.kind is SectionKind.representation and section.image_url
-                    and section.image_url.startswith("https://upload.wikimedia.org/")):
+                    and trusted_media_url(section.image_url)
+                    and trusted_source_url(section.image_source_url)):
                 # Source and attribution travel with the image; the image is
                 # supplementary, and the textual description still renders.
                 blocks.append(SmartBlock(
@@ -263,7 +266,7 @@ def _lesson_to_smart_blocks(
                     content={
                         "url": section.image_url,
                         "alt": section.image_query or section.text[:120],
-                        "caption": section.image_attribution or "Wikimedia Commons",
+                        "caption": section.image_attribution or "Educational image source",
                     },
                     metadata={"source_url": section.image_source_url},
                 ).model_dump())
