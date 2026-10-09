@@ -236,7 +236,7 @@ async def _lookup(client: httpx.AsyncClient, provider: str, query: str) -> Libra
             return None
         response.raise_for_status()
         return parse(response.json())
-    except (httpx.HTTPError, ValueError, TypeError, KeyError, IndexError) as exc:
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, IndexError, OSError) as exc:
         logger.debug("Visual library %s lookup unavailable: %s", provider, type(exc).__name__)
         return None
 
