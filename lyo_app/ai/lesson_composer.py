@@ -172,6 +172,11 @@ class CheckItem(BaseModel):
             raise ValueError(f"correct_index {v} out of range for {len(options)} options")
         return v
 
+    @field_validator("explanation", mode="before")
+    @classmethod
+    def _null_explanation_is_missing_copy(cls, value):
+        return "" if value is None else value
+
     @model_validator(mode="after")
     def _recover_optional_explanation(self):
         # Some providers return a valid question and answer key but omit the
