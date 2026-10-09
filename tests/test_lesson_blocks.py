@@ -370,7 +370,7 @@ async def test_visual_teaching_request_composer_receives_structured_visual_requi
     assert "mermaid" in prompts[0]
 
 
-@pytest.mark.parametrize("request,expected", [
+@pytest.mark.parametrize("user_text,expected", [
     ("Explain photosynthesis with diagrams and images", (True, True)),
     ("Explain photosynthesis with a diagram but don't use an image", (True, False)),
     ("Show me diagrams and photographs of the water cycle", (True, True)),
@@ -379,12 +379,12 @@ async def test_visual_teaching_request_composer_receives_structured_visual_requi
     ("Show me an image of photosynthesis without a flowchart", (False, True)),
     ("Explain photosynthesis without photos", (False, False)),
 ])
-def test_visual_request_plurals_and_opt_outs(request, expected):
+def test_visual_request_plurals_and_opt_outs(user_text, expected):
     from lyo_app.api.v1.stream_lyo2 import _requested_teaching_visuals
-    assert _requested_teaching_visuals(request) == expected
+    assert _requested_teaching_visuals(user_text) == expected
 
 
-@pytest.mark.parametrize("request,expected", [
+@pytest.mark.parametrize("user_text,expected", [
     ("Show me a diagram of photosynthesis", "photosynthesis"),
     ("Draw a diagram of photosynthesis", "photosynthesis"),
     ("Can you explain photosynthesis using diagrams and images?", "photosynthesis"),
@@ -392,9 +392,9 @@ def test_visual_request_plurals_and_opt_outs(request, expected):
     ("Could you draw a picture of a leaf?", "a leaf"),
     ("Explain osmosis with diagrams", "osmosis"),
 ])
-def test_visual_lesson_topic_excludes_format_instructions(request, expected):
+def test_visual_lesson_topic_excludes_format_instructions(user_text, expected):
     from lyo_app.api.v1.stream_lyo2 import _visual_lesson_topic
-    assert _visual_lesson_topic(request) == expected
+    assert _visual_lesson_topic(user_text) == expected
 
 
 def test_provider_null_explanation_recovers_without_losing_gradeable_lesson():
