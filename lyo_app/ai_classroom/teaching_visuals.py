@@ -1,7 +1,7 @@
 """Validated visual teaching tools shared by native and web classrooms.
 
 Visuals are instructional representations, not decoration and never grading
-signals. Real images are resolved server-side from Wikimedia Commons so model
+signals. Real images are resolved server-side from rights-checked image sources so model
 output cannot inject arbitrary media URLs. Every visual keeps an equivalent
 text description for accessibility and degraded/offline clients.
 """
@@ -17,6 +17,11 @@ from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from lyo_app.ai_classroom.visual_library import (
+    commercial_commons_license, find_library_image,
+    trusted_media_url, trusted_source_url,
+)
 
 
 class VisualItem(BaseModel):
@@ -45,15 +50,13 @@ class VisualParameter(BaseModel):
         return self
 
 
-_TRUSTED_IMAGE_HOSTS = {"upload.wikimedia.org", "commons.wikimedia.org"}
-_IMAGE_CACHE: dict[str, tuple[str, str, str] | None] = {}
+_IMAGE_CACHE: dict[str, tuple[str, str, str]] = {}
 
 
 def _trusted_https(url: str | None) -> bool:
     if not url:
         return False
-    parsed = urlparse(url)
-    return parsed.scheme == "https" and parsed.hostname in _TRUSTED_IMAGE_HOSTS
+    return trusted_media_url(url) or trusted_source_url(url)
 
 
 class TeachingVisual(BaseModel):
@@ -111,9 +114,9 @@ class TeachingVisual(BaseModel):
                     raise ValueError("Image annotation coordinates need both x and y")
             # Model-supplied arbitrary URLs are rejected. The resolver below
             # only ever writes Wikimedia hosts.
-            if self.image_url and not _trusted_https(self.image_url):
+            if self.image_url and not trusted_media_url(self.image_url):
                 raise ValueError("Image URL must come from the trusted resolver")
-            if self.source_url and not _trusted_https(self.source_url):
+            if self.source_url and not trusted_source_url(self.source_url):
                 raise ValueError("Image source must come from the trusted resolver")
 
         if self.kind == "graph":
@@ -167,6 +170,33 @@ class TeachingVisual(BaseModel):
         return False
 
 
+def visual_from_numbered_steps(title: str, board_content: str) -> TeachingVisual | None:
+    """Conservative Classroom visual fallback built from existing numbered steps.
+
+    The fallback reuses the teacher's own facts. It does not invent events,
+    relationships, or media when the authored model omits an optional visual.
+    Only explicitly ordered, consecutive steps qualify.
+    """
+    steps: list[str] = []
+    for line in (board_content or "").splitlines():
+        match = re.match(r"^\s*(\d+)[.)]\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        if int(match.group(1)) != len(steps) + 1:
+            return None
+        steps.append(match.group(2).strip())
+    if len(steps) < 2 or len(steps) > 8 or any(len(x) < 5 for x in steps):
+        return None
+    return TeachingVisual(
+        kind="process_flow",
+        title=(title.strip() if title and len(title.strip()) >= 3 else "Steps in this process")[:100],
+        caption="Follow these ordered steps to see how the process unfolds.",
+        description=("Ordered steps: " + "; ".join(steps))[:600],
+        entries=[VisualItem(label=f"Step {index}", detail=step[:240])
+                 for index, step in enumerate(steps, start=1)],
+    )
+
+
 async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
     """Resolve an annotated-image query through a fixed, trusted endpoint.
 
@@ -181,11 +211,22 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
         return visual.model_copy(update={"image_url": None, "source_url": None, "attribution": None})
 
     cached = _IMAGE_CACHE.get(query.casefold())
-    if cached is not None or query.casefold() in _IMAGE_CACHE:
-        if not cached:
-            return visual.model_copy(update={"image_url": None, "source_url": None, "attribution": None})
+    if cached:
         return visual.model_copy(update={
             "image_url": cached[0], "source_url": cached[1], "attribution": cached[2],
+        })
+
+    # For specialist topics an authoritative archive is preferable to a
+    # generic Commons result (e.g. NASA rather than space-themed stock art).
+    specialist = await find_library_image(query, phase="priority")
+    if specialist:
+        resolved = (specialist.url, specialist.source_url, specialist.attribution)
+        if len(_IMAGE_CACHE) >= 128 and query.casefold() not in _IMAGE_CACHE:
+            _IMAGE_CACHE.pop(next(iter(_IMAGE_CACHE)))
+        _IMAGE_CACHE[query.casefold()] = resolved
+        return visual.model_copy(update={
+            "image_url": resolved[0], "source_url": resolved[1],
+            "attribution": resolved[2],
         })
 
     params = {
@@ -206,7 +247,7 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
         async with httpx.AsyncClient(
             timeout=2.5,
             follow_redirects=True,
-            headers={"User-Agent": "LyoAI-Classroom/1.0 educational-visual-resolver"},
+            headers={"User-Agent": "LyoAI/1.0 (https://lyoai.app; educational visual search)"},
         ) as client:
             response = await client.get("https://commons.wikimedia.org/w/api.php", params=params)
             response.raise_for_status()
@@ -230,14 +271,29 @@ async def resolve_visual_media(visual: TeachingVisual) -> TeachingVisual:
             title = (page or {}).get("title") or "Wikimedia Commons"
             attribution_parts = [part for part in (title, author, license_name) if part]
             attribution = " · ".join(dict.fromkeys(attribution_parts)) or "Wikimedia Commons"
-            if _trusted_https(image_url) and _trusted_https(source_url):
+            if (trusted_media_url(image_url) and trusted_source_url(source_url)
+                    and commercial_commons_license(license_name)):
+
                 resolved = (image_url, source_url, attribution[:240])
     except Exception:
         resolved = None
 
-    if len(_IMAGE_CACHE) >= 128:
-        _IMAGE_CACHE.pop(next(iter(_IMAGE_CACHE)))
-    _IMAGE_CACHE[query.casefold()] = resolved
+    if not resolved:
+        # The Wikimedia search can legitimately return no suitable licensed image.
+        # A second, bounded search covers NASA, Smithsonian, Pexels, or
+        # commercially usable Openverse media where configured/appropriate.
+        alternative = await find_library_image(query, phase="fallback")
+        if alternative:
+            resolved = (alternative.url, alternative.source_url, alternative.attribution)
+
+    if resolved:
+        # Cache successful trusted media, not transient upstream failures.
+        # Concurrent failed lookups must never overwrite a successful one.
+        if len(_IMAGE_CACHE) >= 128 and query.casefold() not in _IMAGE_CACHE:
+            _IMAGE_CACHE.pop(next(iter(_IMAGE_CACHE)))
+        _IMAGE_CACHE[query.casefold()] = resolved
+    else:
+        resolved = _IMAGE_CACHE.get(query.casefold())
     if not resolved:
         return visual.model_copy(update={"image_url": None, "source_url": None, "attribution": None})
     return visual.model_copy(update={

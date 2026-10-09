@@ -122,6 +122,15 @@ class LessonSection(BaseModel):
     text: str
     # Set on `representation`/`example` when the idea is better shown than told.
     latex: Optional[str] = None
+    # Structured, renderable flowchart of the represented idea (not an image
+    # prompt or a textual description of a diagram).
+    mermaid: Optional[str] = Field(default=None, max_length=2500)
+    # The model may request a specific, real educational image. Trusted
+    # URLs are resolved server-side; the model must never author image URLs.
+    image_query: Optional[str] = Field(default=None, max_length=140)
+    image_url: Optional[str] = None
+    image_source_url: Optional[str] = None
+    image_attribution: Optional[str] = None
     # Set on `reference` only: a GitHub-flavored markdown table.
     table_markdown: Optional[str] = None
     # Set on `representation` when the idea has a shape the learner can move
@@ -141,7 +150,7 @@ class CheckItem(BaseModel):
     question: str
     options: List[CheckOption]
     correct_index: int
-    explanation: str
+    explanation: str = ""  # optional presentation copy, not the grading answer key
     hint: Optional[str] = None
     # Index of an "I'm not sure — just explain it" option, when present. It is
     # neither correct nor a misconception: selecting it skips grading entirely
@@ -162,6 +171,21 @@ class CheckItem(BaseModel):
         if options and not (0 <= v < len(options)):
             raise ValueError(f"correct_index {v} out of range for {len(options)} options")
         return v
+
+    @field_validator("explanation", mode="before")
+    @classmethod
+    def _null_explanation_is_missing_copy(cls, value):
+        return "" if value is None else value
+
+    @model_validator(mode="after")
+    def _recover_optional_explanation(self):
+        # Some providers return a valid question and answer key but omit the
+        # explanatory sentence. Preserve the server-gradeable lesson instead
+        # of discarding every structured visual and reverting to prose.
+        # Use ONLY the validated correct option, never an invented rationale.
+        if not self.explanation.strip():
+            self.explanation = "Correct answer: " + self.options[self.correct_index].text
+        return self
 
     def is_bailout(self, index: int) -> bool:
         return self.bailout_index is not None and index == self.bailout_index
@@ -277,6 +301,8 @@ def _teach_prompt(
     learner_context: str,
     entry_note: str,
     target_evidence_type: str = "application",
+    requested_diagram: bool = False,
+    requested_image: bool = False,
 ) -> str:
     evidence_instruction = {
         "recognition": (
@@ -293,7 +319,21 @@ def _teach_prompt(
     }.get(target_evidence_type, (
         "Use a fresh but familiar scenario that requires applying the idea, not repeating the worked example."
     ))
+    visual_instruction = (
+        "VISUAL OUTPUT IS EXPLICITLY REQUESTED. Do not substitute ASCII art, "
+        "a code block described in prose, or advice to search for an image. "
+        + ("Set a valid mermaid field on the representation section with the actual "
+           "ordered relationships taught in this lesson. " if requested_diagram else "")
+        + ("Set a specific image_query on the representation section naming a real "
+           "relevant object or process to inspect; the server will resolve a trusted "
+           "image and its license. Do not invent URLs. " if requested_image else "")
+        + "If no reliable visual is possible, preserve truthful prose; never claim "
+        "an image was displayed when none was resolved."
+        if requested_diagram or requested_image else ""
+    )
     return f"""You are Lyo, teaching "{topic}" to one specific learner.
+
+{visual_instruction}
 
 {entry_note}
 
@@ -312,6 +352,20 @@ genuinely does not apply to this topic):
        (negative for BCE).
    Give it a "prompt" saying what to do with it, and 2-8 points taken from
    THIS lesson. Omit "explorable" entirely for topics with neither shape.
+   For concepts with ordered steps, cause/effect, a system, a hierarchy, or a
+   decision, ALSO provide "mermaid": a compact, accurate flowchart that
+   ACTUALLY illustrates the relationships taught in this section. Use only
+   "flowchart LR" or "flowchart TD" plus 3-8 nodes and labelled arrows;
+   use plain text node labels, not HTML, click actions or directives. Example:
+   flowchart LR
+     A[Cause] --> B[Change]
+     B --> C[Effect]
+   This must contain the lesson's own correct facts, not generic placeholders.
+   Omit "mermaid" if this material has no meaningful structural diagram.
+   When a real object, location, organism, work of art, instrument, or physical
+   mechanism is best inspected in a genuine photograph, add "image_query"
+   describing that particular subject. Keep this specific and checkable;
+   no stock scenery or generic decorative photos. NEVER invent URLs.
 4. kind "example" — one worked instance, with "latex" if useful.
 5. kind "trap" — the mistakes learners actually make here. Be specific.
 6. kind "method" — how the learner does this themselves, as ordered steps.
@@ -456,6 +510,8 @@ async def compose(
     mode: str = "probe",
     probe_result: Optional[Dict[str, Any]] = None,
     target_evidence_type: Optional[str] = None,
+    requested_diagram: bool = False,
+    requested_image: bool = False,
 ) -> Optional[ChatLesson]:
     """Compose a lesson, or None to fall back to the existing prose path.
 
@@ -482,6 +538,8 @@ async def compose(
             learner_context,
             _entry_note(probe_result),
             check_target,
+            requested_diagram=requested_diagram,
+            requested_image=requested_image,
         )
 
     raw = await _generate_json(prompt)

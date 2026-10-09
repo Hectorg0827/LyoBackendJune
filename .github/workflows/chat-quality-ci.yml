@@ -19,6 +19,13 @@ on:
       - "tests/test_voice_stream_lifecycle.py"
       - "tests/test_voice_turn_lifecycle.py"
       - "lyo_app/chat/persistence.py"
+      - "lyo_app/chat/freshness.py"
+      - "lyo_app/chat/live_search.py"
+      - "lyo_app/ai_agents/multi_agent_v2/tools/web_search_tool.py"
+      - "tests/test_chat_freshness.py"
+      - "tests/test_live_search.py"
+      - "tests/test_fast_chat_grounding.py"
+      - "tests/test_current_information_stream.py"
       - ".github/workflows/chat-quality-ci.yml"
   workflow_dispatch:
 
@@ -60,3 +67,6 @@ jobs:
       - name: Grounding multimodal and continuity regressions
         run: |
           python -m pytest -q             tests/test_chat_multimodal.py             tests/test_chat_continuity.py             tests/test_chat_check_grading.py tests/test_voice_turn_lifecycle.py
+
+      - name: Current-information routing and provider evidence regressions
+        run: python -m pytest -q tests/test_chat_freshness.py tests/test_live_search.py tests/test_fast_chat_grounding.py tests/test_current_information_stream.py tests/test_chat_fast_path.py tests/test_ai_resilience_streaming.py

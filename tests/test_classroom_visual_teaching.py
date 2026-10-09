@@ -141,3 +141,110 @@ def test_visual_board_memory_reemits_the_latest_prior_visual():
     assert len(memory_visuals) == 1
     assert memory_visuals[0].block["visual_id"] == visual.visual_id
     assert memory_visuals[0].block["kind"] == "process_flow"
+
+
+
+def test_numbered_classroom_explanation_gets_real_process_visual_fallback():
+    from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+
+    visual = visual_from_numbered_steps(
+        "How a campaign works",
+        "1. Identify the target audience\n"
+        "2. Choose the marketing channel\n"
+        "3. Measure the campaign outcome",
+    )
+    assert visual is not None
+    assert visual.kind == "process_flow"
+    assert [item.label for item in visual.entries] == ["Step 1", "Step 2", "Step 3"]
+    assert "target audience" in visual.description
+
+
+def test_unsupported_classroom_list_does_not_invent_flow_relationships():
+    from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+
+    assert visual_from_numbered_steps("Overview", "Marketing has many goals.") is None
+    assert visual_from_numbered_steps(
+        "Examples", "2. Run an experiment\n4. Learn what happened"
+    ) is None
+    assert visual_from_numbered_steps("Short", "1. A\n2. B") is None
+
+
+@pytest.mark.asyncio
+async def test_failed_image_lookup_cannot_poison_successful_concurrent_cache(monkeypatch):
+    import asyncio
+    from lyo_app.ai_classroom import teaching_visuals as module
+
+    module._IMAGE_CACHE.clear()
+    calls = 0
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "query": {"pages": {
+                    "1": {"title": "File:leaf.jpg",
+                          "canonicalurl": "https://commons.wikimedia.org/wiki/File:leaf.jpg",
+                          "imageinfo": [{
+                              "thumburl": "https://upload.wikimedia.org/wikipedia/commons/leaf.jpg",
+                              "extmetadata": {"LicenseShortName": {"value": "CC BY"}}
+                          }]}
+                }}
+            }
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # First call fails *after* the second call has resolved.
+                await asyncio.sleep(0.03)
+                raise ConnectionError("transient upstream outage")
+            return Response()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kw: Client())
+    visual = TeachingVisual(
+        **base_fields("annotated_image"),
+        image_query="photosynthesis leaf",
+    )
+    first, second = await asyncio.gather(
+        module.resolve_visual_media(visual),
+        module.resolve_visual_media(visual),
+    )
+    assert first.image_url == second.image_url
+    assert first.image_url.startswith("https://upload.wikimedia.org/")
+    assert module._IMAGE_CACHE["photosynthesis leaf"][0] == first.image_url
+    module._IMAGE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_failed_image_lookup_is_not_cached_forever(monkeypatch):
+    from lyo_app.ai_classroom import teaching_visuals as module
+
+    module._IMAGE_CACHE.clear()
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            raise ConnectionError("upstream unavailable")
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kw: FailingClient())
+    visual = TeachingVisual(
+        **base_fields("annotated_image"),
+        image_query="chloroplast microscope",
+    )
+    result = await module.resolve_visual_media(visual)
+    assert result.image_url is None
+    assert "chloroplast microscope" not in module._IMAGE_CACHE

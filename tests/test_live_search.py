@@ -1,0 +1,400 @@
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+
+from lyo_app.ai_agents.multi_agent_v2.tools.base import ToolResult
+from lyo_app.ai_agents.multi_agent_v2.tools.web_search_tool import WebSearchTool
+from lyo_app.chat.live_search import (
+    prepare_live_search, source_descriptor, source_navigator, usable_search_results,
+)
+
+
+NOW = "Current date/time: 2026-10-06T22:00:00-04:00 (America/New_York)."
+
+
+def weather_source(**updates):
+    return {
+        "title": "New York weather October 6, 2026",
+        "url": "https://example.com/weather",
+        "snippet": "New York forecast for October 6, 2026: 60 F.",
+        "published_at": "2026-10-06T20:00:00-04:00",
+        "provider": "tavily", **updates,
+    }
+
+
+@pytest.mark.parametrize("source", [
+    weather_source(title="USA WEATHER FORECAST FOR JULY 10, 2026", snippet="July 10, 2026: 85 F in New York."),
+    weather_source(url="https://example.com/2026/07/10/weather"),
+    weather_source(title="Dallas weather October 6, 2026", snippet="Dallas forecast for October 6, 2026: 80 F."),
+    weather_source(title="New York weather", snippet="New York: 60 F."),
+    weather_source(published_at="2026-07-10T20:00:00-04:00"),
+    weather_source(url="", snippet="New York forecast for October 6, 2026"),
+    weather_source(url="https://[invalid"),
+])
+def test_current_weather_rejects_stale_undated_and_wrong_city_results(source):
+    request = prepare_live_search("Today's weather in New York", current_time_context=NOW)
+    assert usable_search_results([source], request) == []
+
+
+def test_weather_keeps_forecast_publication_and_retrieval_dates_distinct():
+    request = prepare_live_search("Today's weather in New York", current_time_context=NOW)
+    result = usable_search_results([weather_source()], request)[0]
+    assert result["forecast_date"] == "2026-10-06"
+    assert result["retrieved_at"] == "2026-10-06T22:00:00-04:00"
+    block = source_navigator([source_descriptor(result)], "sources-test")[0]
+    detail = block["content"]["items"][0]["detail"]
+    assert "Forecast for 2026-10-06" in detail
+    assert "Published 2026-10-06T20:00:00-04:00" in detail
+    assert "Retrieved 2026-10-06T22:00:00-04:00" in detail
+    assert "Live web source" not in detail
+
+
+def test_tomorrow_forecast_uses_local_day_and_requested_place():
+    request = prepare_live_search("New York weather tomorrow", current_time_context=NOW)
+    assert request.location == "New York"
+    assert request.target_day.isoformat() == "2026-10-07"
+    assert "Current local date: 2026-10-06" in request.provider_query
+    assert "Requested date: 2026-10-07" in request.provider_query
+    assert usable_search_results([weather_source()], request) == []
+
+
+@pytest.mark.parametrize("query,location", [
+    ("Weather for tomorrow in New York", "New York"),
+    ("Weather tomorrow in New York", "New York"),
+    ("Weather in New York for tomorrow", "New York"),
+    ("Pronóstico para mañana en Nueva York", "Nueva York"),
+    ("Clima en Nueva York para mañana", "Nueva York"),
+])
+def test_temporal_weather_qualifiers_do_not_remove_the_supplied_city(query, location):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == location
+    assert not request.needs_location
+    assert request.target_day.isoformat() == "2026-10-07"
+    source = weather_source(
+        title="New York forecast October 7, 2026",
+        snippet="New York forecast for October 7, 2026: 60 F.",
+    )
+    assert usable_search_results([source], request)
+
+
+def test_historical_weather_is_not_forced_into_current_date_window():
+    request = prepare_live_search("Weather in New York on July 10, 2026", current_time_context=NOW)
+    result = weather_source(title="July 10, 2026 weather", snippet="July 10, 2026 in New York: 85 F.", published_at="2026-07-10")
+    assert request.current is False
+    assert request.provider_query == request.query
+    assert usable_search_results([result], request)
+
+
+def test_follow_up_changes_place_without_using_old_assistant_claims():
+    request = prepare_live_search("What about Boston?", current_time_context=NOW, conversation_history=[
+        {"role": "user", "content": "Weather in New York today"},
+        {"role": "assistant", "content": "July 10, 2026 in Dallas: 85 F."},
+    ])
+    assert request.topic == "weather"
+    assert request.location == "Boston"
+    assert "July" not in request.provider_query
+    assert usable_search_results([weather_source()], request) == []
+
+
+@pytest.mark.parametrize("published", [None, "2026-07-10", "2026-10-07", "2026-10-07T12:00:00-04:00"])
+def test_news_requires_recent_dated_evidence(published):
+    request = prepare_live_search("Trending news in Dominican Republic", current_time_context=NOW)
+    result = {"title": "Dominican Republic headlines", "url": "https://example.com/news", "snippet": "Dominican Republic news.", "published_at": published}
+    assert usable_search_results([result], request) == []
+
+
+def test_news_dates_are_compared_in_users_timezone():
+    request = prepare_live_search("Noticias de hoy en República Dominicana", current_time_context=NOW)
+    result = {"title": "República Dominicana", "url": "https://example.com/news", "snippet": "Noticias de República Dominicana.", "published_at": "Wed, 07 Oct 2026 01:00:00 GMT"}
+    assert usable_search_results([result], request)
+
+
+@pytest.mark.parametrize("offset", ["-04:00", "-07:00", "+00:00", "+09:00"])
+def test_date_only_news_stays_on_its_calendar_day_and_preserves_date_precision(offset):
+    request = prepare_live_search("News today", current_time_context=f"Current date/time: 2026-10-06T15:00:00{offset}")
+    source = {"title": "Headlines", "url": "https://example.com/news", "snippet": "A news update.", "published_at": "2026-10-06"}
+    result = usable_search_results([source], request)[0]
+    assert result["published_at"] == "2026-10-06"
+    assert usable_search_results([{**source, "published_at": "2026-10-07"}], request) == []
+    assert usable_search_results([{**source, "published_at": "2026-10-05"}], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "Latest FastAPI version", "Current iPhone pricing", "New research on batteries",
+    "Tell me about retrieval augmented generation",
+])
+def test_general_web_lookup_accepts_maintained_pages_without_news_date_rules(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    source = {"title": "Official reference", "url": "https://example.com/docs", "snippet": "Relevant information from maintained documentation."}
+    assert request.topic == "general"
+    assert usable_search_results([source], request)
+    assert "authoritative" in request.provider_query
+    assert "exclude archived forecasts" not in request.provider_query
+
+
+def test_live_financial_quotes_still_require_dated_evidence():
+    request = prepare_live_search("Stock price right now", current_time_context=NOW)
+    source = {"title": "Market data", "url": "https://example.com/quote", "snippet": "Stock price: 100."}
+    assert usable_search_results([source], request) == []
+
+
+def test_today_news_cannot_be_replaced_with_yesterdays_article():
+    request = prepare_live_search("News today", current_time_context=NOW)
+    result = {"title": "Headlines", "url": "https://example.com/news", "snippet": "A news update.", "published_at": "2026-10-05T18:00:00-04:00"}
+    assert usable_search_results([result], request) == []
+
+
+def test_current_year_does_not_disable_recency_for_latest_news():
+    request = prepare_live_search("Latest news in 2026", current_time_context=NOW)
+    assert request.current is True
+
+
+def test_yesterday_news_uses_the_requested_day():
+    request = prepare_live_search("News yesterday", current_time_context=NOW)
+    result = {"title": "Headlines", "url": "https://example.com/news", "snippet": "A news update.", "published_at": "2026-10-05T18:00:00-04:00"}
+    assert usable_search_results([result], request)
+    assert not usable_search_results([{**result, "published_at": "2026-10-06T18:00:00-04:00"}], request)
+
+
+def test_stable_search_does_not_need_a_recent_publication():
+    request = prepare_live_search("Search for the history of the transistor", current_time_context=NOW)
+    result = {"title": "Transistor history", "url": "https://example.com/history", "snippet": "The transistor was invented in 1947."}
+    assert usable_search_results([result], request)
+
+
+def test_historical_follow_up_keeps_the_requested_date():
+    request = prepare_live_search("What about Boston?", current_time_context=NOW, conversation_history=[
+        {"role": "user", "content": "Weather in New York on July 10, 2026"},
+    ])
+    assert request.target_day.isoformat() == "2026-07-10"
+    assert request.current is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tavily_output", [[], [weather_source(title="July 10, 2026 forecast", snippet="July 10, 2026 in New York.")]])
+async def test_empty_or_stale_tavily_results_attempt_gemini(monkeypatch, tavily_output):
+    monkeypatch.setenv("TAVILY_API_KEY", "offline-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-test")
+    tavily = AsyncMock(return_value=ToolResult(success=True, output=tavily_output, message="Provider returned results"))
+    gemini = AsyncMock(return_value=ToolResult(success=True, output=[weather_source(provider="gemini_google_search")], message="Grounded result"))
+    monkeypatch.setattr(WebSearchTool, "_execute_tavily", tavily)
+    monkeypatch.setattr(WebSearchTool, "_execute_gemini_grounded", gemini)
+    result = await WebSearchTool().execute(0, query="Weather in New York today", current_time_context=NOW)
+    assert result.success
+    gemini.assert_awaited_once()
+    assert result.output[0]["provider"] == "gemini_google_search"
+
+
+@pytest.mark.asyncio
+async def test_no_provider_returns_explicit_unavailable_status(monkeypatch):
+    for key in ("TAVILY_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    result = await WebSearchTool().execute(0, query="News today", current_time_context=NOW)
+    assert not result.success
+    assert result.output is None
+    assert result.data["search_status"] == "unavailable"
+
+
+def mock_http(monkeypatch, response_body, captured):
+    original_client = httpx.AsyncClient
+    async def respond(request):
+        import json
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json=response_body)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
+
+
+@pytest.mark.asyncio
+async def test_tavily_receives_date_window_and_preserves_publication_date(monkeypatch):
+    captured = {}
+    mock_http(monkeypatch, {"results": [{"title": "Dominican Republic headlines", "url": "https://example.com/news", "content": "Dominican Republic news.", "published_date": "Tue, 06 Oct 2026 20:00:00 GMT"}]}, captured)
+    request = prepare_live_search("Trending news in Dominican Republic", current_time_context=NOW)
+    result = await WebSearchTool()._execute_tavily(request.provider_query, 5, "offline-test", request=request)
+    assert captured["topic"] == "news"
+    assert captured["time_range"] == "day"
+    assert captured["filter_by_published_date"] is True
+    assert captured["include_published_date"] is True
+    assert captured["search_depth"] == "fast"
+    assert "2026-10-06" in captured["query"]
+    assert result.output[0]["published_at"] == "Tue, 06 Oct 2026 20:00:00 GMT"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grounding", [{}, {"groundingChunks": [{"web": {"uri": "https://example.com/weather", "title": "Weather"}}]}])
+async def test_gemini_answer_without_supported_web_evidence_is_failure(monkeypatch, grounding):
+    mock_http(monkeypatch, {"candidates": [{"content": {"parts": [{"text": "Today is 85 degrees."}]}, "groundingMetadata": grounding}]}, {})
+    result = await WebSearchTool()._execute_gemini_grounded("Weather today", 5, "offline-test")
+    assert not result.success
+    assert result.output is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_keeps_only_cited_text_for_each_source(monkeypatch):
+    mock_http(monkeypatch, {"candidates": [{
+        "content": {"parts": [{"text": "Uncited old weather July 10, 2026."}]},
+        "groundingMetadata": {
+            "groundingChunks": [
+                {"web": {"uri": "https://example.com/weather", "title": "New York weather October 6, 2026"}},
+                {"web": {"uri": "https://example.com/uncited", "title": "Uncited source"}},
+            ],
+            "groundingSupports": [{"segment": {"text": "New York forecast October 6, 2026: 60 F."}, "groundingChunkIndices": [0]}],
+        },
+    }]}, {})
+    request = prepare_live_search("Weather in New York today", current_time_context=NOW)
+    result = await WebSearchTool()._execute_gemini_grounded(request.provider_query, 5, "offline-test", request=request)
+    assert result.success
+    assert len(result.output) == 1
+    assert "July" not in result.output[0]["snippet"]
+
+
+@pytest.mark.parametrize("query", [
+    "What are the latest Python features?", "What are the current visa requirements?",
+    "What are the specs of this phone?", "Tell me about new battery research",
+])
+def test_general_sources_are_not_incorrectly_limited_to_daily_news(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    source = {"title": "Official documentation", "url": "https://example.com/docs",
+              "snippet": "Relevant documented facts.", "published_at": "2026-09-01"}
+    assert usable_search_results([source], request)
+    assert "official" in request.provider_query
+    assert "Requested date" not in request.provider_query
+
+
+def test_daily_general_facts_still_require_recent_dated_evidence():
+    request = prepare_live_search("What is the exchange rate right now?", current_time_context=NOW)
+    source = {"title": "Exchange rate", "url": "https://example.com/rates",
+              "snippet": "A rate from September.", "published_at": "2026-09-01"}
+    assert usable_search_results([source], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "Weather for tomorrow in New York", "Weather in New York for tomorrow",
+    "Weather for October 7 in New York",
+])
+def test_weather_location_survives_temporal_prepositions(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == "New York"
+    assert request.needs_location is False
+
+
+@pytest.mark.parametrize("stamp", [
+    "Current date/time: 2026-10-06T22:00:00-04:00", "Current date/time: 2026-10-06T08:00:00+09:00",
+])
+def test_date_only_news_publication_keeps_its_calendar_day(stamp):
+    request = prepare_live_search("News today", current_time_context=stamp)
+    result = usable_search_results([{
+        "title": "Today's report", "url": "https://example.com/news", "snippet": "A verified report.",
+        "published_at": "2026-10-06",
+    }], request)
+    assert len(result) == 1
+    assert result[0]["published_at"] == "2026-10-06"
+
+
+@pytest.mark.parametrize("query", ["What is the exchange rate right now?", "What is the current price of Bitcoin?"])
+def test_daily_market_facts_cannot_use_yesterdays_publication(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    source = {"title": "Market quote", "url": "https://example.com/quote", "snippet": "A market quote.",
+              "published_at": "2026-10-05"}
+    assert usable_search_results([source], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "What happened in AI news today?", "What's new in artificial intelligence news today?",
+    "What happened in tech news today?", "What happened in AI news today? Include current sources.",
+])
+def test_news_topic_is_not_mistaken_for_a_geographic_location(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == ""
+    evidence = {"title": "Artificial intelligence research published today",
+                "url": "https://example.com/research", "snippet": "Researchers published new model findings.",
+                "published_at": "2026-10-06"}
+    assert usable_search_results([evidence], request)
+
+
+@pytest.mark.parametrize("query", [
+    "Trending news in Dominican Republic", "AI news from Dominican Republic today",
+    "Trending in Dominican Republic", "What happened in Dominican Republic news today?",
+])
+def test_news_region_still_excludes_wrong_location_evidence(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == "Dominican Republic"
+    evidence = {"title": "Today's report", "url": "https://example.com/news",
+                "snippet": "France today.", "published_at": "2026-10-06"}
+    assert usable_search_results([evidence], request) == []
+
+
+@pytest.mark.parametrize("query", [
+    "Actualidad en España", "Noticias de España hoy", "En España, noticias de hoy",
+])
+def test_spanish_news_aliases_and_leading_regions_keep_geographic_evidence(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == "España"
+    right = {"title": "Noticias de España", "url": "https://example.com/spain",
+             "snippet": "España publicó una actualización.", "published_at": "2026-10-06"}
+    wrong = {**right, "title": "France", "url": "https://example.com/france", "snippet": "France today."}
+    assert usable_search_results([right, wrong], request) == [
+        {**right, "retrieved_at": "2026-10-06T22:00:00-04:00"}
+    ]
+
+
+@pytest.mark.parametrize("query", [
+    "AI news from Reuters today", "News from around the world today",
+    "News for investors today", "Noticias para inversores hoy",
+])
+def test_news_publishers_global_scope_and_audiences_do_not_become_places(query):
+    request = prepare_live_search(query, current_time_context=NOW)
+    assert request.location == ""
+    source = {"title": "A new AI report", "url": "https://example.com/report",
+              "snippet": "Researchers published findings.", "published_at": "2026-10-06"}
+    assert usable_search_results([source], request)
+
+
+@pytest.mark.asyncio
+async def test_tavily_uses_question_without_llm_boilerplate_and_honors_official_site(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "offline-test")
+    captured = {}
+    mock_http(monkeypatch, {"results": [{"title": "Emmanuel Macron",
+        "url": "https://www.elysee.fr/en/emmanuel-macron", "content": "The President of France."}]}, captured)
+    question = "Who is the current president of France? Verify with the official Elysée website."
+    result = await WebSearchTool().execute(0, query=question, current_time_context=NOW)
+    assert result.success
+    assert captured["query"] == question
+    assert captured["include_domains"] == ["elysee.fr"]
+    assert "documentation and product" not in captured["query"]
+
+
+def test_requested_official_site_cannot_be_satisfied_by_an_unrelated_url():
+    request = prepare_live_search("What is the latest stable Python version? Check python.org.", current_time_context=NOW)
+    assert request.source_domains == ["python.org"]
+    source = {"title": "Python", "url": "https://unrelated.example/python",
+              "snippet": "Python 3.14.8 is available."}
+    assert usable_search_results([source], request) == []
+    source["url"] = "https://www.python.org/downloads/"
+    assert usable_search_results([source], request)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_gemini_credential_does_not_hide_distinct_configured_google_key(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-first")
+    monkeypatch.setenv("GOOGLE_API_KEY", "offline-second")
+    gemini = AsyncMock(side_effect=[
+        ToolResult(success=False, output=None, message="Permission denied"),
+        ToolResult(success=True, output=[weather_source(provider="gemini_google_search")], message="Grounded evidence"),
+    ])
+    monkeypatch.setattr(WebSearchTool, "_execute_gemini_grounded", gemini)
+    result = await WebSearchTool().execute(0, query="Weather in New York today", current_time_context=NOW)
+    assert result.success
+    assert [call.args[2] for call in gemini.await_args_list] == ["offline-first", "offline-second"]
+
+
+@pytest.mark.asyncio
+async def test_identical_google_credentials_are_not_retried(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-same")
+    monkeypatch.setenv("GOOGLE_API_KEY", "offline-same")
+    gemini = AsyncMock(return_value=ToolResult(success=False, output=None, message="Unavailable"))
+    monkeypatch.setattr(WebSearchTool, "_execute_gemini_grounded", gemini)
+    await WebSearchTool().execute(0, query="News today", current_time_context=NOW)
+    gemini.assert_awaited_once()

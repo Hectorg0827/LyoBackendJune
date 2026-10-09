@@ -155,6 +155,63 @@ def yield_safe_sse_event(event_type: str, data: Dict[str, Any]) -> str:
 
 import re as _re
 
+def _valid_teaching_mermaid(source: str) -> bool:
+    """Accept only bounded static flowcharts authored as lesson representations.
+
+    Client renderers use Mermaid in strict mode. Directives and interactive
+    click handlers do not belong in teacher-produced learning diagrams.
+    """
+    if not isinstance(source, str) or not 0 < len(source) <= 2500:
+        return False
+    stripped = source.strip()
+    if not stripped:
+        return False
+    first_line = stripped.splitlines()[0].strip().lower()
+    if not re.fullmatch(r"(flowchart|graph)\s+(td|tb|lr|rl|bt)", first_line):
+        return False
+    if re.search(r"(?im)^\s*(?:click\b|accdescr\b|acctitle\b|%%\{|style\b|classdef\b|linkstyle\b)", source):
+        return False
+    if "<" in source or ">" in source or "javascript:" in source.lower():
+        # Mermaid arrows contain >; reject HTML syntax, not arrowheads.
+        without_arrows = source.replace("-->", "").replace("==>", "").replace("-.->", "")
+        if "<" in without_arrows or ">" in without_arrows or "javascript:" in source.lower():
+            return False
+    return True
+
+
+async def _hydrate_lesson_images(lesson: ChatLesson) -> None:
+    """Resolve at most one teaching photo against the same trusted source
+    as Classroom. Never trust media URLs provided in model output.
+    Bounded lookup means image retrieval cannot stall the lesson indefinitely.
+    """
+    for section in lesson.sections:
+        section.image_url = None
+        section.image_source_url = None
+        section.image_attribution = None
+
+    for section in lesson.sections:
+        if (section.kind is not SectionKind.representation
+                or not section.image_query or len(section.text.strip()) < 10):
+            continue
+        try:
+            from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, resolve_visual_media
+            visual = TeachingVisual(
+                kind="annotated_image",
+                title=(lesson.topic or "Learning illustration")[:100],
+                caption=("Inspect this real example of " + lesson.topic)[:350],
+                description=section.text[:600],
+                image_query=section.image_query,
+            )
+            resolved = await asyncio.wait_for(resolve_visual_media(visual), timeout=1.8)
+            if resolved.image_url:
+                section.image_url = resolved.image_url
+                section.image_source_url = resolved.source_url
+                section.image_attribution = resolved.attribution
+        except Exception as exc:
+            logger.debug("Optional lesson image lookup skipped: %s", exc)
+        break  # One meaningful image per lesson, not a distracting gallery.
+
+
 def _lesson_to_smart_blocks(
     lesson: "ChatLesson",
     source_surface: str = "chat",
@@ -171,6 +228,8 @@ def _lesson_to_smart_blocks(
     a later request that only has the stored block to go on, so anything the
     verdict needs has to be written down here.
     """
+    from lyo_app.ai_classroom.visual_library import trusted_media_url, trusted_source_url
+
     blocks: List[Dict[str, Any]] = []
 
     for section in lesson.sections:
@@ -190,6 +249,27 @@ def _lesson_to_smart_blocks(
                 blocks.append(
                     SmartBlock.data_viz(section.latex, fmt="math").model_dump()
                 )
+            # Send a real diagram source as a typed Smart Block. Never replace
+            # the explanatory prose: older clients still need the lesson.
+            if section.kind in {SectionKind.representation, SectionKind.example} and _valid_teaching_mermaid(section.mermaid):
+                blocks.append(
+                    SmartBlock.data_viz(section.mermaid, fmt="mermaid").model_dump()
+                )
+            if (section.kind is SectionKind.representation and section.image_url
+                    and trusted_media_url(section.image_url)
+                    and trusted_source_url(section.image_source_url)):
+                # Source and attribution travel with the image; the image is
+                # supplementary, and the textual description still renders.
+                blocks.append(SmartBlock(
+                    type=SmartBlockType.media,
+                    subtype="image",
+                    content={
+                        "url": section.image_url,
+                        "alt": section.image_query or section.text[:120],
+                        "caption": section.image_attribution or "Educational image source",
+                    },
+                    metadata={"source_url": section.image_source_url},
+                ).model_dump())
             # A representation the learner can move through, when the topic
             # genuinely has that shape. The composer omits it otherwise rather
             # than decorating every lesson with a widget.
@@ -311,6 +391,106 @@ def _lesson_mode_for_teaching_action(action: Any) -> Optional[str]:
     return None
 
 
+def _requested_teaching_visuals(text: str) -> Tuple[bool, bool]:
+    """Detect user-requested diagrams and images, including plurals and opt-outs."""
+    value = (text or "").strip()
+    diagram_nouns = r"(?:diagrams?|flow[ -]?charts?|process[ -]?flows?)"
+    image_nouns = r"(?:images?|photos?|photographs?|pictures?|illustrations?)"
+    if not (
+        re.search(r"\b(?:teach|explain|show|draw|illustrate|visualize|walk me through)\b", value, re.I)
+        or re.match(r"^\s*(?:(?:a|an|the)\s+)?(?:diagram|flowchart|image|photo)\s+of\b", value, re.I)
+    ):
+        return False, False
+
+    diagram = bool(re.search(r"\b" + diagram_nouns + r"\b", value, re.I))
+    image = bool(re.search(r"\b" + image_nouns + r"\b", value, re.I))
+    # Covers "without using any photos" and "don't show an image" without
+    # mistaking unrelated words for a request to retrieve media.
+    negation = (
+        r"\b(?:without|no|don't|do not|not|avoid|skip)\s+"
+        r"(?:(?:use|using|include|including|show|showing|add|adding|"
+        r"display|displaying|provide|providing|generate|generating)\s+)?"
+        r"(?:(?:a|an|any|the|real|supporting)\s+)*"
+    )
+    if re.search(negation + diagram_nouns + r"\b", value, re.I):
+        diagram = False
+    if re.search(negation + image_nouns + r"\b", value, re.I):
+        image = False
+    return diagram, image
+
+
+def _complete_requested_lesson_visuals(
+    lesson: ChatLesson, *, diagram: bool, image: bool,
+) -> None:
+    """Enforce explicit visual preferences without inventing teaching facts.
+
+    If the model omitted diagram syntax, derive one ONLY from consecutive
+    numbered steps already in its lesson. Media still requires the trusted
+    Wikimedia resolver; a model-authored URL is never accepted.
+    """
+    representation = next(
+        (section for section in lesson.sections
+         if section.kind is SectionKind.representation), None,
+    )
+    if representation is None:
+        return
+
+    if diagram and not any(_valid_teaching_mermaid(section.mermaid)
+                           for section in lesson.sections):
+        from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+        method = next(
+            (section.text for section in lesson.sections
+             if section.kind is SectionKind.method), "",
+        )
+        visual = visual_from_numbered_steps(lesson.topic, method)
+        if visual is not None and visual.entries:
+            labels = [
+                re.sub(r"[^\w\s,;:.()\-+/%]", "", item.detail or "")[:90].strip()
+                for item in visual.entries
+            ]
+            if all(len(label) >= 5 for label in labels):
+                lines = ["flowchart TD"]
+                lines.extend(f'  S{i}["{label}"]' for i, label in enumerate(labels, 1))
+                lines.extend(f"  S{i} --> S{i+1}" for i in range(1, len(labels)))
+                candidate = "\n".join(lines)
+                if _valid_teaching_mermaid(candidate):
+                    representation.mermaid = candidate
+
+    if image and not representation.image_query and len(lesson.topic.strip()) >= 5:
+        # Topic is user supplied. Wikimedia must verify the actual media and
+        # attribution before any image block is emitted.
+        representation.image_query = lesson.topic.strip()[:140]
+
+
+def _visual_lesson_topic(text: str) -> str:
+    """Keep the underlying subject, not a request for its visual format."""
+    subject = (text or "").strip()
+    # Conversational preambles are not part of the knowledge concept.
+    subject = re.sub(
+        r"^\s*(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?",
+        "", subject, flags=re.I,
+    )
+    subject = re.sub(
+        r"^\s*(?:teach me(?: about)?|explain(?: to me)?|show me|"
+        r"draw(?: me)?|visualize|illustrate|walk me through)\s+",
+        "", subject, flags=re.I,
+    )
+    # "Show me a diagram of photosynthesis" is about photosynthesis, not
+    # the document type "a diagram of photosynthesis".
+    format_nouns = r"(?:process[ -]?flows?|flow[ -]?charts?|diagrams?|images?|photos?|photographs?|pictures?|illustrations?)"
+    subject = re.sub(
+        r"^\s*(?:(?:a|an|the)\s+)?" + format_nouns + r"\s+(?:of|for|showing)\s+",
+        "", subject, flags=re.I,
+    )
+    subject = re.split(
+        r"\s+(?:using|with|as|in)\s+"
+        r"(?:(?:a|an|the|real|supporting|multiple|several)\s+)*"
+        + format_nouns + r"\b",
+        subject, maxsplit=1, flags=re.I,
+    )[0].strip(" .,:;?!")
+    return subject[:180] or (text or "")[:180]
+
+
 async def _try_compose_lesson(
     db: AsyncSession,
     user_id: Optional[str],
@@ -330,7 +510,11 @@ async def _try_compose_lesson(
     """
     from lyo_app.ai.lesson_composer import slugify_skill
 
-    topic = (topic or "").strip() or _extract_course_topic(user_text or "")
+    requested_diagram, requested_image = _requested_teaching_visuals(user_text)
+    topic = (topic or "").strip() or (
+        _visual_lesson_topic(user_text) if (requested_diagram or requested_image)
+        else _extract_course_topic(user_text or "")
+    )
     if not topic:
         return [], None
 
@@ -345,9 +529,16 @@ async def _try_compose_lesson(
         user_id=user_id,
         mode=mode,
         target_evidence_type=target_evidence_type,
+        requested_diagram=requested_diagram,
+        requested_image=requested_image,
     )
     if lesson is None:
         return [], None
+    if mode == "teach":
+        _complete_requested_lesson_visuals(
+            lesson, diagram=requested_diagram, image=requested_image,
+        )
+        await _hydrate_lesson_images(lesson)
     return _lesson_to_smart_blocks(
         lesson,
         source_surface=source_surface,
@@ -357,14 +548,22 @@ async def _try_compose_lesson(
 
 
 def _to_smart_blocks(
-    answer_text: Optional[str], artifact: Optional[UIBlock]
+    answer_text: Optional[str],
+    artifact: Optional[UIBlock],
+    interaction_mode: str = "",
 ) -> List[Dict[str, Any]]:
-    """Convert a plain answer plus optional legacy UIBlock artifact into
-    SmartBlock dicts — the unified block vocabulary all three clients render.
-    Unknown artifact types are skipped rather than guessed at."""
+    """Convert a canonical answer into cross-platform workspace SmartBlocks."""
+    from lyo_app.chat.representation import promote_answer_representations
+
     blocks: List[Dict[str, Any]] = []
     if answer_text:
-        blocks.append(SmartBlock.text(answer_text).model_dump())
+        prose, representation_blocks = promote_answer_representations(
+            answer_text,
+            interaction_mode=interaction_mode,
+        )
+        if prose:
+            blocks.append(SmartBlock.text(prose).model_dump())
+        blocks.extend(representation_blocks)
 
     if artifact is None:
         return blocks
@@ -404,6 +603,36 @@ def _to_smart_blocks(
         if plan:
             blocks.append(SmartBlock.text(str(plan), subtype="summary").model_dump())
 
+    return blocks
+
+
+def _canonical_answer_blocks(
+    answer_text: str,
+    artifact: Optional[UIBlock],
+    *,
+    interaction_mode: str,
+    media_attachments: List[Dict[str, Any]],
+    sources: List[Dict[str, Any]],
+    source_id: str,
+) -> List[Dict[str, Any]]:
+    """Build once, then save and deliver the same answer and source objects."""
+    from lyo_app.chat.document_grounding import document_navigator_content
+    from lyo_app.chat.live_search import source_navigator
+
+    blocks = _to_smart_blocks(answer_text, artifact, interaction_mode=interaction_mode)
+    blocks.extend(source_navigator(
+        [source for source in sources if isinstance(source, dict)
+         and (source.get("kind") == "web" or not source.get("mime_type"))],
+        f"web-{source_id}",
+    ))
+    navigator = document_navigator_content(media_attachments)
+    if navigator.get("items"):
+        blocks.append({
+            "id": source_id, "schema_version": 1,
+            "type": "interactive", "subtype": "sourceNavigator",
+            "content": navigator,
+            "metadata": {"role": "grounding", "page_aware": True},
+        })
     return blocks
 
 
@@ -1400,6 +1629,11 @@ async def stream_lyo2_chat(
                             "type": "voice_incomplete", "message_id": assistant_client_message_id,
                             "generation_status": "incomplete", "replayed": True, "speak": False,
                         })
+                    replayed_blocks = getattr(replayed_assistant, "blocks", None) or []
+                    if replayed_blocks:
+                        yield yield_safe_sse_event("smart_blocks", {
+                            "type": "smart_blocks", "blocks": redact_blocks(replayed_blocks),
+                        })
                     yield "data: [DONE]\n\n"
                     return
 
@@ -1443,7 +1677,11 @@ async def stream_lyo2_chat(
             from lyo_app.chat.freshness import current_time_context, decide_freshness
 
             current_time_for_prompt = current_time_context(request.timezone)
-            freshness_decision = decide_freshness(request.text or "")
+            freshness_decision = decide_freshness(
+                request.text or "",
+                [{"role": turn.role, "content": turn.content}
+                 for turn in (request.conversation_history or [])],
+            )
             fast_intent = fast_route_intent(
                 request.text or "",
                 has_media=bool(media_attachments),
@@ -1638,6 +1876,37 @@ async def stream_lyo2_chat(
                 voice_mode=voice_context.active,
                 voice_interrupted_previous_turn=voice_context.interrupted_previous_turn,
             )
+            if authenticated_user_id:
+                try:
+                    from lyo_app.chat.response_depth import (
+                        apply_learned_depth,
+                        explicit_depth_preference,
+                        learned_depth_for_user,
+                        record_explicit_depth_preference,
+                    )
+
+                    explicit_depth = explicit_depth_preference(request.text or "")
+                    if explicit_depth is not None:
+                        await record_explicit_depth_preference(
+                            db,
+                            int(authenticated_user_id),
+                            request.text or "",
+                            source_session_id=str(request.conversation_id or trace_id),
+                        )
+                    else:
+                        learned_depth = await learned_depth_for_user(
+                            db, int(authenticated_user_id)
+                        )
+                        interaction_contract = apply_learned_depth(
+                            interaction_contract,
+                            user_text=request.text or "",
+                            learned=learned_depth,
+                        )
+                except Exception as depth_exc:
+                    logger.debug(
+                        "Response-depth preference unavailable: %s",
+                        type(depth_exc).__name__,
+                    )
             interaction_contract_payload = {
                 "mode": interaction_contract.mode.value,
                 "depth": interaction_contract.depth.value,
@@ -1763,13 +2032,13 @@ async def stream_lyo2_chat(
                     freshness_decision
                     and freshness_decision.mode.value == "require"
                 )
-                if search_required:
+                if enable_search:
                     yield yield_safe_sse_event(
                         "search_status",
                         {
                             "type": "search_status",
                             "status": "searching",
-                            "message": "Checking current information…",
+                            "message": "Checking web sources…",
                         },
                     )
 
@@ -1854,6 +2123,41 @@ async def stream_lyo2_chat(
                 generation_status = (
                     "incomplete" if stream_failure else "completed"
                 )
+                if (streamed_text and not stream_failure
+                        and model_metadata.get("search_status") not in {"unavailable", "needs_location"}):
+                    from lyo_app.chat.verification import selectively_verify_answer
+
+                    verification_started = time.monotonic()
+                    verification = await selectively_verify_answer(
+                        question=request.text or "",
+                        answer=streamed_text,
+                        interaction_mode=interaction_contract.mode.value,
+                        media_attachments=media_attachments,
+                        sources=model_metadata.get("sources") or [],
+                        search_required=search_required,
+                    )
+                    streamed_text = verification.text
+                    latency_metrics["verification_ms"] = int(
+                        (time.monotonic() - verification_started) * 1000
+                    )
+                    latency_metrics["verification"] = verification.reason
+                    latency_metrics["verification_revised"] = verification.revised
+                from lyo_app.chat.live_search import source_navigator
+
+                grounded_sources = list(model_metadata.get("sources") or [])
+                grounded_blocks = source_navigator(grounded_sources, f"sources-{trace_id[:8]}")
+                if enable_search:
+                    final_search_status = model_metadata.get("search_status") or "unavailable"
+                    latency_metrics["search_status"] = final_search_status
+                    yield yield_safe_sse_event("search_status", {
+                        "type": "search_status", "status": final_search_status,
+                    })
+                fast_workspace_blocks = _to_smart_blocks(
+                    streamed_text,
+                    None,
+                    interaction_mode=interaction_contract.mode.value,
+                ) if not stream_failure and model_metadata.get("search_status") not in {"unavailable", "needs_location"} else []
+                canonical_fast_blocks = fast_workspace_blocks + grounded_blocks
                 if streamed_text:
                     if "server_ttft_ms" not in latency_metrics:
                         latency_metrics["server_ttft_ms"] = int(
@@ -1871,6 +2175,7 @@ async def stream_lyo2_chat(
                             if stream_failure
                             else None
                         ),
+                        blocks=canonical_fast_blocks,
                     )
                     yield yield_safe_sse_event(
                         "answer",
@@ -1915,39 +2220,13 @@ async def stream_lyo2_chat(
                     yield "data: [DONE]\n\n"
                     return
 
-                grounded_sources = list(model_metadata.get("sources") or [])
+                if canonical_fast_blocks:
+                    yield yield_safe_sse_event(
+                        "smart_blocks",
+                        {"type": "smart_blocks", "blocks": redact_blocks(canonical_fast_blocks)},
+                    )
+
                 if grounded_sources:
-                    source_items = [
-                        {
-                            "label": str(source.get("title") or "Web source"),
-                            "detail": "Live web source",
-                            "url": str(source.get("url") or ""),
-                        }
-                        for source in grounded_sources
-                        if isinstance(source, dict) and source.get("url")
-                    ]
-                    if source_items:
-                        yield yield_safe_sse_event(
-                            "smart_blocks",
-                            {
-                                "type": "smart_blocks",
-                                "blocks": [{
-                                    "id": f"sources-{trace_id[:8]}",
-                                    "schema_version": 1,
-                                    "type": "interactive",
-                                    "subtype": "sourceNavigator",
-                                    "content": {
-                                        "title": "Sources used",
-                                        "items": source_items,
-                                    },
-                                    "metadata": {
-                                        "role": "grounding",
-                                        "freshness": freshness_decision.mode.value
-                                        if freshness_decision else "none",
-                                    },
-                                }],
-                            },
-                        )
                     yield yield_safe_sse_event(
                         "sources",
                         {"type": "sources", "sources": grounded_sources},
@@ -2194,14 +2473,22 @@ async def stream_lyo2_chat(
             if (
                 decision.intent == Intent.EXPLAIN
                 and request.text
-                and interaction_contract.mode == InteractionMode.TEACH
+                and (
+                    interaction_contract.mode == InteractionMode.TEACH
+                    or (
+                        interaction_contract.mode == InteractionMode.EXPLAIN
+                        and any(_requested_teaching_visuals(request.text))
+                    )
+                )
                 and not (
                     freshness_decision
                     and freshness_decision.mode.value == "require"
                 )
             ):
-                _force_lesson_mode = _lesson_mode_for_teaching_action(
-                    teaching_decision.action
+                _visual_request = any(_requested_teaching_visuals(request.text))
+                _force_lesson_mode = (
+                    "teach" if _visual_request
+                    else _lesson_mode_for_teaching_action(teaching_decision.action)
                 )
                 if _force_lesson_mode is not None:
                     from lyo_app.teaching_runtime.service import (
@@ -2220,6 +2507,14 @@ async def stream_lyo2_chat(
                             ),
                         )
                     if lesson is not None:
+                        if interaction_contract.mode == InteractionMode.EXPLAIN:
+                            # An explicit explanation, even with visuals, is not
+                            # permission to administer an unsolicited quiz.
+                            lesson.check = None
+                            lesson_blocks = [
+                                block for block in lesson_blocks
+                                if block.get("type") != SmartBlockType.quiz.value
+                            ]
                         async for event in _emit_composed_lesson(
                             db,
                             lesson,
@@ -2460,7 +2755,17 @@ async def stream_lyo2_chat(
 
             def persist_completed_voice(task):
                 if not task.cancelled() and task.exception() is None:
-                    persist_answer(task.result().answer_block.content.get("text", ""), answer_mode)
+                    result = task.result()
+                    text = result.answer_block.content.get("text", "")
+                    blocks = _canonical_answer_blocks(
+                        text, result.artifact_block,
+                        interaction_mode=interaction_contract.mode.value,
+                        media_attachments=media_attachments,
+                        sources=list(result.metadata.get("sources") or []),
+                        source_id=f"sources-{trace_id[:8]}",
+                    )
+                    result.metadata["smart_blocks"] = blocks
+                    persist_answer(text, answer_mode, blocks=blocks)
 
             try:
                 voice_generate_steps = sum(
@@ -2664,7 +2969,7 @@ async def stream_lyo2_chat(
             # The interaction contract already shapes spoken responses. Voice
             # must not wait behind a second, non-authoritative prose optimizer
             # after the canonical model answer is complete.
-            if not voice_delivery:
+            if not voice_delivery and not execution_response.metadata.get("search_status"):
                 raw_llm_text = await ai_performance_optimizer.optimize_response(
                     agent_type=decision.intent.value,
                     response=raw_llm_text,
@@ -2675,10 +2980,62 @@ async def stream_lyo2_chat(
                     }
                 )
 
+            from lyo_app.chat.document_grounding import normalize_attachment_citations
+            from lyo_app.chat.verification import selectively_verify_answer
+
+            raw_llm_text = normalize_attachment_citations(
+                raw_llm_text,
+                media_attachments,
+            )
+            verification_started = time.monotonic()
+            if voice_delivery:
+                # Spoken deltas may already be audible. Never revise the final
+                # snapshot after the learner heard a different canonical turn.
+                verification_reason = "voice_latency_preserved"
+                verification_revised = False
+            else:
+                verification = await selectively_verify_answer(
+                    question=request.text or "",
+                    answer=raw_llm_text,
+                    interaction_mode=interaction_contract.mode.value,
+                    media_attachments=media_attachments,
+                    sources=execution_response.metadata.get("sources") or [],
+                    search_required=bool(
+                        freshness_decision and freshness_decision.mode.value == "require"
+                    ),
+                )
+                raw_llm_text = normalize_attachment_citations(
+                    verification.text,
+                    media_attachments,
+                )
+                verification_reason = verification.reason
+                verification_revised = verification.revised
+            latency_metrics["verification_ms"] = int(
+                (time.monotonic() - verification_started) * 1000
+            )
+            latency_metrics["verification"] = verification_reason
+            latency_metrics["verification_revised"] = verification_revised
+
+            sources = list(execution_response.metadata.get("sources") or [])
+            smart_blocks = execution_response.metadata.get("smart_blocks")
+            if smart_blocks is None:
+                smart_blocks = _canonical_answer_blocks(
+                    raw_llm_text, execution_response.artifact_block,
+                    interaction_mode=interaction_contract.mode.value,
+                    media_attachments=media_attachments,
+                    sources=sources,
+                    source_id=f"sources-{trace_id[:8]}",
+                )
             persist_answer(
                 raw_llm_text,
                 decision.intent.value.lower() if decision.intent else ChatMode.GENERAL.value,
+                blocks=smart_blocks,
             )
+            if execution_response.metadata.get("search_status"):
+                yield yield_safe_sse_event("search_status", {
+                    "type": "search_status",
+                    "status": execution_response.metadata["search_status"],
+                })
             if raw_llm_text and voice_delivery and voice_hints_enabled:
                 yield yield_safe_sse_event(
                     "voice_ready",
@@ -2742,37 +3099,6 @@ async def stream_lyo2_chat(
             # Unified SmartBlock emission: same content as the legacy
             # answer/artifact events above, in the versioned block vocabulary
             # shared by all three clients. Additive — v1 consumers ignore it.
-            smart_blocks = _to_smart_blocks(
-                raw_llm_text, execution_response.artifact_block
-            )
-            sources = list(execution_response.metadata.get("sources") or [])
-            if sources:
-                source_items = []
-                for source in sources:
-                    if not isinstance(source, dict):
-                        continue
-                    page_count = source.get("page_count")
-                    detail = str(source.get("mime_type") or "attachment")
-                    if isinstance(page_count, int) and page_count > 0:
-                        detail += f" • {page_count} page" + ("s" if page_count != 1 else "")
-                    source_items.append({
-                        "label": str(source.get("name") or "Attachment"),
-                        "detail": detail,
-                        "url": str(source.get("url") or ""),
-                    })
-                if source_items:
-                    smart_blocks.append({
-                        "id": f"sources-{trace_id[:8]}",
-                        "schema_version": 1,
-                        "type": "interactive",
-                        "subtype": "sourceNavigator",
-                        "content": {
-                            "title": "Sources used",
-                            "items": source_items,
-                        },
-                        "metadata": {"role": "grounding"},
-                    })
-
             if smart_blocks:
                 yield yield_safe_sse_event(
                     "smart_blocks",
@@ -2843,6 +3169,15 @@ async def stream_lyo2_chat(
             for action_block in execution_response.next_actions:
                 if action_block.content and "actions" in action_block.content:
                     action_labels.extend(action_block.content["actions"])
+            if media_attachments:
+                for label in (
+                    "Summarize this document",
+                    "Show key dates",
+                    "Show key numbers",
+                    "Ask about a page",
+                ):
+                    if label not in action_labels:
+                        action_labels.append(label)
             if action_labels:
                 actions_brick = {
                     "type": "actions",
@@ -2905,6 +3240,7 @@ async def stream_lyo2_chat(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
+            "Content-Encoding": "identity",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
