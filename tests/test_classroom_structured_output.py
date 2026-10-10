@@ -78,6 +78,7 @@ def test_only_an_actual_schema_rejection_is_read_as_one():
         "Error code: 400 - Invalid parameter: 'response_format' of type 'json_schema' is not supported",
         "Invalid schema for response_format 'PracticeTurn'",
         "GenerateContentRequest.generation_config.responseSchema: invalid schema",
+        "GenerateContentRequest.generation_config.responseJsonSchema: invalid schema",
     ]:
         assert looks_like_schema_rejection(rejection), rejection
 
@@ -176,7 +177,7 @@ async def test_a_working_schema_is_not_asked_for_twice(monkeypatch):
 
 def test_gemini_is_handed_the_schema_under_the_key_it_understands():
     """OpenAI's wrapper is what callers build; Gemini wants the bare schema
-    under `responseSchema`. Unwrapping it here is what keeps callers from
+    under `responseJsonSchema`. Unwrapping it here is what keeps callers from
     having to know two dialects."""
     from lyo_app.core.ai_resilience import AIResilienceManager
 
@@ -187,7 +188,8 @@ def test_gemini_is_handed_the_schema_under_the_key_it_understands():
         {"type": "json_schema", "json_schema": {"name": "T", "schema": enforced, "strict": True}},
     )
     assert config["responseMimeType"] == "application/json"
-    assert config["responseSchema"] == enforced
+    assert config["responseJsonSchema"] == enforced
+    assert "responseSchema" not in config
 
 
 def test_gemini_still_understands_a_plain_json_request():
@@ -196,6 +198,7 @@ def test_gemini_still_understands_a_plain_json_request():
     config = AIResilienceManager.apply_structured_output({"maxOutputTokens": 100}, LOOSE_JSON)
     assert config["responseMimeType"] == "application/json"
     assert "responseSchema" not in config
+    assert "responseJsonSchema" not in config
 
 
 def test_a_call_that_asked_for_no_particular_shape_is_left_alone():

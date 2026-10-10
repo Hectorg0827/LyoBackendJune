@@ -217,17 +217,23 @@ async def test_struggle_reteaches_then_models_a_prerequisite_without_a_pass_or_r
 
 
 @pytest.mark.asyncio
-async def test_visual_manipulation_persists_with_same_scene_and_creates_no_evidence():
+@pytest.mark.parametrize("kind,values", [
+    ("fraction_bar", {"value": 3}),
+    ("fraction_pie", {"parts": 8, "value": 3}),
+])
+async def test_visual_manipulation_persists_with_same_scene_and_creates_no_evidence(kind, values):
     teacher = ScriptedTeacher()
     def visual_turn(*args):
-        return teacher._turn(*args).model_copy(update={"visual": fraction_visual()})
+        visual = fraction_visual().model_copy(update={"kind": kind})
+        return teacher._turn(*args).model_copy(update={"visual": visual})
     teacher.turn.side_effect = visual_turn
     _, runner, progress, ctx, opening = await begin(teacher)
     before = state(progress)
     visual_id = "visual:" + before.step_id
-    updated = await runner.run(ctx, progress, action(ActionIntent.UPDATE_ACTIVITY, visual_id, answer_data={"value": 3}))
+    updated = await runner.run(ctx, progress, action(ActionIntent.UPDATE_ACTIVITY, visual_id, answer_data=values))
     assert updated.scene_id == opening.scene_id
     assert state(progress).presentation.visual.value == 3
+    assert state(progress).presentation.visual.parts == values.get("parts", 4)
     assert state(progress).step_id == before.step_id and state(progress).beat_index == -1
     # Moving a teaching visual is exploration, not an answer: no evidence and
     # no graded response. The one recorded event is the declined opening probe.

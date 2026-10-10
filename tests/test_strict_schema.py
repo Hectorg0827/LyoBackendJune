@@ -11,11 +11,15 @@ import json
 import pytest
 
 from lyo_app.ai_classroom.adaptive_teaching import (
-    DiagnosticTurn, Evaluation, LearningPlan, ModelledTurn, PracticeTurn,
+    DiagnosticTurn, Evaluation, ExplanationPracticeTurn, ExplanationTurn,
+    FocusedModelledTurn, LearningPlan, ModelledTurn, PracticeTurn,
+    ReteachingTurn, TransferPracticeTurn, UnitPackage,
 )
 from lyo_app.ai_classroom.strict_schema import SchemaNotStrictable, strict_json_schema
 
-CONTRACTS = [PracticeTurn, ModelledTurn, DiagnosticTurn, Evaluation, LearningPlan]
+CONTRACTS = [PracticeTurn, ModelledTurn, FocusedModelledTurn, ReteachingTurn,
+             ExplanationTurn, ExplanationPracticeTurn, TransferPracticeTurn,
+             DiagnosticTurn, Evaluation, LearningPlan, UnitPackage]
 
 
 def objects(node):
@@ -121,3 +125,69 @@ def test_a_recursive_contract_is_refused_rather_than_mangled():
 def test_a_reference_with_no_definition_is_refused():
     with pytest.raises(SchemaNotStrictable):
         strict_json_schema({"type": "object", "properties": {"a": {"$ref": "#/$defs/Missing"}}})
+
+
+@pytest.mark.parametrize("contract", CONTRACTS, ids=lambda c: c.__name__)
+def test_nested_field_names_and_types_survive_conversion(contract):
+    original = contract.model_json_schema()
+    definitions = original.get("$defs", {})
+
+    def compare(loose, strict):
+        if not isinstance(loose, dict):
+            return
+        if "$ref" in loose:
+            loose = {**definitions[loose["$ref"].removeprefix("#/$defs/")],
+                     **{key: value for key, value in loose.items() if key != "$ref"}}
+        if "type" in loose:
+            assert strict["type"] == loose["type"]
+        if "enum" in loose:
+            assert strict["enum"] == loose["enum"]
+        if "const" in loose:
+            assert strict["enum"] == [loose["const"]]
+        if "properties" in loose:
+            assert set(strict["properties"]) == set(loose["properties"])
+            for name, field in loose["properties"].items():
+                compare(field, strict["properties"][name])
+        if "items" in loose:
+            compare(loose["items"], strict["items"])
+        for branch in ("anyOf", "oneOf", "allOf"):
+            if branch in loose:
+                assert len(loose[branch]) == len(strict[branch])
+                for before, after in zip(loose[branch], strict[branch]):
+                    compare(before, after)
+
+    compare(original, strict_json_schema(original))
+
+
+@pytest.mark.parametrize("name", ["title", "default", "pattern", "format", "const", "$ref"])
+def test_field_names_are_not_treated_as_schema_keywords(name):
+    strict = strict_json_schema({"type": "object", "properties": {
+        name: {"type": "string", "title": "Metadata", "default": "example"},
+    }})
+    assert strict["properties"] == {name: {"type": "string"}}
+    assert strict["required"] == [name]
+
+
+def test_required_learning_unit_title_can_satisfy_both_contracts():
+    from jsonschema import Draft202012Validator
+
+    plan = LearningPlan.model_validate({"units": [{
+        "title": "Compare equal fraction parts",
+        "objective": "Compare two shares using equal-sized parts.",
+        "material": "Split each whole into four equal parts, then count the shaded parts to compare shares.",
+        "practice_targets": ["Compare shares with the same denominator"],
+        "takeaway": "Compare equal parts by counting them.",
+        "prerequisite_titles": [],
+    }]})
+    payload = plan.model_dump(mode="json")
+    strict = strict_json_schema(LearningPlan.model_json_schema())
+    Draft202012Validator.check_schema(strict)
+    Draft202012Validator(strict).validate(payload)
+    assert LearningPlan.model_validate(payload) == plan
+
+
+def test_literals_are_enforced_as_single_value_enums():
+    strict = strict_json_schema({"type": "object", "properties": {
+        "version": {"type": "integer", "const": 2},
+    }})
+    assert strict["properties"]["version"] == {"type": "integer", "enum": [2]}

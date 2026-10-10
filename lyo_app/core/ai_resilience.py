@@ -1048,7 +1048,10 @@ class AIResilienceManager:
         if kind == "json_schema":
             enforced = (response_format.get("json_schema") or {}).get("schema")
             if enforced:
-                generation_config["responseSchema"] = enforced
+                # This is JSON Schema (including additionalProperties and
+                # nullable anyOf), not Gemini's narrower OpenAPI Schema.
+                generation_config.pop("responseSchema", None)
+                generation_config["responseJsonSchema"] = enforced
         return generation_config
 
     def _get_fallback_response(self, message: str, error: str, response_format: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

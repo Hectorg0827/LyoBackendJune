@@ -7,7 +7,7 @@ import time
 from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -228,6 +228,8 @@ def _lesson_to_smart_blocks(
     a later request that only has the stored block to go on, so anything the
     verdict needs has to be written down here.
     """
+    from lyo_app.ai_classroom.visual_library import trusted_media_url, trusted_source_url
+
     blocks: List[Dict[str, Any]] = []
 
     for section in lesson.sections:
@@ -254,7 +256,8 @@ def _lesson_to_smart_blocks(
                     SmartBlock.data_viz(section.mermaid, fmt="mermaid").model_dump()
                 )
             if (section.kind is SectionKind.representation and section.image_url
-                    and section.image_url.startswith("https://upload.wikimedia.org/")):
+                    and trusted_media_url(section.image_url)
+                    and trusted_source_url(section.image_source_url)):
                 # Source and attribution travel with the image; the image is
                 # supplementary, and the textual description still renders.
                 blocks.append(SmartBlock(
@@ -263,7 +266,7 @@ def _lesson_to_smart_blocks(
                     content={
                         "url": section.image_url,
                         "alt": section.image_query or section.text[:120],
-                        "caption": section.image_attribution or "Wikimedia Commons",
+                        "caption": section.image_attribution or "Educational image source",
                     },
                     metadata={"source_url": section.image_source_url},
                 ).model_dump())
@@ -271,6 +274,13 @@ def _lesson_to_smart_blocks(
             # genuinely has that shape. The composer omits it otherwise rather
             # than decorating every lesson with a widget.
             explorable = getattr(section, "explorable", None)
+            if not lesson.is_probe and section.kind is SectionKind.representation:
+                from lyo_app.ai_classroom.teaching_visuals import fraction_pie_from_text
+                visual = section.visual or fraction_pie_from_text(lesson.topic, section.text)
+                if visual is not None:
+                    blocks.append(SmartBlock.teaching_visual(
+                        visual, concept_id=lesson.skill_id, source_surface=source_surface,
+                    ).model_dump())
             if explorable is not None:
                 blocks.append(
                     SmartBlock.explorable(
@@ -388,6 +398,106 @@ def _lesson_mode_for_teaching_action(action: Any) -> Optional[str]:
     return None
 
 
+def _requested_teaching_visuals(text: str) -> Tuple[bool, bool]:
+    """Detect user-requested diagrams and images, including plurals and opt-outs."""
+    value = (text or "").strip()
+    diagram_nouns = r"(?:diagrams?|flow[ -]?charts?|process[ -]?flows?)"
+    image_nouns = r"(?:images?|photos?|photographs?|pictures?|illustrations?)"
+    if not (
+        re.search(r"\b(?:teach|explain|show|draw|illustrate|visualize|walk me through)\b", value, re.I)
+        or re.match(r"^\s*(?:(?:a|an|the)\s+)?(?:diagram|flowchart|image|photo)\s+of\b", value, re.I)
+    ):
+        return False, False
+
+    diagram = bool(re.search(r"\b" + diagram_nouns + r"\b", value, re.I))
+    image = bool(re.search(r"\b" + image_nouns + r"\b", value, re.I))
+    # Covers "without using any photos" and "don't show an image" without
+    # mistaking unrelated words for a request to retrieve media.
+    negation = (
+        r"\b(?:without|no|don't|do not|not|avoid|skip)\s+"
+        r"(?:(?:use|using|include|including|show|showing|add|adding|"
+        r"display|displaying|provide|providing|generate|generating)\s+)?"
+        r"(?:(?:a|an|any|the|real|supporting)\s+)*"
+    )
+    if re.search(negation + diagram_nouns + r"\b", value, re.I):
+        diagram = False
+    if re.search(negation + image_nouns + r"\b", value, re.I):
+        image = False
+    return diagram, image
+
+
+def _complete_requested_lesson_visuals(
+    lesson: ChatLesson, *, diagram: bool, image: bool,
+) -> None:
+    """Enforce explicit visual preferences without inventing teaching facts.
+
+    If the model omitted diagram syntax, derive one ONLY from consecutive
+    numbered steps already in its lesson. Media still requires the trusted
+    Wikimedia resolver; a model-authored URL is never accepted.
+    """
+    representation = next(
+        (section for section in lesson.sections
+         if section.kind is SectionKind.representation), None,
+    )
+    if representation is None:
+        return
+
+    if diagram and not any(_valid_teaching_mermaid(section.mermaid)
+                           for section in lesson.sections):
+        from lyo_app.ai_classroom.teaching_visuals import visual_from_numbered_steps
+        method = next(
+            (section.text for section in lesson.sections
+             if section.kind is SectionKind.method), "",
+        )
+        visual = visual_from_numbered_steps(lesson.topic, method)
+        if visual is not None and visual.entries:
+            labels = [
+                re.sub(r"[^\w\s,;:.()\-+/%]", "", item.detail or "")[:90].strip()
+                for item in visual.entries
+            ]
+            if all(len(label) >= 5 for label in labels):
+                lines = ["flowchart TD"]
+                lines.extend(f'  S{i}["{label}"]' for i, label in enumerate(labels, 1))
+                lines.extend(f"  S{i} --> S{i+1}" for i in range(1, len(labels)))
+                candidate = "\n".join(lines)
+                if _valid_teaching_mermaid(candidate):
+                    representation.mermaid = candidate
+
+    if image and not representation.image_query and len(lesson.topic.strip()) >= 5:
+        # Topic is user supplied. Wikimedia must verify the actual media and
+        # attribution before any image block is emitted.
+        representation.image_query = lesson.topic.strip()[:140]
+
+
+def _visual_lesson_topic(text: str) -> str:
+    """Keep the underlying subject, not a request for its visual format."""
+    subject = (text or "").strip()
+    # Conversational preambles are not part of the knowledge concept.
+    subject = re.sub(
+        r"^\s*(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?",
+        "", subject, flags=re.I,
+    )
+    subject = re.sub(
+        r"^\s*(?:teach me(?: about)?|explain(?: to me)?|show me|"
+        r"draw(?: me)?|visualize|illustrate|walk me through)\s+",
+        "", subject, flags=re.I,
+    )
+    # "Show me a diagram of photosynthesis" is about photosynthesis, not
+    # the document type "a diagram of photosynthesis".
+    format_nouns = r"(?:process[ -]?flows?|flow[ -]?charts?|diagrams?|images?|photos?|photographs?|pictures?|illustrations?)"
+    subject = re.sub(
+        r"^\s*(?:(?:a|an|the)\s+)?" + format_nouns + r"\s+(?:of|for|showing)\s+",
+        "", subject, flags=re.I,
+    )
+    subject = re.split(
+        r"\s+(?:using|with|as|in)\s+"
+        r"(?:(?:a|an|the|real|supporting|multiple|several)\s+)*"
+        + format_nouns + r"\b",
+        subject, maxsplit=1, flags=re.I,
+    )[0].strip(" .,:;?!")
+    return subject[:180] or (text or "")[:180]
+
+
 async def _try_compose_lesson(
     db: AsyncSession,
     user_id: Optional[str],
@@ -407,7 +517,11 @@ async def _try_compose_lesson(
     """
     from lyo_app.ai.lesson_composer import slugify_skill
 
-    topic = (topic or "").strip() or _extract_course_topic(user_text or "")
+    requested_diagram, requested_image = _requested_teaching_visuals(user_text)
+    topic = (topic or "").strip() or (
+        _visual_lesson_topic(user_text) if (requested_diagram or requested_image)
+        else _extract_course_topic(user_text or "")
+    )
     if not topic:
         return [], None
 
@@ -422,10 +536,15 @@ async def _try_compose_lesson(
         user_id=user_id,
         mode=mode,
         target_evidence_type=target_evidence_type,
+        requested_diagram=requested_diagram,
+        requested_image=requested_image,
     )
     if lesson is None:
         return [], None
     if mode == "teach":
+        _complete_requested_lesson_visuals(
+            lesson, diagram=requested_diagram, image=requested_image,
+        )
         await _hydrate_lesson_images(lesson)
     return _lesson_to_smart_blocks(
         lesson,
@@ -664,6 +783,48 @@ router = APIRouter()
 router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
 test_prep_agent = TestPrepAgent()
+
+class VisualUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    conversation_id: str = PydanticField(min_length=1, max_length=128)
+    block_id: str = PydanticField(min_length=1, max_length=128)
+    values: Dict[str, Any] = PydanticField(min_length=1, max_length=3)
+
+
+@router.post("/chat/visual")
+async def update_chat_visual(
+    request: VisualUpdateRequest,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save bounded diagram exploration without another AI call or grading."""
+    from lyo_app.chat.visuals import refresh_message_for_block_update, update_visual_blocks
+
+    user_id = str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to save diagram exploration")
+    conversation = await conversation_store.get_owned_conversation(db, request.conversation_id, user_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = await conversation_store.get_messages(db, conversation.id, limit=200)
+    for message in messages:
+        if getattr(message, "role", None) == "user":
+            continue
+        if not any(isinstance(block, dict) and block.get("id") == request.block_id
+                   for block in (getattr(message, "blocks", None) or [])):
+            continue
+        await refresh_message_for_block_update(db, message)
+        try:
+            blocks, block = update_visual_blocks(message.blocks or [], request.block_id, request.values)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid diagram update") from exc
+        message.blocks = blocks
+        await db.commit()
+        return {"block": block}
+    raise HTTPException(status_code=404, detail="No such visual in this conversation")
+
 
 class CheckAnswerRequest(BaseModel):
     """A learner's answer to an in-chat check.
@@ -1032,6 +1193,8 @@ async def _persist_check_result(
     if message is None:
         return
     try:
+        from lyo_app.chat.visuals import refresh_message_for_block_update
+        await refresh_message_for_block_update(db, message)
         blocks = list(getattr(message, "blocks", None) or [])
         updated = []
         changed = False
@@ -2361,14 +2524,22 @@ async def stream_lyo2_chat(
             if (
                 decision.intent == Intent.EXPLAIN
                 and request.text
-                and interaction_contract.mode == InteractionMode.TEACH
+                and (
+                    interaction_contract.mode == InteractionMode.TEACH
+                    or (
+                        interaction_contract.mode == InteractionMode.EXPLAIN
+                        and any(_requested_teaching_visuals(request.text))
+                    )
+                )
                 and not (
                     freshness_decision
                     and freshness_decision.mode.value == "require"
                 )
             ):
-                _force_lesson_mode = _lesson_mode_for_teaching_action(
-                    teaching_decision.action
+                _visual_request = any(_requested_teaching_visuals(request.text))
+                _force_lesson_mode = (
+                    "teach" if _visual_request
+                    else _lesson_mode_for_teaching_action(teaching_decision.action)
                 )
                 if _force_lesson_mode is not None:
                     from lyo_app.teaching_runtime.service import (
@@ -2387,6 +2558,14 @@ async def stream_lyo2_chat(
                             ),
                         )
                     if lesson is not None:
+                        if interaction_contract.mode == InteractionMode.EXPLAIN:
+                            # An explicit explanation, even with visuals, is not
+                            # permission to administer an unsolicited quiz.
+                            lesson.check = None
+                            lesson_blocks = [
+                                block for block in lesson_blocks
+                                if block.get("type") != SmartBlockType.quiz.value
+                            ]
                         async for event in _emit_composed_lesson(
                             db,
                             lesson,

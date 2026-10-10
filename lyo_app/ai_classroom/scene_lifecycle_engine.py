@@ -1550,6 +1550,7 @@ class SceneLifecycleEngine:
             trigger, context, progress, record_interaction=record_interaction
         )
         progress["_unsynced"] = not saved
+        scene.metadata.course_complete = bool(context.course_complete and saved)
         if not saved:
             # Do not claim resumability or commit grading after a save failure.
             # Retain the active state locally so Retry can save it later.

@@ -46,7 +46,7 @@ _DROPPED_KEYWORDS = frozenset({
     "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
     "minLength", "maxLength", "minItems", "maxItems", "uniqueItems",
     "minProperties", "maxProperties", "discriminator", "deprecated",
-    "readOnly", "writeOnly", "$schema", "$id", "const",
+    "readOnly", "writeOnly", "$schema", "$id",
 })
 
 #: How deep inlining may go before a schema is assumed to be recursive.
@@ -66,6 +66,7 @@ _SCHEMA_REJECTION_MARKERS = (
     "response_format",
     "json_schema",
     "responseschema",
+    "responsejsonschema",
     "response schema",
     "invalid schema",
     "invalid_schema",
@@ -136,7 +137,20 @@ def _convert(node: Any, definitions: dict[str, Any], depth: int) -> Any:
     for key, value in node.items():
         if key in _DROPPED_KEYWORDS or key == "$defs":
             continue
-        converted[key] = _convert(value, definitions, depth + 1)
+        if key == "properties" and isinstance(value, dict):
+            # These keys are field names, not schema keywords. A real `title`
+            # field must survive even though schema metadata named `title`
+            # is dropped. Only each field's schema goes through conversion.
+            converted[key] = {
+                name: _convert(field_schema, definitions, depth + 1)
+                for name, field_schema in value.items()
+            }
+        elif key == "const":
+            # Both provider dialects accept enums. Keep Literal constraints
+            # without depending on support for the JSON Schema `const` key.
+            converted["enum"] = [value]
+        else:
+            converted[key] = _convert(value, definitions, depth + 1)
 
     properties = converted.get("properties")
     if isinstance(properties, dict):
