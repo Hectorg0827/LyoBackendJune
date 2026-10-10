@@ -128,7 +128,7 @@ async def recovery_probe(two_failures=False):
 
 def contract_examples():
     from lyo_app.ai_classroom.adaptive_teaching import (
-        DiagnosticTurn, Evaluation, GuidedState, LearningPlan, ModelledTurn,
+        DiagnosticTurn, Evaluation, FocusedModelledTurn, GuidedState, LearningPlan, ModelledTurn,
         UnitPackage, UnitTargetPackage, turn_schema,
     )
     from tests.adaptive_fixtures import ScriptedTeacher, context, evaluation, plan
@@ -138,6 +138,9 @@ def contract_examples():
     for move in ("diagnose", "orient", "reteach", "answer_question", "guided", "explain", "transfer"):
         schema = turn_schema(move)
         examples[schema] = schema.model_validate(teacher._turn(ctx, state, move).model_dump())
+    focused = examples[ModelledTurn].model_dump()
+    focused["demonstration"] = focused["demonstration"][:1]
+    examples[FocusedModelledTurn] = FocusedModelledTurn.model_validate(focused)
     target = UnitTargetPackage(**{move: teacher._turn(ctx, state, move).model_dump()
                                  for move in ("guided", "faded", "independent", "explain", "transfer")})
     examples[UnitPackage] = UnitPackage(
