@@ -17,6 +17,9 @@ from pathlib import Path
 import aiofiles
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
+
+from lyo_app.routers.clip_media_storage import save_clip_to_cloud, stream_clip_from_cloud
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
@@ -103,6 +106,24 @@ async def upload_media(
         logger.error(f"Media upload failed for user {current_user.id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
 
+    if folder == "clips":
+        try:
+            # A stable URL must point to durable bytes, not Railway's ephemeral
+            # container filesystem. Keep the local path only when the app
+            # deliberately has no object-storage backend configured.
+            stored_in_cloud = await run_in_threadpool(
+                save_clip_to_cloud, dest, folder, name, content_type
+            )
+            if stored_in_cloud:
+                dest.unlink(missing_ok=True)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            logger.exception("Persistent clip upload failed for user %s", current_user.id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Clip storage is unavailable. Please retry the upload.",
+            )
+
     path = f"/api/v1/media/file/{folder}/{name}"
     absolute = str(request.base_url).rstrip("/") + path
     logger.info(f"Media uploaded by user {current_user.id}: {path} ({size} bytes)")
@@ -116,11 +137,21 @@ async def upload_media(
 
 
 @router.get("/file/{folder}/{name}")
-async def serve_media(folder: str, name: str):
-    """Serve an uploaded media file (public — reels and post images are public content)."""
+async def serve_media(folder: str, name: str, request: Request):
+    """Public media URL. Persisted clips are seekable and survive redeploys."""
     if not _FOLDER_RE.match(folder) or "/" in name or ".." in name or name.startswith("."):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     path = _media_root() / folder / name
-    if not path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    return FileResponse(path)
+    if path.is_file():
+        return FileResponse(path)
+    if folder == "clips":
+        try:
+            response = await run_in_threadpool(stream_clip_from_cloud, folder, name, request)
+            if response is not None:
+                return response
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Unable to stream clip from cloud: %s", name)
+            raise HTTPException(status_code=503, detail="Video storage temporarily unavailable")
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
