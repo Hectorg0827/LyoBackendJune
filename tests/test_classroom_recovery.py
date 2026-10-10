@@ -360,4 +360,3 @@ async def test_a_step_that_keeps_failing_teaches_instead_of_repeating_the_same_r
     # And a step that lands clears the count, so the next failure gets its own
     # full retry rather than inheriting this one's.
     assert current(progress).recovery_attempts == 0
-
