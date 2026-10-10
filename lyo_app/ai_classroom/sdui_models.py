@@ -14,6 +14,7 @@ from typing import List, Literal, Union, Optional, Dict, Any
 from uuid import uuid4, UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from lyo_app.ai_classroom.board_presentation import BoardDocument
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -124,9 +125,30 @@ class ComponentBase(BaseModel):
     # Accessibility & Internationalization
     accessibility_label: Optional[str] = None
     language_code: str = Field(default="en-US")
+    # Presentation only: clients cannot use a role to grade or advance.
+    presentation_role: Optional[Literal[
+        "narration", "board", "reference", "practice", "feedback", "recovery", "details",
+    ]] = None
 
     # Conditional rendering
     show_if: Optional[Dict[str, Any]] = Field(default=None, description="Conditional rendering rules")
+
+    @model_validator(mode="after")
+    def default_presentation_role(self):
+        if self.presentation_role is None:
+            if self.type == ComponentType.TEACHER_MESSAGE:
+                self.presentation_role = "narration"
+            elif self.type in (ComponentType.QUIZ_CARD, ComponentType.INPUT_FIELD):
+                self.presentation_role = "practice"
+            elif self.component_id == "classroom-recovery/notice":
+                self.presentation_role = "recovery"
+            elif self.component_id.startswith("classroom-recovery/"):
+                self.presentation_role = "feedback"
+            elif "board-memory" in self.component_id or self.component_id.startswith("memory-visual:"):
+                self.presentation_role = "reference"
+            else:
+                self.presentation_role = "board"
+        return self
 
     class Config:
         use_enum_values = True
@@ -199,6 +221,9 @@ class ExampleBlock(ComponentBase):
     type: Literal[ComponentType.EXAMPLE_BLOCK] = ComponentType.EXAMPLE_BLOCK
     title: str = Field(..., max_length=100)
     content: str = Field(..., max_length=1500)
+    # Structured view of the existing authored content; content remains the
+    # complete fallback for older clients and persisted scenes.
+    board_document: Optional[BoardDocument] = None
 
     # Example metadata
     example_type: Literal["code", "visual", "analogy", "real_world"] = "real_world"
@@ -520,6 +545,7 @@ class SceneMetadata(BaseModel):
     teaching_action: Optional[str] = None
     target_evidence_type: Optional[str] = None
     teaching_policy_version: Optional[str] = None
+    presentation_focus: Optional[Literal["board", "practice", "recovery", "recap", "conversation"]] = None
 
     # Analytics
     scene_source: Literal["ai_generated", "template", "fallback"] = "ai_generated"
@@ -545,6 +571,18 @@ class Scene(BaseModel):
     # Scene sequencing
     next_scene_id: Optional[str] = None
     fallback_scene_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def presentation_focus(self):
+        if self.metadata.presentation_focus is None:
+            if any(c.presentation_role == "recovery" for c in self.components):
+                self.metadata.presentation_focus = "recovery"
+            elif any(c.type in (ComponentType.QUIZ_CARD, ComponentType.INPUT_FIELD)
+                     for c in self.components):
+                self.metadata.presentation_focus = "practice"
+            else:
+                self.metadata.presentation_focus = "board"
+        return self
 
     @field_validator('components')
     @classmethod

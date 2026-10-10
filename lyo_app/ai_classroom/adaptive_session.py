@@ -18,6 +18,7 @@ from lyo_app.ai_classroom.sdui_models import (
     QuizOption, Scene, SceneType, TeacherMessage,
 )
 from lyo_app.ai_classroom.teaching_prompt import MOVES
+from lyo_app.ai_classroom.board_presentation import board_document
 from lyo_app.teaching_runtime import POLICY_VERSION, canonical_action_for_classroom_move
 
 logger = logging.getLogger(__name__)
@@ -1247,7 +1248,8 @@ class AdaptiveSession:
         components = [
             ProgressBar(current=len(state.completed), total=len(state.plan.units), label=self.stage(context, state), priority=0),
             TeacherMessage(text=speech, language_code=context.language_code,
-                           concept_tags=[state.plan.units[state.active_review_index].title
+                           presentation_role="narration",
+                            concept_tags=[state.plan.units[state.active_review_index].title
                                          if state.active_review_index is not None else state.unit.title],
                            emotion="encouraging", priority=1, source_attributions=context.source_attributions[:5]),
         ]
@@ -1272,17 +1274,18 @@ class AdaptiveSession:
         # explanation + current visual are one pedagogical object and must remain
         # ahead of board memory even on clients that sort by component priority.
         components.append(
-            ExampleBlock(title=title,
+            ExampleBlock(component_id="board:" + str(activity_id or state.step_id),
+                         presentation_role="board", board_document=board_document(content), title=title,
                          content=content if separate_description else example_content,
                          language_code=context.language_code, priority=2)
         )
         if separate_description:
             # Preserve both full explanations instead of truncating teaching
             # to satisfy a limit on a single legacy component.
-            components.append(ExampleBlock(title=visual.title, content=visual.description,
+            components.append(ExampleBlock(title=visual.title, content=visual.description, presentation_role="details",
                                            language_code=context.language_code, priority=2))
         if visual:
-            components.append(LessonBlock(component_id="visual:" + activity_id, block_type="teaching_visual",
+            components.append(LessonBlock(component_id="visual:" + activity_id, presentation_role="board", block_type="teaching_visual",
                                           block=visual.model_dump(mode="json"), priority=3))
 
         if prior_anchors:
@@ -1295,7 +1298,7 @@ class AdaptiveSession:
                 memory_lines.append(f"{anchor_title}\n{anchor_content[:240]}")
             if memory_lines:
                 components.append(ExampleBlock(
-                    component_id="classroom-board-memory",
+                    component_id="classroom-board-memory", presentation_role="reference",
                     title=self.copy(context, "Keep in view", "Mantén a la vista"),
                     content="\n\n".join(memory_lines)[:320],
                     language_code=context.language_code,
@@ -1312,7 +1315,7 @@ class AdaptiveSession:
             if remembered_visual:
                 remembered_id = str(remembered_visual.get("visual_id") or "recent")
                 components.append(LessonBlock(
-                    component_id="memory-visual:" + remembered_id,
+                    component_id="memory-visual:" + remembered_id, presentation_role="reference",
                     block_type="teaching_visual",
                     block=remembered_visual,
                     priority=4,
@@ -1330,7 +1333,7 @@ class AdaptiveSession:
             answer = response if len(response) <= 600 else response[:599].rstrip() + "…"
             explanation = (self.copy(context, "Your answer: ", "Tu respuesta: ") + answer + "\n\n" if answer else "") + state.last_feedback
             components.insert(2, ExampleBlock(
-                title=self.copy(context, "Let's work through your answer", "Revisemos tu respuesta"),
+                title=self.copy(context, "Let's work through your answer", "Revisemos tu respuesta"), presentation_role="feedback",
                 content=explanation, language_code=context.language_code, priority=2,
             ))
         more = state.beat_index + 1 < len(state.presentation.demonstration)
@@ -1522,7 +1525,7 @@ class AdaptiveSession:
             "No pude evaluar tu respuesta. Está guardada y no contará como error. "
             "Continúa con un ejemplo nuevo.",
         ) if ungraded else self.paused_notice(context))
-        components = [TeacherMessage(text=self.paused_teaching(context, state),
+        components = [TeacherMessage(text=self.paused_teaching(context, state), presentation_role="narration",
                                      emotion="encouraging", language_code=context.language_code)]
         # Keep the visible example, even after the final modelling beat has
         # advanced and no question was successfully installed. Recovery notices
@@ -1541,16 +1544,16 @@ class AdaptiveSession:
         if state and state.pending and state.pending.retry_response is not None:
             response = state.pending.retry_response
             for index in range(0, len(response), 1500):
-                components.append(ExampleBlock(component_id=f"classroom-recovery/answer/{index}",
+                components.append(ExampleBlock(component_id=f"classroom-recovery/answer/{index}", presentation_role="feedback",
                     title=self.copy(context, "Your answer — not graded", "Tu respuesta — sin evaluar"),
                     content=response[index:index + 1500], language_code=context.language_code))
         elif state and state.last_feedback:
-            components.append(ExampleBlock(component_id="classroom-recovery/feedback",
+            components.append(ExampleBlock(component_id="classroom-recovery/feedback", presentation_role="feedback",
                 title=self.copy(context, "About your answer", "Sobre tu respuesta"),
                 content=state.last_feedback, language_code=context.language_code))
         # The complete recovery message belongs on the board as well as in
         # narration: a muted phone's two-line caption can otherwise hide it.
-        components.append(ExampleBlock(component_id="classroom-recovery/notice",
+        components.append(ExampleBlock(component_id="classroom-recovery/notice", presentation_role="recovery",
             title=self.copy(context, "Your lesson is paused", "Tu lección está en pausa"),
             content=text, language_code=context.language_code))
         components.append(CTAButton(
