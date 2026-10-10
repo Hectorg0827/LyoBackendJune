@@ -37,9 +37,12 @@ build
 .env
 .flaskenv
 *.log
-tests/
+tests/*
+!tests/__init__.py
+!tests/adaptive_fixtures.py
 scripts/*
 !scripts/e2e_learner_loop.py
+!scripts/validate_classroom_recovery.py
 docs/
 artifacts/
 temp/

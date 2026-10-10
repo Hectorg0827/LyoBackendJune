@@ -9,6 +9,7 @@ are bounded here, and an unavailable/uncertain evaluator records no failure.
 import asyncio
 import json
 import logging
+import os
 import re
 from time import perf_counter
 from typing import Any, Awaitable, Callable, Literal
@@ -19,6 +20,9 @@ from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
+from lyo_app.ai_classroom.strict_schema import (
+    SchemaNotStrictable, looks_like_schema_rejection, strict_json_schema,
+)
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, complete_fraction_visuals, hydrate_turn_visuals, visual_from_numbered_steps
 
 logger = logging.getLogger(__name__)
@@ -681,6 +685,18 @@ class GuidedState(StrictModel):
     beat_index: int = -1
     step_id: str = Field(default_factory=lambda: str(uuid4()))
     return_to_checkpoint: bool = False
+    #: Consecutive failures to compose this one step, reset by any success.
+    #:
+    #: A step that cannot be generated leaves the learner on a paused board
+    #: with a Retry. That Retry used to resend the identical request — same
+    #: move, same unit, same learner input, same provider order — so a failure
+    #: the model could not get past the first time it could not get past the
+    #: hundredth either. The lesson was dead and the button said otherwise.
+    #:
+    #: This is what lets each attempt differ from the last: see `turn()` for
+    #: the model escalation and `AdaptiveSession.run` for the move it falls
+    #: back to once asking the same way has demonstrably stopped working.
+    recovery_attempts: int = 0
     practice_events: list[dict[str, Any]] = Field(default_factory=list)
     task_kinds: list[str] = Field(default_factory=list)
     recent_questions: list[str] = Field(default_factory=list)
@@ -790,6 +806,19 @@ def validate_evaluation(result: Evaluation, task: LearningTask, answers: list[st
     return result
 
 
+#: What every classroom call used before the schema could be enforced, and
+#: what each one still falls back to. "Reply with some JSON", nothing more.
+LOOSE_JSON = {"type": "json_object"}
+
+#: The model a step reaches for once the learner has watched it fail.
+#:
+#: Must be a key in `ai_resilience`'s registry — anything else is silently
+#: dropped from the provider order and the escalation becomes a no-op, which
+#: would look exactly like the bug it exists to fix. `test_model_escalation`
+#: holds the two files to each other.
+ESCALATION_PROVIDER = "gemini-2.5-pro"
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -809,6 +838,25 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                             ["gpt-4o-mini", "gpt-4o", "gemini-2.5-flash"]
                             if schema is Evaluation else
                             ["gpt-4o-mini", "gemini-2.5-flash"])
+    # A step the learner has already watched fail is worth a more capable
+    # model. The ordinary order leads with the small, fast one because most
+    # turns do not need more than that; a turn that has now failed every
+    # attempt of a previous request is, by observation, one that does.
+    #
+    # `gemini-2.5-pro` rather than `gpt-4o`, for two reasons. It is the only
+    # model in `ai_resilience`'s registry the live teaching path never asked
+    # for — already configured, already keyed, already behind its own circuit
+    # breaker, and idle. And `gpt-4o` is a May 2024 model that has been pulled
+    # from ChatGPT and carries published retirement dates; building the
+    # recovery path on it would mean rebuilding the recovery path.
+    #
+    # This only ever reorders providers already present in the registry — no
+    # new provider, credential or client. Without it a teaching turn could be
+    # attempted only by `gpt-4o-mini` and `gemini-2.5-flash`, so a unit
+    # neither could author was a unit no amount of retrying would ever teach.
+    if payload.get("_escalate") and not issubclass(schema, UnitPackage):
+        configured_providers = [ESCALATION_PROVIDER,
+                                *[p for p in configured_providers if p != ESCALATION_PROVIDER]]
     rejected_provider = payload.get("_rejected_provider")
     providers = [p for p in configured_providers if p != rejected_provider]
     if rejected_provider in configured_providers:
@@ -818,23 +866,54 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     started = perf_counter()
     result = None
     outcome = "error"
-    try:
-        result = await asyncio.wait_for(
+    messages = [
+        {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
+         + json.dumps(contract, ensure_ascii=False)},
+        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
+    ]
+    max_tokens = (16000 if issubclass(schema, UnitPackage) else
+                  4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
+    timeout = 100 if issubclass(schema, UnitPackage) else 45
+
+    async def call(response_format):
+        return await asyncio.wait_for(
             ai_resilience_manager.chat_completion(
-                messages=[
-                    {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
-                     + json.dumps(contract, ensure_ascii=False)},
-                    {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
-                ],
+                messages=messages,
                 provider_order=providers,
-                max_tokens=(16000 if issubclass(schema, UnitPackage) else
-                            4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000),
+                max_tokens=max_tokens,
                 temperature=0.1 if schema is Evaluation else 0.6,
-                response_format={"type": "json_object"},
+                response_format=response_format,
                 use_cache=False,
             ),
-            timeout=100 if issubclass(schema, UnitPackage) else 45,
+            timeout=timeout,
         )
+
+    try:
+        enforced = strict_response_format(schema, contract)
+        result = await call(enforced or LOOSE_JSON)
+        if enforced and result.get("is_fallback"):
+            # A provider that refuses the schema refuses every request carrying
+            # it, so retrying under the enforced contract is retrying the same
+            # rejection. Falling back to the mode every call used before this
+            # existed bounds the worst case at the old behaviour rather than at
+            # an outage - which matters because nothing short of calling the
+            # providers can prove a given dialect is accepted.
+            #
+            # Only on an actual rejection, though. `is_fallback` means every
+            # provider was exhausted, for any reason at all: rate limits, auth
+            # failures, open circuits, a network outage. Retrying those sends
+            # the same request back through the same unhealthy providers and
+            # doubles the time a learner waits - 45 seconds becomes 90, a unit
+            # package 100 becomes 200 - while adding load exactly when there
+            # is least to spare. The last exception is the only thing that
+            # tells the two apart.
+            if looks_like_schema_rejection(result.get("error")):
+                logger.warning("Structured output rejected for %s; retrying without an enforced schema",
+                               schema.__name__)
+                result = await call(LOOSE_JSON)
+            else:
+                logger.warning("Enforced schema call for %s failed without a schema rejection (%s); "
+                               "not retrying loosely", schema.__name__, result.get("error"))
         if result.get("is_fallback"):
             raise TeachingUnavailable("Providers unavailable")
         responding_provider = result.get("model_used") or result.get("model")
@@ -865,6 +944,35 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         tokens = metadata.get("tokens_used")
         if provider != "unknown" and isinstance(tokens, int) and tokens > 0:
             classroom_model_tokens.labels(operation, provider).inc(tokens)
+
+
+def strict_response_format(schema, contract):
+    """The provider instruction that makes `contract` binding, or None.
+
+    None means ask the old way: the feature is off, or this particular
+    contract cannot be expressed in a strict dialect. Both are ordinary, and
+    neither is worth failing a lesson over.
+
+    Off by default, and deliberately. The conversion is covered by tests, but
+    tests cannot establish that a provider accepts the dialect they produce -
+    only the provider can, and a wrong guess shipped on by default would turn
+    every teaching turn into a rejected request. So this is a switch to throw
+    once it has been watched working against the real APIs, with
+    `CLASSROOM_STRICT_SCHEMA=1`, rather than a change that lands enabled.
+    """
+    flag = os.getenv("CLASSROOM_STRICT_SCHEMA", "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return None
+    try:
+        enforced = strict_json_schema(contract)
+    except SchemaNotStrictable as exc:
+        logger.warning("Contract %s cannot be enforced (%s); asking the old way",
+                       schema.__name__, exc)
+        return None
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": schema.__name__, "schema": enforced, "strict": True},
+    }
 
 
 class AdaptiveTeacher:
@@ -1234,6 +1342,9 @@ class AdaptiveTeacher:
             "open_question": state.open_question[:2000],
             "compress_demonstration": focused,
         }
+        # Internal routing only — stripped before anything reaches a model.
+        if state.recovery_attempts:
+            payload["_escalate"] = True
         for attempt in range(2):
             try:
                 turn = await self.generate(
