@@ -180,6 +180,23 @@ async def contract_probe(provider, schema, example):
 
 async def run(output, contracts=True):
     require(os.getenv("CLASSROOM_STRICT_SCHEMA") == "0", "Recovery staging must explicitly set CLASSROOM_STRICT_SCHEMA=0")
+    # Validate the actual isolated Railway Redis connection, not only the
+    # presence of REDIS_URL. Never log the endpoint or its credentials.
+    try:
+        from redis.asyncio import Redis
+        redis_url = os.getenv("REDIS_URL")
+        require(bool(redis_url), "Validation Redis URL is not configured")
+        redis = Redis.from_url(redis_url, socket_connect_timeout=4, socket_timeout=4)
+        try:
+            require(await asyncio.wait_for(redis.ping(), timeout=6), "Redis PING failed")
+        finally:
+            await redis.aclose()
+        REPORT["redis"] = {"connected": True}
+        print("CLASSROOM_VALIDATION " + json.dumps({"redis_connected": True}), flush=True)
+    except Exception as exc:
+        REPORT.update(status="failed", redis={"connected": False, "error": safe_error(exc)})
+        print("CLASSROOM_VALIDATION " + json.dumps({"redis_connected": False, "error": safe_error(exc)}), flush=True)
+        return REPORT
     REPORT.update(status="running", strict_schema="0", revision=os.getenv("RAILWAY_GIT_COMMIT_SHA"))
     for two in (False, True):
         try:
