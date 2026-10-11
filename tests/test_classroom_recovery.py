@@ -8,13 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningTurn, TeachingUnavailable
-from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine
+from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine, _is_database_course_id
 from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, ExampleBlock, QuizCard, Scene, TeacherMessage
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
 from tests.adaptive_fixtures import (
     ScriptedTeacher, action, advance_to_task, context, decline_probe, evaluation, plan,
 )
+
+
+
+def test_free_topic_session_ids_are_not_sent_to_uuid_course_tables():
+    assert not _is_database_course_id("Fractions")
+    assert not _is_database_course_id("SQL for a job interview")
+    assert not _is_database_course_id("Fractions~2")
+    assert not _is_database_course_id("GENERATE:Fractions")
+    assert _is_database_course_id("17")
+    assert _is_database_course_id("91f1550f-3f96-4aaa-9aa2-a44bec0721d5")
 
 
 def current(progress):
