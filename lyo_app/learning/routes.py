@@ -74,97 +74,93 @@ async def get_my_proofs(
 @router.post("/courses", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_course(
     course_data: _IosCourseCreate,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Dict[str, Any]:
-    """
-    Create a new course — accepts the iOS app flexible payload.
-    Tries a DB insert but catches errors gracefully so iOS always gets a 201.
-    """
-    try:
-        course_id = str(course_data.id or uuid.uuid4())
-        topic = course_data.topic or course_data.subject or course_data.title or "Course"
-        title = course_data.title or f"Introduction to {topic}"
-        difficulty = (
-            course_data.difficulty_level or course_data.difficulty or
-            course_data.level or "beginner"
-        )
-        now = datetime.now(timezone.utc).isoformat()
+    """Persist the course and every supplied lesson in one database transaction.
 
-        modules = []
-        for mod in (course_data.modules or []):
-            lessons = []
-            for les in (mod.lessons or []):
-                lessons.append({
-                    "id": les.id or str(uuid.uuid4()),
-                    "title": les.title or "Lesson",
-                    "duration": les.duration or "10 min",
-                    "duration_minutes": les.duration_minutes or 10,
-                    "content": les.content or ""
-                })
-            modules.append({
+    A failed commit must not return 201 or an invented local/UUID course ID.
+    The authenticated principal, not the client's instructor_id, owns it.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+    from lyo_app.learning.models import Course, Lesson
+
+    topic = course_data.topic or course_data.subject or course_data.title or "Course"
+    title = course_data.title or f"Introduction to {topic}"
+    difficulty = (
+        course_data.difficulty_level or course_data.difficulty or
+        course_data.level or "beginner"
+    ).lower()
+    if difficulty not in {"beginner", "intermediate", "advanced"}:
+        raise HTTPException(status_code=422, detail="Unsupported course difficulty")
+    description = course_data.description or f"A structured course on {topic}"
+
+    # Keep lessons in course order and save module boundaries alongside them.
+    # UUIDs supplied by offline clients are not database identities.
+    modules = []
+    try:
+        course = Course(
+            title=title, description=description, topic=topic,
+            difficulty_level=difficulty, instructor_id=current_user.id,
+            status="draft", is_published=False,
+            estimated_duration_hours=course_data.estimated_hours or 1,
+        )
+        db.add(course)
+        await db.flush()
+        order = 0
+        for mod in course_data.modules or []:
+            module = {
                 "id": mod.id or str(uuid.uuid4()),
                 "title": mod.title or "Module",
                 "description": mod.description or "",
-                "lessons": lessons
-            })
+                "lessons": [],
+            }
+            for les in mod.lessons or []:
+                order += 1
+                lesson = Lesson(
+                    title=les.title or "Lesson",
+                    content=les.content or "",
+                    content_type="text", course_id=course.id,
+                    order_index=order,
+                    duration_minutes=les.duration_minutes or 10,
+                    is_published=False,
+                )
+                db.add(lesson)
+                await db.flush()
+                module["lessons"].append({
+                    "id": str(lesson.id),
+                    "title": lesson.title,
+                    "duration": les.duration or f"{lesson.duration_minutes} min",
+                    "duration_minutes": lesson.duration_minutes,
+                    "content": lesson.content or "",
+                })
+            modules.append(module)
+        course.generation_metadata = {"modules": modules}
+        await db.commit()
+        await db.refresh(course)
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        logger.error("Course persistence failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Course was not saved. Please retry; no course was created.",
+        ) from exc
 
-        # Normalise instructor_id — iOS sends a UUID string, DB expects int
-        raw_iid = course_data.instructor_id
-        instructor_id_db: Optional[int] = None
-        if raw_iid is not None:
-            try:
-                instructor_id_db = int(raw_iid)
-            except (ValueError, TypeError):
-                instructor_id_db = None  # leave null — non-fatal
-
-        # Try Cloud SQL; skip on error
-        try:
-            legacy_schema = CourseCreate(
-                title=title,
-                description=course_data.description or f"A structured course on {topic}",
-                subject=topic,
-                difficulty_level=difficulty,
-                instructor_id=instructor_id_db if instructor_id_db is not None else 0
-            )
-            db_course = await learning_service.create_course(db, legacy_schema)
-            course_id = str(db_course.id)
-            logger.info(f"✅ Course saved to Cloud SQL: {course_id}")
-        except Exception as db_err:
-            logger.warning(f"⚠️  Cloud SQL insert skipped (non-fatal): {db_err}")
-            await db.rollback()
-
-        record = {
-            "id": course_id,
-            "title": title,
-            "topic": topic,
-            "description": course_data.description or f"A structured course on {topic}",
-            "difficulty": difficulty,
-            "difficulty_level": difficulty,
-            "modules": modules or None,
-            "instructor_id": str(course_data.instructor_id) if course_data.instructor_id else None,
-            "is_published": False,
-            "created_at": now,
-            "updated_at": now,
-            "learning_objectives": [
-                f"Understand the fundamentals of {topic}",
-                f"Apply {topic} concepts in practice",
-            ],
-            "estimated_hours": course_data.estimated_hours or max(len(modules) * 0.5, 1),
-        }
-        logger.info(f"📚 Course persisted: '{title}'")
-        return record
-
-    except Exception as e:
-        logger.error(f"create_course error: {e}", exc_info=True)
-        return {
-            "id": str(course_data.id or uuid.uuid4()),
-            "title": course_data.title or "Generated Course",
-            "topic": course_data.topic or "Course",
-            "status": "saved_locally",
-            "message": "Course saved (cloud sync pending)",
-        }
-
-
+    logger.info("Persisted course %s with %s lessons for user %s", course.id, order, current_user.id)
+    return {
+        "id": str(course.id), "title": course.title, "topic": topic,
+        "description": description, "difficulty": difficulty,
+        "difficulty_level": difficulty, "modules": modules or None,
+        "instructor_id": str(current_user.id), "is_published": False,
+        "created_at": course.created_at.isoformat(),
+        "updated_at": course.updated_at.isoformat(),
+        "learning_objectives": [
+            f"Understand the fundamentals of {topic}",
+            f"Apply {topic} concepts in practice",
+        ],
+        "estimated_hours": course.estimated_duration_hours,
+        "lesson_count": order,
+    }
 
 
 @router.get("/courses", response_model=List[CourseRead])
