@@ -53,6 +53,26 @@ async def test_generated_course_and_lessons_are_durable_and_owned(db_session):
     mine = await get_my_courses(current_user=SimpleNamespace(id=user_id), db=db_session)
     assert any(item.id == saved_id and item.lesson_count == 1 for item in mine)
 
+    from lyo_app.learning.routes import get_course, get_course_lessons, publish_course
+    outsider = SimpleNamespace(id=user_id + 10000)
+    with pytest.raises(HTTPException) as denied:
+        await get_course(saved_id, db_session, outsider)
+    assert denied.value.status_code == 404
+    with pytest.raises(HTTPException):
+        await get_course_lessons(saved_id, db_session, outsider)
+    with pytest.raises(HTTPException):
+        await publish_course(saved_id, db_session, outsider)
+
+    owner = SimpleNamespace(id=user_id)
+    restored = await get_course(saved_id, db_session, owner)
+    assert restored.lesson_count == 1
+    assert restored.modules[0]["lessons"][0]["id"] == str(lesson.id)
+    owner_lessons = await get_course_lessons(saved_id, db_session, owner)
+    assert len(owner_lessons) == 1
+    await publish_course(saved_id, db_session, owner)
+    public = await get_course(saved_id, db_session, outsider)
+    assert public.is_published
+
 
 @pytest.mark.asyncio
 async def test_database_failure_never_returns_a_successful_local_course():
