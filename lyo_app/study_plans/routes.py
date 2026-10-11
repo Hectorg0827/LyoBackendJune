@@ -65,7 +65,7 @@ async def profile_plan(db, user_id, profile_id):
 async def prep_state(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    profile_id: Optional[str] = Query(default=None),
+    profile_id: Optional[str] = None,
 ):
     """Read a selected test without mutating or replacing another test."""
     profile = await owned_profile(db, current_user.id, profile_id)
