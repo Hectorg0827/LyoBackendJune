@@ -22,7 +22,7 @@ from lyo_app.learning.schemas import (
 from lyo_app.learning.service import LearningService
 from lyo_app.learning.proofs import ProofEngine
 from lyo_app.core.database import get_db
-from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.dependencies import get_current_user, get_current_user_or_guest
 from lyo_app.models.enhanced import User
 
 logger = logging.getLogger(__name__)
@@ -212,7 +212,8 @@ async def get_my_courses(
 @router.get("/courses/{course_id}", response_model=CourseRead)
 async def get_course(
     course_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user_or_guest)],
 ) -> CourseRead:
     """
     Get course by ID.
@@ -233,13 +234,22 @@ async def get_course(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Course not found"
         )
-    return CourseRead.model_validate(course)
+    # Unpublished learner work must not be readable by guessing integer IDs.
+    if not course.is_published and course.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return CourseRead.model_validate(course).model_copy(
+        update={
+            "lesson_count": len(course.lessons),
+            "modules": (course.generation_metadata or {}).get("modules"),
+        }
+    )
 
 
 @router.post("/courses/{course_id}/publish", response_model=CourseRead)
 async def publish_course(
     course_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> CourseRead:
     """
     Publish a course (make it available for enrollment).
@@ -254,6 +264,9 @@ async def publish_course(
     Raises:
         HTTPException: If course not found
     """
+    existing = await learning_service.get_course_by_id(db, course_id)
+    if existing is None or existing.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Course not found")
     try:
         course = await learning_service.publish_course(db, course_id)
         return CourseRead.model_validate(course)
@@ -267,7 +280,8 @@ async def publish_course(
 @router.get("/instructors/{instructor_id}/courses", response_model=List[CourseRead])
 async def get_instructor_courses(
     instructor_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user_or_guest)],
 ) -> List[CourseRead]:
     """
     Get all courses by instructor ID.
@@ -280,6 +294,8 @@ async def get_instructor_courses(
         List of courses by the instructor
     """
     courses = await learning_service.get_courses_by_instructor(db, instructor_id)
+    if current_user.id != instructor_id:
+        courses = [course for course in courses if course.is_published]
     return [CourseRead.model_validate(course) for course in courses]
 
 
@@ -314,7 +330,8 @@ async def create_lesson(
 @router.get("/courses/{course_id}/lessons", response_model=List[LessonRead])
 async def get_course_lessons(
     course_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user_or_guest)],
 ) -> List[LessonRead]:
     """
     Get all lessons for a course.
@@ -326,6 +343,9 @@ async def get_course_lessons(
     Returns:
         List of lessons ordered by order_index
     """
+    course = await learning_service.get_course_by_id(db, course_id)
+    if course is None or (not course.is_published and course.instructor_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Course not found")
     lessons = await learning_service.get_lessons_by_course(db, course_id)
     return [LessonRead.model_validate(lesson) for lesson in lessons]
 
