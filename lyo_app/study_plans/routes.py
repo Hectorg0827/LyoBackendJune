@@ -5,6 +5,7 @@ from datetime import datetime, date, timedelta, timezone
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -61,10 +62,16 @@ async def profile_plan(db, user_id, profile_id):
 
 
 @router.get("/state")
-async def prep_state(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Read-only resume: opening a screen never creates an exam or posts a turn."""
-    profile = await owned_profile(db, current_user.id)
+async def prep_state(
+    profile_id: Optional[str] = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read a selected test without mutating or replacing another test."""
+    profile = await owned_profile(db, current_user.id, profile_id)
     if not profile:
+        if profile_id:
+            raise HTTPException(404, "Test profile not found")
         return {"profile": None, "plan": None, "timezone": "UTC", "revision": 0, "sessions": []}
     plan = await profile_plan(db, current_user.id, profile.id)
     sessions = []
@@ -77,6 +84,60 @@ async def prep_state(current_user: User = Depends(get_current_user), db: AsyncSe
             "plan": StudyPlanRead.model_validate(plan) if plan else None,
             "timezone": workflow.get("timezone", "UTC"), "revision": workflow.get("revision", 0),
             "sessions": [StudySessionRead.model_validate(s) for s in sessions]}
+
+
+class NewTestStart(BaseModel):
+    """A client-generated key makes a double tap or a retried request safe."""
+    request_id: str = Field(min_length=8, max_length=100)
+
+
+@router.get("/profiles", response_model=List[TestProfileRead])
+async def list_test_profiles(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List the learner's actual exams, including older completed plans."""
+    profiles = (await db.execute(
+        select(TestProfile).where(TestProfile.user_id == current_user.id)
+        .order_by(desc(TestProfile.created_at), desc(TestProfile.id)).limit(100)
+    )).scalars().all()
+    return [TestProfileRead.model_validate(p) for p in profiles]
+
+
+@router.post("/profiles/start", status_code=status.HTTP_201_CREATED)
+async def start_new_test(
+    body: NewTestStart,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Allocate a fresh exam; never reuse or archive the previous test."""
+    await db.execute(select(User.id).where(User.id == current_user.id).with_for_update())
+    # Lookup happens under the user lock, preventing duplicate first attempts
+    # when browsers retry or a learner double-taps Create.
+    previous = (await db.execute(
+        select(TestProfile).where(
+            TestProfile.user_id == current_user.id,
+            TestProfile.workflow_state["start_request_id"].as_string() == body.request_id,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if previous:
+        await db.commit()
+        return {"profile_id": previous.id, "created": False}
+
+    profile = TestProfile(
+        user_id=current_user.id,
+        subject="Pending Test",
+        test_date=date.today() + timedelta(days=30),
+        intake_transcript=[],
+        workflow_state={
+            "timezone": "UTC", "known_fields": [], "revision": 0,
+            "start_request_id": body.request_id,
+        },
+    )
+    db.add(profile)
+    await db.commit()
+    await db.refresh(profile)
+    return {"profile_id": profile.id, "created": True}
 
 
 @router.patch("/profiles/{profile_id}")
