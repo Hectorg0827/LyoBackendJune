@@ -7,7 +7,10 @@ from pydantic import ValidationError
 from lyo_app.ai_classroom.board_presentation import BoardBlock, BoardDocument, board_document
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningPlan, LearningUnit
-from lyo_app.ai_classroom.sdui_models import ExampleBlock, InputField, Scene, SceneType
+from lyo_app.ai_classroom.sdui_models import (
+    ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, Scene,
+    SceneMetadata, SceneType, TeacherMessage,
+)
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, VisualItem
 
 
@@ -58,6 +61,62 @@ def test_invalid_documents_cannot_request_arbitrary_executables_or_ragged_tables
         BoardBlock(kind="steps", items=[" "])
 
 
+def test_fenced_code_preserves_every_line_without_executing_it():
+    authored = "    raise RuntimeError('display only')\n\n        return total  "
+    source = "Before the example.\n```python\n" + authored + "\n```\nAfter the example."
+    document = board_document(source)
+    assert [block.kind for block in document.blocks] == ["text", "code", "text"]
+    assert document.blocks[1].text == authored
+    assert document.blocks[1].language == "python"
+
+
+@pytest.mark.parametrize("columns,rows,kind", [
+    (8, 1, "table"), (9, 1, "text"), (2, 20, "table"), (2, 21, "text"),
+])
+def test_table_limits_preserve_all_authored_cells(columns, rows, kind):
+    headers = [f"H{index}" for index in range(columns)]
+    values = [[f"{row}:{column}" for column in range(columns)] for row in range(rows)]
+    source = "\n".join([
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * columns) + " |",
+        *("| " + " | ".join(row) + " |" for row in values),
+    ])
+    document = board_document(source)
+    assert document.blocks[0].kind == kind
+    if kind == "table":
+        assert document.blocks[0].headers == headers
+        assert document.blocks[0].rows == values
+    else:
+        assert document.blocks == [BoardBlock(kind="text", text=source)]
+
+
+@pytest.mark.parametrize("numbered", [False, True], ids=["bullets", "steps"])
+@pytest.mark.parametrize("count", [20, 21])
+def test_list_limit_keeps_the_final_item_and_authored_step_number(numbered, count):
+    lines = [f"{index}. Item {index}" if numbered else f"- Item {index}"
+             for index in range(1, count + 1)]
+    document = board_document("\n".join(lines))
+    assert document.blocks[0].items == [f"Item {index}" for index in range(1, 21)]
+    if count == 21 and numbered:
+        assert document.blocks[1] == BoardBlock(kind="text", text=lines[-1])
+    elif count == 21:
+        assert document.blocks[1].items == ["Item 21"]
+    else:
+        assert len(document.blocks) == 1
+
+
+@pytest.mark.parametrize("payload", [
+    {"version": 2, "blocks": [{"kind": "text", "text": "Future format"}]},
+    {"blocks": []},
+    {"blocks": [{"kind": "text", "text": "Anchor"}] * 21},
+    {"blocks": [{"kind": "text", "text": "x" * 1501}]},
+    {"blocks": [{"kind": "code", "text": "display()", "execute": True}]},
+])
+def test_invalid_wire_documents_are_rejected_by_the_production_contract(payload):
+    with pytest.raises(ValidationError):
+        BoardDocument.model_validate(payload)
+
+
 def teaching_state():
     return GuidedState(owner="learner", plan=LearningPlan(units=[LearningUnit(
         title="Observe a system", objective="Explain the relationship between the input and output.",
@@ -86,6 +145,97 @@ def test_workspace_document_has_complete_legacy_and_accessibility_fallback():
     assert restored.board_document == board.board_document
     old = ExampleBlock(title="Legacy board", content="Complete previous-version teaching content.")
     assert old.board_document is None
+
+
+@pytest.mark.parametrize("language", ["en-US", "es-ES"])
+@pytest.mark.parametrize("split_description", [False, True])
+def test_full_scene_round_trip_keeps_narration_documents_visuals_and_legacy_content(
+    language, split_description,
+):
+    state = teaching_state()
+    prior = TeachingVisual(kind="fraction_bar", visual_id="prior-fraction",
+        title="One third", caption="One of three equal pieces is shaded.",
+        description="Three equal parts form the whole, and one part is shaded.", parts=3, value=1)
+    state.board_memory = [{"title": "Earlier fraction", "content": "1/3 of the same whole",
+                           "visual": prior.model_dump(mode="json")}]
+    before = state.model_dump()
+    context = SimpleNamespace(language_code=language, source_attributions=[])
+    description = "Four equal parts form the whole; one part is shaded."
+    if split_description:
+        description = " ".join([description] * 10)
+    visual = TeachingVisual(kind="fraction_bar", visual_id="current-fraction",
+        title="One fourth", caption="Shade one of the four equal pieces.",
+        description=description, parts=4, value=1)
+    content = ("1. " + "First step. " * 45 + "\n2. " + "Next step. " * 45
+               if split_description else "1. Divide the whole into four equal parts.\n2. Shade one part.")
+    speech = "Compare these equal pieces of the same whole."
+    components = AdaptiveSession(None).surface(
+        context, state, speech, "Compare the parts", content, visual, "current-step",
+    )
+    scene = Scene(scene_type=SceneType.INSTRUCTION, components=components)
+    restored = Scene.model_validate_json(scene.model_dump_json())
+    assert restored == scene
+    assert restored.metadata.presentation_focus == "board"
+    by_id = {component.component_id: component for component in restored.components}
+    board = by_id["board:current-step"]
+    assert isinstance(board, ExampleBlock)
+    assert board.board_document == board_document(content)
+    assert board.presentation_role == "board" and board.language_code == language
+    assert next(c.text for c in restored.components if isinstance(c, TeacherMessage)) == speech
+    current_visual = by_id["visual:current-step"]
+    assert isinstance(current_visual, LessonBlock)
+    assert current_visual.presentation_role == "board"
+    assert current_visual.block == visual.model_dump(mode="json")
+    assert by_id["classroom-board-memory"].presentation_role == "reference"
+    assert by_id["memory-visual:prior-fraction"].presentation_role == "reference"
+    assert by_id["memory-visual:prior-fraction"].block == prior.model_dump(mode="json")
+    if split_description:
+        assert board.content == content
+        assert next(c.content for c in restored.components if c.presentation_role == "details") == description
+    else:
+        assert board.content == content + "\n\n" + description
+    assert state.model_dump() == before
+
+    # A saved scene from before this contract still has every authored word.
+    legacy = scene.model_dump(mode="json")
+    legacy["metadata"].pop("presentation_focus")
+    for component in legacy["components"]:
+        component.pop("presentation_role")
+        component.pop("board_document", None)
+    old_scene = Scene.model_validate(legacy)
+    assert old_scene.metadata.presentation_focus == "board"
+    assert [c.content for c in old_scene.components if isinstance(c, ExampleBlock)] == [
+        c.content for c in restored.components if isinstance(c, ExampleBlock)
+    ]
+    assert all(c.board_document is None for c in old_scene.components if isinstance(c, ExampleBlock))
+    assert next(c for c in old_scene.components if c.component_id == "memory-visual:prior-fraction").presentation_role == "reference"
+
+
+@pytest.mark.parametrize("language", ["en-US", "es-ES"])
+def test_recovery_scene_round_trip_keeps_the_document_and_retry_action(language):
+    state = teaching_state()
+    context = SimpleNamespace(language_code=language, source_attributions=[], lesson_content="")
+    components = AdaptiveSession(None).surface(context, state,
+        "Keep this worked example in view.", "The example", "1. Compare.\n2. Explain.")
+    state.scene = Scene(scene_type=SceneType.INSTRUCTION, components=components).model_dump(mode="json")
+    before = state.model_dump()
+    failed = AdaptiveSession(None).unavailable(context, state)
+    restored = Scene.model_validate_json(failed.model_dump_json())
+    assert restored.metadata.presentation_focus == "recovery"
+    retained = next(c for c in restored.components if c.component_id == "board:" + state.step_id)
+    assert retained.board_document == board_document("1. Compare.\n2. Explain.")
+    assert retained.content == "1. Compare.\n2. Explain."
+    notice = next(c for c in restored.components if c.component_id == "classroom-recovery/notice")
+    assert notice.presentation_role == "recovery" and notice.content
+    assert next(c for c in restored.components if isinstance(c, CTAButton)).action_intent == ActionIntent.RETRY
+    assert state.model_dump() == before
+
+
+def test_explicit_scene_focus_survives_serialization_with_a_practice_component():
+    task = InputField(question="Explain the relationship.", placeholder="Your explanation")
+    scene = Scene(scene_type=SceneType.INSTRUCTION, components=[task],
+                  metadata=SceneMetadata(presentation_focus="conversation"))
+    assert Scene.model_validate_json(scene.model_dump_json()).metadata.presentation_focus == "conversation"
 
 
 def test_scene_focus_prioritizes_recovery_then_practice():
