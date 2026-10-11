@@ -107,6 +107,9 @@ async def upload_media(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
 
     if folder in DURABLE_MEDIA_FOLDERS:
+        if not size:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Media file is empty")
         try:
             # A stable URL must point to durable bytes, not Railway's ephemeral
             # container filesystem. Local storage is an explicit dev option.

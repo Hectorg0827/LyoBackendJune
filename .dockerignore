@@ -41,6 +41,7 @@ tests/
 scripts/*
 !scripts/e2e_learner_loop.py
 !scripts/discover_media_validation.py
+!scripts/discover_media_recovery.py
 docs/
 artifacts/
 temp/

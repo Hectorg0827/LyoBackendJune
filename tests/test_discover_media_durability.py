@@ -208,3 +208,12 @@ def test_other_attachments_keep_existing_storage_contract(client, monkeypatch, t
     response = client.post("/api/v1/media/upload", data={"folder": "chat"}, files={"file": ("note.txt", b"note", "text/plain")})
     assert response.status_code == 200
     assert client.get(response.json()["path"]).content == b"note"
+
+
+@pytest.mark.parametrize("folder", ["clips", "clip_thumbnails"])
+def test_empty_discover_upload_is_rejected_before_cloud_write(client, monkeypatch, tmp_path, folder):
+    fake = configure_s3(monkeypatch)
+    response = client.post("/api/v1/media/upload", data={"folder": folder}, files={"file": ("clip.mp4", b"", "video/mp4")})
+    assert response.status_code == 400
+    assert not fake.objects
+    assert not list(tmp_path.rglob("*.mp4"))
