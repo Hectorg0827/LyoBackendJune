@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python scripts/validate_classroom_recovery.py --serve"
+startCommand = "python scripts/validate_classroom_recovery.py --serve --recovery-only"
 preDeployCommand = []
 healthcheckPath = "/health"
 healthcheckTimeout = 300
