@@ -217,3 +217,35 @@ def test_empty_discover_upload_is_rejected_before_cloud_write(client, monkeypatc
     assert response.status_code == 400
     assert not fake.objects
     assert not list(tmp_path.rglob("*.mp4"))
+
+
+def test_discover_settings_do_not_enable_legacy_attachment_storage(monkeypatch):
+    import boto3
+    from lyo_app.storage import enhanced_storage
+    captured = {}
+    isolated = SimpleNamespace(
+        storage_provider='gcs', storage_bucket=None, gcs_bucket=None,
+        aws_access_key_id=None, aws_secret_access_key=None, redis_url=None,
+        r2_access_key=None, r2_secret_key=None,
+        discover_storage_provider='aws_s3', discover_storage_bucket='discover-bucket',
+        discover_s3_endpoint_url='https://storage.example', discover_s3_region='auto',
+        discover_s3_addressing_style='virtual', discover_s3_access_key_id='test-key',
+        discover_s3_secret_access_key='test-secret',
+    )
+    monkeypatch.setattr(media, 'settings', isolated)
+    monkeypatch.setattr(enhanced_storage, 'settings', isolated)
+    monkeypatch.setattr(boto3, 'client', lambda service, **kwargs: captured.update(kwargs) or captured)
+    assert media._provider() == ('s3', 'discover-bucket')
+    media._s3_client.cache_clear()
+    try:
+        media._s3_client('s3')
+        assert captured['endpoint_url'] == 'https://storage.example'
+        assert captured['region_name'] == 'auto'
+        assert captured['aws_access_key_id'] == 'test-key'
+        assert captured['config'].s3['addressing_style'] == 'virtual'
+        legacy = enhanced_storage.EnhancedStorageSystem()
+        asyncio.run(legacy._initialize_clients())
+        assert legacy.s3_client is None
+        assert legacy.r2_client is None
+    finally:
+        media._s3_client.cache_clear()

@@ -24,18 +24,20 @@ DURABLE_MEDIA_FOLDERS = {"clips", "clip_thumbnails"}
 
 
 def _provider():
-    name = (getattr(settings, "storage_provider", "") or "").strip().lower()
+    name = (getattr(settings, "discover_storage_provider", None) or getattr(settings, "storage_provider", "") or "").strip().lower()
+    discover_bucket = getattr(settings, "discover_storage_bucket", None)
     if name == "local":
         environment = (getattr(settings, "environment", "") or "").lower()
         if environment not in {"development", "dev", "test", "testing"} or os.getenv("RAILWAY_ENVIRONMENT_ID"):
             raise RuntimeError("Discover uploads require durable object storage in deployed environments")
         return None
     if name in {"gcs", "google_cloud_storage"}:
-        bucket = getattr(settings, "gcs_bucket", None) or getattr(settings, "storage_bucket", None)
+        bucket = discover_bucket or getattr(settings, "gcs_bucket", None) or getattr(settings, "storage_bucket", None)
         provider = "gcs"
     elif name in {"aws_s3", "s3", "cloudflare_r2", "r2"}:
         bucket = (
-            (getattr(settings, "r2_bucket", None) if name in {"cloudflare_r2", "r2"} else None)
+            discover_bucket
+            or (getattr(settings, "r2_bucket", None) if name in {"cloudflare_r2", "r2"} else None)
             or getattr(settings, "storage_bucket", None)
         )
         provider = "r2" if name in {"cloudflare_r2", "r2"} else "s3"
@@ -72,11 +74,11 @@ def _s3_client(provider: str):
         )
     return boto3.client(
         "s3",
-        region_name=getattr(settings, "aws_region", None) or "us-east-1",
-        endpoint_url=getattr(settings, "aws_endpoint_url", None),
-        aws_access_key_id=getattr(settings, "aws_access_key_id", None),
-        aws_secret_access_key=getattr(settings, "aws_secret_access_key", None),
-        config=Config(s3={"addressing_style": getattr(settings, "aws_s3_addressing_style", "auto")}),
+        region_name=getattr(settings, "discover_s3_region", None) or getattr(settings, "aws_region", None) or "us-east-1",
+        endpoint_url=getattr(settings, "discover_s3_endpoint_url", None) or getattr(settings, "aws_endpoint_url", None),
+        aws_access_key_id=getattr(settings, "discover_s3_access_key_id", None) or getattr(settings, "aws_access_key_id", None),
+        aws_secret_access_key=getattr(settings, "discover_s3_secret_access_key", None) or getattr(settings, "aws_secret_access_key", None),
+        config=Config(s3={"addressing_style": getattr(settings, "discover_s3_addressing_style", None) or getattr(settings, "aws_s3_addressing_style", "auto")}),
     )
 
 

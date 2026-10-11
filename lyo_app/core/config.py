@@ -168,6 +168,15 @@ class Settings(BaseSettings):
     # Storage Configuration
     storage_provider: str = Field(default="gcs", description="Storage provider: local, gcs, aws_s3, cloudflare_r2")
     storage_bucket: Optional[str] = Field(default=None, description="Storage bucket name")
+    # Discover has independent credentials; enabling it must not redirect the
+    # legacy attachment uploader to a private bucket with unrelated URL rules.
+    discover_storage_provider: Optional[str] = Field(default=None, description="Discover storage provider override")
+    discover_storage_bucket: Optional[str] = Field(default=None, description="Discover media bucket")
+    discover_s3_endpoint_url: Optional[str] = Field(default=None, description="Discover S3-compatible endpoint")
+    discover_s3_region: Optional[str] = Field(default=None, description="Discover S3 region")
+    discover_s3_addressing_style: Optional[Literal["auto", "path", "virtual"]] = Field(default=None, description="Discover S3 URL style")
+    discover_s3_access_key_id: Optional[str] = Field(default=None, description="Discover S3 access key")
+    discover_s3_secret_access_key: Optional[str] = Field(default=None, description="Discover S3 secret key")
     cdn_domain: Optional[str] = Field(default=None, description="CDN domain for faster file delivery")
     
     # AWS Configuration
