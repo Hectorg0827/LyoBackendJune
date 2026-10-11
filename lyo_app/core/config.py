@@ -6,7 +6,7 @@ All secrets and environment-specific values are loaded from environment variable
 import secrets
 import re
 from functools import lru_cache
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -168,12 +168,23 @@ class Settings(BaseSettings):
     # Storage Configuration
     storage_provider: str = Field(default="gcs", description="Storage provider: local, gcs, aws_s3, cloudflare_r2")
     storage_bucket: Optional[str] = Field(default=None, description="Storage bucket name")
+    # Discover has independent credentials; enabling it must not redirect the
+    # legacy attachment uploader to a private bucket with unrelated URL rules.
+    discover_storage_provider: Optional[str] = Field(default=None, description="Discover storage provider override")
+    discover_storage_bucket: Optional[str] = Field(default=None, description="Discover media bucket")
+    discover_s3_endpoint_url: Optional[str] = Field(default=None, description="Discover S3-compatible endpoint")
+    discover_s3_region: Optional[str] = Field(default=None, description="Discover S3 region")
+    discover_s3_addressing_style: Optional[Literal["auto", "path", "virtual"]] = Field(default=None, description="Discover S3 URL style")
+    discover_s3_access_key_id: Optional[str] = Field(default=None, description="Discover S3 access key")
+    discover_s3_secret_access_key: Optional[str] = Field(default=None, description="Discover S3 secret key")
     cdn_domain: Optional[str] = Field(default=None, description="CDN domain for faster file delivery")
     
     # AWS Configuration
     aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key")
     aws_secret_access_key: Optional[str] = Field(default=None, description="AWS Secret Key")
     aws_region: str = Field(default="us-east-1", description="AWS region")
+    aws_endpoint_url: Optional[str] = Field(default=None, description="S3-compatible endpoint, including Railway buckets")
+    aws_s3_addressing_style: Literal["auto", "path", "virtual"] = Field(default="auto", description="S3 bucket URL addressing style")
     
     # Cloudflare R2 Configuration (S3-compatible, cheaper)
     r2_endpoint: Optional[str] = Field(default=None, description="Cloudflare R2 endpoint")
