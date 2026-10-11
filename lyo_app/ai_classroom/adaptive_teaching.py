@@ -1450,6 +1450,17 @@ class AdaptiveTeacher:
                 logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
                                move, attempt + 1, validation_summary(exc))
                 payload["repair"] = validation_summary(exc) + ". Return the complete root object and match the requested teaching move."
+                if isinstance(exc, TeachingContractError) and "Independent semantic review rejected" in str(exc):
+                    # This is a *content* rejection, not a provider outage. Do
+                    # not ask the same model to repeat a similar invalid first
+                    # probe twice. Escalate the second authoring attempt while
+                    # still applying both deterministic and semantic checks.
+                    payload["_escalate"] = True
+                    payload["repair"] += (
+                        " Rebuild the example or question: verify the mathematics,"
+                        " make distractors credible and distinct, and label"
+                        " misconceptions accurately. Do not reveal an answer."
+                    )
         raise TeachingUnavailable("Could not author a clear checkpoint")
 
     async def evaluate(self, context, pending: PendingTask, response: str) -> Evaluation:
