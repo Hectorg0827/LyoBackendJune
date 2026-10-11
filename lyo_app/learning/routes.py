@@ -82,6 +82,7 @@ async def create_course(
     A failed commit must not return 201 or an invented local/UUID course ID.
     The authenticated principal, not the client's instructor_id, owns it.
     """
+    import math
     from sqlalchemy.exc import SQLAlchemyError
     from lyo_app.learning.models import Course, Lesson
 
@@ -103,7 +104,7 @@ async def create_course(
             title=title, description=description, topic=topic,
             difficulty_level=difficulty, instructor_id=current_user.id,
             status="draft", is_published=False,
-            estimated_duration_hours=course_data.estimated_hours or 1,
+            estimated_duration_hours=max(1, math.ceil(course_data.estimated_hours or 1)),
         )
         db.add(course)
         await db.flush()
@@ -136,8 +137,13 @@ async def create_course(
                 })
             modules.append(module)
         course.generation_metadata = {"modules": modules}
+        # All generated IDs and timestamps exist after flush. Do not issue a
+        # fallible read after a successful commit and then claim nothing saved.
+        saved_id = course.id
+        created_at = course.created_at.isoformat()
+        updated_at = course.updated_at.isoformat()
+        saved_hours = course.estimated_duration_hours
         await db.commit()
-        await db.refresh(course)
     except SQLAlchemyError as exc:
         await db.rollback()
         logger.error("Course persistence failed: %s", exc)
@@ -146,19 +152,19 @@ async def create_course(
             detail="Course was not saved. Please retry; no course was created.",
         ) from exc
 
-    logger.info("Persisted course %s with %s lessons for user %s", course.id, order, current_user.id)
+    logger.info("Persisted course %s with %s lessons for user %s", saved_id, order, current_user.id)
     return {
-        "id": str(course.id), "title": course.title, "topic": topic,
+        "id": str(saved_id), "title": title, "topic": topic,
         "description": description, "difficulty": difficulty,
         "difficulty_level": difficulty, "modules": modules or None,
         "instructor_id": str(current_user.id), "is_published": False,
-        "created_at": course.created_at.isoformat(),
-        "updated_at": course.updated_at.isoformat(),
+        "created_at": created_at,
+        "updated_at": updated_at,
         "learning_objectives": [
             f"Understand the fundamentals of {topic}",
             f"Apply {topic} concepts in practice",
         ],
-        "estimated_hours": course.estimated_duration_hours,
+        "estimated_hours": saved_hours,
         "lesson_count": order,
     }
 
