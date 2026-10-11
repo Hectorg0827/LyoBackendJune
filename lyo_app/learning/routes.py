@@ -302,7 +302,8 @@ async def get_instructor_courses(
 @router.post("/lessons", response_model=LessonRead, status_code=status.HTTP_201_CREATED)
 async def create_lesson(
     lesson_data: LessonCreate,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> LessonRead:
     """
     Create a new lesson.
@@ -317,6 +318,9 @@ async def create_lesson(
     Raises:
         HTTPException: If creation fails
     """
+    course = await learning_service.get_course_by_id(db, lesson_data.course_id)
+    if course is None or course.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Course not found")
     try:
         lesson = await learning_service.create_lesson(db, lesson_data)
         return LessonRead.model_validate(lesson)
@@ -353,7 +357,8 @@ async def get_course_lessons(
 @router.post("/lessons/{lesson_id}/publish", response_model=LessonRead)
 async def publish_lesson(
     lesson_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> LessonRead:
     """
     Publish a lesson (make it available for students).
@@ -368,6 +373,14 @@ async def publish_lesson(
     Raises:
         HTTPException: If lesson not found
     """
+    from sqlalchemy import select
+    from lyo_app.learning.models import Lesson
+    existing = (await db.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    course = await learning_service.get_course_by_id(db, existing.course_id)
+    if course is None or course.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Lesson not found")
     try:
         lesson = await learning_service.publish_lesson(db, lesson_id)
         return LessonRead.model_validate(lesson)
