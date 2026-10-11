@@ -14,7 +14,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any, Callable
-from uuid import uuid4
+from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, Field, ValidationError
@@ -38,6 +38,26 @@ _TURN_LOCKS = WeakValueDictionary()
 
 def session_progress_key(user_id: str, session_id: str) -> str:
     return json.dumps([str(user_id), str(session_id)], ensure_ascii=False)
+
+
+def _is_database_course_id(value: str | None) -> bool:
+    """A free-topic label or generated session ID is not a Course primary key.
+
+    UUID columns reject strings such as 'Fractions' before the real teaching
+    request can complete. Validate the identifier before executing any UUID
+    queries; leave the original value intact for topic/session continuity.
+    """
+    if not value:
+        return False
+    value = str(value).strip()
+    if value.isdecimal():
+        return True
+    try:
+        UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
 
 _HESITATION_PHRASES = (
     "not sure", "not really sure", "not certain", "unsure",
@@ -615,7 +635,7 @@ class ContextAssembler:
             course_id = course_id.replace("**", "").strip()
 
         # 4) If we have a course_id, query the Course DB for the title
-        if course_id and not course_title:
+        if course_id and not course_title and _is_database_course_id(course_id):
             try:
                 course_id_int = int(course_id)
                 from sqlalchemy import select
