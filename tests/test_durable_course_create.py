@@ -34,6 +34,7 @@ async def test_generated_course_and_lessons_are_durable_and_owned(db_session):
     user = User(email="durable-course@example.test", username="durable-course", hashed_password="unused")
     db_session.add(user)
     await db_session.commit()
+    user_id = user.id
     response = await create_course(sample_course(), db_session, user)
 
     assert response["id"].isdigit() and response["instructor_id"] == str(user.id)
@@ -43,13 +44,13 @@ async def test_generated_course_and_lessons_are_durable_and_owned(db_session):
 
     db_session.expire_all()  # Simulate a fresh request reading durable rows.
     saved = await db_session.get(Course, saved_id)
-    assert saved is not None and saved.title == "Fractions" and saved.instructor_id == user.id
+    assert saved is not None and saved.title == "Fractions" and saved.instructor_id == user_id
     lesson = (await db_session.execute(select(Lesson).where(Lesson.course_id == saved_id))).scalar_one()
     assert str(lesson.id) == response["modules"][0]["lessons"][0]["id"]
     assert lesson.content == "1/2 is one of two equal parts"
     assert saved.generation_metadata["modules"][0]["lessons"][0]["id"] == str(lesson.id)
 
-    mine = await get_my_courses(current_user=user, db=db_session)
+    mine = await get_my_courses(current_user=SimpleNamespace(id=user_id), db=db_session)
     assert any(item.id == saved_id and item.lesson_count == 1 for item in mine)
 
 
