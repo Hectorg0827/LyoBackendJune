@@ -40,6 +40,7 @@ build
 tests/
 scripts/*
 !scripts/e2e_learner_loop.py
+!scripts/discover_media_validation.py
 docs/
 artifacts/
 temp/

@@ -33,6 +33,13 @@ app.dependency_overrides[user_media.get_current_user] = validation_user
 app.include_router(user_media.router)
 
 
+@app.middleware("http")
+async def identify_replica(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Validation-Boot-ID"] = BOOT_ID
+    return response
+
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "validation": True, "boot_id": BOOT_ID}
