@@ -27,6 +27,19 @@ def test_free_topic_session_ids_are_not_sent_to_uuid_course_tables():
     assert _is_database_course_id("91f1550f-3f96-4aaa-9aa2-a44bec0721d5")
 
 
+@pytest.mark.asyncio
+async def test_free_topic_lesson_resolution_does_not_execute_uuid_queries():
+    # A missing database here is intentional: free topics have no numeric or
+    # UUID course model and must not send a SQL statement at all.
+    assembler = ContextAssembler(None)
+    assert await assembler._resolve_current_lesson("Fractions", 0) == (
+        None, 0, None, None, 0
+    )
+    assert await assembler._resolve_current_lesson("SQL for a job interview", 2) == (
+        None, 2, None, None, 0
+    )
+
+
 def current(progress):
     return GuidedState.model_validate(progress["guided_state"])
 
