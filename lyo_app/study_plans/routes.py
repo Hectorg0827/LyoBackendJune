@@ -63,9 +63,9 @@ async def profile_plan(db, user_id, profile_id):
 
 @router.get("/state")
 async def prep_state(
-    profile_id: Optional[str] = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    profile_id: Optional[str] = Query(default=None),
 ):
     """Read a selected test without mutating or replacing another test."""
     profile = await owned_profile(db, current_user.id, profile_id)
