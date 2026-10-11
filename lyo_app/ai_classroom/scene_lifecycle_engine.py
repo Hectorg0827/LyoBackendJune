@@ -771,7 +771,17 @@ class ContextAssembler:
             logger.info(f"📚 Course {course_id} has {total_lessons} lessons")
 
         except ValueError:
-            # It's a UUID, try getting lesson from GraphCourse first, then ChatCourse or GeneratedCourseModel
+            if not _is_database_course_id(course_id):
+                # Free-topic sessions ('Fractions', 'SQL for a job interview')
+                # have no canonical course lesson. GraphCourse.id and other
+                # UUID foreign keys cannot accept these labels. Keep the
+                # authored topic session intact and let guided teaching
+                # generate its own lesson instead of triggering a DB error.
+                return (
+                    resolved_lesson_id, resolved_lesson_index, lesson_title,
+                    lesson_content, total_lessons,
+                )
+            # A validated UUID can resolve GraphCourse, ChatCourse or GeneratedCourseModel.
             try:
                 from lyo_app.ai_classroom.models import GraphCourse, LearningNode
                 from sqlalchemy import or_
