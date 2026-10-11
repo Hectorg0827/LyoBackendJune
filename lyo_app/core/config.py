@@ -6,7 +6,7 @@ All secrets and environment-specific values are loaded from environment variable
 import secrets
 import re
 from functools import lru_cache
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -174,6 +174,8 @@ class Settings(BaseSettings):
     aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key")
     aws_secret_access_key: Optional[str] = Field(default=None, description="AWS Secret Key")
     aws_region: str = Field(default="us-east-1", description="AWS region")
+    aws_endpoint_url: Optional[str] = Field(default=None, description="S3-compatible endpoint, including Railway buckets")
+    aws_s3_addressing_style: Literal["auto", "path", "virtual"] = Field(default="auto", description="S3 bucket URL addressing style")
     
     # Cloudflare R2 Configuration (S3-compatible, cheaper)
     r2_endpoint: Optional[str] = Field(default=None, description="Cloudflare R2 endpoint")

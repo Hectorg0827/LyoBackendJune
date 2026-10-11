@@ -19,7 +19,7 @@ from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
-from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, hydrate_turn_visuals, visual_from_numbered_steps
+from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, complete_fraction_visuals, hydrate_turn_visuals, visual_from_numbered_steps
 
 logger = logging.getLogger(__name__)
 
@@ -1167,7 +1167,7 @@ class AdaptiveTeacher:
             "mode": "none" if move in avoid else "preferred" if move in preferred else "optional",
             "strategy": strategy,
             "allowed": [
-                "fraction_bar", "comparison", "sequence", "graph",
+                "fraction_bar", "fraction_pie", "comparison", "sequence", "graph",
                 "process_flow", "timeline", "number_line", "annotated_image",
             ],
             "rule": (
@@ -1190,6 +1190,8 @@ class AdaptiveTeacher:
         state.strategy_history = [*state.strategy_history, strategy][-12:]
         packaged = await self.cached_turn(context, state, move, unit, target_index)
         if packaged is not None:
+            if move in {"orient", "reteach", "prerequisite", "guided"}:
+                complete_fraction_visuals(packaged, unit.title, context.language_code)
             hydrated = await hydrate_turn_visuals(packaged)
             self.schedule_next_unit_prefetch(context, state, move)
             return hydrated
@@ -1316,6 +1318,7 @@ class AdaptiveTeacher:
                 # a genuine numbered process. Construct the illustration
                 # strictly from those existing steps; never invent facts.
                 if move in {"orient", "reteach", "prerequisite", "guided"}:
+                    complete_fraction_visuals(turn, unit.title, context.language_code)
                     for beat in [turn, *turn.demonstration]:
                         if beat.visual is None:
                             beat.visual = visual_from_numbered_steps(

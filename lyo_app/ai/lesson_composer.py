@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,8 @@ class LessonSection(BaseModel):
     # Set on `representation` when the idea has a shape the learner can move
     # through. Omitted for topics that genuinely have neither.
     explorable: Optional[Explorable] = None
+    # Shared with Classroom and Test Prep, including adjustable fraction pies.
+    visual: Optional[TeachingVisual] = None
 
 
 class CheckOption(BaseModel):
@@ -343,6 +346,11 @@ genuinely does not apply to this topic):
 2. kind "core" — the idea itself, ONE sentence.
 3. kind "representation" — the same idea shown a different way (geometric,
    visual, or physical). Use the "latex" field if a formula helps.
+   For part-whole fractions, provide "visual" with kind "fraction_pie", title,
+   caption, description, parts (denominator 1-20), value (numerator 0-parts),
+   whole (the quantity in one whole pie, normally 1) and unit (or empty string).
+   Use a fraction from this lesson. The learner can tap slices and adjust both
+   numerator and denominator. This is exploration, never a graded answer.
    Add an "explorable" ONLY when this topic genuinely has one of these shapes,
    and never as decoration:
      - "number_line": quantities that sit on a scale — fractions, decimals,
@@ -395,6 +403,11 @@ def _drop_unusable_explorables(raw: Dict[str, Any]) -> None:
     for section in raw.get("sections") or []:
         if not isinstance(section, dict):
             continue
+        if section.get("visual") is not None:
+            try:
+                TeachingVisual.model_validate(section["visual"])
+            except Exception:
+                section.pop("visual", None)
         explorable = section.get("explorable")
         if explorable is None:
             continue

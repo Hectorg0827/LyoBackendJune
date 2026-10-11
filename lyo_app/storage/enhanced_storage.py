@@ -34,6 +34,7 @@ except ImportError:
 
 try:
     import boto3
+    from botocore.config import Config
     from botocore.exceptions import ClientError
     BOTO3_AVAILABLE = True
 except ImportError:
@@ -357,7 +358,9 @@ class EnhancedStorageSystem:
                     's3',
                     aws_access_key_id=settings.aws_access_key_id,
                     aws_secret_access_key=settings.aws_secret_access_key,
-                    region_name=getattr(settings, "aws_region", None) or 'us-east-1'
+                    region_name=getattr(settings, "aws_region", None) or 'us-east-1',
+                    endpoint_url=getattr(settings, "aws_endpoint_url", None),
+                    config=Config(s3={"addressing_style": getattr(settings, "aws_s3_addressing_style", "auto")}),
                 )
                 logger.info("AWS S3 client initialized")
             

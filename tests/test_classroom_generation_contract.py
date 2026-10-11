@@ -12,6 +12,19 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, task
 
 
+def assert_teaching_content_preserved(actual, authored):
+    # The server may supplement a missing visual after repairing the provider
+    # response. It must still preserve every authored word, task and beat.
+    exclude = {"visual": True, "demonstration": {"__all__": {"visual": True}}}
+    assert actual.model_dump(exclude=exclude) == authored.model_dump(exclude=exclude)
+    for rendered, original in zip([actual, *actual.demonstration], [authored, *authored.demonstration]):
+        if original.visual is not None:
+            assert rendered.visual == original.visual
+        elif rendered.visual is not None:
+            assert rendered.visual.kind == "fraction_pie"
+            assert (rendered.visual.value, rendered.visual.parts) == (1, 2)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("move", ["orient", "guided", "reteach"])
 async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate_provider(monkeypatch, move):
@@ -26,7 +39,9 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     actual = await AdaptiveTeacher().turn(ctx, state, move)
-    assert actual.model_dump() == expected.model_dump()
+    assert_teaching_content_preserved(actual, expected)
+    if move != "guided":
+        assert all(beat.visual is not None for beat in actual.demonstration)
     assert completion.await_count == 2
     initial, repair = [call.kwargs for call in completion.await_args_list]
     assert initial["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
@@ -60,7 +75,8 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     turn = await AdaptiveTeacher().turn(ctx, state, "orient")
-    assert turn.model_dump() == valid.model_dump()
+    assert_teaching_content_preserved(turn, valid)
+    assert all(beat.visual is not None for beat in turn.demonstration)
     initial, repair = [call.kwargs for call in completion.await_args_list]
     assert initial["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
     assert repair["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]

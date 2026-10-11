@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
-from lyo_app.routers.clip_media_storage import save_clip_to_cloud, stream_clip_from_cloud
+from lyo_app.routers.clip_media_storage import DURABLE_MEDIA_FOLDERS, save_clip_to_cloud, stream_clip_from_cloud
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
@@ -106,11 +106,10 @@ async def upload_media(
         logger.error(f"Media upload failed for user {current_user.id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
 
-    if folder == "clips":
+    if folder in DURABLE_MEDIA_FOLDERS:
         try:
             # A stable URL must point to durable bytes, not Railway's ephemeral
-            # container filesystem. Keep the local path only when the app
-            # deliberately has no object-storage backend configured.
+            # container filesystem. Local storage is an explicit dev option.
             stored_in_cloud = await run_in_threadpool(
                 save_clip_to_cloud, dest, folder, name, content_type
             )
@@ -144,7 +143,7 @@ async def serve_media(folder: str, name: str, request: Request):
     path = _media_root() / folder / name
     if path.is_file():
         return FileResponse(path)
-    if folder == "clips":
+    if folder in DURABLE_MEDIA_FOLDERS:
         try:
             response = await run_in_threadpool(stream_clip_from_cloud, folder, name, request)
             if response is not None:

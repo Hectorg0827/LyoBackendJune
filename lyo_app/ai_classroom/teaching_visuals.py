@@ -65,14 +65,14 @@ class TeachingVisual(BaseModel):
     # saved turn so a later scene can reference the same teaching object.
     visual_id: str = Field(default_factory=lambda: str(uuid4()), min_length=8, max_length=64)
     kind: Literal[
-        "fraction_bar", "comparison", "sequence", "graph",
+        "fraction_bar", "fraction_pie", "comparison", "sequence", "graph",
         "process_flow", "timeline", "number_line", "annotated_image",
     ]
     title: str = Field(min_length=3, max_length=100)
     caption: str = Field(min_length=10, max_length=350)
     # Equivalent textual account for accessibility and older/degraded clients.
     description: str = Field(min_length=10, max_length=600)
-    parts: int = Field(default=10, ge=2, le=20)
+    parts: int = Field(default=10, ge=1, le=20)
     whole: float = Field(default=1, gt=0, le=1000000)
     unit: str = Field(default="", max_length=40)
     value: int = Field(default=0, ge=0, le=20)
@@ -92,7 +92,9 @@ class TeachingVisual(BaseModel):
 
     @model_validator(mode="after")
     def useful_visual(self):
-        if self.kind == "fraction_bar" and self.value > self.parts:
+        if self.kind == "fraction_bar" and self.parts < 2:
+            raise ValueError("A fraction bar needs at least two parts")
+        if self.kind in ("fraction_bar", "fraction_pie") and self.value > self.parts:
             raise ValueError("Shaded parts cannot exceed the whole")
 
         if self.kind in ("comparison", "sequence", "process_flow", "timeline"):
@@ -148,6 +150,29 @@ class TeachingVisual(BaseModel):
         """Apply only bounded exploratory values; visuals never grade."""
         if not isinstance(payload, dict):
             return False
+        if self.kind == "fraction_pie":
+            # A single, atomic update keeps numerator <= denominator when the
+            # learner changes the number of equal slices. Never accept grades,
+            # geometry, labels, or an answer key from an exploratory control.
+            if not payload or set(payload) - {"value", "parts"}:
+                return False
+            parts = payload.get("parts", self.parts)
+            value = payload.get("value", self.value)
+            if (type(parts) is not int or type(value) is not int
+                    or not 1 <= parts <= 20 or not 0 <= value <= parts):
+                return False
+            self.parts, self.value = parts, value
+            # Keep the author's language and instructions, then describe the
+            # current fraction and quantity using universal mathematical
+            # notation. Keeping the old description would retain stale counts;
+            # replacing it with English would discard the authored locale.
+            quantity = self.whole * value / parts
+            self.description = (
+                f"{self.title}. {self.caption} "
+                f"{value}/{parts}; {self.whole:g} {self.unit} × {value}/{parts} "
+                f"≈ {quantity:.6g} {self.unit}."
+            )
+            return True
         if self.kind == "graph":
             values = payload.get("params")
             if not isinstance(values, dict) or set(values) != {p.name for p in self.params}:
@@ -168,6 +193,59 @@ class TeachingVisual(BaseModel):
             self.value = value
             return True
         return False
+
+
+def fraction_pie_from_text(title: str, text: str, language: str | None = None) -> TeachingVisual | None:
+    """Represent a proper fraction already taught in the supplied material.
+
+    This fallback needs no extra model call. It never invents a fraction for
+    unrelated subjects, treats dates as fractions, or turns a mixed/improper
+    fraction into a misleading single whole.
+    """
+    combined = f"{title} {text}"
+    if not re.search(
+        r"\b(?:fractions?|numerators?|denominators?|fracci[oó]n|fracciones|numeradores?|denominadores?)\b",
+        combined, re.I,
+    ):
+        return None
+    candidates: list[tuple[int, int, int]] = []
+    def standalone(start: int) -> bool:
+        return not re.search(r"(?:\d+\s*|[-−]\s*)$", text[:start])
+
+    for match in re.finditer(r"(?<![\w./\-−])(\d{1,2})\s*/\s*(\d{1,2})(?![\w/]|\.\d)", text):
+        if standalone(match.start()):
+            candidates.append((match.start(), int(match[1]), int(match[2])))
+    for match in re.finditer(r"\\(?:d?frac)\s*\{(\d{1,2})\}\s*\{(\d{1,2})\}", text):
+        if standalone(match.start()):
+            candidates.append((match.start(), int(match[1]), int(match[2])))
+    unicode_fractions = {"½": (1, 2), "⅓": (1, 3), "⅔": (2, 3), "¼": (1, 4), "¾": (3, 4),
+                         "⅕": (1, 5), "⅖": (2, 5), "⅗": (3, 5), "⅘": (4, 5), "⅛": (1, 8)}
+    for match in re.finditer("[" + "".join(unicode_fractions) + "]", text):
+        if standalone(match.start()):
+            n, d = unicode_fractions[match[0]]
+            candidates.append((match.start(), n, d))
+    pair = next(((n, d) for _, n, d in sorted(candidates) if 1 <= d <= 20 and 0 <= n <= d), None)
+    if pair is None:
+        return None
+    value, parts = pair
+    spanish = (language.lower().startswith("es") if language else
+               bool(re.search(r"\b(?:fracci[oó]n|fracciones|numerador|denominador)\b", combined, re.I)))
+    return TeachingVisual(
+        kind="fraction_pie", parts=parts, value=value, whole=1,
+        title="Explora la fracción" if spanish else "Explore the fraction",
+        caption=("Toca las partes o cambia el numerador y el denominador para ver cómo cambia la fracción."
+                 if spanish else "Tap slices or change the numerator and denominator to see the fraction change."),
+        description=(f"{value}/{parts}: {value} partes sombreadas de {parts} partes iguales."
+                     if spanish else f"{value}/{parts}: {value} shaded slices out of {parts} equal slices."),
+    )
+
+
+def complete_fraction_visuals(turn: Any, topic: str, language: str = "en") -> Any:
+    """Keep authored visuals, supplement only teaching beats missing a visual."""
+    for beat in [turn, *getattr(turn, "demonstration", [])]:
+        if getattr(beat, "visual", None) is None:
+            beat.visual = fraction_pie_from_text(topic, getattr(beat, "board_content", ""), language)
+    return turn
 
 
 def visual_from_numbered_steps(title: str, board_content: str) -> TeachingVisual | None:
