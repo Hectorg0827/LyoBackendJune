@@ -184,6 +184,31 @@ async def get_published_courses(
     return [CourseRead.model_validate(course) for course in courses]
 
 
+@router.get("/courses/mine", response_model=List[CourseRead])
+async def get_my_courses(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> List[CourseRead]:
+    """Show a learner's saved drafts, including generated lessons."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from lyo_app.learning.models import Course
+
+    result = await db.execute(
+        select(Course)
+        .where(Course.instructor_id == current_user.id)
+        .options(selectinload(Course.lessons))
+        .order_by(Course.created_at.desc())
+        .limit(100)
+    )
+    return [
+        CourseRead.model_validate(course).model_copy(
+            update={"lesson_count": len(course.lessons)}
+        )
+        for course in result.scalars().all()
+    ]
+
+
 @router.get("/courses/{course_id}", response_model=CourseRead)
 async def get_course(
     course_id: int,
