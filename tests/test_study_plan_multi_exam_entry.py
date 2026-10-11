@@ -64,3 +64,63 @@ async def test_selecting_a_missing_or_other_user_profile_never_falls_back_to_lat
         lookup.assert_awaited_once()
         assert lookup.await_args.args[1] == 72
         assert lookup.await_args.args[2] == "other-account-profile"
+
+
+@pytest.mark.asyncio
+async def test_multiple_exams_survive_switch_and_idempotent_retry(db_session):
+    """Exercise real ORM persistence rather than only mocked route objects."""
+    from datetime import date, datetime, timedelta, timezone
+    from sqlalchemy import func, select
+    from lyo_app.auth.models import User
+    from lyo_app.study_plans.models import TestProfile, StudyPlan, StudySession
+    from lyo_app.study_plans.routes import list_test_profiles
+
+    user = User(email="multiple-exams@example.test", username="multiple-exams", hashed_password="unused")
+    other = User(email="other-exams@example.test", username="other-exams", hashed_password="unused")
+    db_session.add_all([user, other])
+    await db_session.flush()
+    old = TestProfile(
+        user_id=user.id, subject="Algebra", test_date=date.today() + timedelta(days=14),
+        intake_complete=True, workflow_state={"timezone": "UTC", "revision": 0},
+    )
+    foreign = TestProfile(
+        user_id=other.id, subject="Private Biology", test_date=date.today() + timedelta(days=14),
+        workflow_state={"timezone": "UTC"},
+    )
+    db_session.add_all([old, foreign])
+    await db_session.flush()
+    plan = StudyPlan(user_id=user.id, test_profile_id=old.id)
+    db_session.add(plan)
+    await db_session.flush()
+    session = StudySession(
+        study_plan_id=plan.id, user_id=user.id,
+        scheduled_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        duration_minutes=25, topic="Linear equations", session_type="practice",
+        status="completed", performance_score=0.8,
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    request = NewTestStart(request_id="separate-exam-12345678")
+    first = await start_new_test(body=request, current_user=user, db=db_session)
+    retry = await start_new_test(body=request, current_user=user, db=db_session)
+    assert first["created"] and first["profile_id"] != old.id
+    assert retry == {"profile_id": first["profile_id"], "created": False}
+    assert await db_session.scalar(
+        select(func.count()).select_from(TestProfile).where(TestProfile.user_id == user.id)
+    ) == 2
+
+    fresh_state = await prep_state(current_user=user, db=db_session, profile_id=first["profile_id"])
+    assert fresh_state["profile"].id == first["profile_id"]
+    assert fresh_state["plan"] is None and fresh_state["sessions"] == []
+
+    old_state = await prep_state(current_user=user, db=db_session, profile_id=old.id)
+    assert old_state["profile"].subject == "Algebra"
+    assert old_state["plan"].id == plan.id
+    assert [row.id for row in old_state["sessions"]] == [session.id]
+    assert old_state["sessions"][0].status == "completed"
+    assert (await list_test_profiles(current_user=user, db=db_session))[0].id == first["profile_id"]
+
+    with pytest.raises(HTTPException) as exc:
+        await prep_state(current_user=user, db=db_session, profile_id=foreign.id)
+    assert exc.value.status_code == 404
