@@ -39,6 +39,7 @@ jobs:
       SECRET_KEY: test-secret-key-for-classroom-ci-at-least-32-characters
       ENVIRONMENT: development
       CHAT_VISUAL_POSTGRES_URL: postgresql+asyncpg://visual_test:visual_test@localhost:5432/visual_test
+      TEST_PREP_POSTGRES_URL: postgresql+asyncpg://visual_test:visual_test@localhost:5432/visual_test
 
     steps:
       - uses: actions/checkout@v4

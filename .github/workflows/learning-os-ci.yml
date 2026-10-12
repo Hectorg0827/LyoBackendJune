@@ -28,10 +28,26 @@ jobs:
   runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: runtime_test
+          POSTGRES_PASSWORD: runtime_test
+          POSTGRES_DB: runtime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U runtime_test -d runtime_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       TESTING: "true"
       SECRET_KEY: test-secret-key-for-learning-os-ci-at-least-32-characters
       ENVIRONMENT: development
+      CHAT_VISUAL_POSTGRES_URL: postgresql+asyncpg://runtime_test:runtime_test@localhost:5432/runtime_test
+      TEST_PREP_POSTGRES_URL: postgresql+asyncpg://runtime_test:runtime_test@localhost:5432/runtime_test
 
     steps:
       - uses: actions/checkout@v4
