@@ -55,7 +55,7 @@ def test_the_escalation_target_is_not_one_of_the_models_that_just_failed():
     escalation only after every attempt under that pair has failed, so the
     target has to be something those attempts did not already use.
     """
-    ordinary = {"gpt-4o-mini", "gemini-2.5-flash"}
+    ordinary = {"gpt-4o-mini", "gemini-3.6-flash"}
     assert ESCALATION_PROVIDER not in ordinary
 
 
