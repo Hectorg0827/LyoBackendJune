@@ -39,7 +39,7 @@ def safe_error(error):
 async def recovery_probe(two_failures=False):
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
-    from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState, TeachingUnavailable
+    from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher, GuidedState, TeachingUnavailable, ESCALATION_PROVIDER
     from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine
     from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, Scene
     from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
@@ -102,9 +102,9 @@ async def recovery_probe(two_failures=False):
         with patch.object(ai_resilience_manager, "chat_completion", observed_completion):
             recovered = await runner.run(ctx, progress, retry(failed))
         state = GuidedState.model_validate(progress["guided_state"])
-        require(calls and calls[0]["first_requested"] == "gemini-2.5-pro", "Pro was not requested first")
-        require(any(c["model_used"] == "gemini-2.5-pro" and not c["fallback"] for c in calls),
-                "No actual Pro response: a fallback cannot establish Pro acceptance")
+        require(calls and calls[0]["first_requested"] == ESCALATION_PROVIDER, "Configured recovery provider was not requested first")
+        require(any(c["model_used"] == ESCALATION_PROVIDER and not c["fallback"] for c in calls),
+                "No actual recovery-provider response: fallback does not establish escalation")
         require(all(c["format"] == "json_object" for c in calls), "Strict mode leaked into recovery")
         require(state.recovery_attempts == 0, "Recovered turn did not reset the failure count")
         require(state.outbox == evidence and not state.completed, "Recovery changed learner evidence or completion")
