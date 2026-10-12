@@ -60,7 +60,8 @@ async def validate(base_url, credentials_path=None):
         async def prepare(token, profile_id, subject, topic):
             message = (f"My {subject} test is on {(date.today() + timedelta(days=14)).isoformat()}. "
                        f"The test covers {topic}. I can study 25 minutes a day, five days per week. "
-                       "It is multiple choice and my confidence is five out of ten. "
+                       "It is multiple choice. My confidence is five out of ten in each listed topic, "
+                       "and my stress level is five out of ten. "
                        "Use America/New_York as my timezone. These are all my test details.")
             for attempt in range(4):
                 turn = await request("POST", endpoint + "/intake/turn", token, json={
