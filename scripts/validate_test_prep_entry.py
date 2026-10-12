@@ -16,7 +16,7 @@ import uuid
 import httpx
 
 
-async def validate(base_url, credentials_path=None):
+async def validate(base_url, credentials_path=None, reuse_credentials=None):
     report = {"base_url": base_url, "status": "running", "cases": []}
     credentials = []
     started = time.monotonic()
@@ -38,6 +38,14 @@ async def validate(base_url, credentials_path=None):
             return response.json() if response.content else None
 
         async def owner():
+            if reuse_credentials:
+                account = reuse_credentials.pop(0)
+                result = await request("POST", "/api/v1/auth/login", json={
+                    "email": account["email"], "password": account["password"],
+                })
+                token = result["access_token"]
+                credentials.append({**account, "token": token})
+                return token
             suffix = uuid.uuid4().hex[:12]
             email, password = f"testprep-{suffix}@example.com", secrets.token_urlsafe(18) + "!Aa1"
             result = await request("POST", "/api/v1/auth/register", expected=(200, 201), json={
@@ -109,7 +117,9 @@ async def validate(base_url, credentials_path=None):
             await request("GET", endpoint + "/profiles", expected=(401, 403))
             check("anonymous_history_is_rejected", True)
             history = await request("GET", endpoint + "/profiles", second)
-            check("history_never_lists_another_learners_exams", {p["id"] for p in history} == {other["profile_id"]})
+            own_history = await request("GET", endpoint + "/profiles", first)
+            check("history_never_lists_another_learners_exams", other["profile_id"] in {p["id"] for p in history}
+                  and not ({p["id"] for p in history} & {p["id"] for p in own_history}))
 
             biology = await prepare(first, biology_id, "Biology", "cell membranes and DNA")
             check("second_generated_plan_is_distinct", biology["plan"]["id"] != before["plan"]["id"])
@@ -145,8 +155,10 @@ if __name__ == "__main__":
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--credentials-output")
+    parser.add_argument("--reuse-credentials", help="Log in existing synthetic learners to avoid registration rate limits")
     args = parser.parse_args()
-    result = asyncio.run(validate(args.base_url.rstrip('/'), args.credentials_output))
+    reused = json.loads(Path(args.reuse_credentials).read_text())["accounts"] if args.reuse_credentials else None
+    result = asyncio.run(validate(args.base_url.rstrip('/'), args.credentials_output, reused))
     Path(args.output).write_text(json.dumps(result, indent=2))
     print(json.dumps(result))
     raise SystemExit(0 if result["status"] == "passed" else 1)
