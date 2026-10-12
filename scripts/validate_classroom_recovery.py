@@ -190,7 +190,7 @@ async def verify_gemini_credentials():
 
     probes = []
     selected = None
-    models = ("gemini-2.5-pro", "gemini-3.1-pro-preview", "gemini-3.8-flash")
+    models = ("gemini-2.5-pro", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash")
     sample = {"contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
               "generationConfig": {"maxOutputTokens": 32, "temperature": 0}}
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
