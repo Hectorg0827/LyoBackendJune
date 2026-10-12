@@ -5,6 +5,7 @@ fastapi>=0.110.0
 uvicorn[standard]==0.24.0
 pydantic>=2.7.0,<2.11.0
 pydantic-settings>=2.2.0
+jsonschema>=4.23.0,<5.0.0
 
 # Database
 sqlalchemy[asyncio]==2.0.23

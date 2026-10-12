@@ -212,3 +212,26 @@ def test_ordinary_practice_may_still_leave_a_misconception_unset():
         option["misconception"] = None
         option["gap"] = None
     assert LearningTask.model_validate(choice).options
+
+
+@pytest.mark.asyncio
+async def test_a_semantically_rejected_opening_probe_escalates_before_second_authoring():
+    """An opening that fails semantic review must not waste its last try repeating."""
+    ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    candidate = ScriptedTeacher()._turn(ctx, state, "diagnose")
+    inputs = []
+
+    async def generate(prompt_text, payload, schema):
+        inputs.append(dict(payload))
+        return candidate
+
+    judge = AsyncMock(side_effect=[False, True])
+    result = await AdaptiveTeacher(generate, semantic_judge=judge).turn(ctx, state, "diagnose")
+
+    assert result.task is not None
+    assert len(inputs) == 2
+    assert not inputs[0].get("_escalate")
+    assert inputs[1]["_escalate"] is True
+    assert "distractors credible" in inputs[1]["repair"]
+    assert judge.await_count == 2
+    assert state.completed == [] and state.outbox == []

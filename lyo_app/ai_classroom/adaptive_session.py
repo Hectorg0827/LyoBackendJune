@@ -67,6 +67,21 @@ class AdaptiveSession:
             return state.plan.units[index].title if index is not None else state.unit.title
         return context.lesson_title or context.topic
 
+    #: How many failures of the same step before a Retry stops asking for it
+    #: in the same words.
+    #:
+    #: Two, so the first Retry still re-authors the exact step the learner was
+    #: waiting for — a provider blip is real and common, that retry already
+    #: carries a stronger model behind it (see `model_json`), and a learner who
+    #: presses the button expects the thing they were promised. It is the
+    #: *second* identical failure that proves asking this way is not working.
+    RELAX_RECOVERY_AFTER = 2
+
+    #: Moves that ask only for teaching. They carry no graded question, so
+    #: they are what a step with no way forward can always fall back to —
+    #: and substituting one of them for another would change nothing.
+    TEACHING_MOVES = frozenset({"orient", "reteach", "prerequisite", "answer_question", "help"})
+
     async def run(self, context, progress: dict[str, Any], trigger) -> Scene:
         data = trigger.action_data or {}
         intent = data.get("action_intent")
@@ -525,6 +540,42 @@ class AdaptiveSession:
         elif pending and pending.id not in state.handled and not recovering:
             return self.save(progress, state, self.checkpoint(context, state))
 
+        # A Retry that resends the identical request earns the identical
+        # failure. Every input to the generator is saved state — the move, the
+        # unit, the learner's words, the provider order — so a step the model
+        # could not compose once it could not compose again, and the learner
+        # sat pressing a button that was never going to do anything. The
+        # paused board was honest about the failure and silent about it being
+        # permanent.
+        #
+        # So the second attempt asks for something else. A question is the
+        # hardest thing to author — it must be new, on the current target, in
+        # the right kind and format, and survive semantic review — while
+        # teaching the same material is the easiest, and is what a learner
+        # stuck at a step most likely needs anyway. The lesson re-teaches, the
+        # learner continues, and the question is asked again on the next step
+        # with a stronger model behind it.
+        #
+        # This relaxes how the next screen is composed, never what the learner
+        # must show: a teaching beat earns no evidence and completes no unit,
+        # and the completion gate still wants an unaided independent
+        # application. A stuck lesson becomes a slower lesson, not an easier
+        # one.
+        if (recovering and state.recovery_attempts >= self.RELAX_RECOVERY_AFTER
+                and move not in self.TEACHING_MOVES):
+            if state.pending is not None and state.pending.id not in state.handled:
+                # Defensive, and deliberately untested: no move that reaches
+                # this line is known to leave an ungraded question behind —
+                # every path that asks for help, an example or a skip either
+                # resolves the pending question first or is itself a teaching
+                # move, which is not relaxed. If one ever does, the learner's
+                # unanswered question is theirs to come back to, and
+                # `accept_turn` would otherwise drop it on a teaching beat.
+                state.return_to_checkpoint = True
+            logger.info("Classroom step relaxed after %s failed attempts: move=%s -> reteach",
+                        state.recovery_attempts, move)
+            move = "reteach"
+
         state.next_move = move
         state.generation_input = learner_input
         # Accepted answers and their outbox events belong to the learner even
@@ -533,9 +584,14 @@ class AdaptiveSession:
         before_generation = state.model_copy(deep=True)
         try:
             turn = await self.teacher.turn(context, state, move, learner_input)
+            state.recovery_attempts = 0
             return self.accept_turn(context, progress, state, turn, move)
         except (TeachingUnavailable, ValidationError) as exc:
-            logger.warning("Classroom step unavailable: move=%s cause=%s", move, validation_summary(exc))
+            logger.warning("Classroom step unavailable: move=%s attempts=%s cause=%s",
+                           move, before_generation.recovery_attempts + 1, validation_summary(exc))
+            # Counted on the state that is actually saved, so the next Retry
+            # can see that this one already failed.
+            before_generation.recovery_attempts = min(before_generation.recovery_attempts + 1, 99)
             return self.save(progress, before_generation, self.unavailable(context, before_generation))
 
     def accept_turn(self, context, progress, state, turn, move):
