@@ -816,7 +816,7 @@ LOOSE_JSON = {"type": "json_object"}
 #: dropped from the provider order and the escalation becomes a no-op, which
 #: would look exactly like the bug it exists to fix. `test_model_escalation`
 #: holds the two files to each other.
-ESCALATION_PROVIDER = "gemini-2.5-pro"
+ESCALATION_PROVIDER = "gemini-3.8-flash"
 
 
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
@@ -843,17 +843,15 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     # turns do not need more than that; a turn that has now failed every
     # attempt of a previous request is, by observation, one that does.
     #
-    # `gemini-2.5-pro` rather than `gpt-4o`, for two reasons. It is the only
-    # model in `ai_resilience`'s registry the live teaching path never asked
-    # for — already configured, already keyed, already behind its own circuit
-    # breaker, and idle. And `gpt-4o` is a May 2024 model that has been pulled
-    # from ChatGPT and carries published retirement dates; building the
-    # recovery path on it would mean rebuilding the recovery path.
+    # Gemini 2.5 Pro is unavailable to newly provisioned projects as of
+    # September 2026; Gemini 3.1 Pro Preview may also be quota-limited.
+    # Use the currently supported Gemini 3.8 Flash endpoint, verified by an
+    # actual GenerateContent request in isolated staging. This remains a
+    # different model from the ordinary small-model teaching path, keeping
+    # the original Retry and learner mastery guards intact.
     #
-    # This only ever reorders providers already present in the registry — no
-    # new provider, credential or client. Without it a teaching turn could be
-    # attempted only by `gpt-4o-mini` and `gemini-2.5-flash`, so a unit
-    # neither could author was a unit no amount of retrying would ever teach.
+    # The fallback providers remain in their original relative order; never
+    # silently assert the escalation succeeded when a fallback answered.
     if payload.get("_escalate") and not issubclass(schema, UnitPackage):
         configured_providers = [ESCALATION_PROVIDER,
                                 *[p for p in configured_providers if p != ESCALATION_PROVIDER]]
