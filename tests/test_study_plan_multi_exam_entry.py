@@ -119,8 +119,95 @@ async def test_multiple_exams_survive_switch_and_idempotent_retry(db_session):
     assert old_state["plan"].id == plan.id
     assert [row.id for row in old_state["sessions"]] == [session.id]
     assert old_state["sessions"][0].status == "completed"
+    assert float(old_state["sessions"][0].performance_score) == 0.8
     assert (await list_test_profiles(current_user=user, db=db_session))[0].id == first["profile_id"]
 
     with pytest.raises(HTTPException) as exc:
         await prep_state(current_user=user, db=db_session, profile_id=foreign.id)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "archived"])
+async def test_selected_history_exposes_saved_work_without_reactivating_it(db_session, status):
+    from datetime import date, datetime, timedelta
+    from lyo_app.auth.models import User
+    from lyo_app.study_plans.models import TestProfile, StudyPlan, StudySession
+    from lyo_app.study_plans.routes import profile_plan
+
+    user = User(email="history@example.test", username="history", hashed_password="unused")
+    db_session.add(user)
+    await db_session.flush()
+    profile = TestProfile(user_id=user.id, subject="Algebra", test_date=date.today() - timedelta(days=1),
+                          intake_complete=True)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = StudyPlan(user_id=user.id, test_profile_id=profile.id, status=status)
+    db_session.add(plan)
+    await db_session.flush()
+    session = StudySession(user_id=user.id, study_plan_id=plan.id, scheduled_at=datetime.utcnow(),
+                           topic="Equations", duration_minutes=20, session_type="practice",
+                           status="completed", performance_score=0.75)
+    db_session.add(session)
+    await db_session.commit()
+
+    selected = await prep_state(user, db_session, profile.id)
+    assert selected["plan"].id == plan.id and selected["plan"].status == status
+    assert selected["sessions"][0].id == session.id
+    assert float(selected["sessions"][0].performance_score) == 0.75
+    # Legacy intake/generation helpers must not mistake history for an active plan.
+    assert await profile_plan(db_session, user.id, profile.id) is None
+    assert (await prep_state(user, db_session))["plan"] is None
+    await db_session.refresh(plan)
+    assert plan.status == status
+
+
+@pytest.mark.asyncio
+async def test_explicit_selection_prefers_resumable_plan_over_newer_history(db_session):
+    from datetime import date, datetime, timedelta
+    from lyo_app.auth.models import User
+    from lyo_app.study_plans.models import TestProfile, StudyPlan
+
+    user = User(email="active-history@example.test", username="active-history", hashed_password="unused")
+    db_session.add(user)
+    await db_session.flush()
+    profile = TestProfile(user_id=user.id, subject="Algebra", test_date=date.today())
+    db_session.add(profile)
+    await db_session.flush()
+    active = StudyPlan(user_id=user.id, test_profile_id=profile.id, status="paused",
+                       created_at=datetime.utcnow() - timedelta(days=1))
+    archived = StudyPlan(user_id=user.id, test_profile_id=profile.id, status="archived")
+    db_session.add_all([active, archived])
+    await db_session.commit()
+    assert (await prep_state(user, db_session, profile.id))["plan"].id == active.id
+
+
+@pytest.mark.asyncio
+async def test_authenticated_multi_exam_http_contract(async_client, auth_headers, second_auth_headers):
+    endpoint = "/api/v1/me/study_plans"
+    start = await async_client.post(endpoint + "/profiles/start", headers=auth_headers,
+                                   json={"request_id": "http-exam-12345678"})
+    assert start.status_code == 201, start.text
+    selected_id = start.json()["profile_id"]
+    retry = await async_client.post(endpoint + "/profiles/start", headers=auth_headers,
+                                   json={"request_id": "http-exam-12345678"})
+    assert retry.status_code == 201
+    assert retry.json() == {"profile_id": selected_id, "created": False}
+    selected = await async_client.get(endpoint + "/state", headers=auth_headers,
+                                      params={"profile_id": selected_id})
+    assert selected.status_code == 200 and selected.json()["profile"]["id"] == selected_id
+    profiles = await async_client.get(endpoint + "/profiles", headers=auth_headers)
+    assert [p["id"] for p in profiles.json()] == [selected_id]
+    foreign = await async_client.get(endpoint + "/state", headers=second_auth_headers,
+                                     params={"profile_id": selected_id})
+    assert foreign.status_code == 404
+    other_profiles = await async_client.get(endpoint + "/profiles", headers=second_auth_headers)
+    assert other_profiles.json() == []
+    missing = await async_client.get(endpoint + "/state", headers=auth_headers,
+                                     params={"profile_id": "missing-exam"})
+    assert missing.status_code == 404
+    invalid = await async_client.post(endpoint + "/profiles/start", headers=auth_headers,
+                                     json={"request_id": "short"})
+    assert invalid.status_code == 422
+    anonymous = await async_client.get(endpoint + "/profiles")
+    assert anonymous.status_code in (401, 403)

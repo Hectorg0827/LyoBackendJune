@@ -141,5 +141,25 @@ async def model_semantic_judge(move: str, unit: LearningUnit, turn: LearningTurn
     if verdict.failure is None:
         logger.warning("Semantic review rejected %s without naming a cause; allowing", move)
         return True
+    if verdict.failure == "mislabelled_gap":
+        # Severity is a coarse, subjective diagnostic hint, not an answer or
+        # a mathematical fact. Production saw multiple opening probes rejected
+        # solely because two reviewers disagreed over near_miss/fundamental.
+        # Stranding the class is worse than conservatively reteaching a little
+        # more. The question still passes the deterministic checks and the
+        # judge's independent correctness/plausibility review.
+        #
+        # Do not grant the fast/faded path from a disputed near_miss label:
+        # conservatively treat every incorrect choice as fundamental. A probe
+        # is ungraded and this only increases learner support.
+        if turn.task is not None:
+            for option in turn.task.options:
+                if not option.correct and not option.abstains and option.gap:
+                    option.gap = "fundamental"
+        logger.warning(
+            "Semantic review disputed %s severity; using conservative full teaching: %s",
+            move, verdict.reason[:200],
+        )
+        return True
     logger.info("Semantic review rejected %s (%s): %s", move, verdict.failure, verdict.reason[:200])
     return False

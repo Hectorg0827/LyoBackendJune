@@ -54,11 +54,16 @@ async def owned_profile(db, user_id, profile_id=None, lock=False):
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def profile_plan(db, user_id, profile_id):
-    return (await db.execute(select(StudyPlan).where(
+async def profile_plan(db, user_id, profile_id, *, include_history=False):
+    # Mutation paths must still see only resumable plans. An explicit history
+    # read also exposes completed/archived work without making it active again.
+    resumable = StudyPlan.status.in_(["active", "paused"])
+    stmt = select(StudyPlan).where(
         StudyPlan.user_id == user_id, StudyPlan.test_profile_id == profile_id,
-        StudyPlan.status.in_(["active", "paused"])
-    ).order_by(desc(StudyPlan.created_at)).limit(1))).scalar_one_or_none()
+        StudyPlan.status.in_(["active", "paused", "completed", "archived"])
+        if include_history else resumable,
+    ).order_by(resumable.desc(), desc(StudyPlan.created_at), desc(StudyPlan.id)).limit(1)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 @router.get("/state")
@@ -73,7 +78,7 @@ async def prep_state(
         if profile_id:
             raise HTTPException(404, "Test profile not found")
         return {"profile": None, "plan": None, "timezone": "UTC", "revision": 0, "sessions": []}
-    plan = await profile_plan(db, current_user.id, profile.id)
+    plan = await profile_plan(db, current_user.id, profile.id, include_history=bool(profile_id))
     sessions = []
     if plan:
         sessions = (await db.execute(select(StudySession).where(

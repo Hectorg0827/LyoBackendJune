@@ -508,6 +508,10 @@ class SceneMetadata(BaseModel):
     # Mastery tracking
     prerequisite_concepts: List[str] = Field(default_factory=list)
     target_concepts: List[str] = Field(default_factory=list)
+    # Only true after the final guided pathway is durably saved. Older
+    # clients ignore this additive field; clients must not infer completion
+    # from a progress bar, a recap, or a successfully rendered scene.
+    course_complete: bool = False
 
     # Adaptive parameters
     user_mastery_context: Optional[Dict[str, float]] = None
