@@ -79,7 +79,7 @@ async def test_a_failed_step_is_retried_on_the_escalated_model_first(monkeypatch
 
     async def chat_completion(**kwargs):
         orders.append(list(kwargs["provider_order"]))
-        return {"content": turn.model_dump_json(), "model_used": "gemini-2.5-pro", "tokens_used": 10}
+        return {"content": turn.model_dump_json(), "model_used": ESCALATION_PROVIDER, "tokens_used": 10}
 
     import lyo_app.core.ai_resilience as resilience
     monkeypatch.setattr(resilience.ai_resilience_manager, "chat_completion", chat_completion)
@@ -116,7 +116,7 @@ async def test_nothing_internal_reaches_the_model(monkeypatch):
 
     async def chat_completion(**kwargs):
         sent.append(kwargs["messages"][-1]["content"])
-        return {"content": turn.model_dump_json(), "model_used": "gemini-2.5-pro", "tokens_used": 10}
+        return {"content": turn.model_dump_json(), "model_used": ESCALATION_PROVIDER, "tokens_used": 10}
 
     import lyo_app.core.ai_resilience as resilience
     monkeypatch.setattr(resilience.ai_resilience_manager, "chat_completion", chat_completion)
