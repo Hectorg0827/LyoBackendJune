@@ -7,7 +7,7 @@ import time
 from typing import AsyncGenerator, Dict, Any, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -274,6 +274,13 @@ def _lesson_to_smart_blocks(
             # genuinely has that shape. The composer omits it otherwise rather
             # than decorating every lesson with a widget.
             explorable = getattr(section, "explorable", None)
+            if not lesson.is_probe and section.kind is SectionKind.representation:
+                from lyo_app.ai_classroom.teaching_visuals import fraction_pie_from_text
+                visual = section.visual or fraction_pie_from_text(lesson.topic, section.text)
+                if visual is not None:
+                    blocks.append(SmartBlock.teaching_visual(
+                        visual, concept_id=lesson.skill_id, source_surface=source_surface,
+                    ).model_dump())
             if explorable is not None:
                 blocks.append(
                     SmartBlock.explorable(
@@ -777,6 +784,48 @@ router_agent = MultimodalRouter()
 planner_agent = LyoPlanner()
 test_prep_agent = TestPrepAgent()
 
+class VisualUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    conversation_id: str = PydanticField(min_length=1, max_length=128)
+    block_id: str = PydanticField(min_length=1, max_length=128)
+    values: Dict[str, Any] = PydanticField(min_length=1, max_length=3)
+
+
+@router.post("/chat/visual")
+async def update_chat_visual(
+    request: VisualUpdateRequest,
+    current_user: UserRead = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save bounded diagram exploration without another AI call or grading."""
+    from lyo_app.chat.visuals import refresh_message_for_block_update, update_visual_blocks
+
+    user_id = str(current_user.id) if getattr(current_user, "id", 0) not in (0, "0", None) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to save diagram exploration")
+    conversation = await conversation_store.get_owned_conversation(db, request.conversation_id, user_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = await conversation_store.get_messages(db, conversation.id, limit=200)
+    for message in messages:
+        if getattr(message, "role", None) == "user":
+            continue
+        if not any(isinstance(block, dict) and block.get("id") == request.block_id
+                   for block in (getattr(message, "blocks", None) or [])):
+            continue
+        await refresh_message_for_block_update(db, message)
+        try:
+            blocks, block = update_visual_blocks(message.blocks or [], request.block_id, request.values)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid diagram update") from exc
+        message.blocks = blocks
+        await db.commit()
+        return {"block": block}
+    raise HTTPException(status_code=404, detail="No such visual in this conversation")
+
+
 class CheckAnswerRequest(BaseModel):
     """A learner's answer to an in-chat check.
 
@@ -1144,6 +1193,8 @@ async def _persist_check_result(
     if message is None:
         return
     try:
+        from lyo_app.chat.visuals import refresh_message_for_block_update
+        await refresh_message_for_block_update(db, message)
         blocks = list(getattr(message, "blocks", None) or [])
         updated = []
         changed = False

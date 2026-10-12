@@ -14,7 +14,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any, Callable
-from uuid import uuid4
+from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, Field, ValidationError
@@ -38,6 +38,26 @@ _TURN_LOCKS = WeakValueDictionary()
 
 def session_progress_key(user_id: str, session_id: str) -> str:
     return json.dumps([str(user_id), str(session_id)], ensure_ascii=False)
+
+
+def _is_database_course_id(value: str | None) -> bool:
+    """A free-topic label or generated session ID is not a Course primary key.
+
+    UUID columns reject strings such as 'Fractions' before the real teaching
+    request can complete. Validate the identifier before executing any UUID
+    queries; leave the original value intact for topic/session continuity.
+    """
+    if not value:
+        return False
+    value = str(value).strip()
+    if value.isdecimal():
+        return True
+    try:
+        UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
 
 _HESITATION_PHRASES = (
     "not sure", "not really sure", "not certain", "unsure",
@@ -615,7 +635,7 @@ class ContextAssembler:
             course_id = course_id.replace("**", "").strip()
 
         # 4) If we have a course_id, query the Course DB for the title
-        if course_id and not course_title:
+        if course_id and not course_title and _is_database_course_id(course_id):
             try:
                 course_id_int = int(course_id)
                 from sqlalchemy import select
@@ -751,7 +771,17 @@ class ContextAssembler:
             logger.info(f"📚 Course {course_id} has {total_lessons} lessons")
 
         except ValueError:
-            # It's a UUID, try getting lesson from GraphCourse first, then ChatCourse or GeneratedCourseModel
+            if not _is_database_course_id(course_id):
+                # Free-topic sessions ('Fractions', 'SQL for a job interview')
+                # have no canonical course lesson. GraphCourse.id and other
+                # UUID foreign keys cannot accept these labels. Keep the
+                # authored topic session intact and let guided teaching
+                # generate its own lesson instead of triggering a DB error.
+                return (
+                    resolved_lesson_id, resolved_lesson_index, lesson_title,
+                    lesson_content, total_lessons,
+                )
+            # A validated UUID can resolve GraphCourse, ChatCourse or GeneratedCourseModel.
             try:
                 from lyo_app.ai_classroom.models import GraphCourse, LearningNode
                 from sqlalchemy import or_
@@ -1550,6 +1580,7 @@ class SceneLifecycleEngine:
             trigger, context, progress, record_interaction=record_interaction
         )
         progress["_unsynced"] = not saved
+        scene.metadata.course_complete = bool(context.course_complete and saved)
         if not saved:
             # Do not claim resumability or commit grading after a save failure.
             # Retain the active state locally so Retry can save it later.

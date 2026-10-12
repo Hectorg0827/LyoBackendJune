@@ -42,9 +42,9 @@ async def test_sound_teaching_is_allowed_through():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [
-    "implausible_distractor", "mislabelled_gap", "incorrect_teaching",
+    "implausible_distractor", "incorrect_teaching",
 ])
-async def test_each_named_failure_rejects_the_turn(failure):
+async def test_content_failures_still_reject_the_turn(failure):
     allowed, _ = await judge(SemanticVerdict(
         sound=False, failure=failure, reason="Quoted offending text."))
     assert not allowed
@@ -121,3 +121,33 @@ def test_plain_adaptive_teacher_still_has_no_implicit_reviewer():
     """The live engine wires the reviewer; isolated teachers stay dependency-free."""
     from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
     assert AdaptiveTeacher().semantic_judge is None
+
+
+@pytest.mark.asyncio
+async def test_disputed_diagnostic_gap_remains_ungraded_and_uses_conservative_teaching():
+    """A subjective gap severity disagreement never blocks a new lesson."""
+    turn = a_turn("diagnose")
+    distractors = [option for option in turn.task.options if not option.correct and not option.abstains]
+    assert len(distractors) == 2
+    distractors[0].gap = "near_miss"
+    target = AsyncMock(return_value=SemanticVerdict(
+        sound=False, failure="mislabelled_gap",
+        reason="This near miss could indicate a fundamental misconception.",
+    ))
+    with patch("lyo_app.ai_classroom.semantic_review.model_json", target):
+        allowed = await model_semantic_judge("diagnose", plan().units[0], turn)
+    assert allowed
+    assert all(option.gap == "fundamental" for option in distractors)
+    assert turn.task.options[0].correct
+    assert target.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_disputed_gap_on_a_non_diagnostic_turn_does_not_invent_a_grade():
+    turn = a_turn("orient")
+    target = AsyncMock(return_value=SemanticVerdict(
+        sound=False, failure="mislabelled_gap", reason="Subjective disagreement."
+    ))
+    with patch("lyo_app.ai_classroom.semantic_review.model_json", target):
+        assert await model_semantic_judge("orient", plan().units[0], turn)
+    assert turn.task is None

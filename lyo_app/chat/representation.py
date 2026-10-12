@@ -41,6 +41,14 @@ def promote_answer_representations(
     text = answer_text or ""
     blocks: List[Dict[str, Any]] = []
 
+    # Reuse the Classroom manipulative for a fraction the answer already
+    # explains. No second generation call and no quiz added to an explanation.
+    if interaction_mode in {"", "answer", "explain", "teach", "continue", "test_prep"}:
+        from lyo_app.ai_classroom.teaching_visuals import fraction_pie_from_text
+        visual = fraction_pie_from_text("", text, "es" if re.search(r"\b(?:fracci[oó]n|fracciones)\b", text, re.I) else "en")
+        if visual is not None:
+            blocks.append(SmartBlock.teaching_visual(visual).model_dump())
+
     def mermaid_replace(match: re.Match[str]) -> str:
         source = match.group("body").strip()
         if source:
