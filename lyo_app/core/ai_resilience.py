@@ -577,7 +577,7 @@ class AIResilienceManager:
             ":generateContent",
             ":streamGenerateContent",
         )
-        endpoint = f"{endpoint}?alt=sse&key={model.api_key}"
+        endpoint = f"{endpoint}?alt=sse"
         provider_started = time.time()
         total_tokens = 0
 
@@ -586,7 +586,7 @@ class AIResilienceManager:
         try:
             async with self.session.post(
                 endpoint,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "x-goog-api-key": model.api_key},
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=max(30, model.timeout)),
             ) as response:
@@ -900,8 +900,8 @@ class AIResilienceManager:
             payload["systemInstruction"] = {
                 "parts": [{"text": "\n\n".join(system_parts)}]
             }
-        headers = {"Content-Type": "application/json"}
-        endpoint = f"{model.endpoint}?key={model.api_key}"
+        headers = {"Content-Type": "application/json", "x-goog-api-key": model.api_key}
+        endpoint = model.endpoint
         print(f">>> [PID {os.getpid()}] Calling {model_name} endpoint...", flush=True)
         start_time = time.time()
         try:
@@ -1464,10 +1464,11 @@ class AIResilienceManager:
             
             # Pre-warm with a lightweight request to Gemini's health endpoint
             # Using the models list endpoint which is lightweight
-            prewarm_url = f"https://generativelanguage.googleapis.com/v1/models?key={sample_model.api_key}"
+            prewarm_url = "https://generativelanguage.googleapis.com/v1beta/models"
             
             async with self.session.get(
                 prewarm_url,
+                headers={"x-goog-api-key": sample_model.api_key},
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
