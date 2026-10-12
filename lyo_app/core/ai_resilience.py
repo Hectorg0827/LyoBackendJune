@@ -266,6 +266,18 @@ class AIResilienceManager:
                     priority=1,
                     capabilities=["chat", "fast", "conversational", "multimodal"],
                 ),
+                "gemini-3.7-flash": AIModelConfig(
+                    name="Google Gemini 3.7 Flash",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
+                    api_key=gemini_key, max_tokens=8000, priority=2,
+                    capabilities=["chat", "creative", "multimodal"],
+                ),
+                "gemini-3.6-flash": AIModelConfig(
+                    name="Google Gemini 3.6 Flash",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+                    api_key=gemini_key, max_tokens=8000, priority=2,
+                    capabilities=["chat", "creative", "multimodal"],
+                ),
                 "gemini-3.8-flash": AIModelConfig(
                     name="Google Gemini 3.8 Flash",
                     endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
