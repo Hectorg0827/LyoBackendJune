@@ -35,7 +35,7 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
     invalid = {"goal": "private learner objective", "target_index": 0}
     completion = AsyncMock(side_effect=[
         {"content": json.dumps(invalid), "model": "gpt-4o-mini"},
-        {"content": expected.model_dump_json(), "model_used": "gemini-2.5-flash"},
+        {"content": expected.model_dump_json(), "model_used": "gemini-3.6-flash"},
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     actual = await AdaptiveTeacher().turn(ctx, state, move)
@@ -44,8 +44,8 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
         assert all(beat.visual is not None for beat in actual.demonstration)
     assert completion.await_count == 2
     initial, repair = [call.kwargs for call in completion.await_args_list]
-    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
-    assert repair["provider_order"] == ["gemini-2.5-flash", "gpt-4o-mini"]
+    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash"]
+    assert repair["provider_order"] == ["gemini-3.6-flash", "gpt-4o-mini"]
     assert initial["max_tokens"] == repair["max_tokens"] == 4500
     contract = json.loads(initial["messages"][0]["content"].split("Return only JSON matching this schema:\n")[1])
     assert set(contract["properties"]) == {"speech", "board_title", "board_content", "visual", "task", "demonstration"}
@@ -70,7 +70,7 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     # malformed content from the second. Routing must follow the actual result,
     # not assume the first name in the requested order answered.
     completion = AsyncMock(side_effect=[
-        {"content": '{"goal":"echoed input"}', "model_used": "gemini-2.5-flash"},
+        {"content": '{"goal":"echoed input"}', "model_used": "gemini-3.6-flash"},
         {"content": valid.model_dump_json(), "model": "gpt-4o-mini"},
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
@@ -78,8 +78,8 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     assert_teaching_content_preserved(turn, valid)
     assert all(beat.visual is not None for beat in turn.demonstration)
     initial, repair = [call.kwargs for call in completion.await_args_list]
-    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
-    assert repair["provider_order"] == ["gpt-4o-mini", "gemini-2.5-flash"]
+    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash"]
+    assert repair["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash"]
     sent = json.loads(repair["messages"][1]["content"])
     assert "_rejected_provider" not in sent
 
@@ -119,7 +119,7 @@ async def test_empty_demonstration_is_repaired_before_the_turn_can_reach_the_stu
     missing_steps["demonstration"] = []
     completion = AsyncMock(side_effect=[
         {"content": json.dumps(missing_steps), "model": "gpt-4o-mini"},
-        {"content": valid.model_dump_json(), "model_used": "gemini-2.5-flash"},
+        {"content": valid.model_dump_json(), "model_used": "gemini-3.6-flash"},
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     turn = await AdaptiveTeacher().turn(ctx, state, "orient")
