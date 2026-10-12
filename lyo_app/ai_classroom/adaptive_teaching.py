@@ -853,8 +853,13 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     # The fallback providers remain in their original relative order; never
     # silently assert the escalation succeeded when a fallback answered.
     if payload.get("_escalate") and not issubclass(schema, UnitPackage):
-        configured_providers = [ESCALATION_PROVIDER,
-                                *[p for p in configured_providers if p != ESCALATION_PROVIDER]]
+        # Retry another validated Google model if 3.8 Flash is overloaded.
+        # No additional provider credentials or mastery concessions.
+        recovery_models = [ESCALATION_PROVIDER, "gemini-3.7-flash", "gemini-3.6-flash"]
+        configured_providers = [
+            *recovery_models,
+            *[p for p in configured_providers if p not in recovery_models],
+        ]
     rejected_provider = payload.get("_rejected_provider")
     providers = [p for p in configured_providers if p != rejected_provider]
     if rejected_provider in configured_providers:
