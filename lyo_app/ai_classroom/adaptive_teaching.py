@@ -833,11 +833,11 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 "the schema itself. Nested definitions belong only inside their named fields.\n")
     # A malformed evaluation must be repaired by a different, capable model
     # before the learner is told that their saved answer cannot be graded.
-    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-2.5-flash"]
+    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash"]
                             if issubclass(schema, DiagnosticTurn) else
-                            ["gpt-4o-mini", "gpt-4o", "gemini-2.5-flash"]
+                            ["gpt-4o-mini", "gpt-4o", "gemini-3.6-flash"]
                             if schema is Evaluation else
-                            ["gpt-4o-mini", "gemini-2.5-flash"])
+                            ["gpt-4o-mini", "gemini-3.6-flash"])
     # A step the learner has already watched fail is worth a more capable
     # model. The ordinary order leads with the small, fast one because most
     # turns do not need more than that; a turn that has now failed every
