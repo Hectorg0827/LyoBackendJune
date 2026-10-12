@@ -89,6 +89,8 @@ async def test_a_failed_step_is_retried_on_the_escalated_model_first(monkeypatch
 
     await adaptive_teaching.model_json("system", {"a": 1, "_escalate": True}, PracticeTurn)
     assert orders[-1][0] == ESCALATION_PROVIDER
+    assert orders[-1][1:3] == ["gemini-3.7-flash", "gemini-3.6-flash"]
+    assert {"gemini-3.7-flash", "gemini-3.6-flash"} <= registry()
     # The models that just failed stay available behind it, rather than being
     # dropped: the escalation is a reorder, never a narrowing.
     assert set(orders[-1]) >= set(orders[-2])
