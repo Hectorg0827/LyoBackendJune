@@ -179,58 +179,59 @@ async def contract_probe(provider, schema, example):
 
 
 async def verify_gemini_credentials():
-    """Probe both configured secrets separately with real Gemini calls.
+    """Check configured credentials against legacy and modern Gemini models.
 
-    The application chooses GEMINI_API_KEY over GOOGLE_API_KEY, even if the
-    first is an OAuth bearer token or invalid. A live provider response is
-    required; never print or persist credentials or raw HTTP request URLs.
+    New AI Studio authorization keys do not necessarily begin with AIza.
+    Use Google's documented x-goog-api-key header. Check actual generateContent
+    results; the models-list endpoint is not proof of generation permission.
+    Never log or persist secret values or outgoing credential-bearing URLs.
     """
     import aiohttp
 
-    result = []
+    probes = []
     selected = None
-    endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
-    sample = {
-        "contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
-        "generationConfig": {"maxOutputTokens": 32, "temperature": 0},
-    }
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
-        for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
-            key = os.getenv(name, "").strip()
+    models = ("gemini-2.5-pro", "gemini-3.1-pro-preview", "gemini-3.8-flash")
+    sample = {"contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+              "generationConfig": {"maxOutputTokens": 32, "temperature": 0}}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+        for variable in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            key = os.getenv(variable, "").strip()
             if not key:
-                result.append({"variable": name, "configured": False, "accepted": False})
+                probes.append({"variable": variable, "configured": False})
                 continue
-            # API keys for Google AI Studio usually start AIza; detecting an
-            # OAuth/Bearer token is a useful diagnostic, not authentication.
-            report = {"variable": name, "configured": True,
-                      "api_key_shape": key.startswith("AIza"), "accepted": False}
-            try:
-                async with session.post(
-                    endpoint, params={"key": key},
-                    headers={"Content-Type": "application/json"}, json=sample
-                ) as response:
-                    report["http_status"] = response.status
-                    payload = await response.json(content_type=None)
-                    if response.status == 200 and payload.get("candidates"):
-                        report["accepted"] = True
-                        if selected is None:
-                            selected = (name, key)
-                    else:
-                        error = payload.get("error", {}) if isinstance(payload, dict) else {}
-                        report["status"] = str(error.get("status", ""))[:64]
-                        details = error.get("details") or []
-                        report["reason"] = next(
-                            (str(d.get("reason", ""))[:96] for d in details
-                             if isinstance(d, dict) and d.get("reason")), ""
-                        )
-            except Exception as exc:
-                report["network_error"] = type(exc).__name__
-            result.append(report)
-    # Only the isolated worker process is changed. No Railway variable is
-    # overwritten and no key is persisted. The production service is untouched.
+            for model in models:
+                item = {"variable": variable, "model": model, "configured": True,
+                        "accepted": False}
+                endpoint = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                            + model + ":generateContent")
+                try:
+                    async with session.post(
+                        endpoint, headers={"Content-Type": "application/json",
+                                           "x-goog-api-key": key}, json=sample
+                    ) as response:
+                        item["http_status"] = response.status
+                        payload = await response.json(content_type=None)
+                        if response.status == 200 and payload.get("candidates"):
+                            item["accepted"] = True
+                            if model == "gemini-2.5-pro" and selected is None:
+                                selected = (variable, key)
+                        else:
+                            error = payload.get("error", {}) if isinstance(payload, dict) else {}
+                            item["status"] = str(error.get("status", ""))[:64]
+                            # Avoid mirroring arbitrary provider-controlled messages.
+                            details = error.get("details") or []
+                            item["reason"] = next(
+                                (str(d.get("reason", ""))[:96] for d in details
+                                 if isinstance(d, dict) and d.get("reason")), ""
+                            )
+                except Exception as exc:
+                    item["network_error"] = type(exc).__name__
+                probes.append(item)
+    # This only selects a validated secret in the isolated worker's process.
+    # The actual Railway configuration and production service are unchanged.
     if selected:
         os.environ["GEMINI_API_KEY"] = selected[1]
-    return {"probes": result, "selected_variable": selected[0] if selected else None,
+    return {"probes": probes, "selected_variable": selected[0] if selected else None,
             "ready": bool(selected)}
 
 
