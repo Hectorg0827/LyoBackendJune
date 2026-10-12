@@ -6,7 +6,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from scripts.validate_classroom_recovery import contract_examples, recovery_probe
-from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningPlan, LearningUnit
+from lyo_app.ai_classroom.adaptive_teaching import ESCALATION_PROVIDER, GuidedState, LearningPlan, LearningUnit
 from lyo_app.ai_classroom.strict_schema import strict_json_schema
 from tests.adaptive_fixtures import ScriptedTeacher, context
 
@@ -27,7 +27,7 @@ async def test_recovery_probe_drives_real_persistence_and_retry_code(monkeypatch
         payload = json.loads(kwargs["messages"][-1]["content"])
         state = GuidedState(owner="42", plan=LearningPlan(units=[LearningUnit.model_validate(payload["unit"])]))
         turn = teacher._turn(context(), state, payload["move"])
-        return {"content": turn.model_dump_json(), "model_used": "gemini-2.5-pro"}
+        return {"content": turn.model_dump_json(), "model_used": ESCALATION_PROVIDER}
 
     monkeypatch.setenv("CLASSROOM_STRICT_SCHEMA", "0")
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", simulated_completion)
@@ -37,7 +37,7 @@ async def test_recovery_probe_drives_real_persistence_and_retry_code(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_fallback_is_never_reported_as_actual_pro_acceptance(monkeypatch):
+async def test_a_fallback_is_never_reported_as_actual_recovery_provider(monkeypatch):
     async def fallback(**kwargs):
         return {"is_fallback": True, "content": "", "model_used": "fallback"}
 
