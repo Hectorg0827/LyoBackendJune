@@ -178,6 +178,62 @@ async def contract_probe(provider, schema, example):
             "seconds": round(time.monotonic() - started, 2), "tokens": result.get("tokens_used")}
 
 
+async def verify_gemini_credentials():
+    """Probe both configured secrets separately with real Gemini calls.
+
+    The application chooses GEMINI_API_KEY over GOOGLE_API_KEY, even if the
+    first is an OAuth bearer token or invalid. A live provider response is
+    required; never print or persist credentials or raw HTTP request URLs.
+    """
+    import aiohttp
+
+    result = []
+    selected = None
+    endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+    sample = {
+        "contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+        "generationConfig": {"maxOutputTokens": 32, "temperature": 0},
+    }
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
+        for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            key = os.getenv(name, "").strip()
+            if not key:
+                result.append({"variable": name, "configured": False, "accepted": False})
+                continue
+            # API keys for Google AI Studio usually start AIza; detecting an
+            # OAuth/Bearer token is a useful diagnostic, not authentication.
+            report = {"variable": name, "configured": True,
+                      "api_key_shape": key.startswith("AIza"), "accepted": False}
+            try:
+                async with session.post(
+                    endpoint, params={"key": key},
+                    headers={"Content-Type": "application/json"}, json=sample
+                ) as response:
+                    report["http_status"] = response.status
+                    payload = await response.json(content_type=None)
+                    if response.status == 200 and payload.get("candidates"):
+                        report["accepted"] = True
+                        if selected is None:
+                            selected = (name, key)
+                    else:
+                        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+                        report["status"] = str(error.get("status", ""))[:64]
+                        details = error.get("details") or []
+                        report["reason"] = next(
+                            (str(d.get("reason", ""))[:96] for d in details
+                             if isinstance(d, dict) and d.get("reason")), ""
+                        )
+            except Exception as exc:
+                report["network_error"] = type(exc).__name__
+            result.append(report)
+    # Only the isolated worker process is changed. No Railway variable is
+    # overwritten and no key is persisted. The production service is untouched.
+    if selected:
+        os.environ["GEMINI_API_KEY"] = selected[1]
+    return {"probes": result, "selected_variable": selected[0] if selected else None,
+            "ready": bool(selected)}
+
+
 async def run(output, contracts=True):
     require(os.getenv("CLASSROOM_STRICT_SCHEMA") == "0", "Recovery staging must explicitly set CLASSROOM_STRICT_SCHEMA=0")
     # Validate the actual isolated Railway Redis connection, not only the
@@ -196,6 +252,13 @@ async def run(output, contracts=True):
     except Exception as exc:
         REPORT.update(status="failed", redis={"connected": False, "error": safe_error(exc)})
         print("CLASSROOM_VALIDATION " + json.dumps({"redis_connected": False, "error": safe_error(exc)}), flush=True)
+        return REPORT
+    provider_auth = await verify_gemini_credentials()
+    REPORT["gemini_credentials"] = provider_auth
+    print("CLASSROOM_VALIDATION " + json.dumps({"gemini_credentials": provider_auth}), flush=True)
+    if not provider_auth["ready"]:
+        REPORT["status"] = "blocked_provider_authentication"
+        Path(output).write_text(json.dumps(REPORT, indent=2))
         return REPORT
     REPORT.update(status="running", strict_schema="0", revision=os.getenv("RAILWAY_GIT_COMMIT_SHA"))
     for two in (False, True):
