@@ -21,6 +21,7 @@ class JourneyContext(StrictModel):
     lesson_id: Optional[str] = Field(default=None, max_length=160)
     concept_id: Optional[str] = Field(default=None, max_length=160)
     question_id: Optional[str] = Field(default=None, max_length=160)
+    study_session_id: Optional[str] = Field(default=None, max_length=36)
 
 
 class JourneyStart(StrictModel):
