@@ -101,7 +101,7 @@ async def verify(base_url="http://127.0.0.1:8080"):
             for label in ("a", "b"):
                 email = f"discover-validation-{label}@example.com"
                 password = os.environ["DISCOVER_VALIDATION_PASSWORD"]
-                signup = await client.post("/api/v1/auth/register", json={
+                signup = await client.post("/auth/register", json={
                     "email": email, "username": f"discover-validation-{label}",
                     "password": password, "confirm_password": password,
                     "first_name": "Synthetic", "last_name": "Discover",
@@ -109,9 +109,11 @@ async def verify(base_url="http://127.0.0.1:8080"):
                 if signup.status_code in (200, 201):
                     result = signup.json()
                 elif signup.status_code in (400, 409):
-                    result = await call("/api/v1/auth/login", method="POST", json={"email": email, "password": password})
+                    result = await call("/auth/login", method="POST", json={"email": email, "password": password})
                 else:
                     raise RuntimeError(f"Synthetic registration returned HTTP {signup.status_code}")
+                if not result.get("access_token"):
+                    result = await call("/auth/login", method="POST", json={"email": email, "password": password})
                 token = result["access_token"]
                 payload = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
                 tokens.append(token)
