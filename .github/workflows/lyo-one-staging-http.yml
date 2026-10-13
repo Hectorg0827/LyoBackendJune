@@ -1,0 +1,23 @@
+name: Lyo One isolated staging HTTP
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/validate_lyo_one_staging_http.py
+      - .github/workflows/lyo-one-staging-http.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise synthetic authenticated learners against isolated Railway staging
+        env:
+          LYO_ONE_STAGING_SMOKE: "1"
+        run: python3 scripts/validate_lyo_one_staging_http.py
