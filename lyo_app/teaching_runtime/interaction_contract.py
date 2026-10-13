@@ -78,6 +78,19 @@ _TEST_PREP_RE = re.compile(
     r"study for (?:a|my) (?:test|exam)|tengo (?:un )?examen|prep[aá]rame para (?:el|un) examen)\b",
     re.IGNORECASE,
 )
+_COACH_RE = re.compile(
+    r"^\s*(?:what should i (?:study|work on|do next)(?: today)?|"
+    r"what do i need to work on(?: today)?|"
+    r"what(?:'s| is) my mission(?: today)?|my mission today|"
+    r"how ready am i|am i ready|show me my readiness)\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
+_COACH_TIME_ONLY_RE = re.compile(
+    r"^\s*i have (?:\d{1,3}\s*(?:min|mins|minutes)|half an hour|an hour|one hour)"
+    r"(?:\s*[,;:-]?\s*(?:what should i (?:study|work on|do next)|what now))?"
+    r"\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
 _COURSE_RE = re.compile(
     r"\b(?:create|make|build) (?:me )?(?:a )?course\b|"
     r"\bteach (?:this|it) in (?:the )?(?:ai )?classroom\b|"
@@ -294,6 +307,18 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_analyze",
         )
+    # Only exact next-step/readiness requests activate Coach. Explicit
+    # teaching and assessment intent above always wins.
+    if _COACH_RE.fullmatch(text) or _COACH_TIME_ONLY_RE.fullmatch(text):
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="explicit_coach",
+        )
     if _DIRECT_ANSWER_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.ANSWER,
@@ -316,6 +341,16 @@ def interaction_contract_for_request(
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="routed_test_prep",
+        )
+    if routed_intent == Intent.COACH:
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="routed_coach",
         )
     if routed_intent == Intent.COURSE:
         return InteractionContract(
