@@ -80,6 +80,22 @@ async def verify(base_url="http://127.0.0.1:8080"):
                 raise RuntimeError("Candidate database readiness timed out")
             check("real_candidate_boot_and_database_health", True, commit=health.get("commit_sha"))
 
+            # /health proves connectivity before background schema setup finishes.
+            for attempt in range(120):
+                connection = await asyncpg.connect(dsn, timeout=15)
+                try:
+                    ready = await connection.fetchval("""SELECT to_regclass('users') IS NOT NULL
+                        AND to_regclass('clips') IS NOT NULL AND to_regclass('clip_saves') IS NOT NULL
+                        AND to_regclass('refresh_tokens') IS NOT NULL""")
+                finally:
+                    await connection.close()
+                if ready:
+                    break
+                await asyncio.sleep(1)
+            else:
+                raise RuntimeError("Candidate schema readiness timed out")
+            check("actual_auth_and_clip_tables_ready", True)
+
             # Uses the real registration/login endpoints and their issued JWTs.
             tokens, owners = [], []
             for label in ("a", "b"):
@@ -170,6 +186,7 @@ async def verify(base_url="http://127.0.0.1:8080"):
             connection = await asyncpg.connect(dsn, timeout=30)
             try:
                 async with connection.transaction():
+                    await connection.execute("DELETE FROM clip_saves WHERE clip_id IN (SELECT id FROM clips WHERE user_id = ANY($1::int[]))", owners)
                     await connection.execute("DELETE FROM clips WHERE user_id = ANY($1::int[])", owners)
                     for i, item in enumerate(fixtures):
                         item["id"] = str(await connection.fetchval("""INSERT INTO clips
@@ -273,6 +290,7 @@ async def verify(base_url="http://127.0.0.1:8080"):
                 report["legacy_media_read_only_audit"]=legacy_results
             report["status"]="passed" if all(x["passed"] for x in report["cases"]) else "failed"
         except Exception as error:
+            check("verification_completed_without_runtime_error", False)
             report.update(status="failed",error=type(error).__name__+": "+str(error).split("Bearer")[0][:250])
         report["duration_seconds"]=round(time.monotonic()-started,2)
         report["passed"]=sum(x["passed"] for x in report["cases"])
