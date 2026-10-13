@@ -238,6 +238,8 @@ async def handoff(
     goal = await owned_goal(db, user_id, journey.goal_id)
     if goal is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Learning goal not found")
+    if goal.status not in ("active", "paused"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Learning goal is not active")
     _validate_test_link(goal, context)
 
     event = JourneyHandoff(
