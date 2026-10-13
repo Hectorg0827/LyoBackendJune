@@ -53,7 +53,7 @@ def test_existing_default_tenant_is_never_overwritten(monkeypatch):
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from lyo_app.core.database import _ensure_default_chat_tenant
+from lyo_app.core.database import _ensure_default_chat_tenant, _ensure_learning_event_enum
 
 
 @pytest.mark.asyncio
@@ -68,5 +68,16 @@ async def test_application_bootstrap_preserves_organization_and_is_idempotent():
             assert len(entries) == 1
             assert entries[0]._mapping["id"] == 1
             assert entries[0]._mapping["name"] == "Lyo Default"
+    finally:
+        await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_sqlite_event_enum_reconciliation_is_a_safe_noop():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await _ensure_learning_event_enum(conn)
     finally:
         await engine.dispose()
