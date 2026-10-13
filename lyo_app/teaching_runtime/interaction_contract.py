@@ -225,7 +225,8 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
-            **delivery_metadata,
+            delivery_mode=delivery_mode,
+            voice_interrupted_previous_turn=bool(voice_mode and voice_interrupted_previous_turn),
             fast_lane=True,
             workflow_intent=Intent.COACH,
             attachment_authoritative=False,
@@ -348,7 +349,8 @@ def interaction_contract_for_request(
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
-            **delivery_metadata,
+            delivery_mode=delivery_mode,
+            voice_interrupted_previous_turn=bool(voice_mode and voice_interrupted_previous_turn),
             fast_lane=True,
             workflow_intent=Intent.COACH,
             attachment_authoritative=False,
