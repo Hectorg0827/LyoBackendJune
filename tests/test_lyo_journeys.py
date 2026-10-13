@@ -214,6 +214,9 @@ async def test_retry_returns_exact_original_event_after_subsequent_transition():
                 current_user=_user(7), db=db,
             )
             replay = await handoff(j.id, request, current_user=_user(7), db=db)
+            initial_replay = await _new(db)
+            assert initial_replay.id == j.id
+            assert initial_replay.revision == 2
             assert replay.id == first.id
             assert replay.revision == 1
             assert (await get_journey(j.id, current_user=_user(7), db=db)).revision == 2
