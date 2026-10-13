@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from lyo_app.coach.models import LearningGoal
 from lyo_app.coach.journey_models import JourneyHandoff, LearningJourney
 from lyo_app.coach.journey_schemas import JourneyContext, JourneyStart, JourneyHandoffRequest
-from lyo_app.coach.journeys import start_journey, handoff
+from lyo_app.coach.journeys import start_journey, handoff, get_journey
 from lyo_app.study_plans.models import StudyPlan, StudySession, TestProfile
 
 
@@ -90,7 +90,8 @@ async def test_study_session_return_binds_exact_exam_and_user():
                     current_user=SimpleNamespace(id=7), db=db,
                 )
             assert error.value.status_code == 422
-            assert started.revision == 1
+            reread = await get_journey(started.id, current_user=SimpleNamespace(id=7), db=db)
+            assert reread.revision == 1
             back = await handoff(
                 started.id,
                 JourneyHandoffRequest(request_id="back-to-same-exam",
