@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+preDeployCommand = ["python scripts/verify_discover_release.py prepare && alembic upgrade head"]
+startCommand = "python scripts/verify_discover_release.py serve"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "NEVER"

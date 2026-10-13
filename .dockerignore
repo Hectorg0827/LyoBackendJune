@@ -45,6 +45,7 @@ scripts/*
 !scripts/validate_classroom_recovery.py
 !scripts/discover_media_validation.py
 !scripts/discover_media_recovery.py
+!scripts/verify_discover_release.py
 docs/
 artifacts/
 temp/
