@@ -73,7 +73,8 @@ _QUIZ_RE = re.compile(
     re.IGNORECASE,
 )
 _TEST_PREP_RE = re.compile(
-    r"\b(?:i have (?:a|an|my) (?:test|exam)|prepare me for (?:a|my) (?:test|exam)|"
+    r"\b(?:i have (?:a|an|my) (?:(?:[\w+-]+\s+){0,4})(?:test|exam|midterm|final)|"
+    r"prepare me for (?:a|my) (?:(?:[\w+-]+\s+){0,4})(?:test|exam|midterm|final)|"
     r"use (?:this|it|the (?:file|document|pdf)) for test prep|"
     r"study for (?:a|my) (?:test|exam)|tengo (?:un )?examen|prep[aá]rame para (?:el|un) examen)\b",
     re.IGNORECASE,
