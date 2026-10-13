@@ -56,7 +56,8 @@ async def verify(base_url="http://127.0.0.1:8080"):
               "database": DB_NAME, "auth_overridden": False, "cases": [], "media": {}}
     started = time.monotonic()
     def check(name, condition, **evidence):
-        report["cases"].append({"case": name, "passed": bool(condition), **evidence})
+        scope = "serving" if name.startswith("serving_") else "staging"
+        report["cases"].append({"case": name, "passed": bool(condition), "scope": scope, **evidence})
 
     async with httpx.AsyncClient(base_url=base_url, timeout=60) as client:
         async def call(path, token=None, method="GET", expected=200, **kwargs):
@@ -290,7 +291,9 @@ async def verify(base_url="http://127.0.0.1:8080"):
                         else:
                             legacy_results.append({"clip_id":item["id"],"status":"outside_canonical_media_path"})
                 report["legacy_media_read_only_audit"]=legacy_results
-            report["status"]="passed" if all(x["passed"] for x in report["cases"]) else "failed"
+            report["status"]="passed" if all(x["passed"] for x in report["cases"] if x["scope"]=="staging") else "failed"
+            report["serving_status"]="passed" if all(x["passed"] for x in report["cases"] if x["scope"]=="serving") else "failed"
+            report["release_status"]="blocked" if report["serving_status"]!="passed" or any(x.get("http_status")==404 for x in report.get("legacy_media_read_only_audit",[])) else "candidate_validated"
         except Exception as error:
             check("verification_completed_without_runtime_error", False)
             report.update(status="failed",error=type(error).__name__+": "+str(error).split("Bearer")[0][:250])
