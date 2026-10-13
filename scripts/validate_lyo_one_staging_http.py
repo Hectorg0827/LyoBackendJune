@@ -202,7 +202,11 @@ def main():
     if status_code != 200 or not isinstance(stream, str):
         raise AssertionError(f"Coach chat stream returned HTTP {status_code} without SSE data")
     if '"coach_mission"' not in stream or '"answer"' not in stream:
-        raise AssertionError("Chat stream did not emit both the canonical Coach mission and text answer")
+        # Synthetic staging conversation only; do not print bearer tokens.
+        import re
+        types = re.findall(r'"type"\s*:\s*"([^"]+)"', stream)
+        event_names = re.findall(r"(?m)^event:\s*([\\w-]+)", stream)
+        raise AssertionError(f"Coach Chat SSE missing event(s); types={types[:15]}, events={event_names[:15]}, prefix={stream[:550]!r}")
     print("PASS authentic Coach Chat SSE mission and answer")
 
     print("PASS authenticated staging journey, Test Prep profile isolation and Coach streaming")
