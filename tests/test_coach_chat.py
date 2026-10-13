@@ -286,3 +286,30 @@ def test_coach_stream_path_is_shared_and_does_not_have_a_second_model():
     assert 'yield_safe_sse_event(\n                    "coach_mission"' in stream
     assert 'decision.intent == Intent.COACH' in stream
     assert 'if not request.forced_intent and not media_attachments:' in stream
+
+
+def test_today_in_coach_request_is_not_treated_as_current_web_news():
+    for prompt in ("What should I work on today?", "What is my mission today?"):
+        result = interaction_contract_for_request(text=prompt, routed_intent=Intent.CHAT)
+        assert result.workflow_intent is Intent.COACH
+        assert result.reason_code == "explicit_coach"
+
+
+def test_real_web_search_still_searches_instead_of_coaching():
+    result = interaction_contract_for_request(
+        text="Search the web for today's chemistry news",
+        routed_intent=Intent.COACH,
+    )
+    assert result.mode is InteractionMode.SEARCH
+    assert result.workflow_intent is None
+
+
+def test_attached_notes_are_not_ignored_by_a_deterministic_coach_route():
+    result = interaction_contract_for_request(
+        text="What should I study today?",
+        routed_intent=Intent.COACH,
+        has_media=True,
+        has_current_media=True,
+    )
+    assert result.workflow_intent is not Intent.COACH
+    assert result.attachment_authoritative is True or result.mode is InteractionMode.SEARCH
