@@ -1839,6 +1839,13 @@ async def stream_lyo2_chat(
                         "prepare for my final",
                     )
                 )
+                # Preserve the subject-qualified exam intake from the Home
+                # front door ("I have a chemistry exam Friday"). It should
+                # not depend on a probabilistic router classifying the words.
+                explicit_prep = explicit_prep or bool(re.search(
+                    r"\bi have (?:a|an|my) (?:(?:[\w+-]+\s+){0,4})(?:test|exam|midterm|final)\b",
+                    lower_text,
+                ))
                 if not request.forced_intent and not cancelled_prep and (continuing_prep or explicit_prep):
                     request.forced_intent = Intent.TEST_PREP
             
