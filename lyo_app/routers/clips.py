@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, or_
+from sqlalchemy import select, func, desc, or_, cast, String
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
@@ -194,6 +194,7 @@ def _search_clips(q: Optional[str]):
         func.lower(Clip.description).contains(term, autoescape=True),
         func.lower(Clip.subject).contains(term, autoescape=True),
         func.lower(Clip.topic).contains(term, autoescape=True),
+        func.lower(cast(Clip.tags, String)).contains(term, autoescape=True),
     )
 
 
