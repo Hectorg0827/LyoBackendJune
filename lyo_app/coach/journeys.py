@@ -90,7 +90,7 @@ def _start_matches(existing: LearningJourney, body: JourneyStart, context: dict)
         existing.goal_id != body.goal_id
         or existing.origin_surface != body.origin_surface
         or existing.origin_ref != body.origin_ref
-        or dict(existing.context_json or {}) != context
+        or dict(existing.initial_context_json or {}) != context
     ):
         raise HTTPException(status.HTTP_409_CONFLICT, "Request ID already used for another journey")
 
@@ -130,6 +130,7 @@ async def start_journey(
         origin_ref=body.origin_ref,
         active_surface=body.origin_surface,
         active_ref=body.origin_ref,
+        initial_context_json=context,
         context_json=context,
         revision=0,
         status="active",
