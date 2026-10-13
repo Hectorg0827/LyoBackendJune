@@ -244,3 +244,45 @@ def test_teaching_policy_does_not_replace_coach_with_a_quiz():
     decision = TeachingPolicy.decide(context)
     assert decision.action is TeachingAction.ANSWER
     assert decision.reason_code == "learner_requested_workflow"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "I have a chemistry exam Friday; what should I study?",
+        "I have a biology test tomorrow.",
+        "I have my physics final next week.",
+        "Prepare me for my advanced algebra test.",
+    ],
+)
+def test_subject_specific_exam_intake_stays_in_test_prep(prompt):
+    """Home's single input must not route a subject-named exam to Coach."""
+    assert is_coach_request(prompt) is False
+    contract = interaction_contract_for_request(text=prompt, routed_intent=Intent.COACH)
+    assert contract.workflow_intent is Intent.TEST_PREP
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Explain my study plan",
+        "Teach me photosynthesis",
+        "Am I ready to submit this essay?",
+        "What is the best way to study biology?",
+    ],
+)
+def test_coach_does_not_hijack_explicit_answer_or_teaching(prompt):
+    assert is_coach_request(prompt) is False
+    contract = interaction_contract_for_request(text=prompt)
+    assert contract.workflow_intent is not Intent.COACH
+
+
+def test_coach_stream_path_is_shared_and_does_not_have_a_second_model():
+    from pathlib import Path
+
+    stream = (Path(__file__).resolve().parents[1] /
+              "lyo_app/api/v1/stream_lyo2.py").read_text()
+    assert 'from lyo_app.coach.chat import process_coach_turn' in stream
+    assert 'yield_safe_sse_event(\n                    "coach_mission"' in stream
+    assert 'decision.intent == Intent.COACH' in stream
+    assert 'if not request.forced_intent and not media_attachments:' in stream
