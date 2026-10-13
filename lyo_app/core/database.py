@@ -198,6 +198,7 @@ async def init_db() -> None:
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_default_chat_tenant(conn)
         
         # Legacy schema patches
         await _ensure_users_schema(conn)
@@ -208,6 +209,30 @@ async def init_db() -> None:
         await _ensure_courses_schema(conn)
         await _ensure_lessons_schema(conn)
         logger.info("Database models registered successfully")
+
+
+async def _ensure_default_chat_tenant(conn) -> None:
+    """Create Chat's default tenant on fresh databases before accepting turns.
+
+    All TenantMixin-based Chat tables historically default to organization 1.
+    Neither creating tables nor registering a learner creates that organization.
+    Protect existing records, and never return a healthy server with missing
+    default tenancy: this would fail every first Chat conversation with FK 500.
+    """
+    await conn.execute(text(
+        """
+        INSERT INTO organizations
+            (id, name, slug, plan_tier, is_active,
+             monthly_api_calls, monthly_ai_tokens, created_at, updated_at)
+        VALUES
+            (1, 'Lyo Default', 'lyo-default-tenant', 'free', TRUE,
+             0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT DO NOTHING
+        """
+    ))
+    exists = await conn.execute(text("SELECT id FROM organizations WHERE id = 1"))
+    if exists.scalar_one_or_none() is None:
+        raise RuntimeError("Default Chat organization is missing; refusing to serve broken conversations")
 
 
 async def _ensure_users_schema(conn) -> None:
