@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.dependencies import get_current_user, get_db
 from lyo_app.auth.models import User
+from lyo_app.study_plans.models import StudyPlan, StudySession
 from .journey_models import JourneyHandoff, LearningJourney
 from .journey_schemas import (
     JourneyContext,
@@ -56,11 +57,11 @@ def _handoff_read(handoff: JourneyHandoff) -> JourneyHandoffRead:
     )
 
 
-def _validate_test_link(goal, context: dict) -> None:
-    """Prevent navigation state from impersonating another exam profile.
+async def _validate_test_link(db: AsyncSession, user_id: int, goal, context: dict) -> None:
+    """Bind a study session to the exact owned exam and learning goal.
 
-    The destination endpoint must STILL enforce object ownership: the journey
-    is a navigation reference, never an access-grant token.
+    This is a navigation reference, never proof of an answered question or
+    an authorization token. Grading stays with Test Prep and Classroom.
     """
     profile_id = context.get("test_profile_id")
     if profile_id and not (
@@ -70,6 +71,29 @@ def _validate_test_link(goal, context: dict) -> None:
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Test profile does not belong to this learning goal",
         )
+
+    study_session_id = context.get("study_session_id")
+    if study_session_id:
+        if not profile_id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Study session requires its test profile",
+            )
+        owned = (await db.execute(
+            select(StudySession.id).join(
+                StudyPlan, StudySession.study_plan_id == StudyPlan.id
+            ).where(
+                StudySession.id == study_session_id,
+                StudySession.user_id == user_id,
+                StudyPlan.user_id == user_id,
+                StudyPlan.test_profile_id == profile_id,
+            )
+        )).scalar_one_or_none()
+        if owned is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Study session is not in this learner's selected exam",
+            )
 
 
 async def _owned_journey(db: AsyncSession, user_id: int, journey_id: str, *, lock=False):
@@ -120,7 +144,7 @@ async def start_journey(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Learning goal not found")
     if goal.status not in ("active", "paused"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Learning goal is not active")
-    _validate_test_link(goal, context)
+    await _validate_test_link(db, user_id, goal, context)
 
     journey = LearningJourney(
         user_id=user_id,
@@ -240,7 +264,7 @@ async def handoff(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Learning goal not found")
     if goal.status not in ("active", "paused"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Learning goal is not active")
-    _validate_test_link(goal, context)
+    await _validate_test_link(db, user_id, goal, context)
 
     event = JourneyHandoff(
         journey_id=journey.id,
