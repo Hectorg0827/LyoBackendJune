@@ -32,6 +32,7 @@ def upgrade() -> None:
             sa.Column("origin_ref", sa.String(160), nullable=True),
             sa.Column("active_surface", sa.String(24), nullable=False),
             sa.Column("active_ref", sa.String(160), nullable=True),
+            sa.Column("initial_context_json", sa.JSON(), nullable=False),
             sa.Column("context_json", sa.JSON(), nullable=False),
             sa.Column("status", sa.String(20), nullable=False, server_default="active"),
             sa.Column("revision", sa.Integer(), nullable=False, server_default="0"),
