@@ -214,10 +214,10 @@ async def get_discover_filters(
 ):
     """Only offer topics with published videos, never dead-end placeholder tabs."""
     rows = await db.execute(
-        select(Clip.subject, func.count(Clip.id).label("count"))
+        select(func.min(Clip.subject), func.count(Clip.id).label("count"))
         .where(Clip.is_public.is_(True), Clip.subject.is_not(None), func.trim(Clip.subject) != "")
-        .group_by(Clip.subject)
-        .order_by(desc("count"), Clip.subject)
+        .group_by(func.lower(func.trim(Clip.subject)))
+        .order_by(desc("count"), func.min(Clip.subject))
         .limit(30)
     )
     return {
@@ -247,7 +247,7 @@ async def get_discover_clips(
         # Build query for public clips
         conditions = [Clip.is_public.is_(True)]
         if subject:
-            conditions.append(Clip.subject == subject)
+            conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
         if level:
             conditions.append(Clip.level == level)
         search = _search_clips(q)
@@ -328,7 +328,7 @@ async def get_saved_clips(
             or_(Clip.is_public.is_(True), Clip.user_id == current_user.id),
         ]
         if subject:
-            conditions.append(Clip.subject == subject)
+            conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
         search = _search_clips(q)
         if search is not None:
             conditions.append(search)
