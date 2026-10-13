@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Authenticated external HTTP smoke of Lyo One, on a dedicated staging host.
+
+Only synthetic learners, goals and navigation records. This script NEVER
+targets the public Lyo production API, any user accounts, or any real exams.
+No external model credentials are needed for the journey API.
+"""
+import json
+import os
+import secrets
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+STAGING_HOST = "lyojourneystagingbackend-staging.up.railway.app"
+BASE = "https://" + STAGING_HOST
+GOALS = "/api/v1/me/coach/goals"
+JOURNEYS = "/api/v1/me/coach/journeys"
+
+
+def require_staging():
+    if os.environ.get("LYO_ONE_STAGING_SMOKE") != "1":
+        raise RuntimeError("LYO_ONE_STAGING_SMOKE=1 is required")
+    if urllib.parse.urlparse(BASE).hostname != STAGING_HOST:
+        raise RuntimeError("Refusing to test any non-isolated domain")
+
+
+def http(path, method="GET", body=None, token=None, timeout=35):
+    headers = {"Accept": "application/json", "User-Agent": "LyoOne-isolated-staging-gate/1"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(320000)
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = raw.decode("utf-8", errors="replace")[:1200]
+            return response.status, payload
+    except urllib.error.HTTPError as exc:
+        raw = exc.read(2500)
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            payload = raw.decode("utf-8", errors="replace")[:800]
+        return exc.code, payload
+
+
+def expect(name, method, path, status, body=None, token=None):
+    code, data = http(path, method=method, body=body, token=token)
+    if code != status:
+        # Never print credentials, bearer tokens, profile data, or email.
+        detail = data.get("detail", None) if isinstance(data, dict) else str(data)[:200]
+        raise AssertionError(f"{name}: expected HTTP {status}, received {code}; detail={str(detail)[:250]}")
+    print(f"PASS {name}: HTTP {code}")
+    return data
+
+
+def new_actor(label):
+    suffix = uuid.uuid4().hex[:16]
+    pwd = "Lyo1!" + secrets.token_urlsafe(18)
+    body = {
+        "username": f"smoke{label}{suffix}"[:40],
+        "email": f"lyo-one-staging-{label}-{suffix}@example.com",
+        "password": pwd,
+        "confirm_password": pwd,
+        "first_name": "Synthetic",
+        "last_name": "Staging",
+    }
+    login = expect(f"register synthetic learner {label}", "POST", "/api/v1/auth/register", 201, body)
+    if not isinstance(login, dict) or not isinstance(login.get("access_token"), str):
+        raise AssertionError("Authenticated register did not return an access token")
+    return login["access_token"]
+
+
+def main():
+    require_staging()
+    # Give Railway deployment/hostname a bounded window to become available.
+    for attempt in range(24):
+        try:
+            status, _ = http("/health", timeout=12)
+            if status == 200:
+                break
+        except (OSError, TimeoutError):
+            pass
+        time.sleep(7)
+    else:
+        raise AssertionError("Staging /health did not become accessible within the bounded check")
+    print("PASS isolated staging health")
+
+    user_a = new_actor("a")
+    user_b = new_actor("b")
+    goal = expect(
+        "create evidence-scoped learning goal", "POST", GOALS, 201,
+        {"goal_type": "mastery", "title": "Synthetic chemical bonding",
+         "subject": "Chemistry",
+         "constraints": {"daily_minutes": 15},
+         "skills": [{"name": "Covalent bonds", "concept_id": "covalent-bonds"}]},
+        user_a,
+    )
+    goal_id = goal.get("goal", {}).get("id")
+    if not goal_id:
+        raise AssertionError("Coach goal identity not returned")
+
+    today = expect("load authenticated Coach mission", "GET",
+                   "/api/v1/me/coach/today", 200, token=user_a)
+    if not isinstance(today.get("mission"), list) or goal_id not in [g["id"] for g in today.get("active_goals", [])]:
+        raise AssertionError("Coach mission did not reference the canonical goal")
+
+    start = {"request_id": "start-" + uuid.uuid4().hex, "goal_id": goal_id,
+             "origin_surface": "chat", "origin_ref": "synthetic-chat",
+             "context": {"chat_session_id": "synthetic-chat"}}
+    journey = expect("start durable learning journey", "POST", JOURNEYS, 201, start, user_a)
+    journey_id = journey["id"]
+    jp = JOURNEYS + "/" + urllib.parse.quote(journey_id, safe="")
+    if journey["revision"] != 0:
+        raise AssertionError("new journey must start at revision zero")
+
+    enter = {"request_id": "enter-" + uuid.uuid4().hex,
+             "expected_revision": 0, "target_surface": "classroom",
+             "target_ref": "covalent-bonds",
+             "context": {"concept_id": "covalent-bonds"}}
+    entry = expect("save Coach -> Classroom handoff", "POST", jp + "/handoffs", 201, enter, user_a)
+    if entry["revision"] != 1:
+        raise AssertionError("Classroom handoff did not advance revision")
+
+    back = {"request_id": "return-" + uuid.uuid4().hex,
+            "expected_revision": 1, "target_surface": "chat",
+            "target_ref": "synthetic-chat", "context": {}}
+    returned = expect("save Classroom -> Chat return", "POST", jp + "/handoffs", 201, back, user_a)
+    assert returned["revision"] == 2
+    reopened = expect("reload durable journey", "GET", jp, 200, token=user_a)
+    if reopened["revision"] != 2 or reopened["active_surface"] != "chat" or reopened["context"]["concept_id"] != "covalent-bonds":
+        raise AssertionError("Reopened journey lost its context")
+
+    replay = expect("idempotent handoff retry", "POST", jp + "/handoffs", 201, enter, user_a)
+    if replay["id"] != entry["id"]:
+        raise AssertionError("Retry created duplicate handoff")
+    start_replay = expect("idempotent journey start replay", "POST", JOURNEYS, 201, start, user_a)
+    if start_replay["id"] != journey_id:
+        raise AssertionError("Retry created duplicate journey")
+
+    stale = {"request_id": "stale-" + uuid.uuid4().hex, "expected_revision": 0,
+             "target_surface": "test_prep", "context": {}}
+    expect("outdated tab revision rejected", "POST", jp + "/handoffs", 409, stale, user_a)
+    expect("cross-user journey read denied", "GET", jp, 404, token=user_b)
+    expect("cross-user handoff denied", "POST", jp + "/handoffs", 404, stale, user_b)
+
+    other_exam = {"request_id": "wrong-exam-" + uuid.uuid4().hex,
+                  "goal_id": goal_id, "origin_surface": "test_prep",
+                  "context": {"test_profile_id": "not-this-goal"}}
+    expect("wrong exam profile cannot be attached", "POST", JOURNEYS, 422, other_exam, user_a)
+    print("PASS authenticated staging journey round trip and isolation")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(f"FAIL staging smoke: {str(exc)[:500]}", file=sys.stderr)
+        sys.exit(1)
