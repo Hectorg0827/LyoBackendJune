@@ -1,0 +1,94 @@
+name: Lyo One existing-schema migration rehearsal
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - alembic/versions/coach_002_learning_journeys.py
+      - alembic/versions/coach_003_default_tenant_bootstrap.py
+      - lyo_app/coach/journey_models.py
+      - lyo_app/coach/journey_schemas.py
+      - lyo_app/coach/journeys.py
+      - .github/workflows/lyo-one-upgrade-rehearsal.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate-existing-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: lyoapp_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql+asyncpg://testuser:testpassword@localhost:5432/lyoapp_test
+      TESTING: "true"
+      ENVIRONMENT: development
+      SECRET_KEY: isolated-migration-rehearsal-not-production-xxxxxxxx
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: candidate
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: baseline
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install candidate dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r candidate/requirements.txt
+      - name: Initialize schema with current main migrations
+        working-directory: baseline
+        env:
+          PYTHONPATH: .
+        run: alembic upgrade heads
+      - name: Upgrade same PostgreSQL schema with candidate migrations
+        working-directory: candidate
+        env:
+          PYTHONPATH: .
+        run: |
+          alembic upgrade heads
+          alembic upgrade heads
+          alembic current
+      - name: Confirm canonical journeys, tenant bootstrap and migration stamp
+        working-directory: candidate
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import asyncio, os
+          import asyncpg
+          async def main():
+              db = await asyncpg.connect(
+                  "postgresql://testuser:testpassword@localhost:5432/lyoapp_test"
+              )
+              try:
+                  required = {"learning_journeys", "journey_handoffs", "learning_goals", "organizations"}
+                  existing = set(await db.fetchval("""
+                      SELECT array_agg(table_name) FROM information_schema.tables
+                      WHERE table_schema='public'
+                  """) or [])
+                  assert required <= existing, f"Missing tables: {required-existing}"
+                  assert await db.fetchval("SELECT EXISTS(SELECT 1 FROM organizations WHERE id=1)")
+                  heads = {r["version_num"] for r in await db.fetch("SELECT version_num FROM alembic_version")}
+                  assert "coach_003" in heads, f"Missing coach_003 migration head: {heads}"
+                  print("PASS isolated current-main PostgreSQL -> Coach/Journeys upgrade")
+              finally:
+                  await db.close()
+          asyncio.run(main())
+          PY
