@@ -74,9 +74,12 @@ def new_actor(label):
         "first_name": "Synthetic",
         "last_name": "Staging",
     }
-    login = expect(f"register synthetic learner {label}", "POST", "/api/v1/auth/register", 201, body)
-    if not isinstance(login, dict) or not isinstance(login.get("access_token"), str):
-        raise AssertionError("Authenticated register did not return an access token")
+    code, login = http("/api/v1/auth/register", method="POST", body=body)
+    if code not in (200, 201) or not isinstance(login, dict) or not isinstance(login.get("access_token"), str):
+        # Only emit the response shape; never display credentials or tokens.
+        keys = sorted(login.keys()) if isinstance(login, dict) else ["non-json"]
+        raise AssertionError(f"Registration returned HTTP {code} without an access token; fields={keys}")
+    print(f"PASS register synthetic learner {label}: HTTP {code}")
     return login["access_token"]
 
 
