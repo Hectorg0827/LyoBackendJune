@@ -47,3 +47,26 @@ def test_existing_default_tenant_is_never_overwritten(monkeypatch):
         assert row["slug"] == "existing-default"
         assert row["plan_tier"] == "enterprise"
         assert row["monthly_api_calls"] == 10
+
+
+
+import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from lyo_app.core.database import _ensure_default_chat_tenant
+
+
+@pytest.mark.asyncio
+async def test_application_bootstrap_preserves_organization_and_is_idempotent():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Organization.__table__.create)
+            await _ensure_default_chat_tenant(conn)
+            await _ensure_default_chat_tenant(conn)
+            entries = (await conn.execute(select(Organization.__table__))).all()
+            assert len(entries) == 1
+            assert entries[0]._mapping["id"] == 1
+            assert entries[0]._mapping["name"] == "Lyo Default"
+    finally:
+        await engine.dispose()
