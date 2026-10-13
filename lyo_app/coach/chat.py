@@ -28,7 +28,8 @@ _COACH_REQUEST_RE = re.compile(
 )
 _TIME_ONLY_COACH_RE = re.compile(
     r"^\s*i have (?:\d{1,3}\s*(?:min|mins|minutes)|half an hour|an hour|one hour)"
-    r"(?:\s*[,;:-]?\s*(?:what should i (?:study|work on|do next)|what now))?"
+    r"(?:\s+(?:to study|for studying))?"
+    r"(?:\s*[,;:.\-]?\s*(?:what should i (?:study|work on|do next)|what now))?"
     r"\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
