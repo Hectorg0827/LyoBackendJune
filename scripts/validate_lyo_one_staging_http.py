@@ -168,7 +168,44 @@ def main():
                   "goal_id": goal_id, "origin_surface": "test_prep",
                   "context": {"test_profile_id": "not-this-goal"}}
     expect("wrong exam profile cannot be attached", "POST", JOURNEYS, 422, other_exam, user_a)
-    print("PASS authenticated staging journey round trip and isolation")
+    # The Test Prep engine must allocate independent exam identities,
+    # rather than reopening the learner's previous stale test.
+    prep = "/api/v1/me/study_plans"
+    exam1_key = "exam-" + uuid.uuid4().hex
+    exam2_key = "exam-" + uuid.uuid4().hex
+    exam1 = expect("create first distinct synthetic exam", "POST",
+                   prep + "/profiles/start", 201, {"request_id": exam1_key}, user_a)
+    exam2 = expect("create second distinct synthetic exam", "POST",
+                   prep + "/profiles/start", 201, {"request_id": exam2_key}, user_a)
+    if not exam1.get("profile_id") or exam1["profile_id"] == exam2.get("profile_id"):
+        raise AssertionError("Test Prep did not produce distinct exam profile IDs")
+    first_replay = expect("exam creation retry does not duplicate exam", "POST",
+                          prep + "/profiles/start", 201, {"request_id": exam1_key}, user_a)
+    if first_replay.get("profile_id") != exam1["profile_id"]:
+        raise AssertionError("Idempotent exam start reused another exam")
+    for selected in (exam1["profile_id"], exam2["profile_id"]):
+        state = expect("select original synthetic exam by profile ID", "GET",
+            prep + "/state?profile_id=" + urllib.parse.quote(selected, safe=""),
+            200, token=user_a)
+        if state.get("profile", {}).get("id") != selected:
+            raise AssertionError("Explicit exam selection returned another profile")
+    expect("another learner cannot open first synthetic exam", "GET",
+           prep + "/state?profile_id=" + urllib.parse.quote(exam1["profile_id"], safe=""),
+           404, token=user_b)
+
+    # Explicit Coach questions must be handled by the canonical Chat stream
+    # without requiring an unrelated external generative-model call.
+    stream_request = {"text": "What should I study today?",
+                      "client_message_id": "coach-" + uuid.uuid4().hex}
+    status_code, stream = http("/api/v1/lyo2/chat/stream", method="POST",
+                               body=stream_request, token=user_a, timeout=55)
+    if status_code != 200 or not isinstance(stream, str):
+        raise AssertionError(f"Coach chat stream returned HTTP {status_code} without SSE data")
+    if '"coach_mission"' not in stream or '"answer"' not in stream:
+        raise AssertionError("Chat stream did not emit both the canonical Coach mission and text answer")
+    print("PASS authentic Coach Chat SSE mission and answer")
+
+    print("PASS authenticated staging journey, Test Prep profile isolation and Coach streaming")
 
 
 if __name__ == "__main__":
