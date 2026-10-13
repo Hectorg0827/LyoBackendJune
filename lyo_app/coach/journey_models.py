@@ -27,6 +27,7 @@ class LearningJourney(Base):
     origin_ref = Column(String(160), nullable=True)
     active_surface = Column(String(24), nullable=False)
     active_ref = Column(String(160), nullable=True)
+    initial_context_json = Column(JSON, nullable=False, default=dict)
     context_json = Column(JSON, nullable=False, default=dict)
     status = Column(String(20), nullable=False, default="active")
     revision = Column(Integer, nullable=False, default=0)
