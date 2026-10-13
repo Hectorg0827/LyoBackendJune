@@ -313,3 +313,19 @@ def test_attached_notes_are_not_ignored_by_a_deterministic_coach_route():
     )
     assert result.workflow_intent is not Intent.COACH
     assert result.attachment_authoritative is True or result.mode is InteractionMode.SEARCH
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "I have 20 minutes to study",
+        "I have 20 minutes for studying",
+        "I have 20 minutes. What should I study?",
+        "I have 20 min - what now?",
+    ],
+)
+def test_natural_language_time_budget_enters_coach(prompt):
+    assert is_coach_request(prompt)
+    assert requested_minutes(prompt) == 20
+    result = interaction_contract_for_request(text=prompt, routed_intent=Intent.CHAT)
+    assert result.workflow_intent is Intent.COACH
