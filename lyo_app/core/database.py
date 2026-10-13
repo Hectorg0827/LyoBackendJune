@@ -171,6 +171,7 @@ async def init_db() -> None:
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
         from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
+        from lyo_app.events.models import LearningEvent, EventType  # noqa: F401
         from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.ai_study.models import StudySession, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
         from lyo_app.ai_agents.models import UserEngagementState, MentorInteraction  # noqa: F401
@@ -198,6 +199,7 @@ async def init_db() -> None:
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_learning_event_enum(conn)
         await _ensure_default_chat_tenant(conn)
         
         # Legacy schema patches
@@ -209,6 +211,36 @@ async def init_db() -> None:
         await _ensure_courses_schema(conn)
         await _ensure_lessons_schema(conn)
         logger.info("Database models registered successfully")
+
+
+
+async def _ensure_learning_event_enum(conn) -> None:
+    """Reconcile legacy PostgreSQL eventtype labels before audit/evidence writes.
+
+    Historical CommunityEvent also defined an enum named eventtype; on a
+    fresh database bootstrapped through SQLAlchemy.create_all, the first model
+    registering the type can omit labels required by LearningEvent. Current
+    Alembic migrations normalize this already, but the runtime create_all
+    bootstrap must not leave an unusable evidence log.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    found = await conn.execute(text(
+        "SELECT 1 FROM pg_type WHERE typname = 'eventtype'"
+    ))
+    if found.scalar_one_or_none() is None:
+        return
+
+    from lyo_app.events.models import EventType
+    for event_type in EventType:
+        # Enum member names come from source code, not user input.
+        label = event_type.name
+        if not label.isidentifier() or not label.isupper():
+            raise RuntimeError("Unsafe learning event label")
+        await conn.execute(text(
+            f"ALTER TYPE eventtype ADD VALUE IF NOT EXISTS '{label}'"
+        ))
 
 
 async def _ensure_default_chat_tenant(conn) -> None:
