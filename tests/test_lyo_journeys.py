@@ -281,6 +281,34 @@ async def test_owned_journey_rejects_missing_or_inactive_goal():
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_archived_goal_cannot_be_reused_for_a_new_handoff():
+    engine = await _database()
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            goal = _goal()
+            db.add(goal)
+            await db.commit()
+            j = await _new(db)
+            goal.status = "archived"
+            await db.commit()
+            with pytest.raises(HTTPException) as exc:
+                await handoff(
+                    j.id,
+                    JourneyHandoffRequest(
+                        request_id="handoff-after-archive",
+                        expected_revision=0,
+                        target_surface="classroom",
+                    ),
+                    current_user=_user(7),
+                    db=db,
+                )
+            assert exc.value.status_code == 409
+            assert (await get_journey(j.id, current_user=_user(7), db=db)).revision == 0
+    finally:
+        await engine.dispose()
+
+
 def test_untrusted_extra_state_and_invalid_surface_do_not_enter_navigation_contract():
     with pytest.raises(ValidationError):
         JourneyContext(secret="never store arbitrary memory")
