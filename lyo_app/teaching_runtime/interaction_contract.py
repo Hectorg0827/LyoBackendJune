@@ -218,6 +218,18 @@ def interaction_contract_for_request(
             reason_code="explicit_quiz",
         )
 
+    # Exact next-best-action requests outrank the generic "today" search
+    # freshness trigger, but never override uploaded-document analysis.
+    if not has_media and (_COACH_RE.fullmatch(text) or _COACH_TIME_ONLY_RE.fullmatch(text)):
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            **delivery_metadata,
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="explicit_coach",
+        )
     if _SEARCH_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.SEARCH,
@@ -308,18 +320,6 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="explicit_analyze",
         )
-    # Only exact next-step/readiness requests activate Coach. Explicit
-    # teaching and assessment intent above always wins.
-    if _COACH_RE.fullmatch(text) or _COACH_TIME_ONLY_RE.fullmatch(text):
-        return InteractionContract(
-            mode=InteractionMode.WORKFLOW,
-            depth=depth,
-            **delivery_metadata,
-            fast_lane=True,
-            workflow_intent=Intent.COACH,
-            attachment_authoritative=False,
-            reason_code="explicit_coach",
-        )
     if _DIRECT_ANSWER_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.ANSWER,
@@ -343,7 +343,7 @@ def interaction_contract_for_request(
             attachment_authoritative=has_media,
             reason_code="routed_test_prep",
         )
-    if routed_intent == Intent.COACH:
+    if routed_intent == Intent.COACH and not has_media:
         return InteractionContract(
             mode=InteractionMode.WORKFLOW,
             depth=depth,
