@@ -1,0 +1,65 @@
+name: Lyo One live Classroom provider rehearsal (isolated)
+
+# Deliberately manual. No production URL or account and no model API secret
+# is injected by GitHub. Provision a provider key in isolated Railway staging
+# before explicitly confirming readiness.
+on:
+  workflow_dispatch:
+    inputs:
+      provider_staging_ready:
+        description: 'Confirm isolated Railway staging has a working AI model provider (type yes)'
+        required: true
+        default: 'no'
+        type: choice
+        options: ['no', 'yes']
+      scenario:
+        required: true
+        default: math_fractions
+        type: choice
+        options: [math_fractions, biology_photosynthesis, physics_newton2, spanish_past_tense, business_contribution_margin]
+      profile:
+        required: true
+        default: struggling
+        type: choice
+        options: [struggling, beginner, interrupter, confident_wrong, curious, advanced]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lyo-one-live-classroom-isolated
+  cancel-in-progress: false
+
+jobs:
+  provider-backed-teacher:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LYO_ONE_PROVIDER_STAGING_READY: ${{ inputs.provider_staging_ready }}
+      LYO_ONE_CLASSROOM_SCENARIO: ${{ inputs.scenario }}
+      LYO_ONE_CLASSROOM_PROFILE: ${{ inputs.profile }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require explicit staging provider readiness
+        shell: bash
+        run: |
+          if [ "$LYO_ONE_PROVIDER_STAGING_READY" != "yes" ]; then
+            echo "::error::Isolated staging has no validated model provider. Configure it and confirm yes before this run."
+            exit 2
+          fi
+      - name: Install black-box teaching harness dependencies
+        run: python -m pip install --disable-pip-version-check httpx websockets
+      - name: Verify isolated host protection and synthetic learner setup
+        run: python -m unittest discover -s tests -p test_lyo_one_live_classroom_runner.py
+      - name: Run real Classroom scenes and verify evidence
+        run: python scripts/validate_lyo_one_live_classroom.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lyo-one-live-classroom-${{ inputs.scenario }}-${{ github.run_id }}
+          path: artifacts/lyo-one-classroom/*.json
+          if-no-files-found: ignore
+          retention-days: 14
