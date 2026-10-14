@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
+      LYO_ONE_EXPECTED_BACKEND_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LYO_ONE_PROVIDER_STAGING_READY: ${{ inputs.provider_staging_ready }}
       LYO_ONE_CLASSROOM_SCENARIO: ${{ inputs.scenario }}
       LYO_ONE_CLASSROOM_PROFILE: ${{ inputs.profile }}
@@ -92,6 +93,7 @@ jobs:
           - scenario: physics_newton2
             profile: confident_wrong
     env:
+      LYO_ONE_EXPECTED_BACKEND_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LYO_ONE_PROVIDER_STAGING_READY: 'yes'
       LYO_ONE_CLASSROOM_SCENARIO: ${{ matrix.scenario }}
       LYO_ONE_CLASSROOM_PROFILE: ${{ matrix.profile }}

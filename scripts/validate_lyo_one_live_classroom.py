@@ -8,6 +8,7 @@ the gate FAILS; a green /health or mocked teaching turn never counts as proof.
 """
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import subprocess
@@ -33,6 +34,25 @@ def require_safe_target(base_url=STAGING_API):
         raise ValueError("Refusing to use any host other than isolated Lyo One staging")
     if os.getenv("LYO_ONE_PROVIDER_STAGING_READY") != "yes":
         raise ValueError("Provider-backed staging must be explicitly confirmed ready")
+
+
+def verify_candidate():
+    require_safe_target(STAGING_API)
+    expected = os.getenv("LYO_ONE_EXPECTED_BACKEND_SHA", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", expected):
+        raise ValueError("LYO_ONE_EXPECTED_BACKEND_SHA must identify the full deployed candidate")
+    req = urllib.request.Request(STAGING_API + "/health", headers={"Cache-Control": "no-cache"})
+    with urllib.request.urlopen(req, timeout=35) as response:
+        health = json.load(response)
+    actual = health.get("commit_sha")
+    if health.get("environment") != "staging" or actual != expected:
+        raise RuntimeError(f"Isolated staging candidate mismatch: expected {expected}, received {actual}")
+    models = health.get("services", {}).get("ai", {}).get("models", {})
+    configured = sorted(name for name, model in models.items()
+                        if name.startswith("gemini-") and model.get("configured"))
+    if not configured:
+        raise RuntimeError("Isolated staging has no configured Gemini provider; enter its separate GEMINI_API_KEY before running real teaching")
+    return {"commit_sha": actual, "configured_gemini_models": configured}
 
 
 def request(path, payload):
@@ -65,6 +85,7 @@ def create_synthetic_access_token():
 
 def main():
     require_safe_target()
+    before = verify_candidate()
     scenario = os.getenv("LYO_ONE_CLASSROOM_SCENARIO", "math_fractions")
     profile = os.getenv("LYO_ONE_CLASSROOM_PROFILE", "struggling")
     if scenario not in SCENARIOS or profile not in PROFILES:
@@ -93,6 +114,9 @@ def main():
     successes = {c.get("name") for c in checks if c.get("passed") is True}
     if not required <= successes:
         raise RuntimeError(f"Missing provider-backed teaching checks: {sorted(required - successes)}")
+    after = verify_candidate()
+    data["deployment_validation"] = {"before": before, "after": after}
+    output.write_text(json.dumps(data, indent=2))
     print("PASS actual provider-backed Classroom scenes and persisted learning evidence")
 
 
