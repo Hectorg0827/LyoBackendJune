@@ -35,6 +35,15 @@ async def test_study_session_return_binds_exact_exam_and_user():
                 db.add(StudySession(id="session-"+pid, user_id=7, study_plan_id="plan-"+pid,
                                     topic="Molecules", session_type="practice",
                                     scheduled_at=datetime.utcnow(), duration_minutes=10))
+            # Cross-account session: a guessed ID must not be accepted,
+            # even when the requesting learner owns the selected exam.
+            db.add(TestProfile(id="exam-foreign", user_id=8, subject="Chemistry",
+                               test_date=date.today() + timedelta(days=10)))
+            db.add(StudyPlan(id="plan-exam-foreign", test_profile_id="exam-foreign", user_id=8))
+            db.add(StudySession(id="session-exam-foreign", user_id=8,
+                                study_plan_id="plan-exam-foreign", topic="Molecules",
+                                session_type="practice", scheduled_at=datetime.utcnow(),
+                                duration_minutes=10))
             await db.commit()
 
             async def create_with_context(key, ctx):
@@ -44,7 +53,7 @@ async def test_study_session_return_binds_exact_exam_and_user():
                     current_user=SimpleNamespace(id=7), db=db,
                 )
 
-            for study_id in ("session-exam-other", "not-a-real-session"):
+            for study_id in ("session-exam-other", "session-exam-foreign", "not-a-real-session"):
                 with pytest.raises(HTTPException) as error:
                     await create_with_context(
                         "attempt-" + study_id,
