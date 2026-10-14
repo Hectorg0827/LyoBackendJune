@@ -2,7 +2,7 @@ name: Lyo One existing-schema migration rehearsal
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/lyo-one-journey-context]
     paths:
       - alembic/versions/coach_002_learning_journeys.py
       - alembic/versions/coach_003_default_tenant_bootstrap.py
