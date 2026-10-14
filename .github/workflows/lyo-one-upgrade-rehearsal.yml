@@ -57,6 +57,63 @@ jobs:
         env:
           PYTHONPATH: .
         run: alembic upgrade heads
+      - name: Seed an existing learner, exam, plan and session before upgrade
+        working-directory: baseline
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def main():
+              db = await asyncpg.connect("postgresql://testuser:testpassword@localhost:5432/lyoapp_test")
+              try:
+                  async with db.transaction():
+                      uid = await db.fetchval("""
+                          INSERT INTO users (
+                              email, username, hashed_password, is_active,
+                              is_verified, is_superuser, created_at, updated_at
+                          ) VALUES (
+                              'preupgrade-learner@example.com', 'preupgrade_learner',
+                              'synthetic-not-a-login', TRUE, FALSE, FALSE, NOW(), NOW()
+                          ) RETURNING id
+                      """)
+                      await db.execute("""
+                          INSERT INTO test_profiles (
+                              id, user_id, created_at, subject, test_date, topics,
+                              materials, intake_complete, intake_transcript, workflow_state
+                          ) VALUES (
+                              'preupgrade-exam', $1, NOW(), 'Biology',
+                              DATE '2026-11-10', '[]'::json, '[]'::json,
+                              TRUE, '[]'::json, '{}'::json
+                          )
+                      """, uid)
+                      await db.execute("""
+                          INSERT INTO test_prep_plans (
+                              id, test_profile_id, user_id, created_at, updated_at,
+                              status, version, total_sessions, weekly_milestones
+                          ) VALUES (
+                              'preupgrade-plan', 'preupgrade-exam', $1, NOW(), NOW(),
+                              'active', 1, 1, '[]'::json
+                          )
+                      """, uid)
+                      await db.execute("""
+                          INSERT INTO test_prep_sessions (
+                              id, study_plan_id, user_id, scheduled_at,
+                              duration_minutes, topic, session_type, status
+                          ) VALUES (
+                              'preupgrade-session', 'preupgrade-plan', $1,
+                              TIMESTAMP '2026-10-20 15:00:00',
+                              15, 'Cell structure', 'practice', 'scheduled'
+                          )
+                      """, uid)
+                  print("PASS seeded real linked learner/exam/plan/session on current main schema")
+              finally:
+                  await db.close()
+
+          asyncio.run(main())
+          PY
       - name: Upgrade same PostgreSQL schema with candidate migrations
         working-directory: candidate
         env:
@@ -87,6 +144,24 @@ jobs:
                   assert await db.fetchval("SELECT EXISTS(SELECT 1 FROM organizations WHERE id=1)")
                   heads = {r["version_num"] for r in await db.fetch("SELECT version_num FROM alembic_version")}
                   assert "coach_003" in heads, f"Missing coach_003 migration head: {heads}"
+                  preserved = await db.fetchrow("""
+                      SELECT p.subject, s.topic, s.status, s.duration_minutes, u.email
+                      FROM test_prep_sessions s
+                      JOIN test_prep_plans x ON x.id = s.study_plan_id
+                      JOIN test_profiles p ON p.id = x.test_profile_id
+                      JOIN users u ON u.id = s.user_id
+                      WHERE s.id = 'preupgrade-session'
+                        AND p.id = 'preupgrade-exam'
+                        AND x.id = 'preupgrade-plan'
+                  """)
+                  assert preserved is not None, "Existing linked learner study plan was lost"
+                  assert (
+                      preserved["subject"], preserved["topic"], preserved["status"],
+                      preserved["duration_minutes"], preserved["email"]
+                  ) == (
+                      "Biology", "Cell structure", "scheduled", 15,
+                      "preupgrade-learner@example.com",
+                  ), f"Existing exam/session data changed unexpectedly: {preserved}"
                   print("PASS isolated current-main PostgreSQL -> Coach/Journeys upgrade")
               finally:
                   await db.close()
