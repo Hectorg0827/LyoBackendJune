@@ -174,6 +174,26 @@ async def test_coach_turn_passes_time_budget_to_receding_horizon(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prompt", ["What should I study?", "I have 5 minutes", "How ready am I?"])
+async def test_coach_turn_without_goals_invites_a_goal_without_fabricating_readiness(monkeypatch, prompt):
+    async def no_active_goals(db, user_id):
+        return []
+
+    # Exercise the real service, DTO, and text formatter used by Chat SSE.
+    monkeypatch.setattr("lyo_app.coach.service.active_goals", no_active_goals)
+    view, answer, budget = await process_coach_turn(object(), 7, prompt)
+
+    assert view.total_minutes == 0
+    assert view.active_goals == []
+    assert view.mission == []
+    assert view.readiness == {}
+    assert "do not have an active learning goal" in answer
+    assert "Readiness:" not in answer
+    assert "Today's mission" not in answer
+    assert budget == requested_minutes(prompt)
+
+
+@pytest.mark.asyncio
 async def test_today_passes_larger_time_budget_into_each_goal_projection(monkeypatch):
     captured = []
     goal = SimpleNamespace(

@@ -758,6 +758,7 @@ async def build_today_view(
     goals = await active_goals(db, user_id)
     if not goals:
         return TodayCoachView(
+            total_minutes=0,
             coach_note="No active learning goal yet. Start with a test, course, assignment, or skill you want to master.",
             generated_at=_now(),
         )

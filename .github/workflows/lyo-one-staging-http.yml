@@ -20,4 +20,5 @@ jobs:
       - name: Exercise synthetic authenticated learners against isolated Railway staging
         env:
           LYO_ONE_STAGING_SMOKE: "1"
+          LYO_ONE_EXPECTED_BACKEND_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/validate_lyo_one_staging_http.py

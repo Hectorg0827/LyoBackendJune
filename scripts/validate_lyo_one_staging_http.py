@@ -7,6 +7,7 @@ No external model credentials are needed for the journey API.
 """
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -17,6 +18,7 @@ import uuid
 
 STAGING_HOST = "lyojourneystagingbackend-staging.up.railway.app"
 BASE = "https://" + STAGING_HOST
+STAGING_WEB = "https://lyoonestagingweb-staging.up.railway.app"
 GOALS = "/api/v1/me/coach/goals"
 JOURNEYS = "/api/v1/me/coach/journeys"
 
@@ -26,10 +28,31 @@ def require_staging():
         raise RuntimeError("LYO_ONE_STAGING_SMOKE=1 is required")
     if urllib.parse.urlparse(BASE).hostname != STAGING_HOST:
         raise RuntimeError("Refusing to test any non-isolated domain")
+    for name in ("LYO_ONE_EXPECTED_BACKEND_SHA", "LYO_ONE_EXPECTED_CLIENT_SHA"):
+        value = os.environ.get(name)
+        if value is not None and not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise RuntimeError(f"{name} must be a full commit SHA")
+
+
+def verify_deployed_revisions():
+    expected_backend = os.environ.get("LYO_ONE_EXPECTED_BACKEND_SHA")
+    expected_client = os.environ.get("LYO_ONE_EXPECTED_CLIENT_SHA")
+    code, health = http("/health")
+    if code != 200 or not isinstance(health, dict):
+        raise AssertionError("Staging backend health is unavailable")
+    if expected_backend and health.get("commit_sha") != expected_backend:
+        raise AssertionError(f"Backend revision mismatch: expected {expected_backend}, received {health.get('commit_sha')}")
+    if expected_client:
+        req = urllib.request.Request(STAGING_WEB + "/api/health", headers={"Cache-Control": "no-cache"})
+        with urllib.request.urlopen(req, timeout=35) as response:
+            client_health = json.load(response)
+        if client_health.get("commit") != expected_client:
+            raise AssertionError(f"Client revision mismatch: expected {expected_client}, received {client_health.get('commit')}")
+    return health
 
 
 def http(path, method="GET", body=None, token=None, timeout=35):
-    headers = {"Accept": "application/json", "User-Agent": "LyoOne-isolated-staging-gate/1"}
+    headers = {"Accept": "application/json", "Cache-Control": "no-cache", "User-Agent": "LyoOne-isolated-staging-gate/1"}
     if token:
         headers["Authorization"] = "Bearer " + token
     if body is not None:
@@ -42,7 +65,7 @@ def http(path, method="GET", body=None, token=None, timeout=35):
             try:
                 payload = json.loads(raw)
             except ValueError:
-                payload = raw.decode("utf-8", errors="replace")[:1200]
+                payload = raw.decode("utf-8", errors="replace")
             return response.status, payload
     except urllib.error.HTTPError as exc:
         raw = exc.read(2500)
@@ -96,18 +119,30 @@ def main():
     # Give Railway deployment/hostname a bounded window to become available.
     for attempt in range(24):
         try:
-            status, _ = http("/health", timeout=12)
-            if status == 200:
-                break
-        except (OSError, TimeoutError):
+            verify_deployed_revisions()
+            break
+        except (OSError, TimeoutError, AssertionError):
             pass
         time.sleep(7)
     else:
-        raise AssertionError("Staging /health did not become accessible within the bounded check")
-    print("PASS isolated staging health")
+        raise AssertionError("Expected staging revision(s) did not become accessible within the bounded check")
+    print("PASS isolated staging health and expected deployed revisions")
 
     user_a = new_actor("a")
     user_b = new_actor("b")
+    empty = expect("new learner receives a valid empty Coach response", "GET",
+                   "/api/v1/me/coach/today", 200, token=user_a)
+    assert empty["total_minutes"] == 0 and empty["primary_goal_id"] is None
+    assert empty["active_goals"] == [] and empty["mission"] == [] and empty["readiness"] == {}
+    status_code, stream = http("/api/v1/lyo2/chat/stream", method="POST", token=user_a,
+                              body={"text": "What should I study?", "client_message_id": "empty-coach-" + uuid.uuid4().hex}, timeout=55)
+    assert status_code == 200 and isinstance(stream, str), "Empty-goal Coach did not return SSE"
+    events = [json.loads(line[6:]) for line in stream.splitlines()
+              if line.startswith("data: ") and line[6:].strip() != "[DONE]"]
+    assert any(event.get("type") == "answer" for event in events), "Empty-goal Coach omitted its readable answer"
+    assert not any(event.get("type") == "error" for event in events), "Empty-goal Coach emitted an error"
+    assert "do not have an active learning goal" in stream, "Empty-goal Coach did not invite a learning goal"
+    print("PASS new learner Coach Chat SSE without fabricated readiness")
     goal = expect(
         "create evidence-scoped learning goal", "POST", GOALS, 201,
         {"goal_type": "mastery", "title": "Synthetic chemical bonding",
@@ -203,12 +238,13 @@ def main():
         raise AssertionError(f"Coach chat stream returned HTTP {status_code} without SSE data")
     if '"coach_mission"' not in stream or '"answer"' not in stream:
         # Synthetic staging conversation only; do not print bearer tokens.
-        import re
         types = re.findall(r'"type"\s*:\s*"([^"]+)"', stream)
         event_names = re.findall(r"(?m)^event:\s*([\\w-]+)", stream)
         raise AssertionError(f"Coach Chat SSE missing event(s); types={types[:15]}, events={event_names[:15]}, prefix={stream[:550]!r}")
     print("PASS authentic Coach Chat SSE mission and answer")
 
+    verify_deployed_revisions()
+    print("PASS expected backend/client revisions remained stable through validation")
     print("PASS authenticated staging journey, Test Prep profile isolation and Coach streaming")
 
 
