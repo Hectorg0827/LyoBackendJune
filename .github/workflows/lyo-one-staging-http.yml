@@ -2,7 +2,7 @@ name: Lyo One isolated staging HTTP
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/lyo-one-journey-context]
     paths:
       - scripts/validate_lyo_one_staging_http.py
       - .github/workflows/lyo-one-staging-http.yml
