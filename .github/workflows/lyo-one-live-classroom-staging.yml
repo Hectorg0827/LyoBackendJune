@@ -1,8 +1,8 @@
 name: Lyo One live Classroom provider rehearsal (isolated)
 
-# Deliberately manual. No production URL or account and no model API secret
+# Deliberately opt-in. No production URL or account and no model API secret
 # is injected by GitHub. Provision a provider key in isolated Railway staging
-# before explicitly confirming readiness.
+# before confirming readiness by manual dispatch or the trusted PR label.
 on:
   workflow_dispatch:
     inputs:
@@ -23,6 +23,13 @@ on:
         type: choice
         options: [struggling, beginner, interrupter, confident_wrong, curious, advanced]
 
+  # GitHub only exposes workflow_dispatch from default-branch workflows.
+  # A maintainer can validate this stacked draft before merge by applying
+  # the 'lyo-provider-ready' label to the trusted backend PR #136.
+  pull_request:
+    types: [labeled]
+    branches: [feature/lyo-one-journey-context]
+
 permissions:
   contents: read
 
@@ -32,6 +39,7 @@ concurrency:
 
 jobs:
   provider-backed-teacher:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -60,6 +68,48 @@ jobs:
         if: always()
         with:
           name: lyo-one-live-classroom-${{ inputs.scenario }}-${{ github.run_id }}
+          path: artifacts/lyo-one-classroom/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  provider-backed-premerge:
+    # Staging-only, explicit maintainer opt-in. Never run for unrelated or
+    # forked PRs; workflows checked out from a PR are executable code.
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'lyo-provider-ready' && github.event.pull_request.number == 136 && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - scenario: math_fractions
+            profile: struggling
+          - scenario: biology_photosynthesis
+            profile: interrupter
+          - scenario: spanish_past_tense
+            profile: curious
+          - scenario: physics_newton2
+            profile: confident_wrong
+    env:
+      LYO_ONE_PROVIDER_STAGING_READY: 'yes'
+      LYO_ONE_CLASSROOM_SCENARIO: ${{ matrix.scenario }}
+      LYO_ONE_CLASSROOM_PROFILE: ${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install real Classroom harness dependencies
+        run: python -m pip install --disable-pip-version-check httpx websockets
+      - name: Verify hard-pinned isolated host and synthetic learner safety
+        run: python -m unittest discover -s tests -p test_lyo_one_live_classroom_runner.py
+      - name: Run provider-backed teaching and persisted-evidence gate
+        run: python scripts/validate_lyo_one_live_classroom.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lyo-one-premerge-${{ matrix.scenario }}-${{ github.run_id }}
           path: artifacts/lyo-one-classroom/*.json
           if-no-files-found: ignore
           retention-days: 14
