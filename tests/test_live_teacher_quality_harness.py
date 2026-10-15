@@ -10,6 +10,7 @@ from scripts.live_teacher_quality import (
     analytics_delta,
     preset_response,
     should_request_hint,
+    should_submit_unknown_option,
     choose_option,
     parse_sse_lines,
     require_https,
@@ -78,6 +79,33 @@ def test_forced_answer_only_claims_certainty_when_client_contract_declares_it():
         ]
     }
     assert choose_option(withheld, want_correct=False) == ("a", "unknown")
+
+
+def test_struggling_learner_submits_hidden_key_diagnostic_only_as_unverified():
+    profile = LEARNER_PROFILES["struggling"]
+    hidden = {"options": [
+        {"id": "opt_a", "is_correct": None},
+        {"id": "opt_b", "is_correct": None},
+    ]}
+    option_id, certainty = choose_option(hidden, want_correct=False)
+    assert (option_id, certainty) == ("opt_a", "unknown")
+    assert should_submit_unknown_option(
+        profile, is_diagnostic=True, certainty=certainty,
+        already_submitted=False,
+    )
+    assert not should_submit_unknown_option(
+        profile, is_diagnostic=True, certainty=certainty,
+        already_submitted=True,
+    )
+    assert not should_submit_unknown_option(
+        profile, is_diagnostic=True, certainty="declared",
+        already_submitted=False,
+    )
+    # A learner with no requested wrong-answer path must not be forced into one.
+    assert not should_submit_unknown_option(
+        LEARNER_PROFILES["fast_learner"], is_diagnostic=False,
+        certainty="unknown", already_submitted=False,
+    )
 
 
 def test_requested_review_must_exist_in_server_due_queue():
