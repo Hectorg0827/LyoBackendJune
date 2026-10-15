@@ -848,9 +848,23 @@ class AIResilienceManager:
         cb = self.circuit_breakers[model_name]
 
         async def make_call():
-            return await self._make_api_call_with_messages(
-                model_name, model, messages, temperature, max_tokens, response_format=response_format
-            )
+            # Retry only transient provider-side overload/rate limiting inside
+            # ONE breaker attempt. Terminal 400/401/403/404 failures must not
+            # consume retries, and no retry fabricates a lesson or grade.
+            for attempt in range(3):
+                try:
+                    return await self._make_api_call_with_messages(
+                        model_name, model, messages, temperature, max_tokens,
+                        response_format=response_format,
+                    )
+                except Exception as exc:
+                    retryable = (
+                        "API returned 503:" in str(exc)
+                        or "API returned 429:" in str(exc)
+                    )
+                    if not retryable or attempt == 2:
+                        raise
+                    await asyncio.sleep(0.4 * (attempt + 1))
 
         return await cb.call(make_call)
 
