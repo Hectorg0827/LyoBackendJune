@@ -48,6 +48,11 @@ def setup_logging(
     # Set specific log levels for noisy libraries
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # Uvicorn logs WebSocket accepted URLs via uvicorn.error, *not*
+    # uvicorn.access. Those URLs can contain credentials from older clients.
+    # Children with their own INFO level bypass the parent logger's level.
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.protocols.websockets").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("google").setLevel(logging.WARNING)
