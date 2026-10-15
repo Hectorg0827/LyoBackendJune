@@ -76,3 +76,6 @@ def test_backend_uvicorn_entrypoints_do_not_log_legacy_query_jwts():
     assert "access_log=False" in entrypoint
     assert 'ALL PROVIDERS FAILED for' not in resilience
     assert "Request for '{message_str" not in resilience
+    config = (root / "lyo_app" / "core" / "structured_logging.py").read_text(encoding="utf-8")
+    assert 'logging.getLogger("uvicorn.error").setLevel(logging.WARNING)' in config
+    assert 'logging.getLogger("uvicorn.protocols.websockets").setLevel(logging.WARNING)' in config
