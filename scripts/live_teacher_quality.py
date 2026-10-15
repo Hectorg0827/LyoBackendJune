@@ -529,6 +529,37 @@ def analytics_delta(
     }
 
 
+
+def is_recovery_only_scene(scene: dict[str, Any]) -> bool:
+    """Distinguish service-recovery UI from an authored teaching scene.
+
+    A WebSocket 200 and even fifteen recovery scenes do not prove teaching.
+    Never count a recovery notice as a lesson, grading or application evidence.
+    """
+    metadata = scene.get("metadata") or {}
+    components = scene.get("components") or []
+    return (
+        metadata.get("presentation_focus") == "recovery"
+        or any(
+            isinstance(item, dict)
+            and str(item.get("component_id") or "").startswith("classroom-recovery/")
+            for item in components
+        )
+    )
+
+
+def has_authored_classroom_instruction(scene: dict[str, Any]) -> bool:
+    if is_recovery_only_scene(scene):
+        return False
+    metadata = scene.get("metadata") or {}
+    components = scene.get("components") or []
+    return bool(metadata.get("teaching_action")) and any(
+        isinstance(item, dict)
+        and item.get("type") in {"TeacherMessage", "ExampleBlock", "LessonBlock", "QuizCard", "InputField"}
+        for item in components
+    )
+
+
 class LiveLyo:
     def __init__(self, base_url: str, token: str, timeout: float):
         self.base_url = base_url
@@ -761,12 +792,27 @@ class LiveLyo:
                 max_size=4 * 1024 * 1024,
             )
 
+        recovery_streak = 0
+        longest_recovery_streak = 0
+        authored_instruction_seen = False
         ws_cm = await connect()
         async with ws_cm as ws:
             for _ in range(max_scenes):
                 scene = await receive_scene(ws)
                 if scene is None:
                     break
+                if is_recovery_only_scene(scene):
+                    recovery_streak += 1
+                    longest_recovery_streak = max(longest_recovery_streak, recovery_streak)
+                    if recovery_streak >= 3:
+                        report.notes.append(
+                            "Three consecutive recovery-only scenes; stopping provider requests. "
+                            "This is a Classroom outage, not lesson progression."
+                        )
+                        break
+                else:
+                    recovery_streak = 0
+                    authored_instruction_seen |= has_authored_classroom_instruction(scene)
 
                 metadata = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
                 action_name = str(metadata.get("teaching_action") or "")
@@ -940,6 +986,8 @@ class LiveLyo:
         ]
         report.classroom = {
             "scene_count": len(scenes),
+            "recovery_only_streak_max": longest_recovery_streak,
+            "authored_instruction_seen": authored_instruction_seen,
             "actions": actions,
             "transcript": transcript,
             "teaching_actions": [
@@ -966,6 +1014,16 @@ class LiveLyo:
             "last_scene": scenes[-1] if scenes else None,
         }
         report.check("classroom_scene_received", bool(scenes), f"{len(scenes)} scenes")
+        report.check(
+            "classroom_authored_instruction_delivered",
+            authored_instruction_seen,
+            "A successful WebSocket response or recovery notice is not instruction.",
+        )
+        report.check(
+            "classroom_recovery_loop_absent",
+            longest_recovery_streak < 3,
+            f"longest consecutive recovery-only streak: {longest_recovery_streak}",
+        )
         report.check(
             "free_form_question_sent",
             asked if learner_profile.ask_question else None,
@@ -1073,10 +1131,14 @@ async def run(args) -> int:
             report.notes.append(f"analytics_before unavailable: {type(exc).__name__}: {exc}")
 
         if args.phase == "seed":
-            try:
-                await lyo.chat_seed(client, report, chat_prompt)
-            except Exception as exc:
-                report.check("chat_stream_completed", False, f"{type(exc).__name__}: {exc}")
+            # The isolated Classroom provider gate must measure Classroom
+            # independently. Chat routing/quiz policy is a separate release
+            # gate, and should not consume provider capacity before teaching.
+            if os.getenv("LYO_ONE_CLASSROOM_ONLY", "") != "yes":
+                try:
+                    await lyo.chat_seed(client, report, chat_prompt)
+                except Exception as exc:
+                    report.check("chat_stream_completed", False, f"{type(exc).__name__}: {exc}")
 
             try:
                 await lyo.classroom(
