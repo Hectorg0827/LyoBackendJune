@@ -41,6 +41,28 @@ class ArtifactType(str, Enum):
     FLASHCARDS = "FLASHCARDS"
 
 
+class FlashcardEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    front: str = Field(strict=True, validation_alias=AliasChoices("front", "question"))
+    back: str = Field(strict=True, validation_alias=AliasChoices("back", "answer"))
+
+    @field_validator("front", "back")
+    @classmethod
+    def require_card_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Flashcards require both a question and an answer")
+        return value
+
+
+class FlashcardDeck(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    title: str = "Flashcards"
+    cards: List[FlashcardEntry] = Field(
+        min_length=1, max_length=100, validation_alias=AliasChoices("cards", "flashcards"),
+    )
+
+
 class MediaRef(BaseModel):
     """Reference to media uploaded through Lyo's authenticated media API."""
     model_config = ConfigDict(extra="forbid")

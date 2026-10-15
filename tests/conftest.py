@@ -3,6 +3,12 @@ Pytest configuration and fixtures for testing.
 Provides database and service fixtures for tests.
 """
 
+import os
+
+# Unit/SQL integration tests use test doubles for cloud services. Never probe
+# an executor's instance metadata for credentials while constructing an SDK.
+os.environ.setdefault("NO_GCE_CHECK", "true")
+
 import asyncio
 import pytest
 import pytest_asyncio

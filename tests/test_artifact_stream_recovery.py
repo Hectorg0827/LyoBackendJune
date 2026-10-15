@@ -5,6 +5,7 @@ the production regression returned 200 followed by an error event.
 """
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import json
 
 import pytest
 
@@ -135,3 +136,88 @@ async def test_mutation_without_authenticated_identity_never_reads_saved_content
     artifact_stream.storage.get_artifact.assert_not_awaited()
     artifact_stream.mutator.model_manager.generate_with_retry.assert_not_awaited()
     artifact_stream.storage.update_artifact.assert_not_awaited()
+
+
+def creation_plan(control, parameters):
+    control.plan.steps[0] = PlannedAction(
+        action_type=ActionType.CREATE_ARTIFACT, description="Create requested flashcards",
+        parameters=parameters,
+    )
+    control.storage.create_artifact.side_effect = lambda user_id, art_type, content: {
+        "artifact_id": "generated-deck", "user_id": user_id, "type": art_type.value,
+        "version": 1, "content": content,
+    }
+
+
+DECK = {"title": "Photosynthesis", "cards": [
+    {"front": "What captures light?", "back": "Chlorophyll"},
+    {"front": "What gas is consumed?", "back": "Carbon dioxide"},
+    {"front": "What gas is released?", "back": "Oxygen"},
+]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parameters", [{}, {"artifact_type": "FLASHCARDS"},
+                                      {"type": "QUIZ", "content": {"title": "New Quiz", "questions": []}}])
+async def test_incomplete_plan_authors_the_requested_deck_instead_of_an_empty_quiz(
+    artifact_stream, monkeypatch, parameters,
+):
+    from lyo_app.ai.schemas.lyo2 import UIBlockType, ArtifactType
+
+    creation_plan(artifact_stream, parameters)
+    completion = AsyncMock(return_value={"content": json.dumps(DECK), "model_used": "gemini-fixture"})
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    assert not [e for e in events if e["type"] == "error"], events
+    block = next(e for e in events if e["type"] == "artifact")["block"]
+    assert block["type"] == UIBlockType.FLASHCARDS
+    assert block["content"]["cards"] == DECK["cards"]
+    assert artifact_stream.storage.create_artifact.await_args.args[1] == ArtifactType.FLASHCARDS
+    completion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_missing_artifact_step_still_creates_the_requested_flashcards(artifact_stream, monkeypatch):
+    creation_plan(artifact_stream, {})
+    artifact_stream.plan.steps.pop(0)
+    completion = AsyncMock(return_value={"content": json.dumps(DECK)})
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    assert next(e for e in events if e["type"] == "artifact")["block"]["content"]["cards"] == DECK["cards"]
+    completion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_question_answer_cards_are_normalized_without_an_extra_model_call(artifact_stream, monkeypatch):
+    creation_plan(artifact_stream, {"type": "FLASHCARDS", "content": {
+        "title": "Photosynthesis", "flashcards": [{"question": " Light pigment? ", "answer": " Chlorophyll "}],
+    }})
+    completion = AsyncMock()
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    assert next(e for e in events if e["type"] == "artifact")["block"]["content"]["cards"] == [
+        {"front": "Light pigment?", "back": "Chlorophyll"},
+    ]
+    completion.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [
+    {"is_fallback": True, "content": "provider unavailable"},
+    {"content": "not JSON"},
+    {"content": '{"cards":[{"front":" ","back":""}]}'},
+])
+async def test_unavailable_or_invalid_authoring_never_saves_an_empty_deck(artifact_stream, monkeypatch, result):
+    creation_plan(artifact_stream, {})
+    completion = AsyncMock(return_value=result)
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    assert not [e for e in events if e["type"] in {"error", "artifact"}], events
+    answer = next(e for e in events if e["type"] == "answer")["block"]["content"]["text"]
+    assert "couldn't create" in answer
+    artifact_stream.storage.create_artifact.assert_not_awaited()
+    artifact_stream.executor._generate_text.assert_not_awaited()

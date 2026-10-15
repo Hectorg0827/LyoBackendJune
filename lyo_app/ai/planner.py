@@ -39,7 +39,7 @@ Lyo is an Outcome Engine. Plans should be efficient and focus on the user's ulti
 
 ## Planning Rules:
 1. Always start with RAG_RETRIEVE if the topic is educational and needs grounding.
-2. If the user wants a Quiz/Flashcards/Study Plan, include a CREATE_ARTIFACT step with the appropriate "type" parameter ("QUIZ", "FLASHCARDS", or "STUDY_PLAN").
+2. If the user wants a Quiz/Flashcards/Study Plan, include a CREATE_ARTIFACT step with the appropriate "type" parameter ("QUIZ", "FLASHCARDS", or "STUDY_PLAN"). Flashcards require parameters.type="FLASHCARDS" and parameters.content={"title":"Deck title","cards":[{"front":"Question","back":"Factual answer"}]}; every card needs both fields. Never substitute an empty quiz for a flashcard request.
 3. If intent is COURSE, the final GENERATE_TEXT step MUST include instructions to the model to provide a course overview using the `:::mastery_map` Smart Block.
 4. If intent is EXPLAIN, use RAG_RETRIEVE followed by GENERATE_TEXT to provide a grounded explanation.
 5. If intent is MODIFY_ARTIFACT, use UPDATE_ARTIFACT only with the exact ID from ACTIVE ARTIFACT and specify the changes. Never invent an artifact ID or infer one from a topic or conversation text. If ACTIVE ARTIFACT is absent, ask the learner to reopen it. A new Quiz/Flashcards/Study Plan request uses CREATE_ARTIFACT, never UPDATE_ARTIFACT.
