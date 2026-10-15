@@ -388,6 +388,22 @@ def choose_option(quiz: dict[str, Any], want_correct: bool) -> tuple[Optional[st
     return None, "missing"
 
 
+def should_submit_unknown_option(
+    profile: LearnerProfile, *, is_diagnostic: bool, certainty: str,
+    already_submitted: bool,
+) -> bool:
+    """Advance genuine learner turns without asserting a hidden answer key.
+
+    A struggling learner cannot deliberately pick the *wrong* answer when
+    the server correctly hides correctness. But a diagnostic still needs a
+    learner response to let the server diagnose and start teaching.
+    """
+    return (
+        certainty == "unknown" and not already_submitted
+        and (is_diagnostic or profile.wrong_attempts > 0)
+    )
+
+
 def select_due_review(
     items: Iterable[dict[str, Any]],
     requested_id: Optional[str] = None,
@@ -885,6 +901,28 @@ class LiveLyo:
                         "Quiz withheld its key; the requested wrong-answer learner behavior "
                         "was not claimed or forced."
                     )
+
+                if quiz is not None and not learner_profile.attempt_correct:
+                    option_id, certainty = choose_option(quiz, want_correct=False)
+                    quiz_key = str(quiz.get("component_id") or scene.get("scene_id") or "")
+                    if option_id and should_submit_unknown_option(
+                        learner_profile, is_diagnostic=is_diagnostic,
+                        certainty=certainty,
+                        already_submitted=quiz_key in unknown_quiz_components,
+                    ):
+                        await send(
+                            ws,
+                            "submit_answer",
+                            quiz,
+                            {"selected_option_id": option_id},
+                        )
+                        unknown_quiz_components.add(quiz_key)
+                        report.notes.append(
+                            "Learner selected one visible option with an undisclosed key. "
+                            "This exercises server grading without asserting a forced "
+                            "incorrect or correct answer."
+                        )
+                        continue
 
                 if quiz is not None and learner_profile.attempt_correct and not correct_submitted:
                     option_id, certainty = choose_option(quiz, want_correct=True)
