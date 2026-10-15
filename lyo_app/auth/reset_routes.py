@@ -18,13 +18,14 @@ import ssl
 import time
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.auth.models import User
 from lyo_app.auth.security import hash_password
+from lyo_app.auth.jwt_auth import rate_limiter
 from lyo_app.core.database import get_async_session
 
 router = APIRouter(prefix="/api/v1/auth/password-reset", tags=["password recovery"])
@@ -146,20 +147,24 @@ async def _send_reset_email(to_email: str, token: str) -> None:
 
 
 @router.post("/request", status_code=status.HTTP_200_OK)
-async def request_reset(payload: ResetRequest, request: Request, db: AsyncSession = Depends(get_async_session)):
+async def request_reset(payload: ResetRequest, request: Request, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_async_session)):
     # Disabled setups must fail for every request (including unknown emails),
     # not leak which account exists.
     if not _provider_configured():
         raise HTTPException(503, "Password recovery is temporarily unavailable")
+    # Rate limit by trusted connection peer (never a spoofable X-Forwarded-For).
+    peer = request.client.host if request.client else "unknown"
+    if not await rate_limiter.check_rate_limit_async(
+        "pwd-reset:" + peer, max_attempts=5, window_minutes=60
+    ):
+        raise HTTPException(429, "Too many reset attempts. Try again later.")
     # Deliberately indistinguishable response for known and unknown addresses.
     result = await db.execute(select(User).where(User.email == str(payload.email).lower()))
     user = result.scalar_one_or_none()
     if user and user.is_active:
         token = create_reset_token(user)
         # Do not log the token, password, email address or tokenized reset URL.
-        from fastapi import BackgroundTasks
-        # Schedule with a dedicated background sender in the request lifecycle.
-        request.state.password_reset_email = (user.email, token)
+        background_tasks.add_task(_send_reset_email, user.email, token)
     return {"message": "If the account exists, a password reset email will be sent."}
 
 
