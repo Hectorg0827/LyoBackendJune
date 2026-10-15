@@ -20,13 +20,13 @@ class RedactClassroomWebSocketQuery(logging.Filter):
     because parameter ordering and future credential fields can change.
     """
 
-    _query = re.compile(r"(/api/v1/classroom/ws/connect)\\?[^\\s\\\"']+")
+    _query = re.compile(r"(/api/v1/classroom/ws/connect)\?[^\s\"\x27]+")
 
     @classmethod
     def _sanitize(cls, value):
         if not isinstance(value, str):
             return value
-        return cls._query.sub(r"\\1?[QUERY_REDACTED]", value)
+        return cls._query.sub(r"\1?[QUERY_REDACTED]", value)
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = self._sanitize(record.msg)
