@@ -34,6 +34,16 @@ async def main() -> None:
                 raise AssertionError(f"Unauthenticated socket closed with {exc.code}") from exc
         else:
             raise AssertionError("Unauthenticated user action was accepted")
+    # Staging explicitly disables old query-token authentication. Verify that
+    # even a genuine synthetic JWT in the URL cannot access learner data.
+    async with websockets.connect(url + "&token=" + token, open_timeout=15, close_timeout=5) as ws:
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=12)
+        except websockets.exceptions.ConnectionClosed as exc:
+            if exc.code != 4001:
+                raise AssertionError(f"Legacy query-token socket closed with {exc.code}") from exc
+        else:
+            raise AssertionError("Legacy URL-token authentication was not rejected")
     # Dedicated first frame authenticates before any learner/session data is sent.
     async with websockets.connect(url, open_timeout=15, close_timeout=5) as ws:
         await ws.send(json.dumps({"type": "classroom_auth", "token": token}))
