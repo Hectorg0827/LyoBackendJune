@@ -819,6 +819,30 @@ LOOSE_JSON = {"type": "json_object"}
 ESCALATION_PROVIDER = "gemini-3.8-flash"
 
 
+
+def compact_classroom_contract(value: Any) -> Any:
+    """Drop only JSON Schema annotation overhead, never validation semantics.
+
+    Keep descriptions, required keys, enumerations, $refs, constraints and
+    definitions. The original canonical schema still validates the response.
+    Titles/defaults/examples add prompt cost but no mandatory constraints.
+    """
+    if isinstance(value, dict):
+        return {
+            key: compact_classroom_contract(child)
+            for key, child in value.items()
+            if key not in {"title", "default", "examples"}
+        }
+    if isinstance(value, list):
+        return [compact_classroom_contract(child) for child in value]
+    return value
+
+
+def bounded_teaching_history(items: list[str], *, keep: int = 4, chars: int = 1000) -> list[str]:
+    """Keep the most recent authored steps while bounding repeated LLM input."""
+    return [str(item)[:chars] for item in items[-keep:]]
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -869,10 +893,18 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     started = perf_counter()
     result = None
     outcome = "error"
+    # Prompt-side compaction is reversible with CLASSROOM_COMPACT_PROMPTS=0.
+    # The provider-enforced contract and server Pydantic validator remain the
+    # complete, unchanged schema; descriptions and all constraints remain.
+    compact = os.getenv("CLASSROOM_COMPACT_PROMPTS", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+    prompt_contract = compact_classroom_contract(contract) if compact else contract
+    prompt_separators = (",", ":") if compact else None
     messages = [
         {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
-         + json.dumps(contract, ensure_ascii=False)},
-        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
+         + json.dumps(prompt_contract, ensure_ascii=False, separators=prompt_separators)},
+        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False, separators=prompt_separators)},
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
@@ -1310,9 +1342,9 @@ class AdaptiveTeacher:
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
             "goal": context.learning_objective, "level": context.preferred_difficulty,
-            "previous_kinds": state.task_kinds[-6:],
-            "previous_questions": state.recent_questions[-8:],
-            "already_taught": [unit.material] if move == "interleave" else state.taught_steps[-6:],
+            "previous_kinds": state.task_kinds[-5:],
+            "previous_questions": state.recent_questions[-6:],
+            "already_taught": [unit.material[:1500]] if move == "interleave" else bounded_teaching_history(state.taught_steps),
             "learner_input": learner_input[:2000], "feedback": state.last_feedback,
             "previous_task": state.pending.task.model_dump() if state.pending else None,
             "previous_answers": state.pending.answers[-3:] if state.pending else [],
@@ -1329,18 +1361,18 @@ class AdaptiveTeacher:
             "visual_policy": self.visual_policy_for(move, strategy),
             "strategy_history": state.strategy_history[-6:],
             "misconceptions": state.misconceptions[-6:],
-            "learner_signals": state.learner_signals[-8:],
+            "learner_signals": state.learner_signals[-6:],
             "board_memory": [
                 {
                     "title": item.get("title", ""),
-                    "content": item.get("content", ""),
+                    "content": str(item.get("content", ""))[:800],
                     "visual": ({
                         "kind": item["visual"].get("kind"),
                         "title": item["visual"].get("title"),
-                        "description": item["visual"].get("description"),
+                        "description": str(item["visual"].get("description") or "")[:400],
                     } if item.get("visual") else None),
                 }
-                for item in state.board_memory[-4:]
+                for item in state.board_memory[-3:]
             ],
             "open_question": state.open_question[:2000],
             "compress_demonstration": focused,
