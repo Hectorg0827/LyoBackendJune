@@ -1013,13 +1013,15 @@ def strict_response_format(schema, contract):
 class AdaptiveTeacher:
     def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json,
                  semantic_judge: Callable[..., Awaitable[bool]] | None = None,
-                 package_cache=None, fast_start: bool = False):
+                 package_cache=None, fast_start: bool = False,
+                 prefetch_unit_packages: bool = True):
         self.generate = generate
         # Optional separate review of meaning the deterministic gate cannot
         # infer: distractor plausibility, gap labeling and factual teaching.
         self.semantic_judge = semantic_judge
         self.package_cache = package_cache
         self.fast_start = fast_start
+        self.prefetch_unit_packages = prefetch_unit_packages
         # Fast-start authors the immediate move first. Once that move is ready,
         # the rest of the unit can be prepared while the learner is reading,
         # listening or answering. Keep the warm package in this teacher
@@ -1145,7 +1147,7 @@ class AdaptiveTeacher:
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
-        if not self.fast_start or self.package_cache is None:
+        if not self.prefetch_unit_packages or not self.fast_start or self.package_cache is None:
             return
         from lyo_app.ai_classroom.unit_package_cache import package_key
         key = package_key(context, unit, self.saved_skill(state, state.next_move))
@@ -1174,7 +1176,8 @@ class AdaptiveTeacher:
         finishes, the existing evaluation path may cancel it and live work wins.
         """
         if (
-            not self.fast_start
+            not self.prefetch_unit_packages
+            or not self.fast_start
             or self.package_cache is None
             or move not in {"independent", "transfer"}
             or self._package_prefetch_tasks
