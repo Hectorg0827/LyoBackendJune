@@ -21,6 +21,25 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+def safe_provider_error_reason(error: object) -> str:
+    """Classify provider errors without logging prompts, keys, or provider bodies."""
+    message = str(error).lower()
+    if "quota exceeded for metric" in message or "generate_content_free_tier_requests" in message:
+        return "quota_exhausted"
+    if "429" in message or "rate limit" in message:
+        return "rate_limited"
+    if "503" in message or "overloaded" in message:
+        return "provider_overloaded"
+    if "401" in message or "403" in message:
+        return "provider_auth_rejected"
+    if "404" in message:
+        return "model_unavailable"
+    if "timeout" in message or isinstance(error, TimeoutError):
+        return "provider_timeout"
+    return type(error).__name__ if isinstance(error, BaseException) else "provider_error"
+
+
+
 
 def _openai_compatible_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Translate Lyo provider-neutral media parts to OpenAI chat content.
@@ -722,7 +741,7 @@ class AIResilienceManager:
         max_tokens = min(max_tokens, 16384)
 
         message_str = json.dumps(messages)
-        print(f">>> [PID {os.getpid()}] AI Resilience Chat: Request for '{message_str[:50]}'", flush=True)
+        logger.debug("AI completion requested: message_count=%d", len(messages))
         if use_cache:
             cache_key = f"chat:{hash(message_str)}"
             cached = self._get_from_cache(cache_key)
@@ -828,12 +847,12 @@ class AIResilienceManager:
                     pass
                 return result
             except Exception as e:
-                print(f">>> [PID {os.getpid()}]   ❌ Error calling {model_name}: {type(e).__name__}: {str(e)[:100]}", flush=True)
-                logger.error(f"Error calling {model_name}: {e}")
+                reason = safe_provider_error_reason(e)
+                logger.warning("AI provider call failed: provider=%s reason=%s", model_name, reason)
                 last_exception = e
                 continue
         
-        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED for '{message_str}'. Returning fallback.", flush=True)
+        logger.warning("All AI providers failed; response fallback used (message_count=%d)", len(messages))
         return self._get_fallback_response(message_str, str(last_exception), response_format=response_format)
 
     async def _call_model_with_messages(
@@ -971,7 +990,8 @@ class AIResilienceManager:
                 duration = time.time() - start_time
                 if response.status != 200:
                     text = await response.text()
-                    print(f">>> [PID {os.getpid()}] {model_name} FAILED ({response.status}) in {duration:.2f}s. Response: {text[:200]}", flush=True)
+                    logger.warning("AI provider HTTP rejection: provider=%s status=%s latency_s=%.2f",
+                                   model_name, response.status, duration)
                     raise Exception(f"API returned {response.status}: {text}")
                 
                 data = await response.json()
@@ -988,7 +1008,8 @@ class AIResilienceManager:
                 }
         except Exception as e:
             duration = time.time() - start_time
-            print(f">>> [PID {os.getpid()}] {model_name} EXCEPTION after {duration:.2f}s: {e}", flush=True)
+            logger.warning("AI provider exception: provider=%s reason=%s latency_s=%.2f",
+                           model_name, safe_provider_error_reason(e), duration)
             raise
 
     def _get_available_models(self, capabilities: Optional[List[str]] = None) -> List[Tuple[str, AIModelConfig]]:
@@ -1121,8 +1142,7 @@ class AIResilienceManager:
 
     def _get_fallback_response(self, message: str, error: str, response_format: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Generate fallback response when ALL AI providers fail."""
-        logger.error(f"🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}")
-        print(f">>> [PID {os.getpid()}] 🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}", flush=True)
+        logger.error("All AI providers failed: reason=%s", safe_provider_error_reason(error))
         
         lower_msg = message.lower()
         is_json = (response_format and response_format.get("type") in ("json_object", "json_schema")) or "json" in lower_msg or "schema" in lower_msg or "{" in lower_msg or "provide:" in lower_msg or "respond with" in lower_msg
