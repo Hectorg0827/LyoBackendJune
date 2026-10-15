@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from live_chat_quality import _turn
+try:\n    from scripts.live_chat_quality import _turn\nexcept ModuleNotFoundError:\n    from live_chat_quality import _turn
 
 
 @dataclass(frozen=True)
