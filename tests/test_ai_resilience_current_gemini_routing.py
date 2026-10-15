@@ -6,6 +6,8 @@ response explicitly recommended Gemini 3.8 Flash.
 """
 from types import SimpleNamespace
 
+import pytest
+
 from lyo_app.core.ai_resilience import AIResilienceManager
 
 
@@ -41,3 +43,55 @@ def test_without_a_configured_current_provider_do_not_fabricate_availability():
     assert mgr._normalize_supported_provider_order([
         "gemini-2.5-flash", "gemini-3.6-flash",
     ]) == ["gemini-2.5-flash", "gemini-3.6-flash"]
+
+
+class _TransparentBreaker:
+    async def call(self, action):
+        return await action()
+
+
+async def _completed_request(behaviors):
+    from unittest.mock import AsyncMock
+
+    manager = _manager()
+    manager.circuit_breakers = {"gemini-3.8-flash": _TransparentBreaker()}
+    manager._make_api_call_with_messages = AsyncMock(side_effect=behaviors)
+    messages = [{"role": "user", "content": "Explain photosynthesis"}]
+    return manager, messages
+
+
+@pytest.mark.asyncio
+async def test_transient_503_then_429_are_retried_inside_one_circuit_breaker_attempt(monkeypatch):
+    observed_sleeps = []
+
+    async def fake_sleep(seconds):
+        observed_sleeps.append(seconds)
+
+    monkeypatch.setattr("lyo_app.core.ai_resilience.asyncio.sleep", fake_sleep)
+    mgr, messages = await _completed_request([
+        RuntimeError("API returned 503: provider overloaded"),
+        RuntimeError("API returned 429: rate limit"),
+        {"content": "A real lesson", "model_used": "gemini-3.8-flash"},
+    ])
+    response = await mgr._call_model_with_messages(
+        "gemini-3.8-flash", mgr.models["gemini-3.8-flash"], messages, 0.2, 256,
+    )
+    assert response["content"] == "A real lesson"
+    assert mgr._make_api_call_with_messages.await_count == 3
+    assert observed_sleeps == [0.4, 0.8]
+
+
+@pytest.mark.asyncio
+async def test_terminal_404_is_not_retried(monkeypatch):
+    async def fake_sleep(_):
+        raise AssertionError("404 must not sleep or retry")
+
+    monkeypatch.setattr("lyo_app.core.ai_resilience.asyncio.sleep", fake_sleep)
+    mgr, messages = await _completed_request(
+        [RuntimeError("API returned 404: model retired")]
+    )
+    with pytest.raises(RuntimeError, match="404"):
+        await mgr._call_model_with_messages(
+            "gemini-3.8-flash", mgr.models["gemini-3.8-flash"], messages, 0.2, 256,
+        )
+    assert mgr._make_api_call_with_messages.await_count == 1
