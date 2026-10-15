@@ -726,9 +726,12 @@ class AIResilienceManager:
         provider_order: List[str] = None,
         use_cache: bool = True,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking_level: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Get chat completion with fallback across providers."""
+        if thinking_level is not None and thinking_level not in {"low", "medium", "high"}:
+            raise ValueError("Unsupported Gemini thinking level")
         # Lazy initialization if lifespan failed
         if not self._initialized:
             print(f">>> [PID {os.getpid()}] AI Resilience: Triggering Lazy Init", flush=True)
@@ -824,8 +827,11 @@ class AIResilienceManager:
                     }
                     print(f">>> [PID {os.getpid()}]   ✅ OpenAI {model_name} SUCCESS", flush=True)
                 else:
+                    thinking_options = ({"thinking_level": thinking_level}
+                                        if thinking_level is not None else {})
                     result = await self._call_model_with_messages(
-                        model_name, model, messages, temperature, max_tokens, response_format=response_format
+                        model_name, model, messages, temperature, max_tokens,
+                        response_format=response_format, **thinking_options,
                     )
                     print(f">>> [PID {os.getpid()}]   ✅ Gemini {model_name} SUCCESS", flush=True)
                 
@@ -863,6 +869,7 @@ class AIResilienceManager:
         temperature: float,
         max_tokens: int,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking_level: Optional[str] = None,
     ) -> Dict[str, Any]:
         cb = self.circuit_breakers[model_name]
 
@@ -872,9 +879,12 @@ class AIResilienceManager:
             # consume retries, and no retry fabricates a lesson or grade.
             for attempt in range(3):
                 try:
+                    thinking_options = ({"thinking_level": thinking_level}
+                                        if thinking_level is not None else {})
                     return await self._make_api_call_with_messages(
                         model_name, model, messages, temperature, max_tokens,
                         response_format=response_format,
+                        **thinking_options,
                     )
                 except Exception as exc:
                     message = str(exc)
@@ -905,6 +915,7 @@ class AIResilienceManager:
         temperature: float,
         max_tokens: int,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking_level: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not model.api_key:
             raise Exception(f"No API key configured for {model.name}")
@@ -970,6 +981,9 @@ class AIResilienceManager:
         }
         
         self.apply_structured_output(payload["generationConfig"], response_format)
+        # Gemini 3 uses levels; legacy 2.5 models do not accept this field.
+        if thinking_level is not None and model_name.startswith("gemini-3."):
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
         
         # Add system instruction if present
         if system_parts:

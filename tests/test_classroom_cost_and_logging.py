@@ -86,10 +86,12 @@ def test_uvicorn_protocol_filter_redacts_entire_classroom_query_before_formattin
 
     record2 = logging.LogRecord(
         "uvicorn.access", logging.INFO, "access.py", 4,
-        "%(path)s", {"path": path}, None,
+        "%(path)s", ({"path": path},), None,
     )
     assert RedactClassroomWebSocketQuery().filter(record2)
     assert secret not in record2.getMessage()
+    assert "session_id=c42" not in record2.getMessage()
+    assert record2.getMessage() == "/api/v1/classroom/ws/connect?[QUERY_REDACTED]"
 
 
 def test_backend_uvicorn_entrypoints_do_not_log_legacy_query_jwts():

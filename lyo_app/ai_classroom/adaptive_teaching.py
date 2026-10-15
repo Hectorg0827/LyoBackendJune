@@ -910,6 +910,15 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
     timeout = 100 if issubclass(schema, UnitPackage) else 45
 
+    # Bound hidden reasoning for immediate lesson authoring inside the existing
+    # 25-second provider deadline. Grading, diagnostics and whole-unit packages
+    # retain their default reasoning. Schemas and evidence gates are unchanged.
+    # https://ai.google.dev/gemini-api/docs/generate-content/thinking
+    immediate_authoring = schema is LearningPlan or (
+        issubclass(schema, LearningTurn) and not issubclass(schema, DiagnosticTurn)
+    )
+    thinking_options = {"thinking_level": "low"} if immediate_authoring else {}
+
     async def call(response_format):
         return await asyncio.wait_for(
             ai_resilience_manager.chat_completion(
@@ -919,6 +928,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 temperature=0.1 if schema is Evaluation else 0.6,
                 response_format=response_format,
                 use_cache=False,
+                **thinking_options,
             ),
             timeout=timeout,
         )
