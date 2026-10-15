@@ -429,7 +429,12 @@ class WebSocketManager:
     ) -> ClientConnection:
         """Handle new client connection"""
 
-        await websocket.accept()
+        # Browser clients authenticate in a dedicated first message, which
+        # requires accepting the transport before verifying the JWT. Avoid
+        # accepting a second time after that pre-authenticated handshake.
+        from starlette.websockets import WebSocketState
+        if websocket.application_state != WebSocketState.CONNECTED:
+            await websocket.accept()
 
         connection = ClientConnection(
             websocket=websocket,
