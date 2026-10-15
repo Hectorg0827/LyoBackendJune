@@ -95,3 +95,22 @@ async def test_terminal_404_is_not_retried(monkeypatch):
             "gemini-3.8-flash", mgr.models["gemini-3.8-flash"], messages, 0.2, 256,
         )
     assert mgr._make_api_call_with_messages.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_request_quota_429_never_sleeps_or_retries(monkeypatch):
+    async def fake_sleep(_):
+        raise AssertionError("Daily Google quota exhaustion cannot recover by retrying")
+
+    monkeypatch.setattr("lyo_app.core.ai_resilience.asyncio.sleep", fake_sleep)
+    error = RuntimeError(
+        "API returned 429: Quota exceeded for metric: "
+        "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+        "limit: 20, model: gemini-3.8-flash. Please retry in 23h."
+    )
+    mgr, messages = await _completed_request([error])
+    with pytest.raises(RuntimeError, match="Quota exceeded"):
+        await mgr._call_model_with_messages(
+            "gemini-3.8-flash", mgr.models["gemini-3.8-flash"], messages, 0.2, 256,
+        )
+    assert mgr._make_api_call_with_messages.await_count == 1
