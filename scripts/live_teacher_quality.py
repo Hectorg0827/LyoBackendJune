@@ -735,7 +735,6 @@ class LiveLyo:
     ) -> None:
         params = {
             "session_id": report.session_id,
-            "token": self.token,
             "topic": report.topic,
             "objective": objective,
             "record_scope": "unit",
@@ -813,6 +812,7 @@ class LiveLyo:
         authored_instruction_seen = False
         ws_cm = await connect()
         async with ws_cm as ws:
+            await ws.send(json.dumps({"type": "classroom_auth", "token": self.token}))
             for _ in range(max_scenes):
                 scene = await receive_scene(ws)
                 if scene is None:
@@ -987,6 +987,7 @@ class LiveLyo:
             reconnect_anchor = str(scenes[-1].get("scene_id") or "")
             ws_cm2 = await connect()
             async with ws_cm2 as ws2:
+                await ws2.send(json.dumps({"type": "classroom_auth", "token": self.token}))
                 scene = await receive_scene(ws2)
                 reconnected = scene is not None
                 if scene is not None:
