@@ -389,6 +389,8 @@ def create_app() -> FastAPI:
         logger.warning(f"⚠️ Progressive Course routes not loaded: {e}")
 
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
+    from lyo_app.auth.reset_routes import router as password_reset_router
+    app.include_router(password_reset_router)
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
 
