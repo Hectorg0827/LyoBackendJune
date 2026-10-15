@@ -858,9 +858,19 @@ class AIResilienceManager:
                         response_format=response_format,
                     )
                 except Exception as exc:
+                    message = str(exc)
+                    # Daily/free-tier request quotas cannot recover on a
+                    # sub-second retry. Google's RESOURCE_EXHAUSTED response
+                    # may include a retry window measured in hours. Do not
+                    # consume extra attempts or show a learner an endless
+                    # cycle of Retry screens for an account-level quota cap.
+                    quota_exhausted = (
+                        "Quota exceeded for metric:" in message
+                        or "generate_content_free_tier_requests" in message
+                    )
                     retryable = (
-                        "API returned 503:" in str(exc)
-                        or "API returned 429:" in str(exc)
+                        "API returned 503:" in message
+                        or ("API returned 429:" in message and not quota_exhausted)
                     )
                     if not retryable or attempt == 2:
                         raise
