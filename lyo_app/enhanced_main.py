@@ -1018,7 +1018,7 @@ if __name__ == "__main__":  # pragma: no cover
         host="0.0.0.0",
         port=port,
         workers=getattr(settings, "WORKERS", 1),
-        log_level=getattr(settings, "LOG_LEVEL", "info").lower(),
+        log_level="warning",  # WebSocket INFO logs include request query strings
         access_log=False,  # Access URLs may carry legacy Classroom WS JWTs
         reload=settings.is_development(),
         loop="uvloop" if not settings.is_development() else "auto",
