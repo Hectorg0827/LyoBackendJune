@@ -71,6 +71,8 @@ def test_backend_uvicorn_entrypoints_do_not_log_legacy_query_jwts():
     entrypoint = (root / "lyo_app" / "enhanced_main.py").read_text(encoding="utf-8")
     resilience = (root / "lyo_app" / "core" / "ai_resilience.py").read_text(encoding="utf-8")
     assert "--no-access-log" in dockerfile
+    assert "--log-level warning" in dockerfile
+    assert 'log_level="warning"' in entrypoint
     assert "access_log=False" in entrypoint
     assert 'ALL PROVIDERS FAILED for' not in resilience
     assert "Request for '{message_str" not in resilience
