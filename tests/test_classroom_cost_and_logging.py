@@ -65,6 +65,33 @@ def test_provider_error_classification_never_repeats_sensitive_provider_text():
         assert secret not in result
 
 
+def test_uvicorn_protocol_filter_redacts_entire_classroom_query_before_formatting():
+    import logging
+    from lyo_app.core.structured_logging import RedactClassroomWebSocketQuery
+    secret = "eyJ.sensitive-legacy-token"
+    path = (
+        "/api/v1/classroom/ws/connect?session_id=c42&topic=Math&token="
+        + secret + "&language=en"
+    )
+    record = logging.LogRecord(
+        "uvicorn.error", logging.INFO, "websocket_impl.py", 123,
+        '%s - "WebSocket %s" [accepted]',
+        (("127.0.0.1", 0), path), None,
+    )
+    assert RedactClassroomWebSocketQuery().filter(record)
+    final = record.getMessage()
+    assert secret not in final
+    assert "session_id=c42" not in final
+    assert "WebSocket /api/v1/classroom/ws/connect?[QUERY_REDACTED]" in final
+
+    record2 = logging.LogRecord(
+        "uvicorn.access", logging.INFO, "access.py", 4,
+        "%(path)s", {"path": path}, None,
+    )
+    assert RedactClassroomWebSocketQuery().filter(record2)
+    assert secret not in record2.getMessage()
+
+
 def test_backend_uvicorn_entrypoints_do_not_log_legacy_query_jwts():
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
