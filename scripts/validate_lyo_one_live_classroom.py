@@ -109,7 +109,7 @@ def main():
     checks = data.get("checks", [])
     if not checks or any(c.get("passed") is False for c in checks):
         raise RuntimeError("Missing or failed teaching quality checks")
-    required = {"classroom_scene_received", "chat_or_classroom_evidence_reached_record"}
+    required = {"classroom_scene_received", "classroom_authored_instruction_delivered", "classroom_recovery_loop_absent", "chat_or_classroom_evidence_reached_record"}
     # Prevent an empty or swallowed provider-error run being marked green.
     successes = {c.get("name") for c in checks if c.get("passed") is True}
     if not required <= successes:
