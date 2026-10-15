@@ -354,6 +354,25 @@ class AIResilienceManager:
             logger.info(f"Circuit breaker reset for {name}")
         print(f">>> [PID {os.getpid()}] All circuit breakers reset to CLOSED", flush=True)
 
+    def _normalize_supported_provider_order(self, provider_order: List[str]) -> List[str]:
+        """Route retired/overloaded Gemini Flash IDs to the supported stable Flash.
+
+        Staging provider validation on 2026-10-14 proved gemini-2.5-flash
+        returns a terminal 404 for new API accounts, and gemini-3.6-flash
+        returned 503. The 404 provider response explicitly recommends
+        gemini-3.8-flash. Do not invent a provider, silently downgrade a Pro
+        request, or treat a configured key as proof of actual availability.
+        """
+        latest = self.models.get("gemini-3.8-flash")
+        migrate = latest is not None and bool(latest.api_key)
+        legacy_flash = {"gemini-2.5-flash", "gemini-3.6-flash", "gemini-3.7-flash"}
+        resolved = []
+        for candidate in provider_order:
+            name = "gemini-3.8-flash" if migrate and candidate in legacy_flash else candidate
+            if name not in resolved:
+                resolved.append(name)
+        return resolved
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -369,6 +388,7 @@ class AIResilienceManager:
             await self.initialize()
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
+        provider_order = self._normalize_supported_provider_order(provider_order)
 
         stream_started = time.monotonic()
         first_token_recorded = False
@@ -723,7 +743,8 @@ class AIResilienceManager:
         # Intelligent model routing based on message complexity
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
-        
+        provider_order = self._normalize_supported_provider_order(provider_order)
+
         print(f">>> [PID {os.getpid()}] chat_completion: provider_order={provider_order}, self.models.keys()={list(self.models.keys())}", flush=True)
         
         available_models_with_configs = [
