@@ -1019,7 +1019,7 @@ if __name__ == "__main__":  # pragma: no cover
         port=port,
         workers=getattr(settings, "WORKERS", 1),
         log_level=getattr(settings, "LOG_LEVEL", "info").lower(),
-        access_log=not settings.is_production(),
+        access_log=False,  # Access URLs may carry legacy Classroom WS JWTs
         reload=settings.is_development(),
         loop="uvloop" if not settings.is_development() else "auto",
     )
