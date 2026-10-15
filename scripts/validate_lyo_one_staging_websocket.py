@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import websockets
 
-from scripts.validate_lyo_one_live_classroom import (
+from validate_lyo_one_live_classroom import (
     STAGING_API, create_synthetic_access_token, verify_candidate,
 )
 
