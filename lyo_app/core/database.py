@@ -171,6 +171,7 @@ async def init_db() -> None:
         from lyo_app.community.models import StudyGroup, GroupMembership, CommunityEvent, EventAttendance  # noqa: F401
         from lyo_app.feeds.models import Post, Comment, PostReaction, CommentReaction, UserFollow  # noqa: F401
         from lyo_app.tenants.models import Organization, APIKey  # noqa: F401
+        from lyo_app.events.models import LearningEvent, EventType  # noqa: F401
         from lyo_app.stack.models import StackItem  # noqa: F401
         from lyo_app.ai_study.models import StudySession, GeneratedQuiz, QuizAttempt, StudySessionAnalytics  # noqa: F401
         from lyo_app.ai_agents.models import UserEngagementState, MentorInteraction  # noqa: F401
@@ -198,6 +199,8 @@ async def init_db() -> None:
         # Enable automatic schema updates to ensure all tables exist
         logger.info("Synchronizing database schema...")
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_learning_event_enum(conn)
+        await _ensure_default_chat_tenant(conn)
         
         # Legacy schema patches
         await _ensure_users_schema(conn)
@@ -208,6 +211,60 @@ async def init_db() -> None:
         await _ensure_courses_schema(conn)
         await _ensure_lessons_schema(conn)
         logger.info("Database models registered successfully")
+
+
+
+async def _ensure_learning_event_enum(conn) -> None:
+    """Reconcile legacy PostgreSQL eventtype labels before audit/evidence writes.
+
+    Historical CommunityEvent also defined an enum named eventtype; on a
+    fresh database bootstrapped through SQLAlchemy.create_all, the first model
+    registering the type can omit labels required by LearningEvent. Current
+    Alembic migrations normalize this already, but the runtime create_all
+    bootstrap must not leave an unusable evidence log.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+
+    found = await conn.execute(text(
+        "SELECT 1 FROM pg_type WHERE typname = 'eventtype'"
+    ))
+    if found.scalar_one_or_none() is None:
+        return
+
+    from lyo_app.events.models import EventType
+    for event_type in EventType:
+        # Enum member names come from source code, not user input.
+        label = event_type.name
+        if not label.isidentifier() or not label.isupper():
+            raise RuntimeError("Unsafe learning event label")
+        await conn.execute(text(
+            f"ALTER TYPE eventtype ADD VALUE IF NOT EXISTS '{label}'"
+        ))
+
+
+async def _ensure_default_chat_tenant(conn) -> None:
+    """Create Chat's default tenant on fresh databases before accepting turns.
+
+    All TenantMixin-based Chat tables historically default to organization 1.
+    Neither creating tables nor registering a learner creates that organization.
+    Protect existing records, and never return a healthy server with missing
+    default tenancy: this would fail every first Chat conversation with FK 500.
+    """
+    await conn.execute(text(
+        """
+        INSERT INTO organizations
+            (id, name, slug, plan_tier, is_active,
+             monthly_api_calls, monthly_ai_tokens, created_at, updated_at)
+        VALUES
+            (1, 'Lyo Default', 'lyo-default-tenant', 'free', TRUE,
+             0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT DO NOTHING
+        """
+    ))
+    exists = await conn.execute(text("SELECT id FROM organizations WHERE id = 1"))
+    if exists.scalar_one_or_none() is None:
+        raise RuntimeError("Default Chat organization is missing; refusing to serve broken conversations")
 
 
 async def _ensure_users_schema(conn) -> None:

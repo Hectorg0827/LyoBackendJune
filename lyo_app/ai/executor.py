@@ -8,7 +8,7 @@ import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType, PlannedAction
 from lyo_app.services.rag_service import RAGService
 from lyo_app.services.artifact_service import ArtifactService
-from lyo_app.services.mutator import FollowUpMutator
+from lyo_app.services.mutator import ArtifactUnavailable, FollowUpMutator
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
 from lyo_app.integrations.calendar_integration import calendar_service, CalendarEvent, EventCategory
@@ -723,11 +723,26 @@ Freshness rules:
             elif step.action_type == ActionType.UPDATE_ARTIFACT:
                 artifact_id = step.parameters.get("artifact_id")
                 instruction = step.parameters.get("instruction", original_request)
-                if artifact_id:
-                    artifact = await self.mutator.mutate(artifact_id, instruction)
-                    execution_context["created_artifacts"].append(artifact)
-                else:
-                    logger.warning("UPDATE_ARTIFACT requested but no artifact_id found in plan")
+                try:
+                    artifact = await self.mutator.mutate(
+                        artifact_id, instruction, user_context={"user_id": user_id},
+                    )
+                except ArtifactUnavailable:
+                    # A stale or invented target is a recoverable interaction,
+                    # not a critical SSE failure. Stop before a later generated
+                    # confirmation can claim that an update succeeded.
+                    logger.warning("Artifact update target unavailable to learner")
+                    return UnifiedChatResponse(
+                        answer_block=UIBlock(
+                            type=UIBlockType.TUTOR_MESSAGE,
+                            content={"text": (
+                                "I couldn't reopen that saved study material, so I haven't changed it. "
+                                "Reopen it and try again, or ask me to create a new set."
+                            )},
+                        ),
+                        metadata={"artifact_status": "unavailable"},
+                    )
+                execution_context["created_artifacts"].append(artifact)
                 
             elif step.action_type == ActionType.GENERATE_TEXT and not execution_context["final_text"]:
                     execution_context["final_text"] = await self._generate_text(

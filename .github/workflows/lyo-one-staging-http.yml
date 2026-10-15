@@ -1,0 +1,36 @@
+name: Lyo One isolated staging HTTP
+
+on:
+  pull_request:
+    branches: [main, feature/lyo-one-journey-context]
+    paths:
+      - scripts/validate_lyo_one_staging_http.py
+      - scripts/validate_lyo_one_staging_websocket.py
+      - lyo_app/ai_classroom/websocket_routes.py
+      - lyo_app/ai_classroom/websocket_manager.py
+      - Dockerfile
+      - .github/workflows/lyo-one-staging-http.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise synthetic authenticated learners against isolated Railway staging
+        env:
+          LYO_ONE_STAGING_SMOKE: "1"
+          LYO_ONE_EXPECTED_BACKEND_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/validate_lyo_one_staging_http.py
+      - name: Install isolated WebSocket test dependency
+        run: python3 -m pip install --disable-pip-version-check 'websockets==15.0.1'
+      - name: Verify Classroom WebSocket authentication without URL tokens
+        env:
+          LYO_ONE_STAGING_WS_AUTH_SMOKE: "1"
+          LYO_ONE_PROVIDER_STAGING_READY: "yes"
+          LYO_ONE_EXPECTED_BACKEND_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/validate_lyo_one_staging_websocket.py
