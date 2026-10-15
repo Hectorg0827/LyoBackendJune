@@ -392,13 +392,14 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
             return ScriptedTeacher()._turn(ctx, GuidedState(owner=ctx.user_id, plan=unit_plan), "diagnose")
         raise AssertionError("The opening should author only its first question")
 
-    def teacher_factory(*, package_cache, fast_start, semantic_judge):
+    def teacher_factory(*, package_cache, fast_start, semantic_judge, prefetch_unit_packages=True):
         installed.append(package_cache)
         reviewed.append(semantic_judge)
         return original_teacher(
             generate=generate,
             package_cache=package_cache,
             fast_start=fast_start,
+            prefetch_unit_packages=prefetch_unit_packages,
             semantic_judge=semantic_judge,
         )
 
