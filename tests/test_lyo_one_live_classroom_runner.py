@@ -86,5 +86,48 @@ class ProviderCandidateTests(unittest.TestCase):
                                   "configured_gemini_models": ["gemini-2.5-flash"]})
 
 
+
+class TeachingEvidenceRegressionTests(unittest.TestCase):
+    """A stream of server fallback cards must never count as a passed lesson."""
+
+    def test_recovery_notice_is_not_a_lesson(self):
+        from scripts.live_teacher_quality import (
+            has_authored_classroom_instruction, is_recovery_only_scene,
+        )
+        scene = {
+            "metadata": {"presentation_focus": "recovery", "teaching_action": None},
+            "components": [
+                {"type": "TeacherMessage", "text": "Let's stay with fractions."},
+                {"type": "ExampleBlock", "component_id": "classroom-recovery/notice",
+                 "content": "Your lesson is paused"},
+                {"type": "CTAButton", "action_intent": "retry"},
+            ],
+        }
+        self.assertTrue(is_recovery_only_scene(scene))
+        self.assertFalse(has_authored_classroom_instruction(scene))
+
+    def test_real_teaching_is_distinguished_from_recovery_and_empty_ui(self):
+        from scripts.live_teacher_quality import (
+            has_authored_classroom_instruction, is_recovery_only_scene,
+        )
+        authored = {"metadata": {"teaching_action": "EXPLAIN"},
+                    "components": [{"type": "TeacherMessage",
+                                    "text": "Because each whole is divided into equal parts."}]}
+        empty = {"metadata": {}, "components": [{"type": "TeacherMessage", "text": "Please retry"}]}
+        self.assertFalse(is_recovery_only_scene(authored))
+        self.assertTrue(has_authored_classroom_instruction(authored))
+        self.assertFalse(has_authored_classroom_instruction(empty))
+
+    def test_recovery_overlay_cannot_masquerade_as_valid_instruction(self):
+        from scripts.live_teacher_quality import has_authored_classroom_instruction
+        mixed = {"metadata": {"teaching_action": "EXPLAIN"},
+                 "components": [
+                     {"type": "TeacherMessage", "text": "Lesson"},
+                     {"type": "ExampleBlock", "component_id": "classroom-recovery/notice",
+                      "content": "Retry"},
+                 ]}
+        self.assertFalse(has_authored_classroom_instruction(mixed))
+
+
 if __name__ == "__main__":
     unittest.main()
