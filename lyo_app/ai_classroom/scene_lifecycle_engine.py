@@ -10,6 +10,7 @@ The live engine owns persistence and streaming; AdaptiveSession owns teaching.
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from enum import Enum
@@ -1528,6 +1529,13 @@ class SceneLifecycleEngine:
             adaptive_teacher = AdaptiveTeacher(
                 package_cache=DatabaseUnitPackageCache(self.db),
                 fast_start=True,
+                # Large speculative UnitPackage calls exhausted provider
+                # capacity while the learner awaited smaller live moves.
+                # Keep authored teacher/grade paths unchanged and allow an
+                # explicit, reversible opt-in after latency/usage validation.
+                prefetch_unit_packages=os.getenv(
+                    "CLASSROOM_PREFETCH_UNIT_PACKAGES", "0"
+                ).strip().lower() in {"1", "true", "yes", "on"},
                 semantic_judge=model_semantic_judge if judge_enabled() else None,
             )
             self.adaptive_teacher = adaptive_teacher
