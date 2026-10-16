@@ -17,6 +17,20 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     if not inspector.has_table("refresh_tokens"):
+        op.create_table(
+            "refresh_tokens",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("token", sa.Text(), nullable=False),
+            sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+            sa.Column("is_revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("device_info", sa.JSON(), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
+                      server_default=sa.text("CURRENT_TIMESTAMP")),
+        )
+        op.create_index("ix_refresh_tokens_token", "refresh_tokens", ["token"], unique=True)
+        op.create_index("ix_refresh_tokens_id", "refresh_tokens", ["id"])
+        op.create_index("ix_refresh_tokens_user_id", "refresh_tokens", ["user_id"])
         return
     columns = {col["name"]: col for col in inspector.get_columns("refresh_tokens")}
     if "token" not in columns:
