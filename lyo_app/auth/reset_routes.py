@@ -30,7 +30,7 @@ from lyo_app.core.database import get_async_session
 
 router = APIRouter(prefix="/api/v1/auth/password-reset", tags=["password recovery"])
 RESET_TTL_SECONDS = 3600
-PUBLIC_RESET_URL = "https://www.lyoai.app/auth/reset-password"
+DEFAULT_RESET_URL = "https://www.lyoai.app/auth/reset-password"
 
 _RATE_LIMIT_LUA = """
 local n = redis.call('INCR', KEYS[1])
@@ -149,7 +149,13 @@ def _provider_configured() -> bool:
 
 async def _send_reset_email(to_email: str, token: str) -> None:
     from urllib.parse import quote
-    url = PUBLIC_RESET_URL + "?token=" + quote(token, safe="")
+    from urllib.parse import urlsplit
+    base_url = os.getenv("LYO_PASSWORD_RESET_URL", DEFAULT_RESET_URL)
+    parts = urlsplit(base_url)
+    if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
+            or parts.query or parts.fragment or parts.path != "/auth/reset-password"):
+        raise RuntimeError("Password recovery public URL must be an HTTPS reset-password page")
+    url = base_url + "?token=" + quote(token, safe="")
     if os.getenv("RESEND_API_KEY"):
         async with httpx.AsyncClient(timeout=15.0) as client:
             reply = await client.post(
