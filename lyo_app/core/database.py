@@ -474,7 +474,7 @@ async def _ensure_refresh_tokens_table(conn) -> None:
         """
         CREATE TABLE IF NOT EXISTS refresh_tokens (
             id SERIAL PRIMARY KEY,
-            token VARCHAR(255) NOT NULL,
+            token TEXT NOT NULL,
             user_id INTEGER NOT NULL,
             is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
             expires_at TIMESTAMP WITH TIME ZONE NOT NULL,

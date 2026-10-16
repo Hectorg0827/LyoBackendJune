@@ -153,7 +153,7 @@ class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    token: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    token: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     
     is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

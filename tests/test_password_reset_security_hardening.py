@@ -65,3 +65,65 @@ def test_railway_deployment_sender_and_proxy_hardening():
         text = (root / script).read_text()
         assert "SMTP_FROM_EMAIL" in text
         assert 'if [ -n "${RESEND_API_KEY:-}" ]' in text
+
+def test_refresh_jwt_widens_beyond_legacy_column_limit():
+    from sqlalchemy import Text
+    from lyo_app.auth.models import RefreshToken
+    token = jwt_auth.create_refresh_token("12345678901234", auth_version=42)
+    assert len(token) > 255  # A real token must not fail at DB insert.
+    assert isinstance(RefreshToken.__table__.c.token.type, Text)
+
+
+@pytest.mark.asyncio
+async def test_migrated_postgres_refresh_token_column_is_unbounded():
+    import os
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    url = os.getenv("COMMUNITY_POSTGRES_URL")
+    if not url:
+        pytest.skip("PostgreSQL acceptance test only runs in backend CI")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+asyncpg://", 1))
+    try:
+        async with engine.connect() as conn:
+            row = (await conn.execute(text("""
+                SELECT data_type, character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                AND table_name = 'refresh_tokens' AND column_name = 'token'
+            """))).one()
+        assert row.data_type == "text"
+        assert row.character_maximum_length is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shared_redis_limit_with_two_independent_clients(monkeypatch):
+    import os
+    import secrets
+    import redis.asyncio as redis_async
+
+    url = os.getenv("REDIS_URL")
+    if not url:
+        pytest.skip("A Redis container is required for integration validation")
+    first = redis_async.from_url(url)
+    second = redis_async.from_url(url)
+    peer = "ci-" + secrets.token_hex(12)
+    key = "pwd-reset:" + peer
+    try:
+        assert await first.ping()
+        monkeypatch.setattr(reset.redis_client, "client", first)
+        for _ in range(3):
+            await reset._enforce_reset_limit(peer)
+        monkeypatch.setattr(reset.redis_client, "client", second)
+        for _ in range(2):
+            await reset._enforce_reset_limit(peer)
+        with pytest.raises(HTTPException) as denied:
+            await reset._enforce_reset_limit(peer)
+        assert denied.value.status_code == 429
+        assert 0 < await second.ttl(key) <= 3600
+    finally:
+        await first.delete(key)
+        await first.aclose()
+        await second.aclose()
