@@ -76,3 +76,44 @@ async def test_confirm_changes_password_and_invalidates_link(monkeypatch):
     assert u.auth_version == 1
     assert db.execute.await_count == 2
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_staging_reset_email_uses_explicit_https_frontend_url(monkeypatch):
+    from urllib.parse import urlsplit, parse_qs
+
+    monkeypatch.setenv("LYO_PASSWORD_RESET_URL",
+                       "https://lyoonestagingweb-staging.up.railway.app/auth/reset-password")
+    outgoing = {}
+
+    class FakeReply:
+        def raise_for_status(self):
+            return None
+
+    class FakeHttpClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, endpoint, headers, json):
+            outgoing.update(json)
+            return FakeReply()
+
+    monkeypatch.setattr(reset.httpx, "AsyncClient", FakeHttpClient)
+    await reset._send_reset_email("learner@example.org", "test-secret-token")
+    url = outgoing["text"].split("within one hour: ", 1)[1]
+    assert urlsplit(url).hostname == "lyoonestagingweb-staging.up.railway.app"
+    assert urlsplit(url).path == "/auth/reset-password"
+    assert parse_qs(urlsplit(url).query) == {"token": ["test-secret-token"]}
+
+
+@pytest.mark.asyncio
+async def test_reset_email_rejects_untrusted_non_https_url(monkeypatch):
+    monkeypatch.setenv("LYO_PASSWORD_RESET_URL", "http://malicious.example/auth/reset-password")
+    with pytest.raises(RuntimeError, match="HTTPS reset-password"):
+        await reset._send_reset_email("learner@example.org", "test-secret-token")
