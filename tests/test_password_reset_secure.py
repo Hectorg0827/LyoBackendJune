@@ -117,3 +117,39 @@ async def test_reset_email_rejects_untrusted_non_https_url(monkeypatch):
     monkeypatch.setenv("LYO_PASSWORD_RESET_URL", "http://malicious.example/auth/reset-password")
     with pytest.raises(RuntimeError, match="HTTPS reset-password"):
         await reset._send_reset_email("learner@example.org", "test-secret-token")
+
+
+@pytest.mark.asyncio
+async def test_reset_throttle_scopes_per_address_not_shared_railway_proxy(monkeypatch):
+    from collections import defaultdict
+    from fastapi import HTTPException
+
+    calls = defaultdict(int)
+
+    async def shared_eval(script, count, key, ttl):
+        calls[key] += 1
+        return calls[key]
+
+    monkeypatch.setattr(reset.redis_client, "client", SimpleNamespace(eval=shared_eval))
+    request = SimpleNamespace(client=SimpleNamespace(host="100.64.0.1"),
+                              headers={"x-forwarded-for": "198.51.100.10"})
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+
+    async def send(email):
+        return await reset.request_reset(payload=reset.ResetRequest(email=email),
+                                         request=request, background_tasks=BackgroundTasks(), db=db)
+
+    for _ in range(5):
+        assert "If the account exists" in (await send("one@example.org"))["message"]
+    # Different learner behind the same ingress proxy is not rate-limited at five.
+    assert "If the account exists" in (await send("two@example.org"))["message"]
+    request.headers["x-forwarded-for"] = "203.0.113.55"  # Spoofing doesn't reset the per-account counter.
+    with pytest.raises(HTTPException) as denied:
+        await send("one@example.org")
+    assert denied.value.status_code == 429
+    assert calls["pwd-reset:ingress:100.64.0.1"] == 7
+    assert len([key for key in calls if key.startswith("pwd-reset:account:")]) == 2
+    assert not any("one@example.org" in key for key in calls)
