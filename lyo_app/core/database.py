@@ -236,6 +236,10 @@ async def _ensure_users_schema(conn) -> None:
 
     ddl_statements: list[str] = []
 
+    # Persistent credential epoch for session revocation after reset.
+    if 'auth_version' not in column_names:
+        ddl_statements.append('ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0')
+
     # SaaS Organizational support
     if "organization_id" not in column_names:
         ddl_statements.append(

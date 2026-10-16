@@ -144,10 +144,10 @@ class AuthService:
         
         # Create access token using jwt_auth for consistent format with chat endpoints
         from lyo_app.core.settings import settings as jwt_settings
-        access_token = create_access_token(user_id=str(user.id))
+        access_token = create_access_token(user_id=str(user.id), auth_version=user.auth_version)
         
         # Create refresh token
-        refresh_token_str = create_refresh_token(user_id=str(user.id))
+        refresh_token_str = create_refresh_token(user_id=str(user.id), auth_version=user.auth_version)
         
         # Store refresh token in database for validation
         refresh_token_record = RefreshTokenModel(
@@ -195,6 +195,13 @@ class AuthService:
         if not user_id:
             raise ValueError("Invalid refresh token payload")
             
+        # Serialize refresh rotation with reset against the same user row.
+        from lyo_app.auth.models import User as CredentialUser
+        locked_row = await db.execute(select(CredentialUser).where(
+            CredentialUser.id == int(user_id)).with_for_update())
+        locked_user = locked_row.scalar_one_or_none()
+        if locked_user is None or token_data.extra.get("auth_version", 0) != locked_user.auth_version:
+            raise ValueError("Refresh token revoked by password reset")
         # Check if token exists in database and is not revoked
         result = await db.execute(
             select(RefreshTokenModel).where(
@@ -218,10 +225,10 @@ class AuthService:
             raise ValueError("Account is disabled")
             
         # Create new access token
-        access_token = create_access_token(user_id=str(user.id))
+        access_token = create_access_token(user_id=str(user.id), auth_version=user.auth_version)
         
         # Rotate refresh token: Create new one and revoke old one
-        new_refresh_token_str = create_refresh_token(user_id=str(user.id))
+        new_refresh_token_str = create_refresh_token(user_id=str(user.id), auth_version=user.auth_version)
         
         # Revoke old token
         token_record.is_revoked = True

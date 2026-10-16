@@ -65,7 +65,7 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]] = None) -> str:
+def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]] = None, auth_version: int = 0) -> str:
     """Create JWT access token."""
     expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
 
@@ -74,6 +74,7 @@ def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]
         "user_id": str(user_id),  # Ensure it's a string in JWT
         "sub": str(user_id),
         "token_type": "access",
+        "auth_version": auth_version,
         "exp": expire,
         "iat": datetime.utcnow(),
         "iss": "lyo-backend"
@@ -90,7 +91,7 @@ def create_access_token(user_id: str, additional_claims: Optional[Dict[str, Any]
     return encoded_jwt
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user_id: str, auth_version: int = 0) -> str:
     """Create JWT refresh token."""
     expire = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
@@ -99,6 +100,7 @@ def create_refresh_token(user_id: str) -> str:
         "user_id": str(user_id),  # Ensure it's a string in JWT
         "sub": str(user_id),
         "token_type": "refresh",
+        "auth_version": auth_version,
         "exp": expire,
         "iat": datetime.utcnow(),
         "iss": "lyo-backend"
@@ -126,19 +128,7 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
     Raises:
         AuthenticationProblem: If token is invalid or expired
     """
-    # Try cache first for access tokens
-    if expected_type == "access":
-        cached_payload = jwt_cache.get(token)
-        if cached_payload:
-            # Reconstruct TokenData from cache
-            exp_timestamp = cached_payload.get("exp")
-            exp_datetime = datetime.fromtimestamp(exp_timestamp)
-            return TokenData(
-                user_id=cached_payload.get("user_id"),
-                token_type=cached_payload.get("token_type"),
-                exp=exp_datetime,
-                **{k: v for k, v in cached_payload.items() if k not in ["user_id", "token_type", "exp"]}
-            )
+    # Never trust cached JWT payloads after a credential epoch change.
 
     try:
         payload = jwt.decode(
@@ -158,12 +148,22 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
         if token_type != expected_type:
             raise AuthenticationProblem(f"Invalid token type. Expected {expected_type}")
         
+        # Legacy tokens without a claim belong to epoch zero; after reset
+        # they fail alongside all other pre-reset access/refresh JWTs.
+        version = payload.get("auth_version", 0)
+        if type(version) is not int:
+            raise AuthenticationProblem("Invalid credential version")
+        try:
+            parsed_id = int(user_id)
+        except (TypeError, ValueError):
+            raise AuthenticationProblem("Invalid user identifier")
+        from lyo_app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            row = await session.execute(select(User.auth_version).where(User.id == parsed_id))
+            current_version = row.scalar_one_or_none()
+        if current_version is None or version != current_version:
+            raise AuthenticationProblem("Session revoked by password change")
         exp_datetime = datetime.fromtimestamp(exp_timestamp)
-        
-        # Cache successful validation for access tokens
-        if expected_type == "access":
-            jwt_cache.set(token, payload)
-        
         return TokenData(
             user_id=user_id,
             token_type=token_type,

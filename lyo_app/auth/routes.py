@@ -219,8 +219,8 @@ async def register_user(
         from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
         from lyo_app.core.settings import settings as jwt_settings
         
-        access_token = create_access_token(user_id=str(user.id))
-        refresh_token = create_refresh_token(user_id=str(user.id))
+        access_token = create_access_token(user_id=str(user.id), auth_version=user.auth_version)
+        refresh_token = create_refresh_token(user_id=str(user.id), auth_version=user.auth_version)
         
         return LoginResponse(
             user=UserRead.model_validate(user),

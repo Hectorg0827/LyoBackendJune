@@ -106,7 +106,7 @@ async def login_json(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token = jwt_create_access_token(user_id=str(user.id))
+    access_token = jwt_create_access_token(user_id=str(user.id), auth_version=user.auth_version)
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/token")
@@ -124,7 +124,7 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = jwt_create_access_token(user_id=str(user.id))
+    access_token = jwt_create_access_token(user_id=str(user.id), auth_version=user.auth_version)
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me")

@@ -17,7 +17,7 @@ def key(monkeypatch):
 
 def user():
     return SimpleNamespace(id=51, email="learner@example.org", is_active=True,
-                           hashed_password="existing-bcrypt-hash")
+                           hashed_password="existing-bcrypt-hash", auth_version=0)
 
 
 def test_stateless_reset_token_is_password_bound_time_limited_and_tamper_proof():
@@ -34,7 +34,7 @@ def test_stateless_reset_token_is_password_bound_time_limited_and_tamper_proof()
 
 @pytest.mark.asyncio
 async def test_reset_request_is_nonenumerating_but_schedules_real_mail(monkeypatch):
-    monkeypatch.setattr(reset.rate_limiter, "check_rate_limit_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(reset, "_enforce_reset_limit", AsyncMock(return_value=None))
     request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
     tasks = BackgroundTasks()
     db = MagicMock()
@@ -73,4 +73,6 @@ async def test_confirm_changes_password_and_invalidates_link(monkeypatch):
     assert "Password updated" in reply["message"]
     assert u.hashed_password == "new-bcrypt-hash"
     assert not reset.verify_reset_token(u, token)
+    assert u.auth_version == 1
+    assert db.execute.await_count == 2
     db.commit.assert_awaited_once()

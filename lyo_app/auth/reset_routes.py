@@ -20,17 +20,38 @@ import time
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lyo_app.auth.models import User
+from lyo_app.auth.models import User, RefreshToken
 from lyo_app.auth.security import hash_password
-from lyo_app.auth.jwt_auth import rate_limiter
+from lyo_app.core.redis_client import redis_client
 from lyo_app.core.database import get_async_session
 
 router = APIRouter(prefix="/api/v1/auth/password-reset", tags=["password recovery"])
 RESET_TTL_SECONDS = 3600
 PUBLIC_RESET_URL = "https://www.lyoai.app/auth/reset-password"
+
+_RATE_LIMIT_LUA = """
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])) end
+return n
+"""
+
+async def _enforce_reset_limit(peer: str) -> None:
+    # A reset rate limit must be shared across every worker; never fall back locally.
+    client = redis_client.client
+    if client is None:
+        raise HTTPException(503, 'Password recovery is temporarily unavailable')
+    try:
+        count = await client.eval(_RATE_LIMIT_LUA, 1, 'pwd-reset:' + peer, 3600)
+        if type(count) is not int:
+            raise ValueError('Redis did not return a counter')
+    except Exception:
+        raise HTTPException(503, 'Password recovery is temporarily unavailable')
+    if count > 5:
+        raise HTTPException(429, 'Too many reset attempts. Try again later.')
+
 
 
 class ResetRequest(BaseModel):
@@ -152,12 +173,9 @@ async def request_reset(payload: ResetRequest, request: Request, background_task
     # not leak which account exists.
     if not _provider_configured():
         raise HTTPException(503, "Password recovery is temporarily unavailable")
-    # Rate limit by trusted connection peer (never a spoofable X-Forwarded-For).
+    # The deployment trusts forwarding headers only from explicit upstream proxies.
     peer = request.client.host if request.client else "unknown"
-    if not await rate_limiter.check_rate_limit_async(
-        "pwd-reset:" + peer, max_attempts=5, window_minutes=60
-    ):
-        raise HTTPException(429, "Too many reset attempts. Try again later.")
+    await _enforce_reset_limit(peer)
     # Deliberately indistinguishable response for known and unknown addresses.
     result = await db.execute(select(User).where(User.email == str(payload.email).lower()))
     user = result.scalar_one_or_none()
@@ -183,6 +201,13 @@ async def confirm_reset(payload: ResetConfirm, db: AsyncSession = Depends(get_as
     if not user or not user.is_active or not verify_reset_token(user, payload.token):
         raise HTTPException(400, "Invalid or expired reset link")
     user.hashed_password = hash_password(payload.new_password)
+    user.auth_version = (user.auth_version or 0) + 1
     user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    # In the same user-row-locked transaction, disable every prior refresh token.
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.is_revoked.is_(False))
+        .values(is_revoked=True)
+    )
     await db.commit()
     return {"message": "Password updated. Sign in with your new password."}
