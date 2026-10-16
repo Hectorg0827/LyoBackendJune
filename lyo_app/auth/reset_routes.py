@@ -38,7 +38,7 @@ if n == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1])) end
 return n
 """
 
-async def _enforce_reset_limit(peer: str) -> None:
+async def _enforce_reset_limit(peer: str, *, limit: int = 5) -> None:
     # A reset rate limit must be shared across every worker; never fall back locally.
     client = redis_client.client
     if client is None:
@@ -49,7 +49,7 @@ async def _enforce_reset_limit(peer: str) -> None:
             raise ValueError('Redis did not return a counter')
     except Exception:
         raise HTTPException(503, 'Password recovery is temporarily unavailable')
-    if count > 5:
+    if count > limit:
         raise HTTPException(429, 'Too many reset attempts. Try again later.')
 
 
@@ -179,11 +179,16 @@ async def request_reset(payload: ResetRequest, request: Request, background_task
     # not leak which account exists.
     if not _provider_configured():
         raise HTTPException(503, "Password recovery is temporarily unavailable")
-    # The deployment trusts forwarding headers only from explicit upstream proxies.
+    # Railway's ingress peer can be shared by many learners. Use a generous
+    # ingress-wide safety ceiling plus a strict per-target email limit. Never
+    # trust user-supplied X-Forwarded-For/X-Real-IP for bypassable counters.
     peer = request.client.host if request.client else "unknown"
-    await _enforce_reset_limit(peer)
+    await _enforce_reset_limit("ingress:" + peer, limit=10000)
+    normalized_email = str(payload.email).strip().lower()
+    address_hash = hmac.new(_key(), normalized_email.encode("utf-8"), hashlib.sha256).hexdigest()
+    await _enforce_reset_limit("account:" + address_hash)
     # Deliberately indistinguishable response for known and unknown addresses.
-    result = await db.execute(select(User).where(User.email == str(payload.email).lower()))
+    result = await db.execute(select(User).where(User.email == normalized_email))
     user = result.scalar_one_or_none()
     if user and user.is_active:
         token = create_reset_token(user)
