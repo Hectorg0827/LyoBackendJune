@@ -127,3 +127,27 @@ async def test_shared_redis_limit_with_two_independent_clients(monkeypatch):
         await first.delete(key)
         await first.aclose()
         await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_existing_legacy_refresh_table_is_widened_during_startup():
+    from lyo_app.core.database import _ensure_refresh_tokens_table
+
+    connection = MagicMock()
+    connection.run_sync = AsyncMock(return_value=(True, True))
+    connection.execute = AsyncMock()
+    await _ensure_refresh_tokens_table(connection)
+    connection.execute.assert_awaited_once()
+    sql = str(connection.execute.await_args.args[0])
+    assert "ALTER TABLE refresh_tokens ALTER COLUMN token TYPE TEXT" in sql
+
+
+@pytest.mark.asyncio
+async def test_already_wide_refresh_table_skips_ddl():
+    from lyo_app.core.database import _ensure_refresh_tokens_table
+
+    connection = MagicMock()
+    connection.run_sync = AsyncMock(return_value=(True, False))
+    connection.execute = AsyncMock()
+    await _ensure_refresh_tokens_table(connection)
+    connection.execute.assert_not_awaited()
