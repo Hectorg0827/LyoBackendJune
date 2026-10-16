@@ -457,17 +457,30 @@ async def _ensure_learner_mastery_schema(conn) -> None:
 async def _ensure_refresh_tokens_table(conn) -> None:
     """Ensure refresh_tokens table exists (manual creation since create_all is disabled)."""
     
-    def _check_table_exists(sync_conn):
+    def _inspect_refresh_tokens(sync_conn):
         inspector = inspect(sync_conn)
-        return inspector.has_table("refresh_tokens")
+        if not inspector.has_table("refresh_tokens"):
+            return False, False
+        if sync_conn.dialect.name != "postgresql":
+            return True, False
+        columns = {col["name"]: col for col in inspector.get_columns("refresh_tokens")}
+        token_col = columns.get("token")
+        if token_col is None:
+            raise RuntimeError("refresh_tokens table is missing its token column")
+        return True, getattr(token_col["type"], "length", None) is not None
 
     try:
-        exists = await conn.run_sync(_check_table_exists)
+        exists, needs_expansion = await conn.run_sync(_inspect_refresh_tokens)
         if exists:
+            if needs_expansion:
+                # Old deployments used VARCHAR(255), which cannot hold new JWTs.
+                # Expand before accepting logins; existing tokens remain intact.
+                await conn.execute(text("ALTER TABLE refresh_tokens ALTER COLUMN token TYPE TEXT"))
+                logger.info("Expanded legacy refresh token column to TEXT")
             return
-    except Exception as e:
-        logger.warning(f"⚠️ refresh_tokens table check failed: {e}")
-        return
+    except Exception:
+        logger.exception("Failed validating refresh token schema")
+        raise
 
     # Table definition matching lyo_app.auth.models.RefreshToken
     ddl_statements = [
