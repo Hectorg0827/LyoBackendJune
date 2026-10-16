@@ -46,10 +46,12 @@ def artifact_stream(harness, monkeypatch):
     monkeypatch.setattr(stream, "LyoExecutor", lambda db: executor)
     monkeypatch.setattr(stream.planner_agent, "plan", AsyncMock(return_value=plan))
 
-    async def consume():
+    async def consume(**overrides):
+        params = dict(text="Create detailed photosynthesis flashcards",
+                      forced_intent=Intent.FLASHCARDS, state_summary={})
+        params.update(overrides)
         response = await harness.response(
-            text="Create detailed photosynthesis flashcards", forced_intent=Intent.FLASHCARDS,
-            state_summary={},
+            **params,
         )
         assert response.status_code == 200
         events = [event_payload(chunk) async for chunk in response.body_iterator]
@@ -76,6 +78,9 @@ async def test_unavailable_artifact_finishes_sse_with_honest_recovery(artifact_s
     events = await control.consume()
     assert not [event for event in events if event["type"] == "error"], events
     assert events[-1]["type"] == "DONE"
+    assert not [event for event in events if event.get("generation_status") == "incomplete"
+                or event["type"] == "voice_incomplete"]
+    assert next(event for event in events if event["type"] == "answer")["generation_status"] == "completed"
     assert not [event for event in events if event["type"] == "artifact"]
     answer = next(event for event in events if event["type"] == "answer")["block"]["content"]["text"]
     assert "reopen" in answer.lower()
@@ -221,3 +226,78 @@ async def test_unavailable_or_invalid_authoring_never_saves_an_empty_deck(artifa
     assert "couldn't create" in answer
     artifact_stream.storage.create_artifact.assert_not_awaited()
     artifact_stream.executor._generate_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_disabled_real_storage_never_emits_a_saved_artifact(artifact_stream, operation):
+    from lyo_app.services.artifact_service import ArtifactService
+
+    storage = ArtifactService.__new__(ArtifactService)
+    storage.fb = SimpleNamespace(enabled=False, db=None)
+    artifact_stream.executor.artifacts = storage
+    artifact_stream.mutator.artifacts = storage
+    if operation == "create":
+        creation_plan(artifact_stream, {"type": "FLASHCARDS", "content": DECK})
+
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    assert not [e for e in events if e["type"] in {"artifact", "error", "voice_incomplete"}]
+    answer = next(e for e in events if e["type"] == "answer")
+    assert answer["generation_status"] == "completed"
+    assert "couldn't save" in answer["block"]["content"]["text"].lower()
+    artifact_stream.mutator.model_manager.generate_with_retry.assert_not_awaited()
+    artifact_stream.executor._generate_text.assert_not_awaited()
+    assert [w["content"] for w in artifact_stream.harness.writes if w["role"] == "assistant"] == [
+        answer["block"]["content"]["text"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_planner_cannot_generate_confirmation_before_unavailable_update(artifact_stream):
+    artifact_stream.plan.steps.reverse()
+    artifact_stream.storage.get_artifact.return_value = None
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    artifact_stream.executor._generate_text.assert_not_awaited()
+    assert not [e for e in events if e["type"] == "artifact"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["read", "write", "provider"])
+async def test_failed_update_never_emits_a_success_confirmation(artifact_stream, failure):
+    if failure == "provider":
+        artifact_stream.mutator.model_manager.generate_with_retry.side_effect = RuntimeError("provider unavailable")
+    else:
+        operation = "get_artifact" if failure == "read" else "update_artifact"
+        getattr(artifact_stream.storage, operation).side_effect = RuntimeError("storage unavailable")
+    events = await artifact_stream.consume()
+    assert any(e["type"] == "error" for e in events)
+    assert not [e for e in events if e["type"] in {"artifact", "answer", "voice_ready"}]
+    artifact_stream.executor._generate_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [{}, {"cards": []}, {"cards": [{"front": "Q", "back": " "}]}])
+async def test_invalid_mutated_flashcards_are_not_saved(artifact_stream, content):
+    artifact_stream.mutator.model_manager.generate_with_retry.return_value = json.dumps(content)
+    events = await artifact_stream.consume()
+    assert any(e["type"] == "error" for e in events)
+    assert not [e for e in events if e["type"] in {"artifact", "answer", "voice_ready"}]
+    artifact_stream.storage.update_artifact.assert_not_awaited()
+    artifact_stream.executor._generate_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_confirmation_is_not_a_completed_artifact_turn(artifact_stream):
+    from lyo_app.core.ai_resilience import StreamingIncompleteError
+
+    artifact_stream.executor._generate_text.side_effect = StreamingIncompleteError(
+        partial_text="Your saved deck contains", model="fixture",
+    )
+    events = await artifact_stream.consume()
+    assert events[-1]["type"] == "DONE"
+    answer = next(e for e in events if e["type"] == "answer")
+    assert answer["generation_status"] == "incomplete"
+    assert any(e["type"] == "voice_incomplete" for e in events)
+    assert not [e for e in events if e["type"] in {"artifact", "voice_ready"}]

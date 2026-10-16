@@ -2,6 +2,7 @@ import logging
 import json
 from typing import Dict, Any, Optional
 from lyo_app.services.artifact_service import ArtifactService
+from lyo_app.ai.schemas.lyo2 import ArtifactType, FlashcardDeck
 from lyo_app.ai_agents.multi_agent_v2.model_manager import ModelManager
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 
@@ -61,6 +62,11 @@ class FollowUpMutator:
         except Exception as e:
             logger.error(f"Failed to parse mutated content: {e}")
             raise ValueError("Mutation failed: AI returned invalid JSON")
+
+        # Updates must satisfy the same flashcard contract as new decks. Valid
+        # JSON alone is not proof that the learner received usable material.
+        if art_type == ArtifactType.FLASHCARDS.value:
+            new_content = FlashcardDeck.model_validate(new_content).model_dump()
             
         # 5. Save new version
         metadata = dict(current_artifact.get("metadata") or {})

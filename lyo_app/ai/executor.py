@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable
 import google.generativeai as genai
 from lyo_app.ai.schemas.lyo2 import LyoPlan, UnifiedChatResponse, UIBlock, ActionType, UIBlockType, ArtifactType, PlannedAction, FlashcardDeck
 from lyo_app.services.rag_service import RAGService
-from lyo_app.services.artifact_service import ArtifactService
+from lyo_app.services.artifact_service import ArtifactService, ArtifactStorageUnavailable
 from lyo_app.services.mutator import ArtifactUnavailable, FollowUpMutator
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 from lyo_app.core.config import settings
@@ -620,6 +620,14 @@ Freshness rules:
                 action_type=ActionType.CREATE_ARTIFACT, description="Create the requested flashcards",
                 parameters={"type": "FLASHCARDS"},
             ))
+        if any(step.action_type in {ActionType.CREATE_ARTIFACT, ActionType.UPDATE_ARTIFACT}
+               for step in execution_steps):
+            # A planner may put confirmation first. No text/voice confirmation
+            # may escape until all artifact operations have actually succeeded.
+            execution_steps = (
+                [step for step in execution_steps if step.action_type != ActionType.GENERATE_TEXT]
+                + [step for step in execution_steps if step.action_type == ActionType.GENERATE_TEXT]
+            )
         freshness = decide_freshness(original_request, conversation_history)
         informational_chat = (
             intent not in {"COURSE", "QUIZ", "FLASHCARDS", "STUDY_PLAN", "TEST_PREP", "COACH",
@@ -644,6 +652,14 @@ Freshness rules:
             return UnifiedChatResponse(
                 answer_block=UIBlock(type=UIBlockType.TUTOR_MESSAGE, content={"text": text}),
                 metadata={"sources": [], "search_status": status},
+            )
+
+        def storage_unavailable_response() -> UnifiedChatResponse:
+            return UnifiedChatResponse(
+                answer_block=UIBlock(type=UIBlockType.TUTOR_MESSAGE, content={
+                    "text": "I couldn't save your study material just now. Please try again.",
+                }),
+                metadata={"artifact_status": "storage_unavailable"},
             )
 
         capability_reply = live_search_capability_response(original_request)
@@ -775,7 +791,10 @@ Freshness rules:
                             }),
                             metadata={"artifact_status": "generation_unavailable"},
                         )
-                artifact = await self.artifacts.create_artifact(user_id, art_type, content)
+                try:
+                    artifact = await self.artifacts.create_artifact(user_id, art_type, content)
+                except ArtifactStorageUnavailable:
+                    return storage_unavailable_response()
                 execution_context["created_artifacts"].append(artifact)
                 
             elif step.action_type == ActionType.UPDATE_ARTIFACT:
@@ -785,6 +804,8 @@ Freshness rules:
                     artifact = await self.mutator.mutate(
                         artifact_id, instruction, user_context={"user_id": user_id},
                     )
+                except ArtifactStorageUnavailable:
+                    return storage_unavailable_response()
                 except ArtifactUnavailable:
                     # A stale or invented target is a recoverable interaction,
                     # not a critical SSE failure. Stop before a later generated
