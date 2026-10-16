@@ -187,7 +187,7 @@ class AuthService:
         from lyo_app.core.settings import settings as jwt_settings
         
         try:
-            token_data = await verify_token_async(refresh_token, expected_type="refresh")
+            token_data = await verify_token_async(refresh_token, expected_type="refresh", db=db)
         except Exception as e:
             raise ValueError(f"Invalid refresh token: {str(e)}")
             

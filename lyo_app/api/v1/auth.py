@@ -134,7 +134,7 @@ async def read_users_me(
 ):
     """Get current user information"""
     from lyo_app.auth.jwt_auth import verify_token_async
-    token_data = await verify_token_async(token, expected_type="access")
+    token_data = await verify_token_async(token, expected_type="access", db=db)
     user = (await db.execute(select(User).where(User.id == int(token_data.user_id)))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")

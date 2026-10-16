@@ -114,7 +114,7 @@ def create_refresh_token(user_id: str, auth_version: int = 0) -> str:
     return encoded_jwt
 
 
-async def verify_token_async(token: str, expected_type: str = "access") -> TokenData:
+async def verify_token_async(token: str, expected_type: str = "access", db: Optional["AsyncSession"] = None) -> TokenData:
     """
     Verify and decode JWT token with caching.
     
@@ -157,10 +157,15 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
             parsed_id = int(user_id)
         except (TypeError, ValueError):
             raise AuthenticationProblem("Invalid user identifier")
-        from lyo_app.core.database import AsyncSessionLocal
-        async with AsyncSessionLocal() as session:
-            row = await session.execute(select(User.auth_version).where(User.id == parsed_id))
+        query = select(User.auth_version).where(User.id == parsed_id)
+        if db is not None:
+            row = await db.execute(query)
             current_version = row.scalar_one_or_none()
+        else:
+            from lyo_app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                row = await session.execute(query)
+                current_version = row.scalar_one_or_none()
         if current_version is None or version != current_version:
             raise AuthenticationProblem("Session revoked by password change")
         exp_datetime = datetime.fromtimestamp(exp_timestamp)
@@ -283,7 +288,7 @@ async def get_current_user(
     
     token = credentials.credentials
     # Use async verification with cache
-    token_data = await verify_token_async(token, "access")
+    token_data = await verify_token_async(token, "access", db=db)
     
     # Convert user_id from string (JWT) to int (database)
     user_id_int = int(token_data.user_id)
