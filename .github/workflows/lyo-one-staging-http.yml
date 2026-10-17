@@ -19,6 +19,9 @@ jobs:
   authenticated-journey:
     runs-on: ubuntu-latest
     timeout-minutes: 9
+    env:
+      LYO_ONE_STAGING_BACKEND_URL: https://lyolaunchbackend-staging.up.railway.app
+      LYO_ONE_STAGING_WEB_URL: https://lyolaunchweb-staging.up.railway.app
     steps:
       - uses: actions/checkout@v4
       - name: Exercise synthetic authenticated learners against isolated Railway staging

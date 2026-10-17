@@ -18,7 +18,7 @@ This candidate integrates current main (including artifact recovery PR145 and th
 
 Project: `LyoOne-Journey-Staging` (`8eb44c4c-d8df-46f2-b535-e75675823469`), environment `staging` (`423b2fa5-5771-4857-9de8-3d81ff0dad39`).
 
-- `LyoLaunchBackend`: `51a92bde-5f8f-43b3-9a63-63005efbc94b`
+- `LyoLaunchBackend`: `da44a435-c4a6-447d-9c5a-84dc707099d1`
 - `LyoLaunchWeb`: `702dc4b0-82ab-408e-ac8c-1cfea56e118b`
 - Separate `LyoLaunchPostgres`: `bdc9b580-ebdf-4cf1-a273-6a25072f59f2`, 1 GiB persistent volume.
 - Existing password-recovery staging services retain their current source and data.
