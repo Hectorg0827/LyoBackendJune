@@ -8,9 +8,8 @@ teaching with it, and no test downstream would notice — the lesson would still
 render, still validate, and just be worse.
 
 So the original text is checked into this test, and every sentence of it has to
-survive somewhere in the composed prompts. The three sentences that were
-deliberately reworded are named, with the reason, rather than allowed through by
-a fuzzy match.
+survive somewhere in the composed prompts. Sentences deliberately reworded as the teaching contract evolves are named,
+with the reason, rather than allowed through by a fuzzy match.
 """
 
 import re
@@ -136,39 +135,6 @@ REWORDED = {
     "When diagnosed_misconception is present, teach against that specific error "
     "rather than the topic in general, and never name the learner as having it.":
         ("aim that beat at diagnosed_misconception",),
-    "Explicitly model the missing step with a DIFFERENT representation or example; "
-    "for prerequisite teach the particular prerequisite the learner is missing, "
-    "then bridge back to the original goal.":
-        ("Explicitly model the missing step with a DIFFERENT representation or example;",
-         "For prerequisite teach the particular prerequisite the learner is missing, "
-         "then bridge back to the original goal."),
-    # The visual system expanded from four decorative-capable primitives into
-    # a server-directed teaching vocabulary. These old sentences are preserved
-    # semantically by the new policy rather than verbatim.
-    "A visual may accompany any beat when useful.":
-        ("visual_policy is the server's decision about visual priority.",),
-    "Use fraction_bar for equal parts/percentages (parts, whole, value, unit), "
-    "comparison for 2–6 contrasting examples (entries with label/detail), "
-    "sequence for 2–6 connected steps, or graph for a simple mathematical "
-    "relationship with 1–3 bounded parameters.":
-        ("Use fraction_bar for equal parts/percentages",
-         "process_flow for causes, systems or transformations",
-         "annotated_image when a real object"),
-    "Set fixed x_min/x_max and y_min/y_max to keep the important changes visible.":
-        ("Set fixed graph x/y bounds so changes remain visible.",),
-    "Choose a visual that explains this actual idea, not decoration.":
-        ("do not force a decorative visual when prose is clearer.",),
-    "Its caption guides exploration and its description conveys equivalent "
-    "information in text.":
-        ("Every visual needs a caption that tells the learner what to look at or manipulate",
-         "a description that conveys equivalent information in text."),
-    "During guided practice invite a prediction or observation using it; "
-    "manipulation alone is never a graded answer.":
-        ("During guided practice, invite a prediction or observation using the visual",
-         "manipulation alone is never a graded answer."),
-    "Prefer a useful visual in the demonstration and guided phase when this "
-    "subject permits one.":
-        ("If mode=preferred, use one when the current idea has useful structure",),
     # Two distractors revealing the same misconception diagnose nothing, which
     # the original left implicit in "every option a position a real learner holds".
     "Make every option a position a real learner holds; never filler, and never "
@@ -176,6 +142,32 @@ REWORDED = {
         ("The two distractors must reveal different misconceptions, and each must "
          "be a position a real learner holds; never filler, and never one "
          "obviously silly choice.",),
+    # Visual teaching expanded from four primitives to a bounded visual engine.
+    # Preserve each original guarantee semantically without carrying duplicate
+    # legacy wording in every model call.
+    "A visual may accompany any beat when useful.":
+        ("visual_policy is the server's decision about visual priority.",),
+    "Use fraction_bar for equal parts/percentages (parts, whole, value, unit), "
+    "comparison for 2–6 contrasting examples (entries with label/detail), "
+    "sequence for 2–6 connected steps, or graph for a simple mathematical "
+    "relationship with 1–3 bounded parameters.":
+        ("Use fraction_bar for equal parts/percentages (parts, whole, value, unit);",
+         "process_flow", "timeline", "number_line", "annotated_image"),
+    "Set fixed x_min/x_max and y_min/y_max to keep the important changes visible.":
+        ("Set fixed graph x/y bounds so changes remain visible.",),
+    "Choose a visual that explains this actual idea, not decoration.":
+        ("do not force a decorative visual when prose is clearer.",),
+    "Its caption guides exploration and its description conveys equivalent "
+    "information in text.":
+        ("caption that tells the learner what to look at or manipulate",
+         "description that conveys equivalent information in text."),
+    "During guided practice invite a prediction or observation using it; "
+    "manipulation alone is never a graded answer.":
+        ("During guided practice, invite a prediction or observation using the visual",
+         "manipulation alone is never a graded answer."),
+    "Prefer a useful visual in the demonstration and guided phase when this "
+    "subject permits one.":
+        ("If mode=preferred, use one when the current idea has useful structure",),
     # Independent application now leads to an optional transfer rung; the
     # original completion claim must change without losing its evidence rule.
     "This is the checkpoint that closes the unit, and it closes only on an answer "
@@ -292,6 +284,17 @@ def test_every_move_the_schema_knows_about_has_instructions_of_its_own():
         assert turn_schema(move) is not None
     # An unknown move still gets a usable contract rather than a promptless call.
     assert teaching_prompt("some_new_move").startswith(CORE)
+
+
+def test_diagnose_does_not_pay_for_visual_rules_it_cannot_use():
+    prompt = teaching_prompt("diagnose")
+    assert "visual_policy is the server's decision" not in prompt
+    assert "annotated_image" not in prompt
+    # Teaching moves that may actually show a visual still receive the full
+    # bounded contract; the optimization is scoped to the answer-leak probe.
+    guided = teaching_prompt("guided")
+    assert "visual_policy is the server's decision" in guided
+    assert "annotated_image" in guided
 
 
 def test_a_move_no_longer_pays_for_the_other_nine():
