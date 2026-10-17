@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.dependencies import get_current_user, get_current_user_or_guest
 from lyo_app.auth.schemas import UserRead
 from lyo_app.core.database import get_db
 from lyo_app.learning.models import Course, CourseEnrollment, Lesson, LessonCompletion
@@ -148,9 +148,15 @@ async def _progress_payload(
 async def canonical_course_detail(
     course_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[UserRead, Depends(get_current_user_or_guest)],
 ) -> dict[str, Any]:
-    """Return a complete course payload with ordered playable lessons."""
+    """Return playable lessons; private drafts are visible only to their owner."""
     course = await _course_with_lessons(db, course_id)
+    # Never expose a generated private course by a guessed integer URL.
+    # Public published courses remain accessible to authenticated users
+    # and to the existing authorized guest API-key flow.
+    if not course.is_published and str(course.instructor_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
     lessons = sorted(course.lessons, key=lambda lesson: lesson.order_index)
     return {
         "id": course.id,
@@ -166,7 +172,7 @@ async def canonical_course_detail(
         "is_featured": course.is_featured,
         "created_at": course.created_at.isoformat() if course.created_at else None,
         "updated_at": course.updated_at.isoformat() if course.updated_at else None,
-        "modules": [],
+        "modules": (course.generation_metadata or {}).get("modules") or [],
         "lessons": [
             {
                 "id": lesson.id,
