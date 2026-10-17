@@ -120,6 +120,65 @@ def new_actor(label):
     return login["access_token"]
 
 
+def verify_saved_course_durability(user_a, user_b):
+    """Exercise actual SQL-backed draft ownership/reload on staging only."""
+    marker = "Staging durability " + uuid.uuid4().hex
+    lesson_texts = [
+        "Synthetic lesson one: atoms",
+        "Synthetic lesson two: electrons",
+        "Synthetic lesson three: molecules",
+    ]
+    payload = {
+        "title": marker,
+        "topic": "Synthetic chemistry QA",
+        "difficulty_level": "beginner",
+        "instructor_id": "999999999",  # Must be ignored in favor of authenticated user.
+        "modules": [
+            {"title": "Basics", "lessons": [
+                {"title": "Atoms", "duration_minutes": 9, "content": lesson_texts[0]},
+                {"title": "Electrons", "duration_minutes": 11, "content": lesson_texts[1]},
+            ]},
+            {"title": "Practice", "lessons": [
+                {"title": "Molecules", "duration_minutes": 13, "content": lesson_texts[2]},
+            ]},
+        ],
+    }
+    owner = expect("read synthetic creator identity", "GET", "/api/v1/auth/me", 200, token=user_a)
+    created = expect("persist generated draft and all lessons", "POST",
+                     "/api/v1/learning/courses", 201, payload, user_a)
+    course_id = str(created.get("id", ""))
+    if not course_id.isdigit() or str(created.get("instructor_id")) != str(owner.get("id")):
+        raise AssertionError("Course save returned a phantom ID or trusted spoofed ownership")
+    if created.get("lesson_count") != 3:
+        raise AssertionError("Course save did not acknowledge all lessons")
+    path = "/api/v1/learning/courses/" + course_id
+    mine = expect("reload saved draft list", "GET",
+                  "/api/v1/learning/courses/mine", 200, token=user_a)
+    if not isinstance(mine, list) or not any(
+        str(c.get("id")) == course_id and c.get("lesson_count") == 3 for c in mine
+    ):
+        raise AssertionError("Persisted draft missing from authenticated Saved list")
+    reopened = expect("reopen persisted draft", "GET", path, 200, token=user_a)
+    if not isinstance(reopened, dict) or reopened.get("lesson_count") != 3:
+        raise AssertionError("Reopened course lost lesson count")
+    modules = reopened.get("modules") or []
+    module_texts = [str(l.get("content")) for m in modules for l in m.get("lessons", [])]
+    if module_texts != lesson_texts:
+        raise AssertionError("Durable generated module lesson content changed after reload")
+    lessons = expect("reload individual persisted lesson rows", "GET",
+                     path + "/lessons", 200, token=user_a)
+    if not isinstance(lessons, list) or [l.get("content") for l in lessons] != lesson_texts:
+        raise AssertionError("Persisted lesson rows differ from saved course content")
+    expect("cross-learner private draft read denied", "GET", path, 404, token=user_b)
+    expect("cross-learner private lesson read denied", "GET",
+           path + "/lessons", 404, token=user_b)
+    foreign = expect("other learner's private Saved list", "GET",
+                     "/api/v1/learning/courses/mine", 200, token=user_b)
+    if not isinstance(foreign, list) or any(str(c.get("id")) == course_id for c in foreign):
+        raise AssertionError("Another learner can see the private generated draft")
+    print("PASS durable course create/list/reopen/refresh/lesson rows/owner isolation")
+
+
 def main():
     require_staging()
     # Give Railway deployment/hostname a bounded window to become available.
@@ -136,6 +195,7 @@ def main():
 
     user_a = new_actor("a")
     user_b = new_actor("b")
+    verify_saved_course_durability(user_a, user_b)
     empty = expect("new learner receives a valid empty Coach response", "GET",
                    "/api/v1/me/coach/today", 200, token=user_a)
     assert empty["total_minutes"] == 0 and empty["primary_goal_id"] is None
