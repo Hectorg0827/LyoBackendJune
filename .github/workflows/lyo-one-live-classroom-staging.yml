@@ -28,7 +28,7 @@ on:
   # the 'lyo-provider-ready' label to the trusted backend PR #136.
   pull_request:
     types: [labeled]
-    branches: [feature/lyo-one-journey-context]
+    branches: [main, feature/lyo-one-journey-context]
 
 permissions:
   contents: read
@@ -117,6 +117,51 @@ jobs:
         if: always()
         with:
           name: lyo-one-premerge-${{ matrix.scenario }}-${{ github.run_id }}
+          path: artifacts/lyo-one-classroom/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  provider-backed-launch:
+    # PR #146 only. Label opt-in after confirming the isolated Launch provider
+    # is safe to use; never exercise production or the older Journey service.
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'lyo-provider-ready' && github.event.pull_request.number == 146 && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - scenario: math_fractions
+            profile: struggling
+          - scenario: biology_photosynthesis
+            profile: interrupter
+          - scenario: spanish_past_tense
+            profile: curious
+          - scenario: physics_newton2
+            profile: confident_wrong
+    env:
+      LYO_ONE_STAGING_BACKEND_URL: https://lyolaunchbackend-staging.up.railway.app
+      LYO_ONE_EXPECTED_BACKEND_SHA: ${{ github.event.pull_request.head.sha }}
+      LYO_ONE_PROVIDER_STAGING_READY: 'yes'
+      LYO_ONE_CLASSROOM_SCENARIO: ${{ matrix.scenario }}
+      LYO_ONE_CLASSROOM_PROFILE: ${{ matrix.profile }}
+      LYO_ONE_CLASSROOM_ONLY: 'yes'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install real Classroom harness dependencies
+        run: python -m pip install --disable-pip-version-check httpx websockets
+      - name: Assert only the designated launch host and revision are tested
+        run: python -m unittest discover -s tests -p test_lyo_one_live_classroom_runner.py
+      - name: Run real provider-backed teaching and persisted-learning gate
+        run: python scripts/validate_lyo_one_live_classroom.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lyo-launch-classroom-${{ matrix.scenario }}-${{ github.run_id }}
           path: artifacts/lyo-one-classroom/*.json
           if-no-files-found: ignore
           retention-days: 14
