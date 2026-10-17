@@ -18,7 +18,16 @@ def test_canonical_learning_routes_are_declared():
 
 def test_canonical_routes_are_prepended_to_legacy_router():
     bootstrap = _source("lyo_app/learning/progress_bootstrap.py")
-    assert "legacy_routes.router.routes = list(router.routes) + list(legacy_routes.router.routes)" in bootstrap
+    assert 'getattr(route, "path", None) == "/courses/mine"' in bootstrap
+    assert "legacy_routes.router.routes = saved_routes + list(router.routes) + remaining_routes" in bootstrap
+
+def test_private_drafts_require_owner_even_on_canonical_course_detail():
+    source = _source("lyo_app/learning/progress_routes.py")
+    assert "Depends(get_current_user_or_guest)" in source
+    assert "course.instructor_id" in source
+    assert "if not course.is_published" in source
+    assert 'status.HTTP_404_NOT_FOUND' in source
+    assert '"modules": (course.generation_metadata or {}).get("modules") or []' in source
 
 
 def test_versioned_router_mounts_canonical_learning_contract():
