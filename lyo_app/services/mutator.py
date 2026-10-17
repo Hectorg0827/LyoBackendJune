@@ -2,10 +2,16 @@ import logging
 import json
 from typing import Dict, Any, Optional
 from lyo_app.services.artifact_service import ArtifactService
+from lyo_app.ai.schemas.lyo2 import ArtifactType, FlashcardDeck
 from lyo_app.ai_agents.multi_agent_v2.model_manager import ModelManager
 from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
+
+
+class ArtifactUnavailable(ValueError):
+    """The requested artifact cannot be edited by this learner."""
+
 
 class FollowUpMutator:
     """
@@ -22,10 +28,15 @@ class FollowUpMutator:
         """
         Applies a mutation to an artifact.
         """
-        # 1. Fetch latest version of artifact
+        # Plans and client artifact IDs are untrusted. Resolve ownership before
+        # sending any saved content to a provider or writing a new version.
+        user_id = str((user_context or {}).get("user_id") or "")
+        if not artifact_id or not user_id or user_id == "0":
+            raise ArtifactUnavailable("Saved artifact unavailable")
         current_artifact = await self.artifacts.get_artifact(artifact_id)
-        if not current_artifact:
-            raise ValueError(f"Artifact {artifact_id} not found")
+        if not current_artifact or str(current_artifact.get("user_id") or "") != user_id:
+            # Missing and foreign IDs deliberately have the same outcome.
+            raise ArtifactUnavailable("Saved artifact unavailable")
             
         art_type = current_artifact.get("type")
         current_content = current_artifact.get("content")
@@ -51,9 +62,14 @@ class FollowUpMutator:
         except Exception as e:
             logger.error(f"Failed to parse mutated content: {e}")
             raise ValueError("Mutation failed: AI returned invalid JSON")
+
+        # Updates must satisfy the same flashcard contract as new decks. Valid
+        # JSON alone is not proof that the learner received usable material.
+        if art_type == ArtifactType.FLASHCARDS.value:
+            new_content = FlashcardDeck.model_validate(new_content).model_dump()
             
         # 5. Save new version
-        metadata = current_artifact.get("metadata", {})
+        metadata = dict(current_artifact.get("metadata") or {})
         metadata["last_instruction"] = instruction
         
         new_artifact = await self.artifacts.update_artifact(artifact_id, new_content, metadata)

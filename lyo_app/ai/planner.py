@@ -39,10 +39,10 @@ Lyo is an Outcome Engine. Plans should be efficient and focus on the user's ulti
 
 ## Planning Rules:
 1. Always start with RAG_RETRIEVE if the topic is educational and needs grounding.
-2. If the user wants a Quiz/Flashcards/Study Plan, include a CREATE_ARTIFACT step with the appropriate "type" parameter ("QUIZ", "FLASHCARDS", or "STUDY_PLAN").
+2. If the user wants a Quiz/Flashcards/Study Plan, include a CREATE_ARTIFACT step with the appropriate "type" parameter ("QUIZ", "FLASHCARDS", or "STUDY_PLAN"). Flashcards require parameters.type="FLASHCARDS" and parameters.content={"title":"Deck title","cards":[{"front":"Question","back":"Factual answer"}]}; every card needs both fields. Never substitute an empty quiz for a flashcard request.
 3. If intent is COURSE, the final GENERATE_TEXT step MUST include instructions to the model to provide a course overview using the `:::mastery_map` Smart Block.
 4. If intent is EXPLAIN, use RAG_RETRIEVE followed by GENERATE_TEXT to provide a grounded explanation.
-5. If intent is MODIFY_ARTIFACT, use UPDATE_ARTIFACT and specify the changes.
+5. If intent is MODIFY_ARTIFACT, use UPDATE_ARTIFACT only with the exact ID from ACTIVE ARTIFACT and specify the changes. Never invent an artifact ID or infer one from a topic or conversation text. If ACTIVE ARTIFACT is absent, ask the learner to reopen it. A new Quiz/Flashcards/Study Plan request uses CREATE_ARTIFACT, never UPDATE_ARTIFACT.
 6. Final step should usually be GENERATE_TEXT to construct the final response.
 7. For REFLECT intent, use GENERATE_TEXT focusing on empathetic feedback.
 8. For WEEKLY_REVIEW intent, use RAG_RETRIEVE followed by GENERATE_TEXT to summarize the week's progress.
@@ -72,6 +72,9 @@ ROUTER DECISION:
 
 USER STATE:
 {json.dumps(request.state_summary)}
+
+ACTIVE ARTIFACT (null means no selected artifact; never invent a reference):
+{request.active_artifact.model_dump_json() if request.active_artifact else "null"}
 {history_text}
 Create a plan to fulfill this request. Take conversation history into account for continuity.
 """

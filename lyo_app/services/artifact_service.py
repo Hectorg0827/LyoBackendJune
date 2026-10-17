@@ -8,6 +8,11 @@ from lyo_app.ai.schemas.lyo2 import ArtifactType
 
 logger = logging.getLogger(__name__)
 
+
+class ArtifactStorageUnavailable(RuntimeError):
+    """Durable artifact storage is not configured or initialized."""
+
+
 class ArtifactService:
     """
     Manages Lyo 2.0 artifacts with append-only versioning.
@@ -23,10 +28,15 @@ class ArtifactService:
     def _is_enabled(self) -> bool:
         return self.fb.enabled and self.fb.db is not None
 
+    def _require_storage(self) -> None:
+        if not self._is_enabled():
+            raise ArtifactStorageUnavailable("Saved study material storage is unavailable")
+
     async def create_artifact(self, user_id: str, artifact_type: ArtifactType, content: Dict[str, Any], metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Creates a new artifact (v1).
         """
+        self._require_storage()
         artifact_id = str(uuid.uuid4())
         version = 1
         
@@ -49,7 +59,7 @@ class ArtifactService:
             
             await asyncio.to_thread(_sync_save)
         else:
-            logger.warning("Firebase not enabled, artifact not persisted")
+            raise ArtifactStorageUnavailable("Saved study material storage is unavailable")
             
         return doc_data
 
@@ -57,6 +67,7 @@ class ArtifactService:
         """
         Creates a new version of an existing artifact.
         """
+        self._require_storage()
         # 1. Find latest version
         latest_version = await self.get_latest_version_number(artifact_id)
         new_version = latest_version + 1
@@ -87,7 +98,7 @@ class ArtifactService:
             
             await asyncio.to_thread(_sync_update)
         else:
-            logger.warning("Firebase not enabled, artifact version not persisted")
+            raise ArtifactStorageUnavailable("Saved study material storage is unavailable")
             
         return doc_data
 
@@ -95,8 +106,7 @@ class ArtifactService:
         """
         Retrieves the latest version number for an artifact.
         """
-        if not self._is_enabled():
-            return 1
+        self._require_storage()
             
         def _sync_get_latest():
             docs = self.fb.db.collection(self.COLLECTION)\
@@ -115,8 +125,7 @@ class ArtifactService:
         """
         Retrieves a specific version of an artifact, or the latest if version is None.
         """
-        if not self._is_enabled():
-            return None
+        self._require_storage()
             
         if version:
             def _sync_get_v():
