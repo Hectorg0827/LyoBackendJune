@@ -11,6 +11,7 @@ on:
       - alembic/versions/launch_001_merge_auth_and_coach.py
       - alembic/versions/launch_002_durable_course_compat.py
       - alembic/versions/launch_003_backfill_course_storage.py
+      - alembic/versions/launch_004_legacy_chat_schema.py
       - lyo_app/coach/journey_models.py
       - lyo_app/coach/journey_schemas.py
       - lyo_app/coach/journeys.py
@@ -167,7 +168,7 @@ jobs:
                   assert required <= existing, f"Missing tables: {required-existing}"
                   assert await db.fetchval("SELECT EXISTS(SELECT 1 FROM organizations WHERE id=1)")
                   heads = {r["version_num"] for r in await db.fetch("SELECT version_num FROM alembic_version")}
-                  assert heads == {"launch_003"}, f"Combined release migration head missing: {heads}"
+                  assert heads == {"launch_004"}, f"Combined release migration head missing: {heads}"
                   assert await db.fetchval("SELECT auth_version FROM users WHERE email='preupgrade-learner@example.com'") == 0
                   assert await db.fetchval("""
                       SELECT data_type FROM information_schema.columns
@@ -218,7 +219,21 @@ jobs:
                       "Pre-upgrade durable course", "draft", "beginner", 1,
                       "Pre-upgrade original lesson", "Preserve this exact lesson text", "text", 1
                   ), "Legacy course and lesson content, ownership or enum semantics changed"
-                  print("PASS existing PostgreSQL learning and Test Prep rows survived launch migration")
+                  for chat_table in (
+                      "chat_courses", "chat_notes", "chat_conversations",
+                      "chat_messages", "chat_telemetry", "chat_highlights"
+                  ):
+                      columns = {row["column_name"] for row in await db.fetch("""
+                          SELECT column_name FROM information_schema.columns
+                          WHERE table_schema='public' AND table_name=$1
+                      """, chat_table)}
+                      assert "organization_id" in columns, f"Missing tenant on {chat_table}"
+                  msg_columns = {row["column_name"] for row in await db.fetch("""
+                      SELECT column_name FROM information_schema.columns
+                      WHERE table_schema='public' AND table_name='chat_messages'
+                  """)}
+                  assert {"client_message_id", "blocks"} <= msg_columns
+                  print("PASS legacy Chat tenant/streaming schema and historical learning rows preserved")
               finally:
                   await db.close()
           asyncio.run(main())
