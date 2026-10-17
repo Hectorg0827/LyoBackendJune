@@ -172,6 +172,13 @@ def verify_saved_course_durability(user_a, user_b):
     expect("cross-learner private draft read denied", "GET", path, 404, token=user_b)
     expect("cross-learner private lesson read denied", "GET",
            path + "/lessons", 404, token=user_b)
+    expect("cross-learner private resume denied", "GET",
+           "/api/v1/learning/users/me/courses/" + course_id + "/progress",
+           404, token=user_b)
+    first_lesson_id = int(created["modules"][0]["lessons"][0]["id"])
+    expect("cross-learner private lesson completion denied", "POST",
+           "/api/v1/learning/completions", 404,
+           {"lesson_id": first_lesson_id}, user_b)
     foreign = expect("other learner's private Saved list", "GET",
                      "/api/v1/learning/courses/mine", 200, token=user_b)
     if not isinstance(foreign, list) or any(str(c.get("id")) == course_id for c in foreign):
