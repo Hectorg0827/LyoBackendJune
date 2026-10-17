@@ -17,6 +17,10 @@ saved_routes = [
 remaining_routes = [
     route for route in legacy_routes.router.routes if route not in saved_routes
 ]
-legacy_routes.router.routes = saved_routes + list(router.routes) + remaining_routes
+# api/v1 mounts the exported canonical router before enhanced_main mounts the
+# legacy one, so Saved must lead BOTH route lists. Otherwise the earlier
+# /courses/{course_id} consumes the literal "mine" and returns HTTP 422.
+router.routes = saved_routes + list(router.routes)
+legacy_routes.router.routes = list(router.routes) + remaining_routes
 
 __all__ = ["router"]
