@@ -285,8 +285,8 @@ class FirebaseAuthService:
         from lyo_app.auth.models import RefreshToken as RefreshTokenModel
         from lyo_app.core.settings import settings as jwt_settings
         
-        access_token = create_access_token(user_id=str(user.id))
-        refresh_token_str = create_refresh_token(user_id=str(user.id))
+        access_token = create_access_token(user_id=str(user.id), auth_version=user.auth_version)
+        refresh_token_str = create_refresh_token(user_id=str(user.id), auth_version=user.auth_version)
         
         # CRITICAL FIX: Store refresh token in database so /auth/refresh can validate it
         refresh_token_record = RefreshTokenModel(
