@@ -112,7 +112,26 @@ jobs:
                               15, 'Cell structure', 'practice', 'scheduled'
                           )
                       """, uid)
-                  print("PASS seeded real linked learner/exam/plan/session on current main schema")
+                  async with db.transaction():
+                      course_id = await db.fetchval("""
+                          INSERT INTO courses (
+                              title, description, difficulty_level, estimated_duration_hours,
+                              is_published, is_featured, instructor_id, created_at, updated_at
+                          ) VALUES (
+                              'Pre-upgrade durable course', 'Original lessons must survive',
+                              'BEGINNER', 1, FALSE, FALSE, $1, NOW(), NOW()
+                          ) RETURNING id
+                      """, uid)
+                      await db.execute("""
+                          INSERT INTO lessons (
+                              title, content, content_type, course_id, order_index,
+                              is_published, is_preview, created_at, updated_at
+                          ) VALUES (
+                              'Pre-upgrade original lesson', 'Preserve this exact lesson text',
+                              'TEXT', $1, 1, FALSE, FALSE, NOW(), NOW()
+                          )
+                      """, course_id)
+                  print("PASS seeded learner, exam, plan, session and legacy course/lesson")
               finally:
                   await db.close()
 
@@ -171,7 +190,34 @@ jobs:
                       "Biology", "Cell structure", "scheduled", 15,
                       "preupgrade-learner@example.com",
                   ), f"Existing exam/session data changed unexpectedly: {preserved}"
-                  print("PASS isolated current-main PostgreSQL -> Coach/Journeys upgrade")
+                  expected_course_columns = {
+                      "topic", "status", "published_at", "organization_id", "generation_metadata"
+                  }
+                  expected_lesson_columns = {"topic", "tags", "organization_id"}
+                  for table, needed in (("courses", expected_course_columns),
+                                        ("lessons", expected_lesson_columns)):
+                      columns = {row["column_name"] for row in await db.fetch("""
+                          SELECT column_name FROM information_schema.columns
+                          WHERE table_schema='public' AND table_name=$1
+                      """, table)}
+                      assert needed <= columns, f"Missing durable {table} columns: {needed-columns}"
+                  preserved_course = await db.fetchrow("""
+                      SELECT c.title, c.status, c.difficulty_level, c.organization_id,
+                             l.title AS lesson_title, l.content, l.content_type, l.organization_id AS lesson_org
+                      FROM courses c JOIN lessons l ON l.course_id = c.id
+                      WHERE c.title = 'Pre-upgrade durable course'
+                  """)
+                  assert preserved_course is not None, "Legacy course and lesson disappeared"
+                  assert (
+                      preserved_course["title"], preserved_course["status"],
+                      preserved_course["difficulty_level"], preserved_course["organization_id"],
+                      preserved_course["lesson_title"], preserved_course["content"],
+                      preserved_course["content_type"], preserved_course["lesson_org"]
+                  ) == (
+                      "Pre-upgrade durable course", "draft", "beginner", 1,
+                      "Pre-upgrade original lesson", "Preserve this exact lesson text", "text", 1
+                  ), "Legacy course and lesson content, ownership or enum semantics changed"
+                  print("PASS existing PostgreSQL learning and Test Prep rows survived launch migration")
               finally:
                   await db.close()
           asyncio.run(main())
