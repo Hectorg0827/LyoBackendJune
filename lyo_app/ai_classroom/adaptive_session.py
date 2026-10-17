@@ -77,6 +77,10 @@ class AdaptiveSession:
     #: presses the button expects the thing they were promised. It is the
     #: *second* identical failure that proves asking this way is not working.
     RELAX_RECOVERY_AFTER = 2
+    # A provider-wide outage cannot be solved by an infinite learner click loop.
+    # After three recovery-only attempts, leave a transparent paused screen.
+    # Re-entering the lesson later is permitted; no answer is graded on outage.
+    MAX_OUTAGE_RETRIES = 3
 
     #: Moves that ask only for teaching. They carry no graded question, so
     #: they are what a step with no way forward can always fall back to —
@@ -123,10 +127,19 @@ class AdaptiveSession:
             progress.setdefault(
                 "record_scope", "unit" if data.get("record_scope") == "unit" else "topic"
             )
+            # No guided state exists until planning succeeds. Persist this
+            # counter with the session so repeated Retry taps do not trigger
+            # unbounded provider calls when the whole model fleet is down.
+            failures = int(progress.get("startup_generation_failures") or 0)
+            if intent == ActionIntent.RETRY and failures >= self.MAX_OUTAGE_RETRIES:
+                return self.unavailable(context, None, retry_attempts=failures)
             try:
                 plan = await self.teacher.plan(context)
             except TeachingUnavailable:
-                return self.unavailable(context, None)
+                failures = min(failures + 1, self.MAX_OUTAGE_RETRIES)
+                progress["startup_generation_failures"] = failures
+                return self.unavailable(context, None, retry_attempts=failures)
+            progress.pop("startup_generation_failures", None)
             identity = None
             if self.skill_resolver is not None:
                 try:
@@ -1572,8 +1585,11 @@ class AdaptiveSession:
         )
         return (lead + "\n\n" + material).strip() if material else lead
 
-    def unavailable(self, context, state):
+    def unavailable(self, context, state, retry_attempts=None):
         ungraded = bool(state and state.pending and state.pending.retry_response is not None)
+        attempts = (retry_attempts if retry_attempts is not None
+                    else getattr(state, "recovery_attempts", 0))
+        outage = attempts >= self.MAX_OUTAGE_RETRIES and not ungraded
         text = (self.copy(
             context,
             "Your answer couldn't be graded. It's saved and won't count as wrong. "
@@ -1609,14 +1625,23 @@ class AdaptiveSession:
                 content=state.last_feedback, language_code=context.language_code))
         # The complete recovery message belongs on the board as well as in
         # narration: a muted phone's two-line caption can otherwise hide it.
+        if outage:
+            text = self.copy(
+                context,
+                "The teaching service is temporarily unavailable. Please leave this lesson "
+                "and reopen it later. We have not graded or advanced this step.",
+                "El servicio de enseñanza no está disponible temporalmente. Sal de esta "
+                "lección y vuelve a abrirla más tarde. No se ha calificado ni avanzado este paso.",
+            )
         components.append(ExampleBlock(component_id="classroom-recovery/notice", presentation_role="recovery",
             title=self.copy(context, "Your lesson is paused", "Tu lección está en pausa"),
             content=text, language_code=context.language_code))
-        components.append(CTAButton(
-            label=self.copy(context, "Continue with a new example", "Continuar con otro ejemplo")
-            if ungraded else self.copy(context, "Retry this step", "Reintentar este paso"),
-            action_intent=ActionIntent.SKIP_QUESTION if ungraded else ActionIntent.RETRY,
-            language_code=context.language_code))
+        if not outage:
+            components.append(CTAButton(
+                label=self.copy(context, "Continue with a new example", "Continuar con otro ejemplo")
+                if ungraded else self.copy(context, "Retry this step", "Reintentar este paso"),
+                action_intent=ActionIntent.SKIP_QUESTION if ungraded else ActionIntent.RETRY,
+                language_code=context.language_code))
         return Scene(scene_type=SceneType.INSTRUCTION, components=components)
 
     def current_or_retry(self, context, state):

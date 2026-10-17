@@ -65,7 +65,7 @@ async def get_current_user(
     # First try to verify as backend JWT token using jwt_auth
     try:
         from lyo_app.auth.jwt_auth import verify_token_async
-        token_data = await verify_token_async(token, expected_type="access")
+        token_data = await verify_token_async(token, expected_type="access", db=db)
         user_id = token_data.user_id
         
         if not user_id:
@@ -219,8 +219,8 @@ async def register_user(
         from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
         from lyo_app.core.settings import settings as jwt_settings
         
-        access_token = create_access_token(user_id=str(user.id))
-        refresh_token = create_refresh_token(user_id=str(user.id))
+        access_token = create_access_token(user_id=str(user.id), auth_version=user.auth_version)
+        refresh_token = create_refresh_token(user_id=str(user.id), auth_version=user.auth_version)
         
         return LoginResponse(
             user=UserRead.model_validate(user),
