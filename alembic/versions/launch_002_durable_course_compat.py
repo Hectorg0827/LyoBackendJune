@@ -31,6 +31,23 @@ def upgrade() -> None:
     course_cols = _columns("courses")
     lesson_cols = _columns("lessons")
 
+    if "organization_id" not in course_cols or "organization_id" not in lesson_cols:
+        if not sa.inspect(bind).has_table("organizations"):
+            raise RuntimeError("Default tenant table is missing")
+        if bind.execute(sa.text("SELECT id FROM organizations WHERE id = 1")).scalar_one_or_none() is None:
+            raise RuntimeError("Default tenant is missing; refusing to orphan existing learning records")
+        for table, existing in (("courses", course_cols), ("lessons", lesson_cols)):
+            if "organization_id" in existing:
+                continue
+            op.add_column(table, sa.Column("organization_id", sa.Integer(),
+                                           nullable=False, server_default="1"))
+            if bind.dialect.name == "postgresql":
+                op.create_foreign_key(
+                    f"fk_{table}_organization_id_organizations",
+                    table, "organizations", ["organization_id"], ["id"],
+                )
+            op.create_index(f"ix_{table}_organization_id", table, ["organization_id"])
+
     if "topic" not in course_cols:
         op.add_column("courses", sa.Column("topic", sa.String(200), nullable=True))
     if "published_at" not in course_cols:
