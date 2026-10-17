@@ -21,6 +21,9 @@ async def test_route_primes_only_first_chunk_and_preserves_locale(monkeypatch):
     response = await routes.synthesize_stream(routes.SynthesizeRequest(text='Una respuesta concreta.', language='es-US'), None)
     assert events == ['first']
     assert response.headers['x-accel-buffering'] == 'no'
+    assert int(response.headers['x-lyo-tts-first-byte-ms']) >= 0
+    assert response.headers['server-timing'].startswith('tts-first-byte;dur=')
+    assert 'X-Lyo-TTS-First-Byte-Ms' in response.headers['access-control-expose-headers']
     assert b''.join([part async for part in response.body_iterator]) == b'firstlast'
     assert events == ['first', 'last', 'closed']
 
