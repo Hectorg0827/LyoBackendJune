@@ -144,6 +144,12 @@ async def _progress_payload(
     }
 
 
+def _require_course_visibility(course: Course, user_id: Any) -> None:
+    """An unpublished course is private even through resume/completion APIs."""
+    if not course.is_published and str(course.instructor_id) != str(user_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
+
+
 @router.get("/courses/{course_id}")
 async def canonical_course_detail(
     course_id: int,
@@ -155,8 +161,7 @@ async def canonical_course_detail(
     # Never expose a generated private course by a guessed integer URL.
     # Public published courses remain accessible to authenticated users
     # and to the existing authorized guest API-key flow.
-    if not course.is_published and str(course.instructor_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
+    _require_course_visibility(course, current_user.id)
     lessons = sorted(course.lessons, key=lambda lesson: lesson.order_index)
     return {
         "id": course.id,
@@ -203,6 +208,7 @@ async def canonical_course_progress(
     """Hydrate the authenticated learner's canonical resume state."""
     user_id = _legacy_user_id(current_user)
     course = await _course_with_lessons(db, course_id)
+    _require_course_visibility(course, user_id)
     enrollment = await _ensure_enrollment(db, user_id=user_id, course_id=course_id)
     payload = await _progress_payload(
         db,
@@ -231,6 +237,7 @@ async def canonical_complete_lesson(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
 
     course = await _course_with_lessons(db, lesson.course_id)
+    _require_course_visibility(course, user_id)
     enrollment = await _ensure_enrollment(
         db,
         user_id=user_id,
