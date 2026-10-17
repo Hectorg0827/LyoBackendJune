@@ -123,7 +123,7 @@ def new_actor(label):
 def main():
     require_staging()
     # Give Railway deployment/hostname a bounded window to become available.
-    for attempt in range(24):
+    for attempt in range(48):
         try:
             verify_deployed_revisions()
             break
