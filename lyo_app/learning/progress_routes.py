@@ -178,6 +178,7 @@ async def canonical_course_detail(
         "created_at": course.created_at.isoformat() if course.created_at else None,
         "updated_at": course.updated_at.isoformat() if course.updated_at else None,
         "modules": (course.generation_metadata or {}).get("modules") or [],
+        "lesson_count": len(lessons),
         "lessons": [
             {
                 "id": lesson.id,
