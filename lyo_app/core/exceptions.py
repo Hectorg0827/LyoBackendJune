@@ -183,13 +183,15 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     """Handle FastAPI HTTP exceptions."""
     logger.warning(f"HTTP exception: {exc.status_code} - {exc.detail}")
     
-    return create_error_response(
+    response = create_error_response(
         error_code="HTTP_ERROR",
         message=exc.detail if isinstance(exc.detail, str) else "HTTP error occurred",
         status_code=exc.status_code,
         details=exc.detail if isinstance(exc.detail, dict) else None,
         request_id=getattr(request.state, 'request_id', None)
     )
+    response.headers.update(exc.headers or {})
+    return response
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
