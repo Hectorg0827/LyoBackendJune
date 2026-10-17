@@ -13,6 +13,7 @@ from lyo_app.coach.service import (
     _readiness,
     _weakest_covered_record,
     _state_for_skill,
+    build_today_view,
     ensure_test_goal,
 )
 from lyo_app.coach.schemas import GoalSkillInput, GoalSkillState, LearningGoalCreate, LearningGoalPatch
@@ -75,6 +76,41 @@ def test_no_evidence_starts_with_a_diagnostic_not_a_beginner_lecture():
     assert evidence == "recognition"
     assert surface == "quiz"
     assert minutes <= 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inactive_status", [None, "paused", "completed", "archived"])
+async def test_today_without_owned_active_goals_returns_empty_valid_mission(inactive_status):
+    database = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with database.begin() as conn:
+            await conn.run_sync(TestProfile.__table__.create)
+            await conn.run_sync(LearningGoal.__table__.create)
+
+        async with AsyncSession(database, expire_on_commit=False) as db:
+            # Another learner's active goal must never populate this mission.
+            other_goal = _goal()
+            other_goal.id = "other-learner-goal"
+            other_goal.user_id = 8
+            db.add(other_goal)
+            if inactive_status is not None:
+                inactive_goal = _goal()
+                inactive_goal.status = inactive_status
+                db.add(inactive_goal)
+            await db.flush()
+
+            view = await build_today_view(db, 7)
+            payload = view.model_dump(mode="json")
+
+            assert payload["total_minutes"] == 0
+            assert payload["primary_goal_id"] is None
+            assert payload["active_goals"] == []
+            assert payload["mission"] == []
+            assert payload["readiness"] == {}
+            assert "No active learning goal" in payload["coach_note"]
+            assert payload["generated_at"]
+    finally:
+        await database.dispose()
 
 
 def test_application_moves_to_transfer_instead_of_repeating_application():

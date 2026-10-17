@@ -819,6 +819,30 @@ LOOSE_JSON = {"type": "json_object"}
 ESCALATION_PROVIDER = "gemini-3.8-flash"
 
 
+
+def compact_classroom_contract(value: Any) -> Any:
+    """Drop only JSON Schema annotation overhead, never validation semantics.
+
+    Keep descriptions, required keys, enumerations, $refs, constraints and
+    definitions. The original canonical schema still validates the response.
+    Titles/defaults/examples add prompt cost but no mandatory constraints.
+    """
+    if isinstance(value, dict):
+        return {
+            key: compact_classroom_contract(child)
+            for key, child in value.items()
+            if key not in {"title", "default", "examples"}
+        }
+    if isinstance(value, list):
+        return [compact_classroom_contract(child) for child in value]
+    return value
+
+
+def bounded_teaching_history(items: list[str], *, keep: int = 4, chars: int = 1000) -> list[str]:
+    """Keep the most recent authored steps while bounding repeated LLM input."""
+    return [str(item)[:chars] for item in items[-keep:]]
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -869,14 +893,31 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     started = perf_counter()
     result = None
     outcome = "error"
+    # Prompt-side compaction is reversible with CLASSROOM_COMPACT_PROMPTS=0.
+    # The provider-enforced contract and server Pydantic validator remain the
+    # complete, unchanged schema; descriptions and all constraints remain.
+    compact = os.getenv("CLASSROOM_COMPACT_PROMPTS", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+    prompt_contract = compact_classroom_contract(contract) if compact else contract
+    prompt_separators = (",", ":") if compact else None
     messages = [
         {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
-         + json.dumps(contract, ensure_ascii=False)},
-        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
+         + json.dumps(prompt_contract, ensure_ascii=False, separators=prompt_separators)},
+        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False, separators=prompt_separators)},
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
     timeout = 100 if issubclass(schema, UnitPackage) else 45
+
+    # Bound hidden reasoning for immediate lesson authoring inside the existing
+    # 25-second provider deadline. Grading, diagnostics and whole-unit packages
+    # retain their default reasoning. Schemas and evidence gates are unchanged.
+    # https://ai.google.dev/gemini-api/docs/generate-content/thinking
+    immediate_authoring = schema is LearningPlan or (
+        issubclass(schema, LearningTurn) and not issubclass(schema, DiagnosticTurn)
+    )
+    thinking_options = {"thinking_level": "low"} if immediate_authoring else {}
 
     async def call(response_format):
         return await asyncio.wait_for(
@@ -887,6 +928,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 temperature=0.1 if schema is Evaluation else 0.6,
                 response_format=response_format,
                 use_cache=False,
+                **thinking_options,
             ),
             timeout=timeout,
         )
@@ -981,13 +1023,15 @@ def strict_response_format(schema, contract):
 class AdaptiveTeacher:
     def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json,
                  semantic_judge: Callable[..., Awaitable[bool]] | None = None,
-                 package_cache=None, fast_start: bool = False):
+                 package_cache=None, fast_start: bool = False,
+                 prefetch_unit_packages: bool = True):
         self.generate = generate
         # Optional separate review of meaning the deterministic gate cannot
         # infer: distractor plausibility, gap labeling and factual teaching.
         self.semantic_judge = semantic_judge
         self.package_cache = package_cache
         self.fast_start = fast_start
+        self.prefetch_unit_packages = prefetch_unit_packages
         # Fast-start authors the immediate move first. Once that move is ready,
         # the rest of the unit can be prepared while the learner is reading,
         # listening or answering. Keep the warm package in this teacher
@@ -1113,7 +1157,7 @@ class AdaptiveTeacher:
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
-        if not self.fast_start or self.package_cache is None:
+        if not self.prefetch_unit_packages or not self.fast_start or self.package_cache is None:
             return
         from lyo_app.ai_classroom.unit_package_cache import package_key
         key = package_key(context, unit, self.saved_skill(state, state.next_move))
@@ -1142,7 +1186,8 @@ class AdaptiveTeacher:
         finishes, the existing evaluation path may cancel it and live work wins.
         """
         if (
-            not self.fast_start
+            not self.prefetch_unit_packages
+            or not self.fast_start
             or self.package_cache is None
             or move not in {"independent", "transfer"}
             or self._package_prefetch_tasks
@@ -1310,9 +1355,9 @@ class AdaptiveTeacher:
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
             "goal": context.learning_objective, "level": context.preferred_difficulty,
-            "previous_kinds": state.task_kinds[-6:],
-            "previous_questions": state.recent_questions[-8:],
-            "already_taught": [unit.material] if move == "interleave" else state.taught_steps[-6:],
+            "previous_kinds": state.task_kinds[-5:],
+            "previous_questions": state.recent_questions[-6:],
+            "already_taught": [unit.material[:1500]] if move == "interleave" else bounded_teaching_history(state.taught_steps),
             "learner_input": learner_input[:2000], "feedback": state.last_feedback,
             "previous_task": state.pending.task.model_dump() if state.pending else None,
             "previous_answers": state.pending.answers[-3:] if state.pending else [],
@@ -1329,18 +1374,18 @@ class AdaptiveTeacher:
             "visual_policy": self.visual_policy_for(move, strategy),
             "strategy_history": state.strategy_history[-6:],
             "misconceptions": state.misconceptions[-6:],
-            "learner_signals": state.learner_signals[-8:],
+            "learner_signals": state.learner_signals[-6:],
             "board_memory": [
                 {
                     "title": item.get("title", ""),
-                    "content": item.get("content", ""),
+                    "content": str(item.get("content", ""))[:800],
                     "visual": ({
                         "kind": item["visual"].get("kind"),
                         "title": item["visual"].get("title"),
-                        "description": item["visual"].get("description"),
+                        "description": str(item["visual"].get("description") or "")[:400],
                     } if item.get("visual") else None),
                 }
-                for item in state.board_memory[-4:]
+                for item in state.board_memory[-3:]
             ],
             "open_question": state.open_question[:2000],
             "compress_demonstration": focused,

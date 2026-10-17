@@ -59,6 +59,57 @@ async def log_learning_event(db: AsyncSession, event_in: LearningEventCreate) ->
     return db_event
 
 
+async def _award_verified_learning_xp(db: AsyncSession, event: LearningEvent) -> bool:
+    """Account for one verified learning event exactly once per event ID.
+
+    The public POST /evolution/events sanitizer removes scored outcomes and
+    evidence confidence; such self-reported activity must never earn XP.
+    Lock the learning-event row to serialize concurrent retries on Postgres.
+    """
+    if (
+        event.event_type not in (EventType.CLASSROOM_DEMONSTRATION, EventType.QUIZ_ANSWER)
+        or event.source_surface not in ("classroom", "chat", "test_prep")
+        or event.measurable_outcome is None
+        or event.measurable_outcome < 0.5
+        or event.evidence_confidence is None
+        or event.evidence_confidence <= 0
+    ):
+        return False
+
+    from lyo_app.gamification.models import UserXP, XPActionType
+    from lyo_app.gamification.service import GamificationService
+
+    # The row is already persisted by log_learning_event. Do not repeat on
+    # ephemeral/unsaved events, or mint arbitrary client-supplied metadata.
+    if event.id is None:
+        return False
+    await db.execute(
+        select(LearningEvent.id)
+        .where(LearningEvent.id == event.id, LearningEvent.user_id == event.user_id)
+        .with_for_update()
+    )
+    already = await db.execute(
+        select(UserXP.id).where(
+            UserXP.user_id == event.user_id,
+            UserXP.context_type == "learning_event",
+            UserXP.context_id == event.id,
+        )
+    )
+    if already.scalar_one_or_none() is not None:
+        return False
+
+    service = GamificationService()
+    await service.award_xp(
+        db=db,
+        user_id=event.user_id,
+        action_type=XPActionType.LESSON_COMPLETED,
+        context_type="learning_event",
+        context_id=event.id,
+        context_data={"surface": event.source_surface},
+    )
+    return True
+
+
 async def _process_evolution_loop(db: AsyncSession, event: LearningEvent):
     """
     Executes the self-evolution background job for a given event.
@@ -97,8 +148,9 @@ async def _process_evolution_loop(db: AsyncSession, event: LearningEvent):
         # without migrating either table.
         projection = await project_event_to_mastery_state(db, event)
 
-        # 2. Update Gamification (XP)
-        # Example: await gamification_service.award_xp_for_event(event)
+        # 2. Award XP only for server-graded evidence, never for unverified
+        # client event claims. A retry must not award the same checkpoint twice.
+        await _award_verified_learning_xp(db, event)
 
         # 3. Update Goals Trajectory
         # Fetch active goals related to this event's skills and recalculate momentum/completion
@@ -151,8 +203,15 @@ async def _process_evolution_loop(db: AsyncSession, event: LearningEvent):
         await db.commit()
         
     except Exception as e:
-        logger.error(f"Failed to process evolution loop for event {event.id}: {str(e)}")
-        event.processed_for_mastery = -1
+        # A partially staged XP/level update must never be committed as the
+        # error marker. The immutable event was committed before processing.
+        event_id = event.id
+        logger.error("Failed to process evolution loop for event %s: %s", event_id, type(e).__name__)
+        await db.rollback()
+        stored = await db.get(LearningEvent, event_id)
+        if stored is None:
+            return
+        stored.processed_for_mastery = ERRORED
         await db.commit()
 
 async def _process_voice_interaction(db: AsyncSession, event: LearningEvent):

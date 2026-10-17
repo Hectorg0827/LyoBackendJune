@@ -65,6 +65,12 @@ set -a
 source .env
 set +a
 
+# Resend requires a verified sender address.
+if [ -n "${RESEND_API_KEY:-}" ] && [ -z "${SMTP_FROM_EMAIL:-}" ]; then
+  echo 'ERROR: SMTP_FROM_EMAIL required when RESEND_API_KEY is configured.' >&2
+  exit 1
+fi
+
 # Force strong 64-character secrets for production deployment
 if [ -z "${SECRET_KEY:-}" ] || [ ${#SECRET_KEY} -lt 64 ]; then
   SECRET_KEY=$(openssl rand -hex 32)
@@ -104,6 +110,12 @@ VARS+=("DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}")
 VARS+=("RUNWAYML_API_SECRET=${RUNWAYML_API_SECRET:-}")
 VARS+=("RUNWAY_API_KEY=${RUNWAY_API_KEY:-}")
 VARS+=("RESEND_API_KEY=${RESEND_API_KEY:-}")
+VARS+=("SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}")
+VARS+=("SMTP_SERVER=${SMTP_SERVER:-}")
+VARS+=("SMTP_PORT=${SMTP_PORT:-587}")
+VARS+=("SMTP_USERNAME=${SMTP_USERNAME:-}")
+VARS+=("SMTP_PASSWORD=${SMTP_PASSWORD:-}")
+VARS+=("TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-127.0.0.1}")
 VARS+=("TAVILY_API_KEY=${TAVILY_API_KEY:-}")
 VARS+=("RUNWARE_API_KEY=${RUNWARE_API_KEY:-}")
 

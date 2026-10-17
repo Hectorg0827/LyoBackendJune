@@ -17,10 +17,19 @@ HEALTH = {"environment": "staging", "commit_sha": SHA,
     "https://api.lyoai.app", "http://test.up.railway.app",
     "https://token@test.up.railway.app", "https://test.up.railway.app/path",
     "https://test.up.railway.app?token=secret", "https://test.up.railway.app.evil.example",
+    "https://test.up.railway.app", "https://lyolaunchbackend-staging.up.railway.app.evil.example",
 ])
 def test_live_runner_rejects_unsafe_targets(url):
     with pytest.raises(ValueError):
         require_target(url, SHA)
+
+
+@pytest.mark.parametrize("url", [
+    "https://lyolaunchbackend-staging.up.railway.app",
+    "https://lyojourneystagingbackend-staging.up.railway.app",
+])
+def test_live_runner_only_accepts_reserved_staging_backends(url):
+    assert require_target(url, SHA) == url
 
 
 @pytest.mark.parametrize("changes", [
@@ -80,7 +89,7 @@ async def test_revision_failure_stops_before_authentication_or_fixture_writes(mo
     client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     monkeypatch.setattr(gate.httpx, "AsyncClient", lambda **kwargs: client)
     report_path = tmp_path / "report.json"
-    result = await gate.run(SimpleNamespace(url="https://test.up.railway.app", expected_sha=SHA,
+    result = await gate.run(SimpleNamespace(url="https://lyolaunchbackend-staging.up.railway.app", expected_sha=SHA,
                                           preflight_only=False, report=report_path))
     assert result == 2
     assert calls == [("GET", "/health")]

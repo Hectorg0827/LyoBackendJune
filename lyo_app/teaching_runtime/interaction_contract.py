@@ -73,9 +73,24 @@ _QUIZ_RE = re.compile(
     re.IGNORECASE,
 )
 _TEST_PREP_RE = re.compile(
-    r"\b(?:i have (?:a|an|my) (?:test|exam)|prepare me for (?:a|my) (?:test|exam)|"
+    r"\b(?:i have (?:a|an|my) (?:(?:[\w+-]+\s+){0,4})(?:test|exam|midterm|final)|"
+    r"prepare me for (?:a|my) (?:(?:[\w+-]+\s+){0,4})(?:test|exam|midterm|final)|"
     r"use (?:this|it|the (?:file|document|pdf)) for test prep|"
     r"study for (?:a|my) (?:test|exam)|tengo (?:un )?examen|prep[aá]rame para (?:el|un) examen)\b",
+    re.IGNORECASE,
+)
+_COACH_RE = re.compile(
+    r"^\s*(?:what should i (?:study|work on|do next)(?: today)?|"
+    r"what do i need to work on(?: today)?|"
+    r"what(?:'s| is) my mission(?: today)?|my mission today|"
+    r"how ready am i|am i ready|show me my readiness)\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
+_COACH_TIME_ONLY_RE = re.compile(
+    r"^\s*i have (?:\d{1,3}\s*(?:min|mins|minutes)|half an hour|an hour|one hour)"
+    r"(?:\s+(?:to study|for studying))?"
+    r"(?:\s*[,;:.\-]?\s*(?:what should i (?:study|work on|do next)|what now))?"
+    r"\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
 _COURSE_RE = re.compile(
@@ -204,6 +219,19 @@ def interaction_contract_for_request(
             reason_code="explicit_quiz",
         )
 
+    # Exact next-best-action requests outrank the generic "today" search
+    # freshness trigger, but never override uploaded-document analysis.
+    if not has_media and (_COACH_RE.fullmatch(text) or _COACH_TIME_ONLY_RE.fullmatch(text)):
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            delivery_mode=delivery_mode,
+            voice_interrupted_previous_turn=bool(voice_mode and voice_interrupted_previous_turn),
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="explicit_coach",
+        )
     if _SEARCH_RE.search(text):
         return InteractionContract(
             mode=InteractionMode.SEARCH,
@@ -316,6 +344,17 @@ def interaction_contract_for_request(
             workflow_intent=Intent.TEST_PREP,
             attachment_authoritative=has_media,
             reason_code="routed_test_prep",
+        )
+    if routed_intent == Intent.COACH and not has_media:
+        return InteractionContract(
+            mode=InteractionMode.WORKFLOW,
+            depth=depth,
+            delivery_mode=delivery_mode,
+            voice_interrupted_previous_turn=bool(voice_mode and voice_interrupted_previous_turn),
+            fast_lane=True,
+            workflow_intent=Intent.COACH,
+            attachment_authoritative=False,
+            reason_code="routed_coach",
         )
     if routed_intent == Intent.COURSE:
         return InteractionContract(

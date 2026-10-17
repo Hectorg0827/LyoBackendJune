@@ -389,6 +389,8 @@ def create_app() -> FastAPI:
         logger.warning(f"⚠️ Progressive Course routes not loaded: {e}")
 
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
+    from lyo_app.auth.reset_routes import router as password_reset_router
+    app.include_router(password_reset_router)
     app.include_router(ai_study_router)
     app.include_router(feeds_router, prefix="/api/v1")
 
@@ -1018,8 +1020,8 @@ if __name__ == "__main__":  # pragma: no cover
         host="0.0.0.0",
         port=port,
         workers=getattr(settings, "WORKERS", 1),
-        log_level=getattr(settings, "LOG_LEVEL", "info").lower(),
-        access_log=not settings.is_production(),
+        log_level="warning",  # WebSocket INFO logs include request query strings
+        access_log=False,  # Access URLs may carry legacy Classroom WS JWTs
         reload=settings.is_development(),
         loop="uvloop" if not settings.is_development() else "auto",
     )

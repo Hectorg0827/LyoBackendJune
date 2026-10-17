@@ -7,6 +7,8 @@ from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
@@ -24,7 +26,7 @@ from lyo_app.gamification.schemas import (
     UserStatsRead
 )
 from lyo_app.gamification.models import (
-    XPActionType, AchievementType, StreakType
+    XPActionType, AchievementType, StreakType, UserAchievement
 )
 
 router = APIRouter()
@@ -38,7 +40,14 @@ async def award_xp(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Award XP to the current user (typically called by system)."""
+    """Administrative XP grant. Normal learners earn XP only from verified server events."""
+    # Never trust a learner-supplied action_type, context or arbitrary xp_earned.
+    # This endpoint is exposed at both legacy and /api/v1 prefixes.
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="XP awards are reserved for trusted server-side workflows",
+        )
     try:
         xp_record = await gamification_service.award_xp(
             db=db,
@@ -163,9 +172,18 @@ async def get_my_achievements(
 ):
     """Get current user's achievements."""
     try:
-        # Implementation would fetch user achievements
-        # Simplified for now
-        return []
+        query = (
+            select(UserAchievement)
+            .options(selectinload(UserAchievement.achievement))
+            .where(UserAchievement.user_id == current_user.id)
+            .order_by(UserAchievement.started_at.desc(), UserAchievement.id.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        if completed_only:
+            query = query.where(UserAchievement.is_completed.is_(True))
+        result = await db.execute(query)
+        return list(result.scalars().all())
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch user achievements")
 
@@ -428,6 +446,17 @@ async def get_gamification_overview(
         # Get recent badges
         badges = await gamification_service.get_user_badges(db, current_user.id)
         recent_badges = badges[:3]  # Last 3 badges
+
+        # Achievements are not completed courses, and XP is not study time.
+        from lyo_app.learning.models import CourseEnrollment, LessonCompletion
+        courses_completed = (await db.execute(select(func.count(CourseEnrollment.id)).where(
+            CourseEnrollment.user_id == current_user.id,
+            CourseEnrollment.completed_at.is_not(None),
+        ))).scalar_one()
+        recorded_minutes = (await db.execute(select(func.sum(LessonCompletion.time_spent_minutes)).where(
+            LessonCompletion.user_id == current_user.id,
+            LessonCompletion.time_spent_minutes >= 0,
+        ))).scalar_one()
         
         return {
             "user_level": {
@@ -440,6 +469,10 @@ async def get_gamification_overview(
                 "total": xp_summary["total_xp"],
                 "today": xp_summary["xp_today"],
                 "this_week": xp_summary["xp_this_week"]
+            },
+            "learning": {
+                "courses_completed": courses_completed,
+                "total_hours": round(recorded_minutes / 60, 2) if recorded_minutes is not None else None,
             },
             "achievements": {
                 "completed": stats["achievements_completed"],

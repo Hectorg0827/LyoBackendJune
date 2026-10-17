@@ -59,7 +59,8 @@ class GamificationService:
         context_id: Optional[int] = None,
         context_data: Optional[Dict[str, Any]] = None,
         custom_xp: Optional[int] = None,
-        check_achievements: bool = True
+        check_achievements: bool = True,
+        commit: bool = True,
     ) -> UserXP:
         """
         Award XP to a user for an action.
@@ -79,7 +80,11 @@ class GamificationService:
         Returns:
             Created XP record
         """
-        xp_amount = custom_xp or self.XP_VALUES.get(action_type, 0)
+        # Serialize this learner's ledger/level updates, including two distinct
+        # checkpoints arriving together. Nested rewards retain the same lock.
+        from lyo_app.auth.models import User
+        await db.execute(select(User.id).where(User.id == user_id).with_for_update())
+        xp_amount = custom_xp if custom_xp is not None else self.XP_VALUES.get(action_type, 0)
         
         # Check for daily XP limits to prevent abuse
         if action_type in [XPActionType.POST_CREATED, XPActionType.COMMENT_CREATED]:
@@ -101,9 +106,10 @@ class GamificationService:
             context_data=context_data
         )
         db.add(xp_record)
+        await db.flush()
         
         # Update user level
-        await self._update_user_level(db, user_id, xp_amount)
+        await self._update_user_level(db, user_id, xp_amount, commit=False)
         
         # Check for achievements
         achievement_notes = []
@@ -112,10 +118,13 @@ class GamificationService:
 
         # Update streaks if applicable
         if action_type in [XPActionType.LESSON_COMPLETED, XPActionType.DAILY_LOGIN]:
-            await self._update_streak(db, user_id, self._action_to_streak_type(action_type))
+            await self._update_streak(db, user_id, self._action_to_streak_type(action_type), commit=False)
 
-        await db.commit()
-        await self._notify_achievements(db, user_id, achievement_notes)
+        if commit:
+            await db.commit()
+            await self._notify_achievements(db, user_id, achievement_notes)
+        else:
+            await db.flush()
         return xp_record
 
     async def get_user_xp_summary(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:
@@ -282,7 +291,7 @@ class GamificationService:
         return result.scalars().all()
 
     # Level Operations
-    async def get_user_level(self, db: AsyncSession, user_id: int) -> UserLevel:
+    async def get_user_level(self, db: AsyncSession, user_id: int, *, commit: bool = True) -> UserLevel:
         """Get or create user level."""
         result = await db.execute(
             select(UserLevel).where(UserLevel.user_id == user_id)
@@ -292,7 +301,10 @@ class GamificationService:
         if not user_level:
             user_level = UserLevel(user_id=user_id)
             db.add(user_level)
-            await db.commit()
+            if commit:
+                await db.commit()
+            else:
+                await db.flush()
             await db.refresh(user_level)
         
         return user_level
@@ -450,9 +462,9 @@ class GamificationService:
         )
         return result.scalar() or 0
 
-    async def _update_user_level(self, db: AsyncSession, user_id: int, xp_gained: int) -> UserLevel:
+    async def _update_user_level(self, db: AsyncSession, user_id: int, xp_gained: int, *, commit: bool = True) -> UserLevel:
         """Update user level based on XP gained."""
-        user_level = await self.get_user_level(db, user_id)
+        user_level = await self.get_user_level(db, user_id, commit=False)
         
         user_level.total_xp += xp_gained
         levels_gained = 0
@@ -466,14 +478,18 @@ class GamificationService:
             if levels_gained == 1:  # First level up of the session
                 await self.award_xp(
                     db, user_id, XPActionType.STREAK_MILESTONE, 
-                    context_data={"level": user_level.current_level}
+                    context_data={"level": user_level.current_level},
+                    check_achievements=False, commit=False,
                 )
         
         user_level.xp_to_next_level = self._xp_for_level(user_level.current_level + 1) - user_level.total_xp
         user_level.levels_gained_today += levels_gained
         user_level.updated_at = datetime.utcnow()
         
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return user_level
 
     def _xp_for_level(self, level: int) -> int:
@@ -500,9 +516,8 @@ class GamificationService:
         achievements = result.scalars().all()
         
         for achievement in achievements:
-          # Each achievement is evaluated independently: a nested award_xp for
-          # an XP reward commits mid-loop, so a later iteration raising must
-          # not lose already-committed unlocks or their queued notifications.
+          # Each achievement is evaluated independently. Rewards join the
+          # outer award transaction; notifications follow its final commit.
           user_achievement = None
           try:
             # Check if user already has this achievement
@@ -526,11 +541,8 @@ class GamificationService:
             )
             
             if is_completed:
-                # Stage the completion and flush it BEFORE awarding XP:
-                # the nested award_xp commits internally, persisting the
-                # flushed row and the XP in the same transaction — neither
-                # can land without the other. check_achievements=False stops
-                # award_xp from re-entering this check and double-awarding.
+                # Stage completion and its reward in the same transaction.
+                # check_achievements=False prevents recursive double awards.
                 if not user_achievement:
                     user_achievement = UserAchievement(
                         user_id=user_id,
@@ -549,7 +561,7 @@ class GamificationService:
                         db, user_id, XPActionType.FIRST_ACHIEVEMENT,
                         custom_xp=achievement.xp_reward,
                         context_data={"achievement_id": achievement.id},
-                        check_achievements=False
+                        check_achievements=False, commit=False,
                     )
 
                 awarded_achievements.append(user_achievement)
@@ -631,7 +643,7 @@ class GamificationService:
         
         elif criteria_type == "total_xp":
             required_xp = criteria.get("xp", 0)
-            user_level = await self.get_user_level(db, user_id)
+            user_level = await self.get_user_level(db, user_id, commit=False)
             return user_level.total_xp >= required_xp
         
         elif criteria_type == "streak_days":
@@ -652,7 +664,7 @@ class GamificationService:
         
         return False
 
-    async def _update_streak(self, db: AsyncSession, user_id: int, streak_type: StreakType) -> Streak:
+    async def _update_streak(self, db: AsyncSession, user_id: int, streak_type: StreakType, *, commit: bool = True) -> Streak:
         """Update user streak."""
         result = await db.execute(
             select(Streak).where(
@@ -691,7 +703,10 @@ class GamificationService:
             streak.updated_at = now
             streak.is_active = True
         
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return streak
 
     async def _update_leaderboard(
