@@ -12,6 +12,7 @@ from sqlalchemy import select, func, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
+from sqlalchemy.dialects.postgresql import ENUM as PostgreSQLEnum
 
 from lyo_app.auth.models import User
 from lyo_app.core.database import Base
@@ -42,6 +43,13 @@ async def test_concurrent_checkpoint_retries_keep_ledger_level_and_streak_consis
             Organization, User, LearningEvent, Achievement, UserAchievement, UserXP, UserLevel, Streak,
         )]
         async with engine.begin() as conn:
+            # Other tests can create public.eventtype from the community enum
+            # before this test. An unqualified CREATE/CAST may then reuse the
+            # incompatible public type even though the tables are disposable.
+            # Create the learning event enum explicitly inside this test's
+            # disposable schema; never alter or reuse the shared public type.
+            local_event_type = PostgreSQLEnum(EventType, name="eventtype", schema=schema)
+            await conn.run_sync(lambda sync: local_event_type.create(sync, checkfirst=False))
             await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
         async with sessions() as db:
             db.add(Organization(id=1, name="XP concurrency test", slug="xp-concurrency"))
