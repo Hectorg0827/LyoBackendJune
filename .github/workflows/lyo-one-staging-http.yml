@@ -18,7 +18,7 @@ permissions:
 jobs:
   authenticated-journey:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 15
     env:
       LYO_ONE_STAGING_BACKEND_URL: https://lyolaunchbackend-staging.up.railway.app
       LYO_ONE_STAGING_WEB_URL: https://lyolaunchweb-staging.up.railway.app
