@@ -7,7 +7,45 @@ from lyo_app.core.ai_resilience import (
     CircuitBreakerConfig,
     StreamingIncompleteError,
 )
-from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter
+from lyo_app.teaching_runtime.voice_delivery import VoiceSegmenter, prepare_spoken_text
+
+
+def test_spoken_text_removes_visual_markup_but_preserves_meaning():
+    canonical = (
+        "## Result\n"
+        "**Rent** is $2,100 【lease.pdf p. 1】. "
+        "See [payment schedule](https://example.com/schedule)."
+    )
+
+    assert prepare_spoken_text(canonical) == (
+        "Result Rent is $2,100. See payment schedule."
+    )
+
+
+def test_spoken_text_preserves_currency_and_strips_math_delimiters():
+    canonical = "Rent is $2,100. Half is $\\frac{1}{2}$."
+
+    assert prepare_spoken_text(canonical) == "Rent is $2,100. Half is 1 over 2."
+
+
+def test_spoken_text_discards_markdown_table_separator_rows():
+    canonical = "| Item | Value |\n| --- | --- |\n| Rent | $2,100 |"
+
+    spoken = prepare_spoken_text(canonical)
+
+    assert spoken == "Item, Value Rent, $2,100"
+    assert "---" not in spoken
+
+
+def test_spoken_text_drops_raw_urls_images_and_code_fences():
+    canonical = (
+        "Look here: https://example.com/raw\n"
+        "![chart](https://example.com/chart.png)\n"
+        "```python\nprint('do not read this')\n```\n"
+        "The conclusion is stable."
+    )
+
+    assert prepare_spoken_text(canonical) == "Look here: The conclusion is stable."
 
 
 def test_voice_segmenter_emits_complete_sentence_before_full_answer():
@@ -18,6 +56,22 @@ def test_voice_segmenter_emits_complete_sentence_before_full_answer():
         "Photosynthesis converts light into chemical energy."
     ]
     assert segmenter.flush() == ["Plants then use"]
+
+
+def test_voice_segmenter_never_emits_fenced_code_split_across_deltas():
+    segmenter = VoiceSegmenter(min_chars=8)
+
+    spoken = []
+    spoken.extend(segmenter.feed("Here is why. `"))
+    spoken.extend(segmenter.feed("``python\nprint('do not speak.'))\n`"))
+    spoken.extend(segmenter.feed("`` The conclusion is safe."))
+    spoken.extend(segmenter.flush())
+
+    joined = " ".join(spoken)
+    assert "do not speak" not in joined
+    assert "python" not in joined
+    assert "Here is why." in joined
+    assert "The conclusion is safe." in joined
 
 
 def test_voice_segmenter_splits_long_unpunctuated_turns():

@@ -21,6 +21,65 @@ _ABBREVIATION_RE = re.compile(
 )
 
 
+_SOURCE_CITATION_RE = re.compile(r"【[^】]+】")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_CODE_FENCE_RE = re.compile(r"\x60\x60\x60[\s\S]*?\x60\x60\x60")
+_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*")
+_LIST_PREFIX_RE = re.compile(r"(?m)^\s*(?:[-*+]\s+|\d+[.)]\s+)")
+_EMPHASIS_RE = re.compile(r"[*_~]+")
+_URL_RE = re.compile(r"https?://\S+")
+_MATH_BLOCK_RE = re.compile(r"\$\$([\s\S]*?)\$\$")
+_INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+)\$(?!\$)")
+_TABLE_SEPARATOR_RE = re.compile(
+    r"(?m)^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
+)
+_CURRENCY_DOLLAR_RE = re.compile(
+    r"\$(?=\d[\d,]*(?:\.\d+)?(?:\s|[.,!?)]|$))"
+)
+_CURRENCY_DOLLAR_SENTINEL = "__LYO_CURRENCY_DOLLAR__"
+
+
+def prepare_spoken_text(raw: str) -> str:
+    """Convert canonical Chat text into a speech-only rendering.
+
+    This is deliberately presentation-only. The canonical text stays unchanged
+    for persistence, rendering, citations, memory, and evaluation. Voice clients
+    receive this field only to avoid reading markdown syntax, source markers,
+    raw URLs, or table pipes aloud.
+    """
+    text = raw or ""
+    text = _CODE_FENCE_RE.sub(" ", text)
+    text = _MARKDOWN_IMAGE_RE.sub(" ", text)
+    text = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = _SOURCE_CITATION_RE.sub(" ", text)
+    text = _URL_RE.sub(" ", text)
+    text = _HEADING_RE.sub("", text)
+    text = re.sub(r"(?m)^\s*([A-Da-d])[.)]\s+", r"\1: ", text)
+    text = _LIST_PREFIX_RE.sub("", text)
+    text = re.sub(r"\x60([^\x60]+)\x60", r"\1", text)
+    text = _EMPHASIS_RE.sub("", text)
+    # Protect currency in the original canonical text, before LaTeX is
+    # converted. A math opener such as "$\\frac" cannot be mistaken for a
+    # currency marker at this stage, while "$2,100" can be protected safely.
+    text = _CURRENCY_DOLLAR_RE.sub(_CURRENCY_DOLLAR_SENTINEL, text)
+    text = re.sub(
+        r"\\frac\{([^{}]+)\}\{([^{}]+)\}",
+        r"\1 over \2",
+        text,
+    )
+    text = text.replace("\\(", "").replace("\\)", "")
+    text = text.replace("\\[", "").replace("\\]", "")
+    text = _MATH_BLOCK_RE.sub(r"\1", text)
+    text = _INLINE_MATH_RE.sub(r"\1", text)
+    text = text.replace(_CURRENCY_DOLLAR_SENTINEL, "$")
+    text = _TABLE_SEPARATOR_RE.sub(" ", text)
+    text = re.sub(r"(?m)^\s*\|?(.*?)\|\s*$", lambda m: m.group(1).replace("|", ", "), text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 @dataclass
 class VoiceSegmenter:
     """Incrementally group token deltas into TTS-safe phrases.
@@ -35,15 +94,62 @@ class VoiceSegmenter:
     soft_target_chars: int = 120
     hard_max_chars: int = 220
     _buffer: str = field(default="", init=False, repr=False)
+    _inside_fenced_code: bool = field(default=False, init=False, repr=False)
+    _fence_carry: str = field(default="", init=False, repr=False)
 
     def feed(self, delta: str) -> List[str]:
         if not delta:
             return []
-        self._buffer += delta
+        speakable = self._strip_fenced_code(delta, final=False)
+        if speakable:
+            self._buffer += speakable
         return self._drain(final=False)
 
     def flush(self) -> List[str]:
+        trailing = self._strip_fenced_code("", final=True)
+        if trailing:
+            self._buffer += trailing
         return self._drain(final=True)
+
+    def _strip_fenced_code(self, delta: str, *, final: bool) -> str:
+        """Remove fenced-code content across arbitrary model-delta boundaries."""
+        fence_token = chr(96) * 3
+        data = self._fence_carry + (delta or "")
+        self._fence_carry = ""
+        output: List[str] = []
+        cursor = 0
+
+        while cursor < len(data):
+            fence = data.find(fence_token, cursor)
+            if fence < 0:
+                remainder = data[cursor:]
+                if not final:
+                    keep = 0
+                    for size in (2, 1):
+                        if remainder.endswith(chr(96) * size):
+                            keep = size
+                            break
+                    visible = remainder[:-keep] if keep else remainder
+                    if not self._inside_fenced_code:
+                        output.append(visible)
+                    if keep:
+                        self._fence_carry = remainder[-keep:]
+                elif not self._inside_fenced_code:
+                    output.append(remainder)
+                break
+
+            if not self._inside_fenced_code:
+                output.append(data[cursor:fence])
+            self._inside_fenced_code = not self._inside_fenced_code
+            cursor = fence + len(fence_token)
+
+        if final:
+            if self._fence_carry and not self._inside_fenced_code:
+                output.append(self._fence_carry)
+            self._fence_carry = ""
+            self._inside_fenced_code = False
+
+        return "".join(output)
 
     def _drain(self, *, final: bool) -> List[str]:
         segments: List[str] = []
