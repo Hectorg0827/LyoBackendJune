@@ -5,10 +5,10 @@ Provides endpoints for creating, viewing, and managing user clips.
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, or_, cast, String
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
@@ -183,27 +183,77 @@ async def get_my_clips(
         )
 
 
+def _search_clips(q: Optional[str]):
+    """Case-insensitive, literal search across published clip metadata."""
+    value = (q or "").strip()
+    if not value:
+        return None
+    term = value.lower()
+    return or_(
+        func.lower(Clip.title).contains(term, autoescape=True),
+        func.lower(Clip.description).contains(term, autoescape=True),
+        func.lower(Clip.subject).contains(term, autoescape=True),
+        func.lower(Clip.topic).contains(term, autoescape=True),
+        func.lower(cast(Clip.tags, String)).contains(term, autoescape=True),
+    )
+
+
+def _discover_order(sort: str):
+    # Stable ordering keeps offset-based pagination predictable when scores tie.
+    if sort == "latest":
+        return (desc(Clip.created_at), desc(Clip.id))
+    if sort == "popular":
+        return (desc(Clip.like_count), desc(Clip.view_count), desc(Clip.id))
+    return (desc(Clip.view_count + Clip.like_count * 2), desc(Clip.id))
+
+
+@router.get("/discover/filters")
+async def get_discover_filters(
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Only offer topics with published videos, never dead-end placeholder tabs."""
+    rows = await db.execute(
+        select(func.min(Clip.subject), func.count(Clip.id).label("count"))
+        .where(Clip.is_public.is_(True), Clip.subject.is_not(None), func.trim(Clip.subject) != "")
+        .group_by(func.lower(func.trim(Clip.subject)))
+        .order_by(desc("count"), func.min(Clip.subject))
+        .limit(30)
+    )
+    return {
+        "subjects": [
+            {"name": name, "count": count}
+            for name, count in rows.all()
+            if name and name.strip() and name.strip().lower() not in {"general", "unknown"}
+        ]
+    }
+
+
 @router.get("/discover", response_model=ClipsListResponse)
 async def get_discover_clips(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    subject: Optional[str] = None,
+    subject: Optional[str] = Query(None, max_length=100),
     level: Optional[str] = None,
+    q: Optional[str] = Query(None, max_length=120),
+    sort: Literal["for_you", "latest", "popular"] = "for_you",
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get public clips for Discover feed."""
+    """Filter/search ALL public clips on the server before pagination."""
     try:
         offset = (page - 1) * per_page
         
         # Build query for public clips
-        conditions = [Clip.is_public == True]
-        
+        conditions = [Clip.is_public.is_(True)]
         if subject:
-            conditions.append(Clip.subject == subject)
+            conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
         if level:
             conditions.append(Clip.level == level)
-        
+        search = _search_clips(q)
+        if search is not None:
+            conditions.append(search)
+
         # Count total
         count_query = select(func.count()).select_from(Clip).where(*conditions)
         total_result = await db.execute(count_query)
@@ -213,7 +263,7 @@ async def get_discover_clips(
         query = (
             select(Clip)
             .where(*conditions)
-            .order_by(desc(Clip.view_count + Clip.like_count * 2))
+            .order_by(*_discover_order(sort))
             .offset(offset)
             .limit(per_page)
         )
@@ -264,6 +314,8 @@ async def get_discover_clips(
 async def get_saved_clips(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    subject: Optional[str] = Query(None, max_length=100),
+    q: Optional[str] = Query(None, max_length=120),
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -271,19 +323,31 @@ async def get_saved_clips(
     try:
         offset = (page - 1) * per_page
         
+        conditions = [
+            ClipSave.user_id == current_user.id,
+            or_(Clip.is_public.is_(True), Clip.user_id == current_user.id),
+        ]
+        if subject:
+            conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
+        search = _search_clips(q)
+        if search is not None:
+            conditions.append(search)
         # Join with ClipSave
         query = (
             select(Clip)
             .join(ClipSave, Clip.id == ClipSave.clip_id)
-            .where(ClipSave.user_id == current_user.id)
+            .where(*conditions)
             .order_by(desc(ClipSave.created_at))
             .offset(offset)
             .limit(per_page)
         )
         
         # Count total
-        count_query = select(func.count()).select_from(ClipSave).where(
-            ClipSave.user_id == current_user.id
+        count_query = (
+            select(func.count())
+            .select_from(Clip)
+            .join(ClipSave, Clip.id == ClipSave.clip_id)
+            .where(*conditions)
         )
         
         total_result = await db.execute(count_query)
