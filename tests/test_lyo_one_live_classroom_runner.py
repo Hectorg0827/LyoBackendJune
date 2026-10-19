@@ -19,10 +19,11 @@ class IsolatedTeacherSafetyTests(unittest.TestCase):
         with patch.dict(os.environ, {"LYO_ONE_PROVIDER_STAGING_READY": "yes"}):
             for url in (
                 "https://api.lyoai.app",
-                "http://lyojourneystagingbackend-staging.up.railway.app",
-                "https://lyojourneystagingbackend-staging.up.railway.app.evil.test",
-                "https://user:pw@lyojourneystagingbackend-staging.up.railway.app",
-                "https://lyojourneystagingbackend-staging.up.railway.app/other",
+                "https://lyojourneystagingbackend-staging.up.railway.app",
+                "http://lyoclassroomcertificationbackend-staging.up.railway.app",
+                "https://lyoclassroomcertificationbackend-staging.up.railway.app.evil.test",
+                "https://user:pw@lyoclassroomcertificationbackend-staging.up.railway.app",
+                "https://lyoclassroomcertificationbackend-staging.up.railway.app/other",
             ):
                 with self.subTest(url=url), self.assertRaises(ValueError):
                     runner.require_safe_target(url)
@@ -35,7 +36,7 @@ class IsolatedTeacherSafetyTests(unittest.TestCase):
             runner.require_safe_target()
 
     def test_synthetic_registration_never_uses_a_production_host(self):
-        self.assertEqual(runner.EXPECTED_HOST, "lyojourneystagingbackend-staging.up.railway.app")
+        self.assertEqual(runner.EXPECTED_HOST, "lyoclassroomcertificationbackend-staging.up.railway.app")
         self.assertNotEqual(runner.STAGING_API, "https://api.lyoai.app")
         self.assertTrue(runner.STAGING_API.startswith("https://"))
 
