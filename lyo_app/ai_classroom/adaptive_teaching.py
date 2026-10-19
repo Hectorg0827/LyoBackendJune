@@ -1157,7 +1157,15 @@ class AdaptiveTeacher:
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
-        if not self.prefetch_unit_packages or not self.fast_start or self.package_cache is None:
+        # An opt-in cannot create several expensive UnitPackage generations
+        # during rapid learner turns or a quick change of unit. Keep at most
+        # one speculative provider task per teacher, regardless of cache key.
+        if (
+            not self.prefetch_unit_packages
+            or not self.fast_start
+            or self.package_cache is None
+            or self._package_prefetch_tasks
+        ):
             return
         from lyo_app.ai_classroom.unit_package_cache import package_key
         key = package_key(context, unit, self.saved_skill(state, state.next_move))
