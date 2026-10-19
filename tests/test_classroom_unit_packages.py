@@ -525,3 +525,36 @@ async def test_live_fast_start_without_speculation_keeps_teaching_and_does_not_s
     assert not teacher._package_prefetch_tasks
     assert not teacher._prefetched_packages
     assert not (await db.execute(select(ClassroomUnitPackage))).scalars().all()
+
+
+def test_opt_in_unit_prefetch_never_fans_out_to_multiple_provider_calls(monkeypatch):
+    """A second cache miss cannot enqueue another large package while one runs."""
+    from types import SimpleNamespace
+    from lyo_app.ai_classroom import unit_package_cache
+
+    ctx = context(target_duration_minutes=8)
+    state = GuidedState(
+        owner=ctx.user_id,
+        plan=plan(1),
+        skill_ids=["fixture-skill"],
+        identity_required=True,
+        record_scope="unit",
+    )
+    teacher = AdaptiveTeacher(
+        generate=AsyncMock(),
+        package_cache=object(),
+        fast_start=True,
+        prefetch_unit_packages=True,
+    )
+    # A different unit is already being prefetched. The new cache key is
+    # distinct, so deduplicating by cache key alone is insufficient.
+    existing = SimpleNamespace(done=lambda: False)
+    teacher._package_prefetch_tasks["different-unit"] = existing
+    teacher._fast_cache_misses.add("new-unit")
+    monkeypatch.setattr(
+        unit_package_cache, "package_key",
+        lambda *_args: SimpleNamespace(cache_key="new-unit", level_band=1),
+    )
+    teacher.schedule_package_prefetch(ctx, state, state.unit)
+    assert teacher._package_prefetch_tasks == {"different-unit": existing}
+    assert teacher._fast_cache_misses == {"new-unit"}
