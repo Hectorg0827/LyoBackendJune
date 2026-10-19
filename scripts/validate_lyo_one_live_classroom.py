@@ -18,8 +18,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-STAGING_API = "https://lyojourneystagingbackend-staging.up.railway.app"
-EXPECTED_HOST = "lyojourneystagingbackend-staging.up.railway.app"
+STAGING_API = "https://lyoclassroomcertificationbackend-staging.up.railway.app"
+EXPECTED_HOST = "lyoclassroomcertificationbackend-staging.up.railway.app"
 SCENARIOS = {"math_fractions", "biology_photosynthesis", "physics_newton2",
              "spanish_past_tense", "business_contribution_margin"}
 PROFILES = {"interrupter", "beginner", "advanced", "confident_wrong",
