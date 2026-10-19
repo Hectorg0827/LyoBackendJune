@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-STAGING_HOST = "lyojourneystagingbackend-staging.up.railway.app"
+STAGING_HOST = "lyoclassroomcertificationbackend-staging.up.railway.app"
 BASE = "https://" + STAGING_HOST
 STAGING_WEB = "https://lyoonestagingweb-staging.up.railway.app"
 GOALS = "/api/v1/me/coach/goals"
