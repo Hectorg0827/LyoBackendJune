@@ -1,6 +1,7 @@
 """A reusable unit must be complete, safe, scoped and learner independent."""
 
 import importlib.util
+import typing
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -23,7 +24,11 @@ from lyo_app.ai_classroom.models import (
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
 from lyo_app.ai_classroom.sdui_models import ActionIntent, QuizCard
 from lyo_app.ai_classroom.skill_identity import resolve_skill_plan
-from lyo_app.ai_classroom.teaching_prompt import unit_package_prompt
+from lyo_app.ai_classroom.teaching_prompt import (
+    ASKING_MOVES,
+    teaching_prompt,
+    unit_package_prompt,
+)
 from lyo_app.ai_classroom.unit_package_cache import DatabaseUnitPackageCache, package_key
 from lyo_app.core.database import Base
 from tests.adaptive_fixtures import (
@@ -468,6 +473,43 @@ def test_prompt_and_slot_contract_cover_the_full_unit():
     for index in range(3):
         for move in ("guided", "faded", "independent", "explain", "transfer"):
             assert select_package_turn(package, move, index).task.target_index == index
+
+
+def test_every_asking_move_names_the_kind_it_wants():
+    """A move that asks something must say which `kind` it means.
+
+    `kind` and `response_format` are two fields that share no values, and the
+    authoring model fills both from prose. `faded` used to offer "a completion,
+    choice or short_answer task" — three response_format values and no kind —
+    and came back with kind="completion" on every target of every attempt, so
+    no package ever validated and the lesson fell back to live authoring until
+    it ran out of attempts and paused. The moves that name their kind outright
+    never failed that way; this keeps every asking move in that group.
+    """
+    from lyo_app.ai_classroom.adaptive_teaching import LearningTask
+
+    kinds = set(typing.get_args(LearningTask.model_fields["kind"].annotation))
+    formats = set(typing.get_args(LearningTask.model_fields["response_format"].annotation))
+    assert not kinds & formats, "the two fields must stay disjoint for this test to mean anything"
+
+    for move in sorted(ASKING_MOVES):
+        block = teaching_prompt(move)
+        assert "kind=" in block, f"{move} never names a kind"
+        named = {kind for kind in kinds if f"kind={kind}" in block or f"or {kind}," in block
+                 or f"or {kind} " in block or f", {kind} or" in block or f"={kind}," in block}
+        assert named, f"{move} names no kind from {sorted(kinds)}"
+        # The failure that caused this test: a response_format offered as a kind.
+        for shape in formats:
+            assert f"kind={shape}" not in block, f"{move} offers {shape} as a kind"
+
+
+def test_task_rules_name_both_field_vocabularies():
+    """Naming only one field's values leaves the other's words homeless."""
+    rules = teaching_prompt("guided")
+    for kind in ("predict", "choose", "apply", "diagnose", "explain"):
+        assert kind in rules
+    for shape in ("choice", "short_answer", "completion"):
+        assert shape in rules
 
 
 def test_migration_adds_cache_without_changing_existing_concepts():

@@ -80,7 +80,10 @@ VISUALS = (
 #: True of any move that asks the learner something.
 TASK_RULES = (
     "For every task set target_index to the supplied target_index. Separate the "
-    "cognitive kind (predict/choose/apply/diagnose/explain) from response_format. "
+    "cognitive kind (predict/choose/apply/diagnose/explain) from response_format "
+    "(choice/short_answer/completion). They are two fields and share no values: "
+    "a shape such as completion or short_answer is a response_format and is "
+    "never a kind. "
     "Choice tasks may use any kind; provide options only for response_format=choice. "
     "Supply the actual scenario and all needed data; ask one specific "
     "decision/result, with a reason only when needed. Never ask the learner to "
@@ -157,19 +160,19 @@ FOCUSED_ORIENT = (
 )
 
 GUIDED = (
-    "This move is guided: demonstration=[], supply a choice task with 2–4 "
-    "options; model the setup and support ONE next decision. Use plausible, kind, "
-    "question-specific distractor feedback. Consecutive choices are welcome. Vary "
-    "response_format from checkpoint to checkpoint so its shape is never "
-    "predictable from the phase; pick whichever fits THIS question, and when you "
-    "use choice make every distractor a real misconception. "
+    "This move is guided: demonstration=[], kind=predict, choose or apply; "
+    "model the setup and support ONE next decision. Vary response_format from "
+    "checkpoint to checkpoint so its shape is never predictable from the phase; "
+    "pick whichever fits THIS question. When you use choice, give 2–4 options "
+    "and make every distractor a real misconception, with plausible, "
+    "considerate, question-specific feedback. Consecutive choices are welcome. "
 )
 
 FADED = (
-    "This move is faded: demonstration=[], supply a completion, choice or "
-    "short_answer task with most of a related worked example already completed. "
-    "Ask for ONE missing step or result; never a broad explanation. Only the "
-    "final step is removed. "
+    "This move is faded: demonstration=[], kind=predict or apply, and "
+    "response_format completion, choice or short_answer. Most of a related "
+    "worked example is already completed. Ask for ONE missing step or result; "
+    "never a broad explanation. Only the final step is removed. "
 )
 
 INDEPENDENT = (
@@ -217,8 +220,9 @@ CLOSING_WIN = (
     "reteaching, not the whole skill. This learner has been wrong several times "
     "in a row, and this question exists so that the last thing that happens to "
     "them is something they can do. Make it genuinely answerable from what was "
-    "just modelled, with the setup done for them and one decision left. Offer "
-    "2–4 options with kind, specific feedback, or ask for one short answer. Do "
+    "just modelled, with the setup done for them and one decision left. Use "
+    "kind=predict, choose or apply. Offer 2–4 options with considerate, "
+    "specific feedback, or ask for one short answer. Do "
     "not restate the question they kept missing, do not test the whole skill, "
     "and never suggest they have run out of chances: the unit is already saved "
     "for more practice whatever they answer. "
