@@ -15,7 +15,7 @@ from validate_lyo_one_live_classroom import (
 async def main() -> None:
     if os.getenv("LYO_ONE_STAGING_WS_AUTH_SMOKE") != "1":
         raise RuntimeError("Explicit isolated Classroom WS security opt-in required")
-    if urlparse(STAGING_API).hostname != "lyojourneystagingbackend-staging.up.railway.app":
+    if urlparse(STAGING_API).hostname != "lyoclassroomcertificationbackend-staging.up.railway.app":
         raise RuntimeError("Refusing non-isolated staging target")
     verify_candidate()  # Full SHA + environment + configured-provider identity
     token = create_synthetic_access_token()
