@@ -15,7 +15,10 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, ValidationError, ValidatorFunctionWrapHandler,
+    field_validator, model_validator,
+)
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
@@ -263,6 +266,27 @@ class TeachingBeat(StrictModel):
     board_title: str = Field(min_length=3, max_length=100)
     board_content: str = Field(min_length=10, max_length=1000)
     visual: TeachingVisual | None = None
+
+    @field_validator("visual", mode="wrap")
+    @classmethod
+    def optional_visual(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> TeachingVisual | None:
+        """Keep valid teaching when an optional representation is malformed.
+
+        Only the visual's validation can degrade to None. Speech, paced beats,
+        tasks and private grading criteria still pass their complete contracts.
+        The existing post-validation fallbacks may illustrate authored material;
+        this boundary never invents a diagram, question or mastery evidence.
+        """
+        try:
+            return handler(value)
+        except ValidationError as exc:
+            # Error locations can contain provider-supplied extra field names.
+            # Log fixed error codes only, never their values, keys or context.
+            causes = sorted({item["type"] for item in exc.errors(
+                include_input=False, include_context=False, include_url=False,
+            )})
+            logger.warning("Classroom optional visual omitted: cause=%s", ",".join(causes))
+            return None
 
     @model_validator(mode="after")
     def concise_teaching(self):
