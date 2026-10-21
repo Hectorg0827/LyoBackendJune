@@ -178,8 +178,9 @@ async def create_clip(
         # Library imports are retried; the same source must not appear twice.
         existing = await db.execute(
             select(Clip.id).where(Clip.user_id == current_user.id, Clip.source_url == request.sourceUrl)
+            .order_by(Clip.id).limit(1)
         )
-        duplicate = existing.scalar_one_or_none()
+        duplicate = existing.scalar()
         if duplicate is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
