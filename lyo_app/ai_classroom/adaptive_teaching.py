@@ -867,6 +867,66 @@ def bounded_teaching_history(items: list[str], *, keep: int = 4, chars: int = 10
     return [str(item)[:chars] for item in items[-keep:]]
 
 
+def validate_authored_turn_with_optional_visual_fallback(
+    schema: type[StrictModel], raw_json: str,
+) -> StrictModel:
+    """Only an invalid *optional presentation visual* may be discarded.
+
+    Keep the original authored speech, board, demonstration and graded task.
+    Nothing about learner correctness, assessment criteria or mastery is
+    synthesized or relaxed. Mixed visual/nonvisual errors still fail closed,
+    and the full phase-specific schema validates the final object.
+    """
+    try:
+        return schema.model_validate_json(raw_json)
+    except ValidationError as original:
+        if not issubclass(schema, LearningTurn):
+            raise
+        visual_locations: set[tuple[Any, ...]] = set()
+        for error in original.errors(
+            include_input=False, include_context=False, include_url=False,
+        ):
+            location = tuple(error.get("loc") or ())
+            if location and location[0] == "visual":
+                visual_locations.add(("visual",))
+            elif (
+                len(location) >= 3
+                and location[0] == "demonstration"
+                and isinstance(location[1], int)
+                and location[2] == "visual"
+            ):
+                visual_locations.add(("demonstration", location[1], "visual"))
+            else:
+                # A missing task, leaked answer, malformed demonstration,
+                # invalid assessment, etc. must still trigger normal repair.
+                raise
+        if not visual_locations:
+            raise
+        document = json.loads(raw_json)
+        if not isinstance(document, dict):
+            raise original
+        for location in visual_locations:
+            if location[0] == "visual":
+                if "visual" not in document:
+                    raise original
+                document.pop("visual")
+            else:
+                beats = document.get("demonstration")
+                index = location[1]
+                if (not isinstance(beats, list) or index >= len(beats)
+                        or not isinstance(beats[index], dict)
+                        or "visual" not in beats[index]):
+                    raise original
+                beats[index].pop("visual")
+        validated = schema.model_validate(document)
+        logger.warning(
+            "Discarded %d invalid optional Classroom visual(s); "
+            "kept original authored task, board and phase constraints",
+            len(visual_locations),
+        )
+        return validated
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -995,7 +1055,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         first, last = raw.find("{"), raw.rfind("}")
         if first < 0 or last <= first:
             raise TeachingUnavailable("Missing structured response")
-        response = schema.model_validate_json(raw[first:last + 1])
+        response = validate_authored_turn_with_optional_visual_fallback(schema, raw[first:last + 1])
         outcome = "success"
         return response
     except ValidationError:
