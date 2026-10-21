@@ -99,7 +99,11 @@ def main():
     command = [
         sys.executable, "scripts/live_teacher_quality.py", "seed",
         "--base-url", STAGING_API, "--scenario", scenario, "--profile", profile,
-        "--max-scenes", "14", "--timeout", "75",
+        # Give the struggling profile enough separate opportunities to
+        # demonstrate three *server-confirmed* wrong choices and remediation.
+        # Do not lower the wrong-answer requirement merely to make CI green.
+        "--max-scenes", "20" if profile == "struggling" else "14",
+        "--timeout", "75",
         "--output", str(output),
     ]
     completed = subprocess.run(command, env=env, timeout=780, check=False)
