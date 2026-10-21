@@ -21,6 +21,25 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+def safe_provider_error_reason(error: object) -> str:
+    """Classify provider errors without logging prompts, keys, or provider bodies."""
+    message = str(error).lower()
+    if "quota exceeded for metric" in message or "generate_content_free_tier_requests" in message:
+        return "quota_exhausted"
+    if "429" in message or "rate limit" in message:
+        return "rate_limited"
+    if "503" in message or "overloaded" in message:
+        return "provider_overloaded"
+    if "401" in message or "403" in message:
+        return "provider_auth_rejected"
+    if "404" in message:
+        return "model_unavailable"
+    if "timeout" in message or isinstance(error, TimeoutError):
+        return "provider_timeout"
+    return type(error).__name__ if isinstance(error, BaseException) else "provider_error"
+
+
+
 
 def _openai_compatible_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Translate Lyo provider-neutral media parts to OpenAI chat content.
@@ -354,6 +373,25 @@ class AIResilienceManager:
             logger.info(f"Circuit breaker reset for {name}")
         print(f">>> [PID {os.getpid()}] All circuit breakers reset to CLOSED", flush=True)
 
+    def _normalize_supported_provider_order(self, provider_order: List[str]) -> List[str]:
+        """Route retired/overloaded Gemini Flash IDs to the supported stable Flash.
+
+        Staging provider validation on 2026-10-14 proved gemini-2.5-flash
+        returns a terminal 404 for new API accounts, and gemini-3.6-flash
+        returned 503. The 404 provider response explicitly recommends
+        gemini-3.8-flash. Do not invent a provider, silently downgrade a Pro
+        request, or treat a configured key as proof of actual availability.
+        """
+        latest = self.models.get("gemini-3.8-flash")
+        migrate = latest is not None and bool(latest.api_key)
+        legacy_flash = {"gemini-2.5-flash", "gemini-3.6-flash", "gemini-3.7-flash"}
+        resolved = []
+        for candidate in provider_order:
+            name = "gemini-3.8-flash" if migrate and candidate in legacy_flash else candidate
+            if name not in resolved:
+                resolved.append(name)
+        return resolved
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -369,6 +407,7 @@ class AIResilienceManager:
             await self.initialize()
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
+        provider_order = self._normalize_supported_provider_order(provider_order)
 
         stream_started = time.monotonic()
         first_token_recorded = False
@@ -687,9 +726,12 @@ class AIResilienceManager:
         provider_order: List[str] = None,
         use_cache: bool = True,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking_level: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Get chat completion with fallback across providers."""
+        if thinking_level is not None and thinking_level not in {"low", "medium", "high"}:
+            raise ValueError("Unsupported Gemini thinking level")
         # Lazy initialization if lifespan failed
         if not self._initialized:
             print(f">>> [PID {os.getpid()}] AI Resilience: Triggering Lazy Init", flush=True)
@@ -702,7 +744,7 @@ class AIResilienceManager:
         max_tokens = min(max_tokens, 16384)
 
         message_str = json.dumps(messages)
-        print(f">>> [PID {os.getpid()}] AI Resilience Chat: Request for '{message_str[:50]}'", flush=True)
+        logger.debug("AI completion requested: message_count=%d", len(messages))
         if use_cache:
             cache_key = f"chat:{hash(message_str)}"
             cached = self._get_from_cache(cache_key)
@@ -723,7 +765,8 @@ class AIResilienceManager:
         # Intelligent model routing based on message complexity
         if not provider_order:
             provider_order = self._select_optimal_provider(messages, max_tokens)
-        
+        provider_order = self._normalize_supported_provider_order(provider_order)
+
         print(f">>> [PID {os.getpid()}] chat_completion: provider_order={provider_order}, self.models.keys()={list(self.models.keys())}", flush=True)
         
         available_models_with_configs = [
@@ -784,8 +827,11 @@ class AIResilienceManager:
                     }
                     print(f">>> [PID {os.getpid()}]   ✅ OpenAI {model_name} SUCCESS", flush=True)
                 else:
+                    thinking_options = ({"thinking_level": thinking_level}
+                                        if thinking_level is not None else {})
                     result = await self._call_model_with_messages(
-                        model_name, model, messages, temperature, max_tokens, response_format=response_format
+                        model_name, model, messages, temperature, max_tokens,
+                        response_format=response_format, **thinking_options,
                     )
                     print(f">>> [PID {os.getpid()}]   ✅ Gemini {model_name} SUCCESS", flush=True)
                 
@@ -807,12 +853,12 @@ class AIResilienceManager:
                     pass
                 return result
             except Exception as e:
-                print(f">>> [PID {os.getpid()}]   ❌ Error calling {model_name}: {type(e).__name__}: {str(e)[:100]}", flush=True)
-                logger.error(f"Error calling {model_name}: {e}")
+                reason = safe_provider_error_reason(e)
+                logger.warning("AI provider call failed: provider=%s reason=%s", model_name, reason)
                 last_exception = e
                 continue
         
-        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED for '{message_str}'. Returning fallback.", flush=True)
+        logger.warning("All AI providers failed; response fallback used (message_count=%d)", len(messages))
         return self._get_fallback_response(message_str, str(last_exception), response_format=response_format)
 
     async def _call_model_with_messages(
@@ -823,13 +869,41 @@ class AIResilienceManager:
         temperature: float,
         max_tokens: int,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking_level: Optional[str] = None,
     ) -> Dict[str, Any]:
         cb = self.circuit_breakers[model_name]
 
         async def make_call():
-            return await self._make_api_call_with_messages(
-                model_name, model, messages, temperature, max_tokens, response_format=response_format
-            )
+            # Retry only transient provider-side overload/rate limiting inside
+            # ONE breaker attempt. Terminal 400/401/403/404 failures must not
+            # consume retries, and no retry fabricates a lesson or grade.
+            for attempt in range(3):
+                try:
+                    thinking_options = ({"thinking_level": thinking_level}
+                                        if thinking_level is not None else {})
+                    return await self._make_api_call_with_messages(
+                        model_name, model, messages, temperature, max_tokens,
+                        response_format=response_format,
+                        **thinking_options,
+                    )
+                except Exception as exc:
+                    message = str(exc)
+                    # Daily/free-tier request quotas cannot recover on a
+                    # sub-second retry. Google's RESOURCE_EXHAUSTED response
+                    # may include a retry window measured in hours. Do not
+                    # consume extra attempts or show a learner an endless
+                    # cycle of Retry screens for an account-level quota cap.
+                    quota_exhausted = (
+                        "Quota exceeded for metric:" in message
+                        or "generate_content_free_tier_requests" in message
+                    )
+                    retryable = (
+                        "API returned 503:" in message
+                        or ("API returned 429:" in message and not quota_exhausted)
+                    )
+                    if not retryable or attempt == 2:
+                        raise
+                    await asyncio.sleep(0.4 * (attempt + 1))
 
         return await cb.call(make_call)
 
@@ -841,6 +915,7 @@ class AIResilienceManager:
         temperature: float,
         max_tokens: int,
         response_format: Optional[Dict[str, Any]] = None,
+        thinking_level: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not model.api_key:
             raise Exception(f"No API key configured for {model.name}")
@@ -906,6 +981,9 @@ class AIResilienceManager:
         }
         
         self.apply_structured_output(payload["generationConfig"], response_format)
+        # Gemini 3 uses levels; legacy 2.5 models do not accept this field.
+        if thinking_level is not None and model_name.startswith("gemini-3."):
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
         
         # Add system instruction if present
         if system_parts:
@@ -926,7 +1004,8 @@ class AIResilienceManager:
                 duration = time.time() - start_time
                 if response.status != 200:
                     text = await response.text()
-                    print(f">>> [PID {os.getpid()}] {model_name} FAILED ({response.status}) in {duration:.2f}s. Response: {text[:200]}", flush=True)
+                    logger.warning("AI provider HTTP rejection: provider=%s status=%s latency_s=%.2f",
+                                   model_name, response.status, duration)
                     raise Exception(f"API returned {response.status}: {text}")
                 
                 data = await response.json()
@@ -943,7 +1022,8 @@ class AIResilienceManager:
                 }
         except Exception as e:
             duration = time.time() - start_time
-            print(f">>> [PID {os.getpid()}] {model_name} EXCEPTION after {duration:.2f}s: {e}", flush=True)
+            logger.warning("AI provider exception: provider=%s reason=%s latency_s=%.2f",
+                           model_name, safe_provider_error_reason(e), duration)
             raise
 
     def _get_available_models(self, capabilities: Optional[List[str]] = None) -> List[Tuple[str, AIModelConfig]]:
@@ -1076,8 +1156,7 @@ class AIResilienceManager:
 
     def _get_fallback_response(self, message: str, error: str, response_format: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Generate fallback response when ALL AI providers fail."""
-        logger.error(f"🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}")
-        print(f">>> [PID {os.getpid()}] 🚨 ALL AI PROVIDERS FAILED - Using Fallback. Error: {error}", flush=True)
+        logger.error("All AI providers failed: reason=%s", safe_provider_error_reason(error))
         
         lower_msg = message.lower()
         is_json = (response_format and response_format.get("type") in ("json_object", "json_schema")) or "json" in lower_msg or "schema" in lower_msg or "{" in lower_msg or "provide:" in lower_msg or "respond with" in lower_msg

@@ -35,6 +35,7 @@ Lyo is an Outcome Engine for learning.
 - FLASHCARDS: User wants flashcards for study.
 - STUDY_PLAN: User wants a schedule or plan to reach a goal.
 - TEST_PREP: User has an upcoming test or exam and needs to prepare for it. Use this instead of STUDY_PLAN when an actual exam/test is mentioned.
+- COACH: User asks what to study next, for readiness, or for a time-boxed mission based on existing learning goals. Do NOT turn an upcoming exam intake into COACH.
 - SUMMARIZE_NOTES: User has provided notes and wants a summary.
 - SCHEDULE_REMINDERS: User wants to set study reminders.
 - COMMUNITY: User wants to interact with the learning community.

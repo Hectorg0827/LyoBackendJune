@@ -7,6 +7,11 @@ from lyo_app.ai_agents.multi_agent_v2.agents.base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
+
+class ArtifactUnavailable(ValueError):
+    """The requested artifact cannot be edited by this learner."""
+
+
 class FollowUpMutator:
     """
     Handles artifact mutations (updates).
@@ -22,10 +27,15 @@ class FollowUpMutator:
         """
         Applies a mutation to an artifact.
         """
-        # 1. Fetch latest version of artifact
+        # Plans and client artifact IDs are untrusted. Resolve ownership before
+        # sending any saved content to a provider or writing a new version.
+        user_id = str((user_context or {}).get("user_id") or "")
+        if not artifact_id or not user_id or user_id == "0":
+            raise ArtifactUnavailable("Saved artifact unavailable")
         current_artifact = await self.artifacts.get_artifact(artifact_id)
-        if not current_artifact:
-            raise ValueError(f"Artifact {artifact_id} not found")
+        if not current_artifact or str(current_artifact.get("user_id") or "") != user_id:
+            # Missing and foreign IDs deliberately have the same outcome.
+            raise ArtifactUnavailable("Saved artifact unavailable")
             
         art_type = current_artifact.get("type")
         current_content = current_artifact.get("content")
@@ -53,7 +63,7 @@ class FollowUpMutator:
             raise ValueError("Mutation failed: AI returned invalid JSON")
             
         # 5. Save new version
-        metadata = current_artifact.get("metadata", {})
+        metadata = dict(current_artifact.get("metadata") or {})
         metadata["last_instruction"] = instruction
         
         new_artifact = await self.artifacts.update_artifact(artifact_id, new_content, metadata)

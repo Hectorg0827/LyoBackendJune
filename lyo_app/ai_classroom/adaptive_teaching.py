@@ -15,7 +15,10 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, ValidationError, ValidatorFunctionWrapHandler,
+    field_validator, model_validator,
+)
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
@@ -263,6 +266,27 @@ class TeachingBeat(StrictModel):
     board_title: str = Field(min_length=3, max_length=100)
     board_content: str = Field(min_length=10, max_length=1000)
     visual: TeachingVisual | None = None
+
+    @field_validator("visual", mode="wrap")
+    @classmethod
+    def optional_visual(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> TeachingVisual | None:
+        """Keep valid teaching when an optional representation is malformed.
+
+        Only the visual's validation can degrade to None. Speech, paced beats,
+        tasks and private grading criteria still pass their complete contracts.
+        The existing post-validation fallbacks may illustrate authored material;
+        this boundary never invents a diagram, question or mastery evidence.
+        """
+        try:
+            return handler(value)
+        except ValidationError as exc:
+            # Error locations can contain provider-supplied extra field names.
+            # Log fixed error codes only, never their values, keys or context.
+            causes = sorted({item["type"] for item in exc.errors(
+                include_input=False, include_context=False, include_url=False,
+            )})
+            logger.warning("Classroom optional visual omitted: cause=%s", ",".join(causes))
+            return None
 
     @model_validator(mode="after")
     def concise_teaching(self):
@@ -819,6 +843,90 @@ LOOSE_JSON = {"type": "json_object"}
 ESCALATION_PROVIDER = "gemini-3.8-flash"
 
 
+
+def compact_classroom_contract(value: Any) -> Any:
+    """Drop only JSON Schema annotation overhead, never validation semantics.
+
+    Keep descriptions, required keys, enumerations, $refs, constraints and
+    definitions. The original canonical schema still validates the response.
+    Titles/defaults/examples add prompt cost but no mandatory constraints.
+    """
+    if isinstance(value, dict):
+        return {
+            key: compact_classroom_contract(child)
+            for key, child in value.items()
+            if key not in {"title", "default", "examples"}
+        }
+    if isinstance(value, list):
+        return [compact_classroom_contract(child) for child in value]
+    return value
+
+
+def bounded_teaching_history(items: list[str], *, keep: int = 4, chars: int = 1000) -> list[str]:
+    """Keep the most recent authored steps while bounding repeated LLM input."""
+    return [str(item)[:chars] for item in items[-keep:]]
+
+
+def validate_authored_turn_with_optional_visual_fallback(
+    schema: type[StrictModel], raw_json: str,
+) -> StrictModel:
+    """Only an invalid *optional presentation visual* may be discarded.
+
+    Keep the original authored speech, board, demonstration and graded task.
+    Nothing about learner correctness, assessment criteria or mastery is
+    synthesized or relaxed. Mixed visual/nonvisual errors still fail closed,
+    and the full phase-specific schema validates the final object.
+    """
+    try:
+        return schema.model_validate_json(raw_json)
+    except ValidationError as original:
+        if not issubclass(schema, LearningTurn):
+            raise
+        visual_locations: set[tuple[Any, ...]] = set()
+        for error in original.errors(
+            include_input=False, include_context=False, include_url=False,
+        ):
+            location = tuple(error.get("loc") or ())
+            if location and location[0] == "visual":
+                visual_locations.add(("visual",))
+            elif (
+                len(location) >= 3
+                and location[0] == "demonstration"
+                and isinstance(location[1], int)
+                and location[2] == "visual"
+            ):
+                visual_locations.add(("demonstration", location[1], "visual"))
+            else:
+                # A missing task, leaked answer, malformed demonstration,
+                # invalid assessment, etc. must still trigger normal repair.
+                raise
+        if not visual_locations:
+            raise
+        document = json.loads(raw_json)
+        if not isinstance(document, dict):
+            raise original
+        for location in visual_locations:
+            if location[0] == "visual":
+                if "visual" not in document:
+                    raise original
+                document.pop("visual")
+            else:
+                beats = document.get("demonstration")
+                index = location[1]
+                if (not isinstance(beats, list) or index >= len(beats)
+                        or not isinstance(beats[index], dict)
+                        or "visual" not in beats[index]):
+                    raise original
+                beats[index].pop("visual")
+        validated = schema.model_validate(document)
+        logger.warning(
+            "Discarded %d invalid optional Classroom visual(s); "
+            "kept original authored task, board and phase constraints",
+            len(visual_locations),
+        )
+        return validated
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -869,14 +977,31 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     started = perf_counter()
     result = None
     outcome = "error"
+    # Prompt-side compaction is reversible with CLASSROOM_COMPACT_PROMPTS=0.
+    # The provider-enforced contract and server Pydantic validator remain the
+    # complete, unchanged schema; descriptions and all constraints remain.
+    compact = os.getenv("CLASSROOM_COMPACT_PROMPTS", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+    prompt_contract = compact_classroom_contract(contract) if compact else contract
+    prompt_separators = (",", ":") if compact else None
     messages = [
         {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
-         + json.dumps(contract, ensure_ascii=False)},
-        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
+         + json.dumps(prompt_contract, ensure_ascii=False, separators=prompt_separators)},
+        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False, separators=prompt_separators)},
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
     timeout = 100 if issubclass(schema, UnitPackage) else 45
+
+    # Bound hidden reasoning for immediate lesson authoring inside the existing
+    # 25-second provider deadline. Grading, diagnostics and whole-unit packages
+    # retain their default reasoning. Schemas and evidence gates are unchanged.
+    # https://ai.google.dev/gemini-api/docs/generate-content/thinking
+    immediate_authoring = schema is LearningPlan or (
+        issubclass(schema, LearningTurn) and not issubclass(schema, DiagnosticTurn)
+    )
+    thinking_options = {"thinking_level": "low"} if immediate_authoring else {}
 
     async def call(response_format):
         return await asyncio.wait_for(
@@ -887,6 +1012,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 temperature=0.1 if schema is Evaluation else 0.6,
                 response_format=response_format,
                 use_cache=False,
+                **thinking_options,
             ),
             timeout=timeout,
         )
@@ -929,7 +1055,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         first, last = raw.find("{"), raw.rfind("}")
         if first < 0 or last <= first:
             raise TeachingUnavailable("Missing structured response")
-        response = schema.model_validate_json(raw[first:last + 1])
+        response = validate_authored_turn_with_optional_visual_fallback(schema, raw[first:last + 1])
         outcome = "success"
         return response
     except ValidationError:
@@ -981,13 +1107,15 @@ def strict_response_format(schema, contract):
 class AdaptiveTeacher:
     def __init__(self, generate: Callable[..., Awaitable[StrictModel]] = model_json,
                  semantic_judge: Callable[..., Awaitable[bool]] | None = None,
-                 package_cache=None, fast_start: bool = False):
+                 package_cache=None, fast_start: bool = False,
+                 prefetch_unit_packages: bool = True):
         self.generate = generate
         # Optional separate review of meaning the deterministic gate cannot
         # infer: distractor plausibility, gap labeling and factual teaching.
         self.semantic_judge = semantic_judge
         self.package_cache = package_cache
         self.fast_start = fast_start
+        self.prefetch_unit_packages = prefetch_unit_packages
         # Fast-start authors the immediate move first. Once that move is ready,
         # the rest of the unit can be prepared while the learner is reading,
         # listening or answering. Keep the warm package in this teacher
@@ -1113,7 +1241,15 @@ class AdaptiveTeacher:
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
-        if not self.fast_start or self.package_cache is None:
+        # An opt-in cannot create several expensive UnitPackage generations
+        # during rapid learner turns or a quick change of unit. Keep at most
+        # one speculative provider task per teacher, regardless of cache key.
+        if (
+            not self.prefetch_unit_packages
+            or not self.fast_start
+            or self.package_cache is None
+            or self._package_prefetch_tasks
+        ):
             return
         from lyo_app.ai_classroom.unit_package_cache import package_key
         key = package_key(context, unit, self.saved_skill(state, state.next_move))
@@ -1142,7 +1278,8 @@ class AdaptiveTeacher:
         finishes, the existing evaluation path may cancel it and live work wins.
         """
         if (
-            not self.fast_start
+            not self.prefetch_unit_packages
+            or not self.fast_start
             or self.package_cache is None
             or move not in {"independent", "transfer"}
             or self._package_prefetch_tasks
@@ -1310,9 +1447,9 @@ class AdaptiveTeacher:
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
             "goal": context.learning_objective, "level": context.preferred_difficulty,
-            "previous_kinds": state.task_kinds[-6:],
-            "previous_questions": state.recent_questions[-8:],
-            "already_taught": [unit.material] if move == "interleave" else state.taught_steps[-6:],
+            "previous_kinds": state.task_kinds[-5:],
+            "previous_questions": state.recent_questions[-6:],
+            "already_taught": [unit.material[:1500]] if move == "interleave" else bounded_teaching_history(state.taught_steps),
             "learner_input": learner_input[:2000], "feedback": state.last_feedback,
             "previous_task": state.pending.task.model_dump() if state.pending else None,
             "previous_answers": state.pending.answers[-3:] if state.pending else [],
@@ -1329,18 +1466,18 @@ class AdaptiveTeacher:
             "visual_policy": self.visual_policy_for(move, strategy),
             "strategy_history": state.strategy_history[-6:],
             "misconceptions": state.misconceptions[-6:],
-            "learner_signals": state.learner_signals[-8:],
+            "learner_signals": state.learner_signals[-6:],
             "board_memory": [
                 {
                     "title": item.get("title", ""),
-                    "content": item.get("content", ""),
+                    "content": str(item.get("content", ""))[:800],
                     "visual": ({
                         "kind": item["visual"].get("kind"),
                         "title": item["visual"].get("title"),
-                        "description": item["visual"].get("description"),
+                        "description": str(item["visual"].get("description") or "")[:400],
                     } if item.get("visual") else None),
                 }
-                for item in state.board_memory[-4:]
+                for item in state.board_memory[-3:]
             ],
             "open_question": state.open_question[:2000],
             "compress_demonstration": focused,

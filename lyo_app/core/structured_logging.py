@@ -6,8 +6,36 @@ Provides structured logging configuration for different environments.
 
 import logging
 import logging.config
+import re
 import sys
 from typing import Optional
+
+
+
+class RedactClassroomWebSocketQuery(logging.Filter):
+    """Remove Classroom URL query params from Uvicorn protocol/access logs.
+
+    WebSocket [accepted] messages may be INFO records from uvicorn.error,
+    bypassing --no-access-log. Replace the entire query, not only token=,
+    because parameter ordering and future credential fields can change.
+    """
+
+    _query = re.compile(r"(/api/v1/classroom/ws/connect)\?[^\s\"\x27]+")
+
+    @classmethod
+    def _sanitize(cls, value):
+        if not isinstance(value, str):
+            return value
+        return cls._query.sub(r"\1?[QUERY_REDACTED]", value)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = self._sanitize(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(self._sanitize(item) for item in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {key: self._sanitize(val) for key, val in record.args.items()}
+        return True
+
 
 
 def setup_logging(
@@ -48,6 +76,15 @@ def setup_logging(
     # Set specific log levels for noisy libraries
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # Uvicorn logs WebSocket accepted URLs via uvicorn.error, *not*
+    # uvicorn.access. Those URLs can contain credentials from older clients.
+    # Children with their own INFO level bypass the parent logger's level.
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.protocols.websockets").setLevel(logging.WARNING)
+    for name in ("uvicorn.error", "uvicorn.access", "uvicorn.protocols.websockets"):
+        target = logging.getLogger(name)
+        if not any(isinstance(item, RedactClassroomWebSocketQuery) for item in target.filters):
+            target.addFilter(RedactClassroomWebSocketQuery())
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("google").setLevel(logging.WARNING)

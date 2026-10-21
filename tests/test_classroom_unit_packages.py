@@ -392,13 +392,14 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
             return ScriptedTeacher()._turn(ctx, GuidedState(owner=ctx.user_id, plan=unit_plan), "diagnose")
         raise AssertionError("The opening should author only its first question")
 
-    def teacher_factory(*, package_cache, fast_start, semantic_judge):
+    def teacher_factory(*, package_cache, fast_start, semantic_judge, prefetch_unit_packages=True):
         installed.append(package_cache)
         reviewed.append(semantic_judge)
         return original_teacher(
             generate=generate,
             package_cache=package_cache,
             fast_start=fast_start,
+            prefetch_unit_packages=prefetch_unit_packages,
             semantic_judge=semantic_judge,
         )
 
@@ -497,3 +498,63 @@ def test_migration_adds_cache_without_changing_existing_concepts():
         assert not inspect(connection).has_table("classroom_question_exposures")
         assert connection.execute(text("SELECT id FROM concepts")).one() == ("old-id",)
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_fast_start_without_speculation_keeps_teaching_and_does_not_start_package_jobs(db):
+    # A validated live move still answers immediately; only the expensive
+    # background full-unit compilation is disabled in the shipping engine.
+    ctx, unit = context(target_duration_minutes=8), plan(1).units[0]
+    unit_plan = LearningPlan(units=[unit])
+    skill = (await resolve_skill_plan(db, ctx, unit_plan)).unit_ids[0]
+    state = GuidedState(
+        owner=ctx.user_id, plan=unit_plan, skill_ids=[skill],
+        identity_required=True, record_scope="unit",
+    )
+    scripted = ScriptedTeacher()
+    generated = AsyncMock(side_effect=lambda _prompt, _payload, _schema: scripted._turn(
+        ctx, state, "orient",
+    ))
+    teacher = AdaptiveTeacher(
+        generate=generated, package_cache=DatabaseUnitPackageCache(db),
+        fast_start=True, prefetch_unit_packages=False,
+    )
+    lesson = await teacher.turn(ctx, state, "orient")
+    assert lesson.demonstration
+    assert generated.await_count == 1
+    assert not teacher._package_prefetch_tasks
+    assert not teacher._prefetched_packages
+    assert not (await db.execute(select(ClassroomUnitPackage))).scalars().all()
+
+
+def test_opt_in_unit_prefetch_never_fans_out_to_multiple_provider_calls(monkeypatch):
+    """A second cache miss cannot enqueue another large package while one runs."""
+    from types import SimpleNamespace
+    from lyo_app.ai_classroom import unit_package_cache
+
+    ctx = context(target_duration_minutes=8)
+    state = GuidedState(
+        owner=ctx.user_id,
+        plan=plan(1),
+        skill_ids=["fixture-skill"],
+        identity_required=True,
+        record_scope="unit",
+    )
+    teacher = AdaptiveTeacher(
+        generate=AsyncMock(),
+        package_cache=object(),
+        fast_start=True,
+        prefetch_unit_packages=True,
+    )
+    # A different unit is already being prefetched. The new cache key is
+    # distinct, so deduplicating by cache key alone is insufficient.
+    existing = SimpleNamespace(done=lambda: False)
+    teacher._package_prefetch_tasks["different-unit"] = existing
+    teacher._fast_cache_misses.add("new-unit")
+    monkeypatch.setattr(
+        unit_package_cache, "package_key",
+        lambda *_args: SimpleNamespace(cache_key="new-unit", level_band=1),
+    )
+    teacher.schedule_package_prefetch(ctx, state, state.unit)
+    assert teacher._package_prefetch_tasks == {"different-unit": existing}
+    assert teacher._fast_cache_misses == {"new-unit"}

@@ -42,7 +42,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         # Rate limiting
         if self.enable_rate_limiting:
             client_ip = self._get_client_ip(request)
-            if not self._check_rate_limit(client_ip, request.url.path):
+            if not self._check_rate_limit(client_ip, request.url.path, request.method):
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Rate limit exceeded"},
@@ -70,18 +70,27 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             return forwarded_for.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
     
-    def _check_rate_limit(self, client_ip: str, path: str) -> bool:
-        """Check if request is within rate limits."""
-        # Define limits for different paths
+    def _check_rate_limit(self, client_ip: str, path: str, method: str = "GET") -> bool:
+        """Independently throttle auth attempts, ordinary reads and AI traffic.
+
+        The shared in-memory limiter must never use the bare client IP for
+        buckets with different limits: twenty harmless Home/API reads would
+        otherwise exhaust the 10/minute auth limit and make /auth/me return
+        429, causing a working learner to appear signed out.
+        """
+        normalized_method = method.upper()
         if path.startswith("/api/v1/auth/"):
-            limit, window = 10, 60  # 10 requests per minute for auth
+            credential_mutation = normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+            if credential_mutation:
+                bucket, limit = "credential-attempt", 10
+            else:
+                bucket, limit = "auth-read", 120
         elif path.startswith("/api/v1/ai/"):
-            limit, window = 60, 60  # 60 requests per minute for AI
+            bucket, limit = "ai", 60
         else:
-            limit, window = 120, 60  # 120 requests per minute for general
-        
-        return self._rate_limiter.is_allowed(client_ip, limit, window)
-    
+            bucket, limit = "general", 120
+        return self._rate_limiter.is_allowed(f"{client_ip}:{bucket}", limit, 60)
+
     def _add_security_headers(self, response: Response) -> None:
         """Add security headers to response."""
         response.headers["X-Content-Type-Options"] = "nosniff"
