@@ -21,6 +21,9 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 DB_NAME = "discover_filters_20261013"
+# CREATE DATABASE takes no bind parameters; keep it a literal, not a format.
+CREATE_DATABASE_SQL = 'CREATE DATABASE "discover_filters_20261013"'
+assert CREATE_DATABASE_SQL.endswith(f'"{DB_NAME}"')
 LIVE = "https://api.lyoai.app"
 KNOWN_SHA = "e1cb18e4803215667a262c131fcf0a38014151d13063520c2151bec9c1864d25"
 
@@ -44,7 +47,7 @@ async def prepare():
     try:
         exists = await connection.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", DB_NAME)
         if not exists:
-            await connection.execute(f'CREATE DATABASE "{DB_NAME}"')
+            await connection.execute(CREATE_DATABASE_SQL)
         print("DISCOVER_VALIDATION_DATABASE_READY=" + DB_NAME, flush=True)
     finally:
         await connection.close()

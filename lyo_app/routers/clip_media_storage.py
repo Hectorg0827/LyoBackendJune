@@ -28,8 +28,11 @@ DURABLE_MEDIA_FOLDERS = {"clips", "clip_thumbnails"}
 # to prove a URL was served by a new deployment or by a second replica.
 INSTANCE_ID = uuid.uuid4().hex[:12]
 MEDIA_PATH = re.compile(
-    r"^/api/v1/media/file/(clips|clip_thumbnails)/([a-f0-9]{32}\.(?:mp4|mov|webm|jpg|png|webp|heic))$"
+    r"^/api/v1/media/file/(clips|clip_thumbnails)/([a-f0-9]{32}\.(mp4|mov|webm|jpg|png|webp|heic))$"
 )
+# The upload endpoint stores any allowed type in any folder, so an image can
+# sit in "clips". Only a video there may become a clip's video.
+FOLDER_EXTENSIONS = {"clips": {"mp4", "mov", "webm"}, "clip_thumbnails": {"jpg", "png", "webp", "heic"}}
 
 
 def _provider():
@@ -120,7 +123,9 @@ def save_clip_to_cloud(local_file: Path, folder: str, name: str, content_type: s
 def media_path_parts(url: str | None) -> Optional[tuple[str, str]]:
     """(folder, name) for a URL that points at this API's durable media, else None."""
     match = MEDIA_PATH.fullmatch(urlsplit(url or "").path)
-    return (match.group(1), match.group(2)) if match else None
+    if not match or match.group(3) not in FOLDER_EXTENSIONS[match.group(1)]:
+        return None
+    return match.group(1), match.group(2)
 
 
 def stat_durable_media(folder: str, name: str, local_root: Path) -> Optional[int]:
@@ -128,13 +133,13 @@ def stat_durable_media(folder: str, name: str, local_root: Path) -> Optional[int
 
     Publishing checks this so a clip can never point at an upload that does
     not exist. Storage errors propagate: "could not check" is not "missing".
+    With cloud storage configured only the bucket counts: a file on this
+    container's disk is exactly what a redeploy or another replica lacks.
     """
-    local = local_root / folder / name
-    if local.is_file():
-        return local.stat().st_size
     config = _provider()
     if not config:
-        return None
+        local = local_root / folder / name
+        return local.stat().st_size if local.is_file() else None
     provider, bucket_name = config
     key = _key(folder, name)
     if provider == "gcs":

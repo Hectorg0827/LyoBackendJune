@@ -44,7 +44,9 @@ def _columns():
     ]
 
 
-INDEXES = {"ix_clips_media_status": "media_status", "ix_clips_source_url": "source_url"}
+# name -> (column, unique). A source URL is unique: one source is one video
+# in the feed, and the index settles imports that race each other.
+INDEXES = {"ix_clips_media_status": ("media_status", False), "ix_clips_source_url": ("source_url", True)}
 
 
 def _has_table(name: str) -> bool:
@@ -67,9 +69,9 @@ def upgrade() -> None:
         if column.name not in existing:
             op.add_column("clips", column)
     indexes = _existing_indexes("clips")
-    for name, column in INDEXES.items():
+    for name, (column, unique) in INDEXES.items():
         if name not in indexes:
-            op.create_index(name, "clips", [column])
+            op.create_index(name, "clips", [column], unique=unique)
 
     if not _has_table("clip_saves"):
         op.create_table(

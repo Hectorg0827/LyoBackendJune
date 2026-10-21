@@ -36,9 +36,9 @@ The account used for ingest becomes the clips' publisher; use a dedicated
 "Lyo Library" account rather than a person's.
 """
 import argparse
-import hashlib
 import html
 import json
+import os
 import re
 import subprocess
 import sys
@@ -366,9 +366,25 @@ def ingest_entry(api, auth, sources, entry, report, workdir):
             "video_sha256": sha256(video.read_bytes()), "duration": duration}
 
 
+def write_ledger(path, ledger):
+    """Replace the ledger whole or not at all: a half-written one blocks every rerun."""
+    temporary = path.with_name(path.name + ".tmp")
+    with open(temporary, "w") as handle:
+        json.dump(ledger, handle, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
 def ingest(args):
     entries = load_manifest(args.manifest)
     gate = validate_manifest(entries, args.minimum)
+    if gate["status"] != "passed" and not args.partial:
+        # Nothing reaches the public feed from a manifest that fails review.
+        print(json.dumps(gate, indent=2))
+        print("The manifest gate failed and nothing was uploaded. Fix the problems above, "
+              "or pass --partial to publish only the entries that are ready.", file=sys.stderr)
+        return 1
     approved = [e for e in entries if (e.get("review") or {}).get("approved") is True and not entry_problems(e)]
     ledger_path = Path(args.ledger)
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
@@ -388,7 +404,7 @@ def ingest(args):
                     continue
             report.check(f"{entry['id']}_ingested", True, clip_id=result["clip_id"])
             ledger[entry["id"]] = {**result, "source": entry["source"], "attribution": attribution_line(entry["source"])}
-            ledger_path.write_text(json.dumps(ledger, indent=2))
+            write_ledger(ledger_path, ledger)
     published = sum(1 for e in approved if e["id"] in ledger)
     report.check("catalog_meets_minimum", published >= args.minimum, published=published, minimum=args.minimum)
     report.data["attribution_records"] = {key: value["attribution"] for key, value in ledger.items()}
@@ -411,6 +427,8 @@ def main(argv=None):
     load.add_argument("--ledger", default="discover-catalog-ledger.json")
     load.add_argument("--minimum", type=int, default=20)
     load.add_argument("--report")
+    load.add_argument("--partial", action="store_true",
+                      help="publish the ready entries even when the manifest gate fails")
     args = parser.parse_args(argv)
     return {"search": search, "validate": validate, "ingest": ingest}[args.command](args)
 

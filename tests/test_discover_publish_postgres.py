@@ -171,9 +171,47 @@ async def test_library_videos_carry_their_credit_and_cannot_be_imported_twice(pg
     assert again.status_code == 409
     assert again.json()["error"]["details"]["clipId"] == first.json()["clip"]["id"]
 
-    unlicensed = dict(provenance, licenseName=None, sourceUrl=source + "-2")
-    refused = await pg.client.post("/api/v1/clips", json=clip_body(pg, **unlicensed), headers=pg.a)
-    assert refused.status_code == 400
+    # One source is one video in the feed, whichever account imports it.
+    other_account = await pg.client.post("/api/v1/clips", json=clip_body(pg, **provenance), headers=pg.b)
+    assert other_account.status_code == 409
+
+    for missing in ("licenseName", "attribution"):
+        incomplete = dict(provenance, sourceUrl=f"{source}-{missing}", **{missing: "  "})
+        refused = await pg.client.post("/api/v1/clips", json=clip_body(pg, **incomplete), headers=pg.a)
+        assert refused.status_code == 400, missing
+
+
+@pytest.mark.asyncio
+async def test_two_imports_of_one_source_racing_each_other_end_in_one_clip(pg, monkeypatch):
+    source = f"https://commons.wikimedia.org/wiki/File:{pg.tag}.webm"
+    provenance = {"sourceName": "Wikimedia Commons", "sourceUrl": source,
+                  "licenseName": "CC BY 4.0", "attribution": "Jane Doe · CC BY 4.0"}
+    winner = (await pg.client.post("/api/v1/clips", json=clip_body(pg, **provenance), headers=pg.a)).json()["clip"]["id"]
+
+    # The racing request checked before the winner committed, so its own
+    # check saw nothing; the unique index is what has to catch it.
+    real_check = clips_router._refuse_published_source
+    calls = []
+
+    async def check_that_lost_the_race(db, url):
+        calls.append(url)
+        if len(calls) > 1:
+            await real_check(db, url)
+
+    monkeypatch.setattr(clips_router, "_refuse_published_source", check_that_lost_the_race)
+    loser = await pg.client.post("/api/v1/clips", json=clip_body(pg, **provenance), headers=pg.b)
+    assert loser.status_code == 409
+    assert loser.json()["error"]["details"]["clipId"] == winner
+    async with pg.sessions() as session:
+        count = await session.scalar(text("SELECT count(*) FROM clips WHERE source_url = :s"), {"s": source})
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_image_uploaded_to_the_video_folder_is_not_a_video(pg):
+    image = pg.upload("clips", "jpg", b"jpeg-bytes")
+    response = await pg.client.post("/api/v1/clips", json=clip_body(pg, videoUrl=image), headers=pg.a)
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

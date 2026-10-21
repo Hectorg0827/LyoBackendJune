@@ -188,3 +188,27 @@ def test_validate_command_reports_and_exits_nonzero_below_minimum(tmp_path, caps
     manifest.write_text(json.dumps({"entries": [approved("only")]}))
     assert catalog.main(["validate", "--manifest", str(manifest)]) == 1
     assert json.loads(capsys.readouterr().out)["ready"] == 1
+
+
+def test_a_failed_gate_uploads_nothing(tmp_path, monkeypatch, capsys):
+    manifest = tmp_path / "catalog.json"
+    manifest.write_text(json.dumps({"entries": [approved("only")]}))
+
+    def no_network(*_args, **_kwargs):
+        raise AssertionError("ingest must stop before signing in or uploading")
+
+    monkeypatch.setattr(catalog, "authenticate", no_network)
+    monkeypatch.setattr(catalog, "ingest_entry", no_network)
+    code = catalog.main(["ingest", "--manifest", str(manifest), "--api", "http://127.0.0.1:9",
+                         "--ledger", str(tmp_path / "ledger.json")])
+    assert code == 1
+    assert "nothing was uploaded" in capsys.readouterr().err
+    assert not (tmp_path / "ledger.json").exists()
+
+
+def test_the_ledger_is_replaced_whole(tmp_path):
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text('{"old": {}}')
+    catalog.write_ledger(ledger, {"nasa-X1": {"clip_id": "7"}})
+    assert json.loads(ledger.read_text()) == {"nasa-X1": {"clip_id": "7"}}
+    assert [p.name for p in tmp_path.iterdir()] == ["ledger.json"]

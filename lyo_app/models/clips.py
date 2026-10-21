@@ -67,7 +67,8 @@ class Clip(Base):
     # Provenance for library videos: a Creative Commons licence is only met
     # when the credit travels with the video, so clients show these fields.
     source_name = Column(String(120), nullable=True)
-    source_url = Column(String(500), nullable=True, index=True)
+    # One source is one video in the feed, whoever imports it.
+    source_url = Column(String(500), nullable=True, index=True, unique=True)
     license_name = Column(String(60), nullable=True)
     license_url = Column(String(500), nullable=True)
     attribution = Column(String(300), nullable=True)

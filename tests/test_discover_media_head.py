@@ -115,6 +115,10 @@ def test_video_responses_name_their_process_and_are_cacheable_forever(client, mo
     ("/api/v1/media/file/content/" + "a" * 32 + ".mp4", None),
     ("/api/v1/media/file/clips/../secret.mp4", None),
     ("/api/v1/media/file/clips/" + "a" * 32 + ".exe", None),
+    # The upload endpoint stores any allowed type in any folder: an image in
+    # "clips" is not a video, and a video is not a poster.
+    ("/api/v1/media/file/clips/" + "a" * 32 + ".jpg", None),
+    ("/api/v1/media/file/clip_thumbnails/" + "a" * 32 + ".mp4", None),
     (None, None),
 ])
 def test_media_path_parts_only_recognises_upload_paths(url, expected):
@@ -137,3 +141,12 @@ def test_stat_counts_a_development_file_on_local_disk(monkeypatch, tmp_path):
     (tmp_path / "clips" / "a.mp4").write_bytes(PAYLOAD)
     assert media.stat_durable_media("clips", "a.mp4", tmp_path) == 10
     assert media.stat_durable_media("clips", "b.mp4", tmp_path) is None
+
+
+def test_with_cloud_storage_a_local_copy_is_not_proof(monkeypatch, tmp_path):
+    # A file on this container's disk is what a redeploy or another replica
+    # lacks; with a bucket configured, only the bucket counts.
+    (tmp_path / "clips").mkdir()
+    (tmp_path / "clips" / "a.mp4").write_bytes(PAYLOAD)
+    use_s3(monkeypatch, MetadataOnlyS3(missing=True))
+    assert media.stat_durable_media("clips", "a.mp4", tmp_path) is None

@@ -10,6 +10,7 @@ from datetime import datetime
 from urllib.parse import urlsplit
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, cast, String
+from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from lyo_app.auth.jwt_auth import get_current_user
@@ -114,7 +115,9 @@ async def _stored_media_url(raw_url: Optional[str], folder: str, http_request: R
     """(absolute URL, size) for a file uploaded to this API's durable media, else None.
 
     Size is None when the file is not there. A URL on another host, or outside
-    the upload folder, is not ours to vouch for and comes back as None.
+    the upload folder, is not ours to vouch for and comes back as None. The
+    URL returned is always built here from the path, never the one the client
+    sent, so no client-chosen host is ever stored.
     """
     parts = media_path_parts(raw_url)
     if not parts or parts[0] != folder:
@@ -122,7 +125,7 @@ async def _stored_media_url(raw_url: Optional[str], folder: str, http_request: R
     split = urlsplit(raw_url)
     if split.netloc and split.hostname not in _own_media_hosts(http_request):
         return None
-    absolute = raw_url if split.netloc else str(http_request.base_url).rstrip("/") + split.path
+    absolute = str(http_request.base_url).rstrip("/") + split.path
     try:
         size = await run_in_threadpool(stat_durable_media, parts[0], parts[1], _media_root())
     except Exception:
@@ -132,6 +135,16 @@ async def _stored_media_url(raw_url: Optional[str], folder: str, http_request: R
             detail="Clip storage is unavailable. Please try publishing again.",
         )
     return absolute, size
+
+
+async def _refuse_published_source(db: AsyncSession, source_url: str) -> None:
+    existing = await db.execute(select(Clip.id).where(Clip.source_url == source_url).limit(1))
+    duplicate = existing.scalar()
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "This source is already published", "clipId": str(duplicate)},
+        )
 
 
 @router.post("", response_model=ClipResponse)
@@ -170,22 +183,16 @@ async def create_clip(
     has_provenance = any([request.sourceName, request.sourceUrl, request.licenseName,
                           request.licenseUrl, request.attribution])
     if has_provenance:
-        if not request.licenseName or not (request.sourceUrl or "").startswith(("https://", "http://")):
+        # Open licences are met only when the credit travels with the video.
+        if (not (request.licenseName or "").strip() or not (request.attribution or "").strip()
+                or not (request.sourceUrl or "").startswith(("https://", "http://"))):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A licensed video needs its licence and a link to its source",
+                detail="A licensed video needs its licence, its credit and a link to its source",
             )
-        # Library imports are retried; the same source must not appear twice.
-        existing = await db.execute(
-            select(Clip.id).where(Clip.user_id == current_user.id, Clip.source_url == request.sourceUrl)
-            .order_by(Clip.id).limit(1)
-        )
-        duplicate = existing.scalar()
-        if duplicate is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"message": "This source is already published", "clipId": str(duplicate)},
-            )
+        # Library imports are retried, and one source is one video in the
+        # feed whoever imports it. The unique index settles concurrent ones.
+        await _refuse_published_source(db, request.sourceUrl)
 
     try:
         clip = Clip(
@@ -213,7 +220,14 @@ async def create_clip(
         )
 
         db.add(clip)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            if not request.sourceUrl:
+                raise
+            await _refuse_published_source(db, request.sourceUrl)
+            raise
         await db.refresh(clip)
 
         logger.info(f"Clip created: {clip.id} by user {current_user.id}")
@@ -224,6 +238,8 @@ async def create_clip(
             message="Clip created successfully"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating clip: {e}")
         await db.rollback()

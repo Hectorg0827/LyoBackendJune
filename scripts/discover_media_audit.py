@@ -7,7 +7,9 @@ status from what storage actually holds:
   missing   the URL is this API's media path but nothing is stored there
             (clips uploaded before durable storage, whose bytes a redeploy
             erased, e.g. legacy clips 1 and 2)
-  external  the URL is on another host, so this API cannot vouch for it
+  external  the URL is on another host (anything not in
+            DISCOVER_AUDIT_API_HOSTS, default api.lyoai.app), so this API
+            cannot vouch for it, even when a file of that name is stored here
 
 It never deletes a clip, never changes who can see it, and never rewrites a
 URL. Restoring a missing clip means re-uploading its original file and
@@ -16,7 +18,7 @@ publishing it again.
   python scripts/discover_media_audit.py                  # read-only report
   DISCOVER_AUDIT_APPLY=YES \\
   DISCOVER_AUDIT_BACKUP_VERIFIED=YES \\
-  DISCOVER_AUDIT_EXPECTED_HOST=<database host> \\
+  DISCOVER_AUDIT_EXPECTED_TARGET=<database host>/<database name> \\
   python scripts/discover_media_audit.py                  # record statuses
 
 Needs the same DATABASE_URL and storage settings as the API it audits.
@@ -40,14 +42,24 @@ from lyo_app.routers.clip_media_storage import media_path_parts, stat_durable_me
 # so by default only durable storage counts. Development may point at its
 # local upload folder instead.
 LOCAL_ROOT = Path(os.getenv("DISCOVER_AUDIT_LOCAL_MEDIA_ROOT", "/nonexistent-local-media"))
+# A stored URL keeps whatever host it was saved with. Only hosts that serve
+# this API's media can be vouched for; a matching filename elsewhere cannot.
+API_HOSTS = {h.strip().lower() for h in os.getenv("DISCOVER_AUDIT_API_HOSTS", "api.lyoai.app").split(",") if h.strip()}
 
 
 def classify(video_url):
     parts = media_path_parts(video_url)
-    if not parts or parts[0] != "clips":
+    host = (urlsplit(video_url or "").hostname or "").lower()
+    if not parts or parts[0] != "clips" or (host and host not in API_HOSTS):
         return MEDIA_EXTERNAL, None
     size = stat_durable_media(parts[0], parts[1], LOCAL_ROOT)
     return (MEDIA_READY, size) if size else (MEDIA_MISSING, size)
+
+
+def database_target(url):
+    """'host/database' for a connection URL: the database, not just its server."""
+    parts = urlsplit(url)
+    return f"{parts.hostname or ''}/{parts.path.lstrip('/')}"
 
 
 def guard(url):
@@ -55,8 +67,8 @@ def guard(url):
     if apply:
         if os.getenv("DISCOVER_AUDIT_BACKUP_VERIFIED") != "YES":
             raise RuntimeError("Verify a database backup before recording statuses")
-        if os.getenv("DISCOVER_AUDIT_EXPECTED_HOST") != (urlsplit(url).hostname or ""):
-            raise RuntimeError("Confirm the database host with DISCOVER_AUDIT_EXPECTED_HOST")
+        if os.getenv("DISCOVER_AUDIT_EXPECTED_TARGET") != database_target(url):
+            raise RuntimeError("Confirm the database with DISCOVER_AUDIT_EXPECTED_TARGET=<host>/<database>")
     return apply
 
 
