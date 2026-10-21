@@ -10,6 +10,7 @@ from scripts.live_teacher_quality import (
     analytics_delta,
     preset_response,
     should_request_hint,
+    preserved_teaching_after_detour,
     should_submit_unknown_option,
     choose_option,
     parse_sse_lines,
@@ -315,3 +316,17 @@ def test_unknown_quiz_key_tracking_is_scoped_per_checkpoint():
     assert "quiz_key not in unknown_quiz_components" in source
     assert "unknown_quiz_components.add(quiz_key)" in source
     assert "unknown_quiz_submitted" not in source
+
+
+
+def test_resume_preserves_original_instruction_when_reference_memory_is_appended():
+    original = (
+        "Photosynthesis converts carbon dioxide and water into glucose.\n"
+        "Board: inputs carbon dioxide and water; outputs glucose and oxygen."
+    )
+    appended = original + "\nKeep in view: A learner asked why light supplies energy."
+    assert preserved_teaching_after_detour(original, original)
+    assert preserved_teaching_after_detour(original, appended)
+    assert not preserved_teaching_after_detour(original, "Different lesson\n" + original)
+    assert not preserved_teaching_after_detour(original, original.replace("oxygen", "nitrogen"))
+    assert not preserved_teaching_after_detour("", original)
