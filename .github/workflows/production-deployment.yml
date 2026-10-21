@@ -92,6 +92,9 @@ jobs:
           # Community regressions that only PostgreSQL reproduces (offset-aware
           # event times, native enums) run against the migrated service DB.
           COMMUNITY_POSTGRES_URL: postgresql://testuser:testpass@localhost:5432/testdb
+          # Discover publishing and the ready-media filter, on a database
+          # built by migrations alone (where clip_saves was once missing).
+          DISCOVER_POSTGRES_URL: postgresql://testuser:testpass@localhost:5432/testdb
         run: python -m pytest --cov=lyo_app --cov-report=xml tests/
 
       - name: Upload coverage
