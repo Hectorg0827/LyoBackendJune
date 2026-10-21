@@ -7,13 +7,16 @@ Chat/Test Prep/Classroom attachments retain their existing local storage path.
 """
 import mimetypes
 import os
+import re
+import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Optional
+from urllib.parse import urlsplit
 
 import anyio
 from fastapi import HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from lyo_app.core.config import settings
@@ -21,6 +24,12 @@ from lyo_app.core.config import settings
 CHUNK_SIZE = 1024 * 1024
 FIRST_CHUNK_SIZE = 64 * 1024
 DURABLE_MEDIA_FOLDERS = {"clips", "clip_thumbnails"}
+# One value per running process. Release checks read it from media responses
+# to prove a URL was served by a new deployment or by a second replica.
+INSTANCE_ID = uuid.uuid4().hex[:12]
+MEDIA_PATH = re.compile(
+    r"^/api/v1/media/file/(clips|clip_thumbnails)/([a-f0-9]{32}\.(?:mp4|mov|webm|jpg|png|webp|heic))$"
+)
 
 
 def _provider():
@@ -108,6 +117,40 @@ def save_clip_to_cloud(local_file: Path, folder: str, name: str, content_type: s
     return True
 
 
+def media_path_parts(url: str | None) -> Optional[tuple[str, str]]:
+    """(folder, name) for a URL that points at this API's durable media, else None."""
+    match = MEDIA_PATH.fullmatch(urlsplit(url or "").path)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def stat_durable_media(folder: str, name: str, local_root: Path) -> Optional[int]:
+    """Size in bytes of stored Discover media, or None when nothing is there.
+
+    Publishing checks this so a clip can never point at an upload that does
+    not exist. Storage errors propagate: "could not check" is not "missing".
+    """
+    local = local_root / folder / name
+    if local.is_file():
+        return local.stat().st_size
+    config = _provider()
+    if not config:
+        return None
+    provider, bucket_name = config
+    key = _key(folder, name)
+    if provider == "gcs":
+        blob = _gcs_bucket(bucket_name).get_blob(key)
+        return int(blob.size or 0) if blob is not None else None
+    from botocore.exceptions import ClientError
+
+    try:
+        head = _s3_client(provider).head_object(Bucket=bucket_name, Key=key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise
+    return int(head.get("ContentLength", 0))
+
+
 def parse_byte_range(header: str | None, size: int) -> tuple[int, int, bool]:
     """HTTP bytes range; support normal and suffix requests, reject invalid ones."""
     if size < 1:
@@ -178,6 +221,22 @@ def stream_clip_from_cloud(folder: str, name: str, request: Request):
         mime_type = head.get("ContentType") or mime_type
 
     start, end, partial = parse_byte_range(request.headers.get("range"), size)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
+        # Names are random and never rewritten, so a cached copy stays valid;
+        # swiping back to a clip then plays from the browser's cache.
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Media-Instance": INSTANCE_ID,
+    }
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    status_code = 206 if partial else 200
+    if request.method == "HEAD":
+        # Players probe with HEAD for length and range support before
+        # playing; answer from metadata alone rather than reading the video.
+        return Response(status_code=status_code, headers=headers, media_type=mime_type)
+
     first_end = min(end, start + FIRST_CHUNK_SIZE - 1)
     close = lambda: None
     # Fetch a bounded first chunk before StreamingResponse commits 200/206.
@@ -221,17 +280,10 @@ def stream_clip_from_cloud(folder: str, name: str, request: Request):
         finally:
             close()
 
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(end - start + 1),
-        "Cache-Control": "public, max-age=3600",
-    }
-    if partial:
-        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     return _CloudStreamingResponse(
         chunks(),
         close=close,
         media_type=mime_type,
-        status_code=206 if partial else 200,
+        status_code=status_code,
         headers=headers,
     )

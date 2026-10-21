@@ -3,17 +3,22 @@ Clips Router - CRUD operations for educational video clips.
 Provides endpoints for creating, viewing, and managing user clips.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from datetime import datetime
+from urllib.parse import urlsplit
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, cast, String
+from starlette.concurrency import run_in_threadpool
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
+from lyo_app.core.config import settings
 from lyo_app.core.database import get_async_session
-from lyo_app.models.clips import Clip, ClipLike, ClipView, ClipSave, ClipComment
+from lyo_app.models.clips import Clip, ClipLike, ClipView, ClipSave, ClipComment, MEDIA_READY
+from lyo_app.routers.clip_media_storage import media_path_parts, stat_durable_media
+from lyo_app.routers.user_media import _media_root
 
 import logging
 
@@ -50,6 +55,12 @@ class ClipCreate(BaseModel):
     tags: List[str] = Field(default_factory=list)
     isPublic: bool = True
     enableCourseGeneration: bool = True
+    # Provenance, for library videos published under an open licence.
+    sourceName: Optional[str] = Field(None, max_length=120)
+    sourceUrl: Optional[str] = Field(None, max_length=500)
+    licenseName: Optional[str] = Field(None, max_length=60)
+    licenseUrl: Optional[str] = Field(None, max_length=500)
+    attribution: Optional[str] = Field(None, max_length=300)
 
 
 class ClipUpdate(BaseModel):
@@ -93,20 +104,95 @@ class GenerateCourseRequest(BaseModel):
 # API Endpoints
 # ============================================================================
 
+def _own_media_hosts(http_request: Request) -> set:
+    hosts = {http_request.url.hostname, http_request.base_url.hostname}
+    configured = urlsplit(getattr(settings, "base_url", "") or "").hostname
+    return {host for host in hosts | {configured} if host}
+
+
+async def _stored_media_url(raw_url: Optional[str], folder: str, http_request: Request):
+    """(absolute URL, size) for a file uploaded to this API's durable media, else None.
+
+    Size is None when the file is not there. A URL on another host, or outside
+    the upload folder, is not ours to vouch for and comes back as None.
+    """
+    parts = media_path_parts(raw_url)
+    if not parts or parts[0] != folder:
+        return None
+    split = urlsplit(raw_url)
+    if split.netloc and split.hostname not in _own_media_hosts(http_request):
+        return None
+    absolute = raw_url if split.netloc else str(http_request.base_url).rstrip("/") + split.path
+    try:
+        size = await run_in_threadpool(stat_durable_media, parts[0], parts[1], _media_root())
+    except Exception:
+        logger.exception("Could not confirm stored media %s", split.path)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Clip storage is unavailable. Please try publishing again.",
+        )
+    return absolute, size
+
+
 @router.post("", response_model=ClipResponse)
 async def create_clip(
     request: ClipCreate,
+    http_request: Request,
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Create a new clip."""
+    """Publish a clip whose video was uploaded with POST /api/v1/media/upload.
+
+    The video must already be in durable storage. A clip row whose video
+    is missing is exactly what left Discover offering videos that could only
+    fail, so publishing checks first instead of trusting the URL.
+    """
+    video = await _stored_media_url(request.videoUrl, "clips", http_request)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="videoUrl must be a video uploaded with /api/v1/media/upload",
+        )
+    video_url, video_bytes = video
+    if not video_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The uploaded video could not be found. Please upload it again.",
+        )
+    # Posters are optional. One in our own poster folder must exist; any
+    # other poster is kept as the client sent it, since a missing poster
+    # costs a still frame, not playback.
+    thumbnail_url = request.thumbnailUrl
+    poster = await _stored_media_url(request.thumbnailUrl, "clip_thumbnails", http_request)
+    if poster is not None:
+        thumbnail_url = poster[0] if poster[1] else None
+
+    has_provenance = any([request.sourceName, request.sourceUrl, request.licenseName,
+                          request.licenseUrl, request.attribution])
+    if has_provenance:
+        if not request.licenseName or not (request.sourceUrl or "").startswith(("https://", "http://")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A licensed video needs its licence and a link to its source",
+            )
+        # Library imports are retried; the same source must not appear twice.
+        existing = await db.execute(
+            select(Clip.id).where(Clip.user_id == current_user.id, Clip.source_url == request.sourceUrl)
+        )
+        duplicate = existing.scalar_one_or_none()
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": "This source is already published", "clipId": str(duplicate)},
+            )
+
     try:
         clip = Clip(
             user_id=current_user.id,
             title=request.title,
             description=request.description,
-            video_url=request.videoUrl,
-            thumbnail_url=request.thumbnailUrl,
+            video_url=video_url,
+            thumbnail_url=thumbnail_url,
             duration_seconds=request.durationSeconds,
             subject=request.subject,
             topic=request.topic,
@@ -114,21 +200,29 @@ async def create_clip(
             key_points=request.keyPoints,
             tags=request.tags,
             is_public=request.isPublic,
-            enable_course_generation=request.enableCourseGeneration
+            enable_course_generation=request.enableCourseGeneration,
+            media_status=MEDIA_READY,
+            media_bytes=video_bytes,
+            media_checked_at=datetime.utcnow(),
+            source_name=request.sourceName,
+            source_url=request.sourceUrl,
+            license_name=request.licenseName,
+            license_url=request.licenseUrl,
+            attribution=request.attribution,
         )
-        
+
         db.add(clip)
         await db.commit()
         await db.refresh(clip)
-        
+
         logger.info(f"Clip created: {clip.id} by user {current_user.id}")
-        
+
         return ClipResponse(
             success=True,
             clip=clip.to_dict(),
             message="Clip created successfully"
         )
-        
+
     except Exception as e:
         logger.error(f"Error creating clip: {e}")
         await db.rollback()
@@ -215,7 +309,8 @@ async def get_discover_filters(
     """Only offer topics with published videos, never dead-end placeholder tabs."""
     rows = await db.execute(
         select(func.min(Clip.subject), func.count(Clip.id).label("count"))
-        .where(Clip.is_public.is_(True), Clip.subject.is_not(None), func.trim(Clip.subject) != "")
+        .where(Clip.is_public.is_(True), Clip.media_status == MEDIA_READY,
+               Clip.subject.is_not(None), func.trim(Clip.subject) != "")
         .group_by(func.lower(func.trim(Clip.subject)))
         .order_by(desc("count"), func.min(Clip.subject))
         .limit(30)
@@ -245,7 +340,9 @@ async def get_discover_clips(
         offset = (page - 1) * per_page
         
         # Build query for public clips
-        conditions = [Clip.is_public.is_(True)]
+        # Only clips whose video is confirmed in storage; anything else
+        # would be a reel that can only fail to play.
+        conditions = [Clip.is_public.is_(True), Clip.media_status == MEDIA_READY]
         if subject:
             conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
         if level:
@@ -326,6 +423,7 @@ async def get_saved_clips(
         conditions = [
             ClipSave.user_id == current_user.id,
             or_(Clip.is_public.is_(True), Clip.user_id == current_user.id),
+            Clip.media_status == MEDIA_READY,
         ]
         if subject:
             conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
@@ -412,7 +510,14 @@ async def get_clip(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied"
             )
-        
+        # A shared link to a clip whose video is gone opens nothing playable;
+        # its owner still sees it, with mediaStatus saying why.
+        if clip.media_status != MEDIA_READY and clip.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clip not found"
+            )
+
         clip_dict = clip.to_dict()
         
         # Check if user liked this clip

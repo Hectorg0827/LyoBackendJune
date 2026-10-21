@@ -5,8 +5,16 @@ Clips are short user-created videos that can be used for AI course generation.
 
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, JSON, ForeignKey
+from sqlalchemy import BigInteger, Column, Integer, String, Text, Float, Boolean, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import relationship
+
+# Discover serves only clips whose video bytes were confirmed in durable
+# storage. "unverified" is every row that predates that check until an audit
+# looks; "missing" and "external" are never served in the feed.
+MEDIA_READY = "ready"
+MEDIA_UNVERIFIED = "unverified"
+MEDIA_MISSING = "missing"
+MEDIA_EXTERNAL = "external"
 
 from lyo_app.core.database import Base
 
@@ -49,11 +57,25 @@ class Clip(Base):
     
     # Visibility
     is_public = Column(Boolean, default=True)
-    
+
+    # Whether the video behind video_url is known to exist (see MEDIA_*).
+    media_status = Column(String(16), nullable=False, default=MEDIA_UNVERIFIED,
+                          server_default=MEDIA_UNVERIFIED, index=True)
+    media_bytes = Column(BigInteger, nullable=True)
+    media_checked_at = Column(DateTime, nullable=True)
+
+    # Provenance for library videos: a Creative Commons licence is only met
+    # when the credit travels with the video, so clients show these fields.
+    source_name = Column(String(120), nullable=True)
+    source_url = Column(String(500), nullable=True, index=True)
+    license_name = Column(String(60), nullable=True)
+    license_url = Column(String(500), nullable=True)
+    attribution = Column(String(300), nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships
     user = relationship("User", back_populates="clips")
     likes = relationship("ClipLike", back_populates="clip", cascade="all, delete-orphan")
@@ -97,7 +119,21 @@ class Clip(Base):
             "authorName": author_name,
             "authorAvatarURL": author_avatar,
             "isPublic": self.is_public,
+            "mediaStatus": self.media_status or MEDIA_UNVERIFIED,
+            "attribution": self.attribution_dict(),
             "createdAt": self.created_at.isoformat() if self.created_at else None
+        }
+
+    def attribution_dict(self) -> Optional[dict]:
+        """The credit a licensed video must carry, or None for a learner's own clip."""
+        if not (self.license_name or self.source_url or self.attribution):
+            return None
+        return {
+            "credit": self.attribution,
+            "sourceName": self.source_name,
+            "sourceURL": self.source_url,
+            "license": self.license_name,
+            "licenseURL": self.license_url,
         }
 
 

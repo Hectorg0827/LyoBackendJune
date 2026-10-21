@@ -194,8 +194,9 @@ async def verify(base_url="http://127.0.0.1:8080"):
                     for i, item in enumerate(fixtures):
                         item["id"] = str(await connection.fetchval("""INSERT INTO clips
                           (user_id,title,description,video_url,subject,topic,level,tags,key_points,is_public,
-                           view_count,like_count,share_count,comment_count,created_at,updated_at,duration_seconds,enable_course_generation)
-                          VALUES ($1,$2,$3,$4,$5,$6,$7,'[]','[]',$8,$9,$10,0,0,$11,$11,8,false) RETURNING id""",
+                           view_count,like_count,share_count,comment_count,created_at,updated_at,duration_seconds,enable_course_generation,
+                           media_status,media_bytes)
+                          VALUES ($1,$2,$3,$4,$5,$6,$7,'[]','[]',$8,$9,$10,0,0,$11,$11,8,false,'ready',663882) RETURNING id""",
                           item["owner"], item["title"], item["description"], LIVE+fixture_path, item["subject"],
                           item["topic"], item["level"], item["public"], item["views"], item["likes"],
                           datetime(2026, 10, 1) + timedelta(minutes=i//2)))
