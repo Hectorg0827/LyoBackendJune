@@ -388,6 +388,17 @@ def choose_option(quiz: dict[str, Any], want_correct: bool) -> tuple[Optional[st
     return None, "missing"
 
 
+def preserved_teaching_after_detour(original: str, resumed: str) -> bool:
+    """The original authored board and narration must survive unchanged.
+
+    Classroom may append a reference-board memory after answering a learner's
+    question, so a whole-scene string equality check incorrectly reports a
+    continuity failure even when every original teaching word was preserved.
+    Do not accept partial paraphrases, omissions or unrelated instruction.
+    """
+    return bool(original and resumed and resumed.startswith(original))
+
+
 def should_submit_unknown_option(
     profile: LearnerProfile, *, is_diagnostic: bool, certainty: str,
     already_submitted: bool,
@@ -856,7 +867,7 @@ class LiveLyo:
                     # live answer to the detour. Pedagogical quality is reviewed
                     # from the transcript; this assertion is only structural.
                     post_question_seen = True
-                    if original_example_text and text == original_example_text:
+                    if preserved_teaching_after_detour(original_example_text, text):
                         resumed_same_example = True
 
                 example = component(scene, "ExampleBlock", "LessonBlock")
