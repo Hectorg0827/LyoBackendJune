@@ -37,3 +37,5 @@ def test_auth_and_retry_headers_survive_error_envelope(status, headers):
     assert response.status_code == status
     for name, value in headers.items():
         assert response.headers[name] == value
+
+# Railway build retry: no runtime behavior changed.
