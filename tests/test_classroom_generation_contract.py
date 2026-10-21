@@ -8,6 +8,7 @@ import pytest
 from lyo_app.ai_classroom.adaptive_teaching import (
     AdaptiveTeacher, CriterionResult, Evaluation, GuidedState, PendingTask,
     TeachingUnavailable, turn_schema,
+    validate_authored_turn_with_optional_visual_fallback,
 )
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, task
 
@@ -151,3 +152,102 @@ def test_saved_sessions_keep_their_existing_contract():
     restored = GuidedState.model_validate_json(state.model_dump_json())
     assert restored.presentation.demonstration == []
     assert turn_schema("answer_question").model_validate(saved).task is None
+
+
+def test_optional_root_visual_missing_title_keeps_assessment_and_learner_text_unchanged():
+    ctx = context()
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    authored = ScriptedTeacher()._turn(ctx, state, "guided")
+    data = authored.model_dump()
+    data["visual"] = {
+        "kind": "comparison",
+        "caption": "A comparison of the relevant quantities.",
+        "description": "Two quantities can be compared side by side.",
+        "entries": [],
+    }
+    result = validate_authored_turn_with_optional_visual_fallback(
+        turn_schema("guided"), json.dumps(data),
+    )
+    assert result.visual is None
+    assert result.task == authored.task
+    assert result.speech == authored.speech
+    assert result.board_title == authored.board_title
+    assert result.board_content == authored.board_content
+    assert result.demonstration == authored.demonstration
+
+
+def test_invalid_demonstration_visual_does_not_remove_required_worked_steps():
+    ctx = context()
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    authored = ScriptedTeacher()._turn(ctx, state, "orient")
+    data = authored.model_dump()
+    data["demonstration"][0]["visual"] = {
+        "kind": "fraction_pie", "title": "Half and whole",
+        "caption": "Two halves make up a complete whole.",
+        "description": "A pie with two sections has one section shaded.",
+        "parts": 2, "value": 9,
+    }
+    result = validate_authored_turn_with_optional_visual_fallback(
+        turn_schema("orient"), json.dumps(data),
+    )
+    assert result.demonstration[0].visual is None
+    assert len(result.demonstration) == len(authored.demonstration)
+    for original, actual in zip(authored.demonstration, result.demonstration):
+        assert original.speech == actual.speech
+        assert original.board_title == actual.board_title
+        assert original.board_content == actual.board_content
+    assert result.task is None
+
+
+def test_mixed_invalid_visual_and_invalid_grading_task_still_fails_closed():
+    from pydantic import ValidationError
+    ctx = context()
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    data = ScriptedTeacher()._turn(ctx, state, "guided").model_dump()
+    data["visual"] = {"kind": "fraction_pie"}
+    # An absent task cannot be repaired by removing its optional visual.
+    data.pop("task")
+    with pytest.raises(ValidationError):
+        validate_authored_turn_with_optional_visual_fallback(
+            turn_schema("guided"), json.dumps(data),
+        )
+
+
+def test_invalid_required_demonstration_never_passes_as_optional_visual_error():
+    from pydantic import ValidationError
+    ctx = context()
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    data = ScriptedTeacher()._turn(ctx, state, "orient").model_dump()
+    data["demonstration"] = []
+    data["visual"] = {"kind": "fraction_pie"}
+    with pytest.raises(ValidationError):
+        validate_authored_turn_with_optional_visual_fallback(
+            turn_schema("orient"), json.dumps(data),
+        )
+
+
+@pytest.mark.asyncio
+async def test_provider_invalid_optional_visual_does_not_retry_paid_generation(monkeypatch):
+    ctx = context()
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    authored = ScriptedTeacher()._turn(ctx, state, "guided")
+    data = authored.model_dump()
+    data["visual"] = {
+        "kind": "comparison",
+        "caption": "A comparison of the quantities.",
+        "description": "Two values compared side by side.",
+        "entries": [],
+    }
+    completion = AsyncMock(return_value={
+        "content": json.dumps(data),
+        "model_used": "gemini-3.8-flash",
+        "tokens_used": 1200,
+    })
+    monkeypatch.setattr(
+        "lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion",
+        completion,
+    )
+    turn = await AdaptiveTeacher().turn(ctx, state, "guided")
+    assert turn.visual is None
+    assert turn.task == authored.task
+    assert completion.await_count == 1
