@@ -23,6 +23,13 @@ EXPECTED = {
 async def main():
     url = os.environ["DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://", 1)
     apply = os.getenv("DISCOVER_QUARANTINE_APPLY") == "YES"
+    if apply:
+        if os.getenv("DISCOVER_QUARANTINE_CONFIRM_IDS") != "1,2":
+            raise RuntimeError("Expected clip IDs must be explicitly confirmed")
+        if os.getenv("DISCOVER_QUARANTINE_BACKUP_VERIFIED") != "YES":
+            raise RuntimeError("Database backup must be verified before writes")
+        if os.getenv("DISCOVER_QUARANTINE_EXPECTED_HOST") != (urlsplit(url).hostname or ""):
+            raise RuntimeError("Database host must be explicitly confirmed")
     connection = await asyncpg.connect(url)
     try:
         async with connection.transaction(readonly=not apply):
