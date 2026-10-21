@@ -19,7 +19,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
-from lyo_app.routers.clip_media_storage import DURABLE_MEDIA_FOLDERS, save_clip_to_cloud, stream_clip_from_cloud
+from lyo_app.routers.clip_media_storage import (
+    DURABLE_MEDIA_FOLDERS,
+    INSTANCE_ID,
+    save_clip_to_cloud,
+    stream_clip_from_cloud,
+)
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
@@ -138,14 +143,18 @@ async def upload_media(
     }
 
 
-@router.get("/file/{folder}/{name}")
+@router.api_route("/file/{folder}/{name}", methods=["GET", "HEAD"])
 async def serve_media(folder: str, name: str, request: Request):
-    """Public media URL. Persisted clips are seekable and survive redeploys."""
+    """Public media URL. Persisted clips are seekable and survive redeploys.
+
+    HEAD is answered as well as GET: video players and CDNs probe a URL's
+    length and range support with HEAD, and FastAPI does not add it for us.
+    """
     if not _FOLDER_RE.match(folder) or "/" in name or ".." in name or name.startswith("."):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     path = _media_root() / folder / name
     if path.is_file():
-        return FileResponse(path)
+        return FileResponse(path, headers={"X-Media-Instance": INSTANCE_ID})
     if folder in DURABLE_MEDIA_FOLDERS:
         try:
             response = await run_in_threadpool(stream_clip_from_cloud, folder, name, request)
