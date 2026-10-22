@@ -7,6 +7,8 @@ from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lyo_app.core.database import get_db
@@ -24,7 +26,7 @@ from lyo_app.gamification.schemas import (
     UserStatsRead
 )
 from lyo_app.gamification.models import (
-    XPActionType, AchievementType, StreakType
+    XPActionType, AchievementType, StreakType, UserAchievement
 )
 
 router = APIRouter()
@@ -163,9 +165,18 @@ async def get_my_achievements(
 ):
     """Get current user's achievements."""
     try:
-        # Implementation would fetch user achievements
-        # Simplified for now
-        return []
+        query = (
+            select(UserAchievement)
+            .options(selectinload(UserAchievement.achievement))
+            .where(UserAchievement.user_id == current_user.id)
+            .order_by(UserAchievement.started_at.desc(), UserAchievement.id.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        if completed_only:
+            query = query.where(UserAchievement.is_completed.is_(True))
+        result = await db.execute(query)
+        return list(result.scalars().all())
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch user achievements")
 
