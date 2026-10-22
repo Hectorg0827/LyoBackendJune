@@ -41,6 +41,17 @@ jobs:
           done
           curl -sS -m 30 -o /dev/null -D - https://lyoai.app/ | grep -iE '^(HTTP|server|location|x-railway|x-vercel)' | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: The API accepts the website on both hostnames
+        # lyoai.app forwards to www.lyoai.app, so the API must allow www.
+        run: |
+          for origin in https://www.lyoai.app https://lyoai.app; do
+            allowed=$(curl -sS -m 30 -o /dev/null -D - -X OPTIONS https://api.lyoai.app/api/v1/clips/discover \
+              -H "Origin: $origin" -H "Access-Control-Request-Method: GET" \
+              -H "Access-Control-Request-Headers: authorization" \
+              | grep -i '^access-control-allow-origin' | tr -d '\r')
+            echo "$origin -> ${allowed:-not allowed}" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
