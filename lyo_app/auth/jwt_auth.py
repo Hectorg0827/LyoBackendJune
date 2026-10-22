@@ -3,6 +3,7 @@
 import jwt
 import json
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import Depends, HTTPException, status
@@ -15,6 +16,7 @@ from lyo_app.core.problems import AuthenticationProblem, AuthorizationProblem
 from lyo_app.core.database import get_db
 from lyo_app.auth.models import User
 from lyo_app.auth.jwt_cache import JWTCache
+from lyo_app.auth.token_revocation import is_token_revoked
 from lyo_app.core.logging import logger
 
 # Lazy import for redis_manager to avoid startup issues
@@ -130,6 +132,15 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
     if expected_type == "access":
         cached_payload = jwt_cache.get(token)
         if cached_payload:
+            if is_token_revoked(cached_payload):
+                jwt_cache.invalidate(token)
+                raise AuthenticationProblem("Token has been revoked")
+            if cached_payload.get("token_type") != expected_type:
+                jwt_cache.invalidate(token)
+                raise AuthenticationProblem("Invalid token type")
+            if float(cached_payload.get("exp", 0)) <= time.time():
+                jwt_cache.invalidate(token)
+                raise AuthenticationProblem("Token has expired")
             # Reconstruct TokenData from cache
             exp_timestamp = cached_payload.get("exp")
             exp_datetime = datetime.fromtimestamp(exp_timestamp)
@@ -147,6 +158,9 @@ async def verify_token_async(token: str, expected_type: str = "access") -> Token
             algorithms=[settings.JWT_ALGORITHM],
             options={"require": ["exp", "iat", "user_id", "token_type"]}
         )
+
+        if is_token_revoked(payload):
+            raise AuthenticationProblem("Token has been revoked")
         
         user_id: str = payload.get("user_id")
         token_type: str = payload.get("token_type")
@@ -186,6 +200,9 @@ def verify_token(token: str, expected_type: str = "access") -> TokenData:
             algorithms=[settings.JWT_ALGORITHM],
             options={"require": ["exp", "iat", "user_id", "token_type"]}
         )
+
+        if is_token_revoked(payload):
+            raise AuthenticationProblem("Token has been revoked")
         
         user_id: str = payload.get("user_id")
         token_type: str = payload.get("token_type")
