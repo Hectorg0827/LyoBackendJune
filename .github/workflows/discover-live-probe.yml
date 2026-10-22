@@ -23,8 +23,20 @@ jobs:
       - name: Backend health
         run: curl -sS -m 30 https://api.lyoai.app/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
 
-      - name: Web health
-        run: curl -sS -m 30 https://lyoai.app/api/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
+      - name: Web health on both hostnames
+        # The Railway web service answers www.lyoai.app; the apex may be served
+        # by something else, which a deploy of that service does not update.
+        run: |
+          for host in lyoai.app www.lyoai.app; do
+            echo "$host: $(curl -sS -m 30 "https://$host/api/health")" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Where each hostname points
+        run: |
+          for host in lyoai.app www.lyoai.app api.lyoai.app; do
+            echo "$host -> $(dig +short "$host" | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          curl -sS -m 30 -o /dev/null -D - https://lyoai.app/ | grep -iE '^(HTTP|server|location|x-railway|x-vercel)' | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Media route answers HEAD
         run: |
