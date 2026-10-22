@@ -9,6 +9,9 @@ on:
     branches-ignore: [main]
     paths:
       - .github/workflows/discover-live-probe.yml
+      # Publishing the library needs the Discover backend live, so every
+      # change to its manifest re-reads what production serves.
+      - catalog/catalog.json
   workflow_dispatch:
 
 permissions:
