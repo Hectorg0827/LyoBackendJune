@@ -7,5 +7,6 @@ same goal model rather than a separate AI.
 """
 
 from .models import CoachSnapshot, GoalSkill, LearningGoal
+from .journey_models import JourneyHandoff, LearningJourney
 
-__all__ = ["LearningGoal", "GoalSkill", "CoachSnapshot"]
+__all__ = ["LearningGoal", "GoalSkill", "CoachSnapshot", "LearningJourney", "JourneyHandoff"]

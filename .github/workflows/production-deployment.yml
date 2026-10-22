@@ -16,7 +16,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, feature/lyo-one-journey-context]
   release:
     types: [published]
   workflow_dispatch:

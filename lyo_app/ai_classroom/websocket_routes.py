@@ -74,7 +74,7 @@ async def authenticate_websocket(
                 if user:
                     return user
         except Exception as e:
-            logger.warning(f"WebSocket JWT authentication failed: {e}")
+            logger.warning("WebSocket JWT authentication failed: invalid credentials")
 
     if api_key:
         configured_key = os.getenv("CLASSROOM_GUEST_API_KEY")
@@ -88,6 +88,18 @@ async def authenticate_websocket(
             )
 
     raise HTTPException(status_code=401, detail="Valid authentication required for WebSocket")
+
+
+def classroom_access_token_from_message(raw: str) -> Optional[str]:
+    """Accept credentials only from a dedicated first message, not learner actions."""
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or data.get("type") != "classroom_auth":
+        return None
+    token = data.get("token")
+    return token.strip() if isinstance(token, str) and 16 <= len(token.strip()) <= 8192 else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -117,16 +129,34 @@ async def websocket_endpoint(
     heartbeat_task = None
 
     try:
-        # Extract authentication from query parameters
-        # Note: We can't use normal Depends() in WebSocket, so we parse manually
-        token = websocket.query_params.get("token")
+        # Prefer a bearer header (native clients) or a dedicated first
+        # WebSocket message (browser clients). These do not place reusable
+        # access credentials in request URLs and edge proxy access logs.
+        # Legacy query token support remains only for previously shipped
+        # clients, to be disabled after the mobile rollout is verified.
+        legacy_query = websocket.query_params.get("token")
         api_key = websocket.query_params.get("api_key")
+        header = websocket.headers.get("authorization") or ""
+        token = header[7:].strip() if header.lower().startswith("bearer ") else None
+        allow_legacy = os.getenv("CLASSROOM_ALLOW_QUERY_AUTH", "1").lower() not in {
+            "0", "false", "no", "off",
+        }
+        if not token and allow_legacy:
+            token = legacy_query
 
-        # Authentication fails closed. Guest classrooms are available only
-        # when operators configure a dedicated secret.
         if not token and not api_key:
-            await websocket.close(code=4001, reason="Authentication required")
-            return
+            # Browsers cannot set an Authorization header on WebSocket.
+            # Accept the transport only, require auth before any room,
+            # learner data, welcome scene or session access.
+            await websocket.accept()
+            try:
+                auth_raw = await asyncio.wait_for(websocket.receive_text(), timeout=8)
+                token = classroom_access_token_from_message(auth_raw)
+            except (asyncio.TimeoutError, WebSocketDisconnect, ValueError):
+                token = None
+            if not token:
+                await websocket.close(code=4001, reason="Authentication required")
+                return
 
         if token:
             try:

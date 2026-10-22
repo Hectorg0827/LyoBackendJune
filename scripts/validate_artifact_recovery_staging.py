@@ -23,11 +23,17 @@ import httpx
 
 def require_target(url: str, expected_sha: str) -> str:
     parsed = urlparse(url)
-    if (parsed.scheme != "https" or not parsed.hostname
-            or not parsed.hostname.endswith(".up.railway.app")
+    # A Railway hostname by itself proves neither isolation nor ownership.
+    # Accept only the two explicitly reserved Lyo staging backends.
+    approved_hosts = {
+        "lyolaunchbackend-staging.up.railway.app",
+        "lyojourneystagingbackend-staging.up.railway.app",
+    }
+    if (parsed.scheme != "https" or parsed.hostname not in approved_hosts
+            or parsed.netloc != parsed.hostname
             or parsed.username or parsed.password or parsed.port
             or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
-        raise ValueError("Use an isolated HTTPS Railway service origin")
+        raise ValueError("Use an approved isolated Lyo staging backend origin")
     if not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
         raise ValueError("A full expected backend commit SHA is required")
     return url.rstrip("/")

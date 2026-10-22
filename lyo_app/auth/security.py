@@ -115,6 +115,9 @@ def verify_token(token: str) -> Optional[dict]:
     """
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        from lyo_app.auth.token_revocation import is_token_revoked
+        if is_token_revoked(payload):
+            return None
         return payload
     except JWTError:
         return None

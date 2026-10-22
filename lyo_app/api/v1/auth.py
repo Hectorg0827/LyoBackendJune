@@ -106,7 +106,7 @@ async def login_json(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token = jwt_create_access_token(user_id=str(user.id))
+    access_token = jwt_create_access_token(user_id=str(user.id), auth_version=user.auth_version)
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/token")
@@ -124,7 +124,7 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = jwt_create_access_token(user_id=str(user.id))
+    access_token = jwt_create_access_token(user_id=str(user.id), auth_version=user.auth_version)
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me")
@@ -134,7 +134,7 @@ async def read_users_me(
 ):
     """Get current user information"""
     from lyo_app.auth.jwt_auth import verify_token_async
-    token_data = await verify_token_async(token, expected_type="access")
+    token_data = await verify_token_async(token, expected_type="access", db=db)
     user = (await db.execute(select(User).where(User.id == int(token_data.user_id)))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")

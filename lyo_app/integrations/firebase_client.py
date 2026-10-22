@@ -3,6 +3,7 @@ Provides optional Firestore & Storage helpers when Firebase credentials are pres
 """
 from __future__ import annotations
 import os
+import re
 from typing import Optional, Any, Dict
 
 try:
@@ -11,6 +12,18 @@ try:
     _FIREBASE_AVAILABLE = True
 except Exception:  # pragma: no cover - guarded import
     _FIREBASE_AVAILABLE = False
+
+def _is_isolated_staging_project(project_id: str | None, credential_project: str | None,
+                                 gcp_project: str | None = None) -> bool:
+    """Allow staging writes only to a named test project matching the key."""
+    return bool(
+        isinstance(project_id, str)
+        and re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", project_id)
+        and re.search(r"(?:^|-)(?:staging|test|sandbox)(?:-|$)", project_id)
+        and credential_project == project_id
+        and (not gcp_project or gcp_project == project_id)
+    )
+
 
 class FirebaseClient:
     _instance: Optional["FirebaseClient"] = None
@@ -27,45 +40,57 @@ class FirebaseClient:
         self.bucket = None
 
     def initialize_app(self):
-        """Perform blocked initialization logic here, not in __init__"""
+        """Initialize optional Firebase storage, failing closed in staging."""
         if self._initialized_sdk:
             return
         self._initialized_sdk = True
-
         if not _FIREBASE_AVAILABLE:
             return
+
         try:
-            # Use FIREBASE_PROJECT_ID for auth, GCP_PROJECT_ID for storage
             firebase_project_id = os.getenv("FIREBASE_PROJECT_ID") or os.getenv("GCP_PROJECT_ID")
             gcp_project_id = os.getenv("GCP_PROJECT_ID")
-            
-            # Priority: FIREBASE_CREDENTIALS_JSON > GOOGLE_APPLICATION_CREDENTIALS > ADC
-            cred: Any
             cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-            
-            if cred_json:
-                # Use Firebase-specific credentials from JSON env var
+            cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            staging = os.getenv("ENVIRONMENT", "").strip().lower() == "staging"
+
+            # Never use ADC / metadata-server discovery or a different
+            # Firebase project for synthetic artifact writes in staging.
+            if staging:
+                if not cred_json and not (cred_path and os.path.isfile(cred_path)):
+                    return
                 import json
-                cred_dict = json.loads(cred_json)
-                cred = credentials.Certificate(cred_dict)
-            elif os.getenv("GOOGLE_APPLICATION_CREDENTIALS") and os.path.exists(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")):
-                cred = credentials.Certificate(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+                if cred_json:
+                    certificate = json.loads(cred_json)
+                else:
+                    with open(cred_path, encoding="utf-8") as handle:
+                        certificate = json.load(handle)
+                if not _is_isolated_staging_project(firebase_project_id, certificate.get("project_id"), gcp_project_id):
+                    return
+
+            if cred_json:
+                import json
+                cred = credentials.Certificate(json.loads(cred_json))
+            elif cred_path and os.path.isfile(cred_path):
+                cred = credentials.Certificate(cred_path)
             else:
+                # Preserve existing production behavior; staging returned
+                # above rather than selecting environment-default credentials.
                 cred = credentials.ApplicationDefault()
-            
-            # Initialize with Firebase project ID for token verification
+
             try:
-                # Check if already initialized separately
-                firebase_admin.get_app()
+                app = firebase_admin.get_app()
             except ValueError:
-                firebase_admin.initialize_app(cred, {
+                app = firebase_admin.initialize_app(cred, {
                     "projectId": firebase_project_id,
-                    "storageBucket": f"{gcp_project_id}.appspot.com" if gcp_project_id else None
+                    "storageBucket": f"{gcp_project_id}.appspot.com" if gcp_project_id else None,
                 })
-            
-            self.db = firestore.client()
+            if staging and app.project_id != firebase_project_id:
+                return
+
+            self.db = firestore.client(app=app)
             try:
-                self.bucket = storage.bucket()
+                self.bucket = storage.bucket(app=app)
             except Exception:
                 self.bucket = None
             self.enabled = True
