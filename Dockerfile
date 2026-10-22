@@ -38,4 +38,4 @@ USER app
 
 # Run the real application. A deployment must fail if the real API cannot boot;
 # never substitute a health-only bootloader that can hide import/config failures.
-CMD ["bash", "-c", "exec uvicorn lyo_app.enhanced_main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["bash", "-c", "exec uvicorn lyo_app.enhanced_main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips=\"${TRUSTED_PROXY_IPS:-127.0.0.1}\""]

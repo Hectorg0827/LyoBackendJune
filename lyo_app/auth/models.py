@@ -6,7 +6,7 @@ Defines the User model and related database tables.
 from datetime import datetime
 from typing import Optional, Set, TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String, Text, JSON, ForeignKey, Integer
+from sqlalchemy import Boolean, DateTime, String, Text, JSON, ForeignKey, Integer, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -34,6 +34,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    auth_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text('0'))
     
     # Profile fields
     first_name: Mapped[Optional[str]] = mapped_column(String(100))
@@ -152,7 +153,7 @@ class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    token: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    token: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     
     is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
