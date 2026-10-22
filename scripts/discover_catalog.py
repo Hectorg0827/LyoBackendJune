@@ -24,6 +24,10 @@ Licences: public domain, CC0, CC BY and CC BY-SA only. NonCommercial and
 NoDerivatives licences are refused (Lyo is a commercial product, and trimming
 and re-encoding is adapting). Material NASA did not make itself must be
 cleared by the reviewer; the search flags descriptions that mention it.
+NASA drafts, and public domain Commons drafts, are published silent
+(clip.audio "mute"): the footage is public domain, but the library music in
+many government videos is licensed to the agency alone. A reviewer who hears
+only narration or natural sound sets "keep".
 
   python scripts/discover_catalog.py search nasa "Perseverance landing" >> drafts.jsonl
   python scripts/discover_catalog.py search commons "mitosis" >> drafts.jsonl
@@ -59,7 +63,9 @@ LEVELS = {"beginner", "intermediate", "advanced"}
 MAX_DOWNLOAD_BYTES = 600 * 1024 * 1024
 MIN_SECONDS, MAX_SECONDS = 5, 90
 NASA_GUIDELINES = "https://www.nasa.gov/nasa-brand-center/images-and-media/"
-THIRD_PARTY_HINTS = re.compile(r"copyright|©|courtesy of|used with permission|all rights reserved", re.I)
+THIRD_PARTY_HINTS = re.compile(r"copyright|©|courtesy of|used with permission|all rights reserved"
+                               r"|music (provided|licensed|courtesy)|production music|universal music", re.I)
+AUDIO_CHOICES = {"keep", "mute"}
 
 
 # ── Licences ────────────────────────────────────────────────────────────────
@@ -111,8 +117,11 @@ def nasa_entries(search_body, collections):
         if not preferred:
             continue
         center = data.get("center") or ""
-        credit = data.get("secondary_creator") or (f"NASA/{center}" if center else "NASA")
+        # secondary_creator names the video's producer, or sometimes its
+        # music licensor; neither is the credit NASA asks for.
+        credit = "NASA/JPL-Caltech" if center == "JPL" else f"NASA/{center}" if center else "NASA"
         description = _strip_html(data.get("description") or data.get("description_508"))
+        provenance = " ".join([description or "", data.get("secondary_creator") or "", data.get("photographer") or ""])
         entries.append(draft(
             f"nasa-{nasa_id}", data.get("title") or nasa_id, description,
             source={"name": "NASA Image and Video Library",
@@ -120,7 +129,11 @@ def nasa_entries(search_body, collections):
                     "mediaUrl": preferred, "license": "Public domain", "licenseUrl": NASA_GUIDELINES,
                     "credit": credit},
             tags=[k for k in (data.get("keywords") or [])][:8],
-            rights_check=bool(THIRD_PARTY_HINTS.search(description or "")),
+            rights_check=bool(THIRD_PARTY_HINTS.search(provenance)),
+            # NASA's footage is public domain; the library music many of its
+            # videos carry is licensed to NASA, not to us. A reviewer who hears
+            # only narration or natural sound can set "keep".
+            audio="mute",
         ))
     return entries
 
@@ -146,15 +159,19 @@ def commons_entries(body):
                     "credit": value("Artist") or value("Credit")},
             tags=[],
             rights_check=licence_family(licence) is None,
+            # A CC licence covers the whole file, soundtrack included. Public
+            # domain uploads are mostly US government videos, whose music is
+            # often licensed like NASA's.
+            audio="mute" if licence_family(licence) == "public-domain" else "keep",
         ))
     return entries
 
 
-def draft(entry_id, title, description, source, tags, rights_check):
+def draft(entry_id, title, description, source, tags, rights_check, audio="keep"):
     return {
         "id": entry_id, "title": (title or "")[:200], "description": description or "",
         "subject": None, "topic": None, "level": "beginner", "tags": tags, "keyPoints": [],
-        "source": source, "clip": {"start": 0, "duration": None},
+        "source": source, "clip": {"start": 0, "duration": None, "audio": audio},
         "review": {"approved": False, "reviewer": None, "factChecked": False, "ageAppropriate": False,
                    "rightsCleared": not rights_check, "notes": ""},
     }
@@ -210,6 +227,8 @@ def entry_problems(entry):
             problems.append(f"review.{flag} is not confirmed")
     if not (review.get("reviewer") or "").strip():
         problems.append("review.reviewer is not named")
+    if (entry.get("clip") or {}).get("audio", "keep") not in AUDIO_CHOICES:
+        problems.append("clip.audio must be keep or mute")
     return problems
 
 
@@ -275,9 +294,15 @@ def index_at_front(path):
                 handle.seek(size - 8, 1)
 
 
-def encode(source, out_video, out_poster, start, duration):
-    """Phone-friendly H.264 High/AAC MP4, index first, at most 1280px on the long edge."""
+def encode(source, out_video, out_poster, start, duration, mute=False):
+    """Phone-friendly H.264 High/AAC MP4, index first, at most 1280px on the long edge.
+
+    mute replaces the source's sound with silence, for footage whose soundtrack
+    is not ours to republish.
+    """
     info = probe(source)
+    if mute:
+        info["audio"] = None
     if not info["video"]:
         raise ValueError("no video stream")
     length = max(0.0, info["duration"] - start)
@@ -334,8 +359,9 @@ def ingest_entry(api, auth, sources, entry, report, workdir):
     source = entry["source"]
     raw, video, poster = workdir / "source", workdir / "clip.mp4", workdir / "poster.jpg"
     download(sources, source["mediaUrl"], raw)
-    duration = encode(raw, video, poster, float((entry.get("clip") or {}).get("start") or 0),
-                      (entry.get("clip") or {}).get("duration"))
+    window = entry.get("clip") or {}
+    duration = encode(raw, video, poster, float(window.get("start") or 0), window.get("duration"),
+                      mute=window.get("audio") == "mute")
     uploaded = {}
     for label, folder, path, content_type in [("video", "clips", video, "video/mp4"),
                                               ("poster", "clip_thumbnails", poster, "image/jpeg")]:
