@@ -1,0 +1,34 @@
+name: Discover live probe
+
+# Read-only checks against production, from a runner that can reach it:
+# which commit api.lyoai.app and lyoai.app are serving, and whether the media
+# route answers HEAD (405 before the Discover media fix, 404 for a missing
+# file after it). Sends no credentials and changes nothing.
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - .github/workflows/discover-live-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Backend health
+        run: curl -sS -m 30 https://api.lyoai.app/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
+
+      - name: Web health
+        run: curl -sS -m 30 https://lyoai.app/api/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
+
+      - name: Media route answers HEAD
+        run: |
+          missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
+          head=$(curl -sS -m 30 -I -o /dev/null -w '%{http_code}' "$missing")
+          get=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' "$missing")
+          echo "HEAD missing clip -> $head; GET missing clip -> $get" | tee -a "$GITHUB_STEP_SUMMARY"
