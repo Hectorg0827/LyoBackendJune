@@ -16,22 +16,37 @@ review.approved, factChecked, ageAppropriate, rightsCleared and reviewer.
 import json
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "scripts"))
-from discover_catalog import MIN_SECONDS, licence_family  # noqa: E402
+from discover_catalog import MIN_SECONDS, USER_AGENT, licence_family  # noqa: E402
+
+# Wikimedia limits how fast one client may fetch files, so its videos are
+# probed one at a time; NASA's asset host takes parallel requests.
+SERIAL_HOSTS = {"upload.wikimedia.org"}
 
 
-def probe_remote(url):
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-user_agent", "LyoDiscoverCatalog/1.0 (https://lyoai.app; library ingestion)",
-             "-print_format", "json", "-show_streams", "-show_format", url],
-            check=True, capture_output=True, text=True, timeout=90).stdout
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        return {"error": type(error).__name__}
+def probe_remote(url, attempts=3):
+    for attempt in range(attempts):
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-user_agent", USER_AGENT,
+                 "-print_format", "json", "-show_streams", "-show_format", url],
+                check=True, capture_output=True, text=True, timeout=90).stdout
+            break
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or "").strip().splitlines()[-1:] or ["ffprobe failed"]
+        except subprocess.TimeoutExpired:
+            detail = ["timed out"]
+        if attempt + 1 < attempts:
+            # Wikimedia answers 429 to bursts; back off before asking again.
+            time.sleep(5 * (attempt + 1))
+    else:
+        return {"error": detail[0][:200]}
     info = json.loads(out)
     video = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), {})
     audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
@@ -48,7 +63,7 @@ def blockers(entry):
     if not (source.get("credit") or "").strip():
         found.append("no credit")
     if "error" in probe:
-        found.append("video could not be read")
+        found.append(f"video could not be read ({probe['error']})")
     else:
         if probe["duration"] < MIN_SECONDS:
             found.append(f"only {probe['duration']}s long")
@@ -70,9 +85,14 @@ def main(raw_path, out_dir):
             continue
         seen.update({entry["id"], key})
         entries.append(entry)
+    serial = [e for e in entries if urlsplit(e["source"]["mediaUrl"]).hostname in SERIAL_HOSTS]
+    parallel = [e for e in entries if e not in serial]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for entry, probe in zip(entries, pool.map(probe_remote, [e["source"]["mediaUrl"] for e in entries])):
+        for entry, probe in zip(parallel, pool.map(probe_remote, [e["source"]["mediaUrl"] for e in parallel])):
             entry["probe"] = probe
+    for entry in serial:
+        entry["probe"] = probe_remote(entry["source"]["mediaUrl"])
+        time.sleep(1)
     for entry in entries:
         entry["subject"] = entry.pop("area")
         entry["blockers"] = blockers(entry)
