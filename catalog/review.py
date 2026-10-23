@@ -6,11 +6,15 @@
       and writes catalog/catalog.json (the manifest, nothing approved) and
       catalog/REVIEW.md (the numbered list a person watches and chooses from).
 
-  python catalog/review.py approve --reviewer NAME --numbers 1,2,5 [--keep-sound 2]
+  python catalog/review.py approve --reviewer NAME --numbers 1,2,5 [--keep-sound 2] [--note TEXT]
       Marks those numbers approved, fact-checked, age-appropriate and rights
       cleared by NAME, keeps the original sound on --keep-sound numbers, and
-      leaves every other entry unapproved. Only run it with the numbers the
-      reviewer chose themselves.
+      leaves every other entry unapproved. --note records how the review was
+      done. Only run it with the numbers the reviewer chose themselves.
+
+  python catalog/review.py publish [--off]
+      Records the owner's go-ahead to publish the approved entries to
+      production. discover-library-ingest.yml publishes nothing without it.
 
 Then: python scripts/discover_catalog.py validate --manifest catalog/catalog.json
 """
@@ -78,7 +82,7 @@ def numbers(text):
     return {int(n) for n in text.split(",") if n.strip()}
 
 
-def approve(reviewer, chosen, keep_sound):
+def approve(reviewer, chosen, keep_sound, note=""):
     data = json.loads(MANIFEST.read_text())
     entries = data["entries"]
     unknown = sorted(n for n in chosen | keep_sound if not 1 <= n <= len(entries))
@@ -87,11 +91,20 @@ def approve(reviewer, chosen, keep_sound):
     for number, entry in enumerate(entries, 1):
         ok = number in chosen
         entry["review"].update({"approved": ok, "factChecked": ok, "ageAppropriate": ok,
-                                "rightsCleared": ok, "reviewer": reviewer if ok else None})
+                                "rightsCleared": ok, "reviewer": reviewer if ok else None,
+                                "notes": note if ok else ""})
         if number in keep_sound:
             entry["clip"]["audio"] = "keep"
     MANIFEST.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     print(f"{len(chosen)} of {len(entries)} approved by {reviewer}")
+    return 0
+
+
+def set_publish(on):
+    data = json.loads(MANIFEST.read_text())
+    data["publish"] = on
+    MANIFEST.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    print("publishing " + ("allowed" if on else "held"))
     return 0
 
 
@@ -103,10 +116,15 @@ def main(argv=None):
     mark.add_argument("--reviewer", required=True)
     mark.add_argument("--numbers", required=True, type=numbers)
     mark.add_argument("--keep-sound", default=set(), type=numbers)
+    mark.add_argument("--note", default="")
+    go = sub.add_parser("publish")
+    go.add_argument("--off", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "build":
         return build()
-    return approve(args.reviewer, args.numbers, args.keep_sound)
+    if args.command == "publish":
+        return set_publish(not args.off)
+    return approve(args.reviewer, args.numbers, args.keep_sound, args.note)
 
 
 if __name__ == "__main__":
