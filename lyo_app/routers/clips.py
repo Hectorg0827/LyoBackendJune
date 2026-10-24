@@ -3,21 +3,24 @@ Clips Router - CRUD operations for educational video clips.
 Provides endpoints for creating, viewing, and managing user clips.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from datetime import datetime
 from urllib.parse import urlsplit
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, or_, cast, String
+from sqlalchemy import select, func, desc, or_, cast, exists, String
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
+from lyo_app.community.models import ContentReport, ReportReason, ReportStatus, ReportTargetType
 from lyo_app.core.config import settings
 from lyo_app.core.database import get_async_session
-from lyo_app.models.clips import Clip, ClipLike, ClipView, ClipSave, ClipComment, MEDIA_READY
+from lyo_app.models.clips import (
+    Clip, ClipLike, ClipView, ClipSave, ClipComment, MEDIA_READY, MODERATION_ACTIVE, MODERATION_HIDDEN,
+)
 from lyo_app.routers.clip_media_storage import media_path_parts, stat_durable_media
 from lyo_app.routers.user_media import _media_root
 
@@ -91,6 +94,12 @@ class ClipsListResponse(BaseModel):
     total: int
     page: int
     perPage: int
+
+
+class ClipReportCreate(BaseModel):
+    """A learner's report of a clip."""
+    reason: ReportReason
+    description: Optional[str] = Field(None, max_length=1000)
 
 
 class GenerateCourseRequest(BaseModel):
@@ -309,6 +318,27 @@ def _search_clips(q: Optional[str]):
     )
 
 
+# Distinct learners whose pending reports hide a clip until a moderator
+# decides, so one learner cannot take a video down alone.
+REPORTS_TO_HIDE_CLIP = 3
+
+
+def _reported_by(user_id: int):
+    """True for clips this learner reported: they leave that learner's lists."""
+    return exists().where(
+        ContentReport.reporter_id == user_id,
+        ContentReport.target_type == ReportTargetType.CLIP,
+        ContentReport.target_id == cast(Clip.id, String),
+    )
+
+
+def _servable_to(clip: Clip, user_id: int) -> bool:
+    """Whether a learner may open this clip: its owner always may."""
+    if clip.user_id == user_id:
+        return True
+    return clip.media_status == MEDIA_READY and clip.moderation_status == MODERATION_ACTIVE
+
+
 def _discover_order(sort: str):
     # Stable ordering keeps offset-based pagination predictable when scores tie.
     if sort == "latest":
@@ -327,6 +357,7 @@ async def get_discover_filters(
     rows = await db.execute(
         select(func.min(Clip.subject), func.count(Clip.id).label("count"))
         .where(Clip.is_public.is_(True), Clip.media_status == MEDIA_READY,
+               Clip.moderation_status == MODERATION_ACTIVE, ~_reported_by(current_user.id),
                Clip.subject.is_not(None), func.trim(Clip.subject) != "")
         .group_by(func.lower(func.trim(Clip.subject)))
         .order_by(desc("count"), func.min(Clip.subject))
@@ -358,8 +389,14 @@ async def get_discover_clips(
         
         # Build query for public clips
         # Only clips whose video is confirmed in storage; anything else
-        # would be a reel that can only fail to play.
-        conditions = [Clip.is_public.is_(True), Clip.media_status == MEDIA_READY]
+        # would be a reel that can only fail to play. Clips that reports took
+        # out, or that this learner reported, are not offered either.
+        conditions = [
+            Clip.is_public.is_(True),
+            Clip.media_status == MEDIA_READY,
+            Clip.moderation_status == MODERATION_ACTIVE,
+            ~_reported_by(current_user.id),
+        ]
         if subject:
             conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
         if level:
@@ -441,6 +478,8 @@ async def get_saved_clips(
             ClipSave.user_id == current_user.id,
             or_(Clip.is_public.is_(True), Clip.user_id == current_user.id),
             Clip.media_status == MEDIA_READY,
+            or_(Clip.moderation_status == MODERATION_ACTIVE, Clip.user_id == current_user.id),
+            ~_reported_by(current_user.id),
         ]
         if subject:
             conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
@@ -527,9 +566,10 @@ async def get_clip(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied"
             )
-        # A shared link to a clip whose video is gone opens nothing playable;
-        # its owner still sees it, with mediaStatus saying why.
-        if clip.media_status != MEDIA_READY and clip.user_id != current_user.id:
+        # A shared link to a clip whose video is gone, or that reports hid,
+        # opens nothing; its owner still sees it, with mediaStatus or
+        # moderationStatus saying why.
+        if not _servable_to(clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -906,6 +946,57 @@ async def record_clip_share(
         logger.error(f"Error recording clip share: {e}")
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/{clip_id}/report", status_code=status.HTTP_201_CREATED)
+async def report_clip(
+    clip_id: int,
+    payload: ClipReportCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Report a clip for review. It leaves the reporter's feed at once."""
+    clip = (await db.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
+    if not clip or not clip.is_public or not _servable_to(clip, current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
+    if clip.user_id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You can't report your own video")
+
+    target = (ContentReport.target_type == ReportTargetType.CLIP, ContentReport.target_id == str(clip.id))
+    already = await db.execute(
+        select(ContentReport.id).where(ContentReport.reporter_id == current_user.id, *target).limit(1)
+    )
+    if already.first() is not None:
+        response.status_code = status.HTTP_200_OK
+        return {"status": "already_reported", "message": "You've already reported this video. We'll review it."}
+
+    try:
+        db.add(ContentReport(
+            reporter_id=current_user.id,
+            target_type=ReportTargetType.CLIP,
+            target_id=str(clip.id),
+            reason=payload.reason,
+            description=(payload.description or "").strip() or None,
+            status=ReportStatus.PENDING,
+        ))
+        await db.flush()
+        reporters = await db.scalar(
+            select(func.count(func.distinct(ContentReport.reporter_id)))
+            .where(*target, ContentReport.status == ReportStatus.PENDING)
+        )
+        if (reporters or 0) >= REPORTS_TO_HIDE_CLIP and clip.moderation_status == MODERATION_ACTIVE:
+            clip.moderation_status = MODERATION_HIDDEN
+            logger.warning("Clip %s hidden pending review after %s reports", clip.id, reporters)
+        await db.commit()
+    except Exception:
+        logger.exception("Could not save a report of clip %s", clip_id)
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Your report could not be sent. Please try again.",
+        )
+    return {"status": "reported", "message": "Thanks. We'll review this video."}
 
 
 # ── Comments ─────────────────────────────────────────────────────────────────

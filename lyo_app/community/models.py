@@ -586,6 +586,7 @@ class ReportTargetType(str, Enum):
     USER = "user"
     GROUP = "group"
     EVENT = "event"
+    CLIP = "clip"
 
 
 class ReportReason(str, Enum):
