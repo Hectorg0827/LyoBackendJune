@@ -178,6 +178,23 @@ async def test_two_uses_of_one_link_at_once_only_one_counts(pg):
     assert sorted(r.status_code for r in results) == [200, 400]
 
 
+@needs_db
+@pytest.mark.asyncio
+async def test_simultaneous_requests_still_send_at_most_three_links(pg):
+    await asyncio.gather(*(pg.ask(pg.emails["owner"]) for _ in range(6)))
+    assert len(pg.sent) == 3, f"{len(pg.sent)} links went out for one account in an hour"
+
+
+@needs_db
+@pytest.mark.asyncio
+async def test_two_different_links_used_at_once_take_turns(pg):
+    await pg.ask(pg.emails["owner"])
+    await pg.ask(pg.emails["owner"])
+    first, second = pg.sent[0].token, pg.sent[1].token
+    results = await asyncio.gather(pg.confirm(first, NEW), pg.confirm(second, "Another-Pass9"))
+    assert sorted(r.status_code for r in results) == [200, 400], [r.text for r in results]
+
+
 def _resend(monkeypatch, handler):
     real = httpx.AsyncClient
     monkeypatch.setattr(password_reset.httpx, "AsyncClient",

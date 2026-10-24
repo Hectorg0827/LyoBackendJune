@@ -104,6 +104,16 @@ async def _find_user(db: AsyncSession, email: str):
     return matches[0] if len(matches) == 1 else None
 
 
+async def _lock_account(db: AsyncSession, user_id: int):
+    """Lock the account's row until commit.
+
+    Every request and confirmation takes it first, so for one account they
+    take turns: the hourly limit cannot be outrun by simultaneous requests,
+    and two links used at once cannot deadlock on each other's rows.
+    """
+    return (await db.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one_or_none()
+
+
 async def send_reset_email(to: str, link: str) -> bool:
     key = os.getenv("RESEND_API_KEY", "").strip()
     if not key:
@@ -153,6 +163,7 @@ async def request_password_reset(
     if user is None or not user.is_active:
         return {"message": SENT}
 
+    await _lock_account(db, user.id)
     now = datetime.now(timezone.utc)
     recent = await db.scalar(
         select(func.count()).select_from(PasswordReset)
@@ -186,16 +197,17 @@ async def confirm_password_reset(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Password must be at most {SecurityConfig.MAX_PASSWORD_BYTES} bytes")
 
+    token_hash = _token_hash(payload.token)
+    owner = await db.scalar(select(PasswordReset.user_id).where(PasswordReset.token_hash == token_hash))
+    user = await _lock_account(db, owner) if owner is not None else None
+    # Read after the lock, so a link a turn before us used or ended is seen as such.
     now = datetime.now(timezone.utc)
-    # Locked, so two uses of one link take turns and only the first counts.
     reset = (await db.execute(
         select(PasswordReset)
-        .where(PasswordReset.token_hash == _token_hash(payload.token),
+        .where(PasswordReset.token_hash == token_hash,
                PasswordReset.used_at.is_(None), PasswordReset.expires_at > now)
-        .with_for_update()
     )).scalar_one_or_none()
-    user = await db.get(User, reset.user_id) if reset else None
-    if user is None or not user.is_active:
+    if reset is None or user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_LINK)
 
     user.hashed_password = get_password_hash(password)
