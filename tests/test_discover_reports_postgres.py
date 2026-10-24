@@ -11,6 +11,7 @@ to run these; they are skipped otherwise.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from types import SimpleNamespace
@@ -107,6 +108,9 @@ async def pg(monkeypatch, tmp_path):
         params = {"ids": user_ids}
         await session.execute(text("DELETE FROM content_reports WHERE reporter_id = ANY(:ids)"), params)
         await session.execute(text("DELETE FROM clip_saves WHERE user_id = ANY(:ids)"), params)
+        await session.execute(text("DELETE FROM clip_likes WHERE user_id = ANY(:ids)"), params)
+        await session.execute(text("DELETE FROM clip_views WHERE user_id = ANY(:ids)"), params)
+        await session.execute(text("DELETE FROM clip_comments WHERE user_id = ANY(:ids)"), params)
         await session.execute(text("DELETE FROM clips WHERE user_id = ANY(:ids)"), params)
         await session.execute(text("DELETE FROM users WHERE id = ANY(:ids)"), params)
         await session.commit()
@@ -153,6 +157,7 @@ async def test_reports_that_cannot_apply_are_refused(pg):
     clip_id = await pg.publish()
     private_id = await pg.publish(isPublic=False)
     assert (await pg.report(0, clip_id)).status_code == 400  # one's own video
+    assert (await pg.report(0, private_id)).status_code == 400  # one's own, even private
     assert (await pg.report(1, private_id)).status_code == 404  # a video they cannot see
     assert (await pg.report(1, 2_000_000_000)).status_code == 404
     assert (await pg.report(1, clip_id, reason="boring")).status_code == 422
@@ -199,3 +204,54 @@ async def test_three_different_reporters_hide_a_video_from_everyone_but_its_owne
     assert own.json()["clip"]["moderationStatus"] == "hidden"
     mine = await pg.client.get("/api/v1/clips", headers=pg.as_user(0))
     assert clip_id in [c["id"] for c in mine.json()["clips"]]
+
+
+@pytest.mark.asyncio
+async def test_reports_arriving_together_still_hide_at_three_and_count_once(pg):
+    clip_id = await pg.publish()
+    assert (await pg.report(1, clip_id)).status_code == 201
+    together = await asyncio.gather(pg.report(2, clip_id), pg.report(3, clip_id))
+    assert [r.status_code for r in together] == [201, 201]
+    assert await _moderation_status(pg, clip_id) == "hidden"
+
+    other_id = await pg.publish(title=f"Tides {pg.tag}")
+    twice = await asyncio.gather(pg.report(1, other_id), pg.report(1, other_id))
+    assert sorted(r.status_code for r in twice) == [200, 201]
+    assert len(await _report_rows(pg, other_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_hidden_video_cannot_be_watched_liked_saved_or_commented_on_except_by_its_owner(pg):
+    clip_id = await pg.publish()
+    comment = await pg.client.post(f"/api/v1/clips/{clip_id}/comments", headers=pg.as_user(4),
+                                   json={"content": "Before it was hidden"})
+    assert comment.status_code == 201, comment.text
+    for reporter in (1, 2, 3):
+        assert (await pg.report(reporter, clip_id)).status_code == 201
+
+    base = f"/api/v1/clips/{clip_id}"
+    for method, path, body in [
+        ("GET", "/comments", None), ("POST", "/comments", {"content": "Still here?"}),
+        ("POST", "/like", None), ("POST", "/save", None), ("POST", "/view", None), ("POST", "/share", None),
+    ]:
+        response = await pg.client.request(method, base + path, headers=pg.as_user(4), json=body)
+        assert response.status_code == 404, f"{method} {path}: {response.status_code}"
+    owner = await pg.client.get(base + "/comments", headers=pg.as_user(0))
+    assert owner.status_code == 200
+    assert [c["content"] for c in owner.json()["items"]] == ["Before it was hidden"]
+
+
+@pytest.mark.asyncio
+async def test_someone_elses_private_video_has_no_readable_comments(pg):
+    private_id = await pg.publish(isPublic=False)
+    response = await pg.client.get(f"/api/v1/clips/{private_id}/comments", headers=pg.as_user(1))
+    assert response.status_code == 404
+
+
+def test_the_community_report_endpoint_sends_videos_to_their_own_endpoint():
+    from pydantic import ValidationError
+    from lyo_app.community.schemas import ReportCreate
+
+    with pytest.raises(ValidationError, match="/api/v1/clips/"):
+        ReportCreate(target_type="clip", target_id="1", reason="spam")
+    assert ReportCreate(target_type="post", target_id="1", reason="spam").target_type.value == "post"

@@ -31,3 +31,23 @@ def test_every_page_is_read_and_unplayable_clips_are_named():
         problems = serving_check.check(api, clips)
     assert [c["id"] for c in clips] == [1, 2, 3]
     assert problems == ["Clip 2: poster HEAD 404", "Clip 3: mediaStatus 'missing'"]
+
+
+def test_a_clip_without_a_poster_still_passes():
+    posterless = {**clip(1), "thumbnailURL": None}
+    with httpx.Client(base_url="https://api.example.test", transport=httpx.MockTransport(handler)) as api:
+        assert serving_check.check(api, [posterless]) == []
+
+
+def test_media_on_another_host_is_named_and_never_requested():
+    requested = []
+
+    def record(request):
+        requested.append(str(request.url))
+        return httpx.Response(200, headers={"content-length": "1234"})
+
+    elsewhere = {**clip(1), "thumbnailURL": "http://169.254.169.254/latest/meta-data"}
+    with httpx.Client(base_url="https://api.example.test", transport=httpx.MockTransport(record)) as api:
+        problems = serving_check.check(api, [elsewhere])
+    assert problems == ["Clip 1: poster is not on api.example.test"]
+    assert requested == ["https://api.example.test/v/1.mp4"]

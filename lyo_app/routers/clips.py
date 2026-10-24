@@ -339,6 +339,11 @@ def _servable_to(clip: Clip, user_id: int) -> bool:
     return clip.media_status == MEDIA_READY and clip.moderation_status == MODERATION_ACTIVE
 
 
+def _open_to(clip: Optional[Clip], user_id: int) -> bool:
+    """Whether a learner may see or act on this clip: a servable public one, or their own."""
+    return clip is not None and (clip.is_public or clip.user_id == user_id) and _servable_to(clip, user_id)
+
+
 def _discover_order(sort: str):
     # Stable ordering keeps offset-based pagination predictable when scores tie.
     if sort == "latest":
@@ -728,7 +733,7 @@ async def toggle_clip_like(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not clip:
+        if not _open_to(clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -785,7 +790,7 @@ async def record_clip_view(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not clip:
+        if not _open_to(clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -824,7 +829,7 @@ async def generate_course_from_clip(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not clip:
+        if not _open_to(clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -880,7 +885,7 @@ async def toggle_clip_save(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not clip:
+        if not _open_to(clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -934,7 +939,7 @@ async def record_clip_share(
     try:
         result = await db.execute(select(Clip).where(Clip.id == clip_id))
         clip = result.scalar_one_or_none()
-        if not clip:
+        if not _open_to(clip, current_user.id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
         clip.share_count = (clip.share_count or 0) + 1
@@ -957,11 +962,13 @@ async def report_clip(
     current_user: User = Depends(get_current_user)
 ):
     """Report a clip for review. It leaves the reporter's feed at once."""
-    clip = (await db.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
-    if not clip or not clip.is_public or not _servable_to(clip, current_user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
-    if clip.user_id == current_user.id:
+    # The row lock makes reports of one clip take turns, so the duplicate
+    # check and the count below always see every report committed before.
+    clip = (await db.execute(select(Clip).where(Clip.id == clip_id).with_for_update())).scalar_one_or_none()
+    if clip and clip.user_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You can't report your own video")
+    if not _open_to(clip, current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
     target = (ContentReport.target_type == ReportTargetType.CLIP, ContentReport.target_id == str(clip.id))
     already = await db.execute(
@@ -1020,6 +1027,9 @@ async def list_clip_comments(
 ):
     """List comments for a clip, newest first."""
     try:
+        clip = (await db.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
+        if not _open_to(clip, current_user.id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
         count_result = await db.execute(
             select(func.count()).select_from(ClipComment).where(ClipComment.clip_id == clip_id)
         )
@@ -1040,6 +1050,8 @@ async def list_clip_comments(
             "page": page,
             "per_page": per_page,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing clip comments: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -1056,7 +1068,7 @@ async def create_clip_comment(
     try:
         result = await db.execute(select(Clip).where(Clip.id == clip_id))
         clip = result.scalar_one_or_none()
-        if not clip:
+        if not _open_to(clip, current_user.id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
         comment = ClipComment(

@@ -2,8 +2,9 @@
 
 Signs in with DISCOVER_CERTIFY_EMAIL and DISCOVER_CERTIFY_PASSWORD, reads every
 page of /api/v1/clips/discover, and checks that each clip is ready and that
-its video and poster answer HEAD with a size. Prints what the feed holds and
-exits 1 when it holds fewer than --minimum clips or any check fails.
+its video, and its poster when it has one, answer HEAD with a size from the
+API's own host. Prints what the feed holds and exits 1 when it holds fewer
+than --minimum clips or any check fails.
 """
 import argparse
 import sys
@@ -31,6 +32,9 @@ def read_feed(api, auth):
 
 
 def check(api, clips):
+    # Only the API's own media is requested: feed URLs come from what learners
+    # publish, and this check runs with the library account's secrets.
+    api_host = api.base_url.host
     problems = []
     for clip in clips:
         title = clip.get("title") or f"clip {clip.get('id')}"
@@ -38,9 +42,14 @@ def check(api, clips):
             problems.append(f"{title}: mediaStatus {clip.get('mediaStatus')!r}")
         for label, url in (("video", clip.get("videoURL")), ("poster", clip.get("thumbnailURL"))):
             if not url:
-                problems.append(f"{title}: no {label} URL")
+                # A learner's clip may have no poster; every clip needs a video.
+                if label == "video":
+                    problems.append(f"{title}: no video URL")
                 continue
-            response = api.head(url)
+            if httpx.URL(url).host != api_host:
+                problems.append(f"{title}: {label} is not on {api_host}")
+                continue
+            response = api.head(url, follow_redirects=False)
             if response.status_code != 200 or not int(response.headers.get("content-length") or 0):
                 problems.append(f"{title}: {label} HEAD {response.status_code}")
     return problems
