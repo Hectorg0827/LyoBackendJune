@@ -1,62 +1,16 @@
 """
 Moderation Router - Content moderation and safety
+
+Reports are filed where the content lives (POST /api/v1/clips/{id}/report,
+/api/v1/community/reports), which store them for review. A report endpoint
+here answered "submitted" without saving anything, so it was removed.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-from typing import Optional, List
-from enum import Enum
-from datetime import datetime
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
 
 router = APIRouter(prefix="/moderation", tags=["Moderation"])
-
-
-class ReportReason(str, Enum):
-    """Reasons for reporting content."""
-    SPAM = "spam"
-    HARASSMENT = "harassment"
-    INAPPROPRIATE = "inappropriate"
-    MISINFORMATION = "misinformation"
-    COPYRIGHT = "copyright"
-    OTHER = "other"
-
-
-class ReportCreate(BaseModel):
-    """Create a content report."""
-    content_type: str  # post, comment, user, message
-    content_id: str
-    reason: ReportReason
-    description: Optional[str] = None
-
-
-class ReportResponse(BaseModel):
-    """Report response model."""
-    report_id: str
-    status: str
-    created_at: datetime
-
-
-@router.post("/report")
-async def report_content(
-    report: ReportCreate,
-    current_user: User = Depends(get_current_user)
-):
-    """Report content for moderation review."""
-    return ReportResponse(
-        report_id="report_placeholder",
-        status="submitted",
-        created_at=datetime.utcnow()
-    )
-
-
-@router.get("/reports/me")
-async def get_my_reports(
-    current_user: User = Depends(get_current_user)
-):
-    """Get reports submitted by current user."""
-    return {"reports": [], "total": 0}
 
 
 @router.post("/block/{user_id}")

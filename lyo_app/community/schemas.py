@@ -1098,6 +1098,15 @@ class ReportCreate(BaseModel):
     reason: ReportReason
     description: Optional[str] = Field(None, max_length=1000)
 
+    @field_validator("target_type")
+    @classmethod
+    def _not_a_clip(cls, value: ReportTargetType) -> ReportTargetType:
+        # Clip reports count toward hiding the clip, which only the clips
+        # endpoint does.
+        if value == ReportTargetType.CLIP:
+            raise ValueError("Report videos with POST /api/v1/clips/{id}/report")
+        return value
+
 
 class ReportRead(BaseModel):
     """Schema for report response."""

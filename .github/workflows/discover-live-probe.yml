@@ -3,7 +3,9 @@ name: Discover live probe
 # Read-only checks against production, from a runner that can reach it:
 # which commit api.lyoai.app and lyoai.app are serving, and whether the media
 # route answers HEAD (405 before the Discover media fix, 404 for a missing
-# file after it). Sends no credentials and changes nothing.
+# file after it), and whether each web address serves Discover switched on.
+# Changes nothing. The last step signs in as the library account, when its
+# secrets are set, to read the Discover feed a user would get.
 on:
   push:
     branches-ignore: [main]
@@ -12,6 +14,7 @@ on:
       # Publishing the library needs the Discover backend live, so every
       # change to its manifest re-reads what production serves.
       - catalog/catalog.json
+      - catalog/serving_check.py
   workflow_dispatch:
 
 permissions:
@@ -21,7 +24,7 @@ jobs:
   probe:
     name: Probe production
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Backend health
         run: curl -sS -m 30 https://api.lyoai.app/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
@@ -32,6 +35,19 @@ jobs:
         run: |
           for host in lyoai.app www.lyoai.app; do
             echo "$host: $(curl -sS -m 30 "https://$host/api/health")" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Discover switch on both hostnames
+        # /discover is prerendered: switched on, it holds the feed's loading
+        # placeholder; switched off, the "being updated" notice.
+        run: |
+          for host in www.lyoai.app lyoai.app; do
+            page=$(curl -sS -m 30 -L "https://$host/discover" || true)
+            if grep -q 'Loading Discover' <<<"$page"; then state=on
+            elif grep -q 'Discover is being updated' <<<"$page"; then state=off
+            else state="unknown (neither marker found)"
+            fi
+            echo "$host/discover -> $state" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Where each hostname points
@@ -52,9 +68,40 @@ jobs:
             echo "$origin -> ${allowed:-not allowed}" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: A video over 10 MB reaches the upload route
+        # 413 means a blanket size cap refused it before the route; 401 means
+        # it got through to the route, which then asks for a sign-in.
+        run: |
+          head -c $((11 * 1024 * 1024)) /dev/zero > "$RUNNER_TEMP/eleven-mb.mp4"
+          code=$(curl -sS -m 120 -o /dev/null -w '%{http_code}' \
+            -F "folder=clips" -F "file=@$RUNNER_TEMP/eleven-mb.mp4;type=video/mp4" \
+            https://api.lyoai.app/api/v1/media/upload)
+          echo "11 MB upload without a sign-in -> $code (413 = refused for size; 401 = reached the route)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
           head=$(curl -sS -m 30 -I -o /dev/null -w '%{http_code}' "$missing")
           get=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' "$missing")
           echo "HEAD missing clip -> $head; GET missing clip -> $get" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: The Discover feed a signed-in user gets
+        env:
+          DISCOVER_CERTIFY_EMAIL: ${{ secrets.DISCOVER_LIBRARY_EMAIL }}
+          DISCOVER_CERTIFY_PASSWORD: ${{ secrets.DISCOVER_LIBRARY_PASSWORD }}
+        run: |
+          if [ -z "$DISCOVER_CERTIFY_EMAIL" ]; then
+            echo "No library account secrets; feed not read." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          pip install -q 'httpx==0.25.2'
+          python catalog/serving_check.py | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"

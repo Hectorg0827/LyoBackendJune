@@ -16,6 +16,11 @@ MEDIA_UNVERIFIED = "unverified"
 MEDIA_MISSING = "missing"
 MEDIA_EXTERNAL = "external"
 
+# Learner reports can take a clip out of Discover: "hidden" clips wait for a
+# moderator and only their owner still sees them.
+MODERATION_ACTIVE = "active"
+MODERATION_HIDDEN = "hidden"
+
 from lyo_app.core.database import Base
 
 
@@ -63,6 +68,10 @@ class Clip(Base):
                           server_default=MEDIA_UNVERIFIED, index=True)
     media_bytes = Column(BigInteger, nullable=True)
     media_checked_at = Column(DateTime, nullable=True)
+
+    # Whether reports have taken the clip out of Discover (see MODERATION_*).
+    moderation_status = Column(String(16), nullable=False, default=MODERATION_ACTIVE,
+                               server_default=MODERATION_ACTIVE, index=True)
 
     # Provenance for library videos: a Creative Commons licence is only met
     # when the credit travels with the video, so clients show these fields.
@@ -121,6 +130,7 @@ class Clip(Base):
             "authorAvatarURL": author_avatar,
             "isPublic": self.is_public,
             "mediaStatus": self.media_status or MEDIA_UNVERIFIED,
+            "moderationStatus": self.moderation_status or MODERATION_ACTIVE,
             "attribution": self.attribution_dict(),
             "createdAt": self.created_at.isoformat() if self.created_at else None
         }
