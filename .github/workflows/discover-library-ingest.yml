@@ -35,7 +35,7 @@ jobs:
     name: Publish approved library videos
     if: github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     env:
       API: https://api.lyoai.app
     steps:
