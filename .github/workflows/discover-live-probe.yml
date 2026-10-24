@@ -78,6 +78,15 @@ jobs:
             https://api.lyoai.app/api/v1/media/upload)
           echo "11 MB upload without a sign-in -> $code (413 = refused for size; 401 = reached the route)" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Videos can be reported
+        # 401 means the report route exists and asks for a sign-in; 404 means
+        # the API predates it.
+        run: |
+          code=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' -d '{"reason":"other"}' \
+            https://api.lyoai.app/api/v1/clips/1/report)
+          echo "Report without a sign-in -> $code (401 = route live; 404 = not deployed)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
