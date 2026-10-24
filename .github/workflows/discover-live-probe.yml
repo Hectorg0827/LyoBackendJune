@@ -24,7 +24,7 @@ jobs:
   probe:
     name: Probe production
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
       - name: Backend health
         run: curl -sS -m 30 https://api.lyoai.app/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
@@ -90,6 +90,26 @@ jobs:
             -H 'Content-Type: application/json' -d '{"reason":"other"}' \
             https://api.lyoai.app/api/v1/clips/1/report)
           echo "Report without a sign-in -> $code (401 = route live; 404 = not deployed)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Moderation is live
+        # The API's moderator routes ask for a sign-in (401; 404 = not
+        # deployed), and each web address serves the /moderation page.
+        run: |
+          for path in moderation/me moderation/clips; do
+            code=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' "https://api.lyoai.app/api/v1/$path")
+            echo "GET /api/v1/$path without a sign-in -> $code (401 = route live; 404 = not deployed)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          # A web deploy may still be rolling out, so wait up to 20 minutes.
+          for host in www.lyoai.app lyoai.app; do
+            shipped=no
+            for attempt in $(seq 40); do
+              page=$(curl -sS -m 30 -L "https://$host/moderation" || true)
+              chunk=$(grep -oE '/_next/static/chunks/app/[^"]*moderation/page-[^"]*\.js' <<<"$page" | head -1)
+              if [ -n "$chunk" ] && curl -sS -m 30 "https://$host$chunk" | grep -q 'This page is for moderators'; then shipped=yes; break; fi
+              sleep 30
+            done
+            echo "$host/moderation page -> $shipped" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Media route answers HEAD
         run: |
