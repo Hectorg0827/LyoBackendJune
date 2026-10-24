@@ -3,8 +3,9 @@ name: Discover live probe
 # Read-only checks against production, from a runner that can reach it:
 # which commit api.lyoai.app and lyoai.app are serving, and whether the media
 # route answers HEAD (405 before the Discover media fix, 404 for a missing
-# file after it). Changes nothing. The last step signs in as the library
-# account, when its secrets are set, to read the Discover feed a user would get.
+# file after it), and whether each web address serves Discover switched on.
+# Changes nothing. The last step signs in as the library account, when its
+# secrets are set, to read the Discover feed a user would get.
 on:
   push:
     branches-ignore: [main]
