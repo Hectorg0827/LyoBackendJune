@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from lyo_app.auth.jwt_auth import get_current_user
 from lyo_app.auth.models import User
-from lyo_app.community.models import ContentReport, ReportReason, ReportStatus, ReportTargetType
+from lyo_app.community.models import ContentReport, ReportReason, ReportStatus, ReportTargetType, UserBlock
 from lyo_app.core.config import settings
 from lyo_app.core.database import get_async_session
 from lyo_app.models.clips import (
@@ -332,6 +332,27 @@ def _reported_by(user_id: int):
     )
 
 
+def _blocked_with(user_id: int, other_user_id):
+    """True where this learner blocked the other user, or was blocked by them.
+
+    A block works both ways: neither sees the other's clips or comments, nor
+    can act on them. ``other_user_id`` is a column, such as Clip.user_id.
+    """
+    return exists().where(or_(
+        (UserBlock.blocker_id == user_id) & (UserBlock.blocked_id == other_user_id),
+        (UserBlock.blocker_id == other_user_id) & (UserBlock.blocked_id == user_id),
+    ))
+
+
+async def _visible_to(db: AsyncSession, clip: Optional[Clip], user_id: int) -> bool:
+    """_open_to, and no block between the learner and the clip's owner."""
+    if not _open_to(clip, user_id):
+        return False
+    if clip.user_id == user_id:
+        return True
+    return not await db.scalar(select(_blocked_with(user_id, clip.user_id)))
+
+
 def _servable_to(clip: Clip, user_id: int) -> bool:
     """Whether a learner may open this clip: its owner always may."""
     if clip.user_id == user_id:
@@ -383,6 +404,7 @@ async def get_discover_filters(
         select(func.min(Clip.subject), func.count(Clip.id).label("count"))
         .where(Clip.is_public.is_(True), Clip.media_status == MEDIA_READY,
                Clip.moderation_status == MODERATION_ACTIVE, ~_reported_by(current_user.id),
+               ~_blocked_with(current_user.id, Clip.user_id),
                Clip.subject.is_not(None), func.trim(Clip.subject) != "")
         .group_by(func.lower(func.trim(Clip.subject)))
         .order_by(desc("count"), func.min(Clip.subject))
@@ -415,12 +437,14 @@ async def get_discover_clips(
         # Build query for public clips
         # Only clips whose video is confirmed in storage; anything else
         # would be a reel that can only fail to play. Clips that reports took
-        # out, or that this learner reported, are not offered either.
+        # out, that this learner reported, or whose owner is blocked either
+        # way, are not offered either.
         conditions = [
             Clip.is_public.is_(True),
             Clip.media_status == MEDIA_READY,
             Clip.moderation_status == MODERATION_ACTIVE,
             ~_reported_by(current_user.id),
+            ~_blocked_with(current_user.id, Clip.user_id),
         ]
         if subject:
             conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
@@ -505,6 +529,7 @@ async def get_saved_clips(
             Clip.media_status == MEDIA_READY,
             or_(Clip.moderation_status == MODERATION_ACTIVE, Clip.user_id == current_user.id),
             ~_reported_by(current_user.id),
+            ~_blocked_with(current_user.id, Clip.user_id),
         ]
         if subject:
             conditions.append(func.lower(func.trim(Clip.subject)) == subject.strip().lower())
@@ -591,10 +616,10 @@ async def get_clip(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied"
             )
-        # A shared link to a clip whose video is gone, or that reports hid,
-        # opens nothing; its owner still sees it, with mediaStatus or
-        # moderationStatus saying why.
-        if not _servable_to(clip, current_user.id):
+        # A shared link to a clip whose video is gone, that reports hid, or
+        # whose owner is blocked either way, opens nothing; its owner still
+        # sees it, with mediaStatus or moderationStatus saying why.
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -765,7 +790,7 @@ async def toggle_clip_like(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -822,7 +847,7 @@ async def record_clip_view(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -861,7 +886,7 @@ async def generate_course_from_clip(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -917,7 +942,7 @@ async def toggle_clip_save(
         clip_result = await db.execute(clip_query)
         clip = clip_result.scalar_one_or_none()
         
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Clip not found"
@@ -971,7 +996,7 @@ async def record_clip_share(
     try:
         result = await db.execute(select(Clip).where(Clip.id == clip_id))
         clip = result.scalar_one_or_none()
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
         clip.share_count = (clip.share_count or 0) + 1
@@ -999,7 +1024,7 @@ async def report_clip(
     clip = (await db.execute(select(Clip).where(Clip.id == clip_id).with_for_update())).scalar_one_or_none()
     if clip and clip.user_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You can't report your own video")
-    if not _open_to(clip, current_user.id):
+    if not await _visible_to(db, clip, current_user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
     target = (ContentReport.target_type == ReportTargetType.CLIP, ContentReport.target_id == str(clip.id))
@@ -1060,16 +1085,18 @@ async def list_clip_comments(
     """List comments for a clip, newest first."""
     try:
         clip = (await db.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
+        # Comments by someone blocked either way are left out.
+        shown = (ClipComment.clip_id == clip_id, ~_blocked_with(current_user.id, ClipComment.user_id))
         count_result = await db.execute(
-            select(func.count()).select_from(ClipComment).where(ClipComment.clip_id == clip_id)
+            select(func.count()).select_from(ClipComment).where(*shown)
         )
         total = count_result.scalar() or 0
 
         result = await db.execute(
             select(ClipComment)
-            .where(ClipComment.clip_id == clip_id)
+            .where(*shown)
             .order_by(desc(ClipComment.created_at))
             .offset((page - 1) * per_page)
             .limit(per_page)
@@ -1100,7 +1127,7 @@ async def create_clip_comment(
     try:
         result = await db.execute(select(Clip).where(Clip.id == clip_id))
         clip = result.scalar_one_or_none()
-        if not _open_to(clip, current_user.id):
+        if not await _visible_to(db, clip, current_user.id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
         comment = ClipComment(

@@ -2512,31 +2512,42 @@ class CommunityService:
         blocker_id: int,
         block_data: "BlockUserCreate"
     ) -> Dict[str, Any]:
-        """Block a user."""
+        """Block a user. Blocking someone already blocked returns that block."""
         from lyo_app.community.models import UserBlock
-        
-        # Check if already blocked
-        existing = await db.execute(
-            select(UserBlock).where(
-                UserBlock.blocker_id == blocker_id,
-                UserBlock.blocked_id == block_data.user_id
+
+        if await db.get(User, block_data.user_id) is None:
+            raise LookupError("User not found")
+
+        async def existing():
+            result = await db.execute(
+                select(UserBlock).where(
+                    UserBlock.blocker_id == blocker_id,
+                    UserBlock.blocked_id == block_data.user_id
+                )
             )
-        )
-        if existing.scalar_one_or_none():
-            raise ValueError("User already blocked")
-        
-        db_block = UserBlock(
-            blocker_id=blocker_id,
-            blocked_id=block_data.user_id,
-            reason=block_data.reason
-        )
-        
-        db.add(db_block)
-        await db.commit()
-        await db.refresh(db_block)
-        
+            return result.scalar_one_or_none()
+
+        db_block = await existing()
+        if db_block is None:
+            db_block = UserBlock(
+                blocker_id=blocker_id,
+                blocked_id=block_data.user_id,
+                reason=block_data.reason
+            )
+            db.add(db_block)
+            try:
+                await db.commit()
+            except IntegrityError:
+                # A simultaneous request blocked them first.
+                await db.rollback()
+                db_block = await existing()
+                if db_block is None:
+                    raise
+            else:
+                await db.refresh(db_block)
+
         user = await db.get(User, block_data.user_id)
-        
+
         return {
             "id": db_block.id,
             "user_id": block_data.user_id,
