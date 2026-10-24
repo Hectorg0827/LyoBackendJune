@@ -36,6 +36,19 @@ jobs:
             echo "$host: $(curl -sS -m 30 "https://$host/api/health")" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Discover switch on both hostnames
+        # /discover is prerendered: switched on, it holds the feed's loading
+        # placeholder; switched off, the "being updated" notice.
+        run: |
+          for host in www.lyoai.app lyoai.app; do
+            page=$(curl -sS -m 30 -L "https://$host/discover" || true)
+            if grep -q 'Loading Discover' <<<"$page"; then state=on
+            elif grep -q 'Discover is being updated' <<<"$page"; then state=off
+            else state="unknown (neither marker found)"
+            fi
+            echo "$host/discover -> $state" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Where each hostname points
         run: |
           for host in lyoai.app www.lyoai.app api.lyoai.app; do
