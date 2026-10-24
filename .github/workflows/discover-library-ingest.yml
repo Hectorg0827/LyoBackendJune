@@ -44,6 +44,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The branch as it is now, not the commit that triggered the run:
+          # a run queued behind another must see the ledger that one saved.
+          ref: ${{ github.ref_name }}
 
       - name: Check the library account and the API are ready
         id: ready

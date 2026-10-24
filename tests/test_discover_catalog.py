@@ -9,6 +9,7 @@ import shutil
 from fractions import Fraction
 import subprocess
 
+import httpx
 import pytest
 
 from scripts import discover_catalog as catalog
@@ -257,3 +258,36 @@ def test_the_ledger_is_replaced_whole(tmp_path):
     catalog.write_ledger(ledger, {"nasa-X1": {"clip_id": "7"}})
     assert json.loads(ledger.read_text()) == {"nasa-X1": {"clip_id": "7"}}
     assert [p.name for p in tmp_path.iterdir()] == ["ledger.json"]
+
+
+def test_a_rate_limited_request_waits_and_is_asked_again():
+    answers = iter([429, 429, 200])
+    waits = []
+    transport = catalog.PatientTransport(
+        httpx.MockTransport(lambda request: httpx.Response(next(answers))), sleep=waits.append)
+    with httpx.Client(transport=transport, base_url="https://api.example.test") as client:
+        assert client.post("/api/v1/media/upload", files={"file": ("a.mp4", b"x", "video/mp4")}).status_code == 200
+    assert waits == [15, 30]
+
+
+def test_the_limiter_is_not_waited_on_forever():
+    waits = []
+    transport = catalog.PatientTransport(
+        httpx.MockTransport(lambda request: httpx.Response(429)), waits=(1, 2), sleep=waits.append)
+    with httpx.Client(transport=transport, base_url="https://api.example.test") as client:
+        assert client.get("/health").status_code == 429
+    assert waits == [1, 2]
+
+
+@needs_ffmpeg
+def test_a_clip_over_the_upload_limit_is_encoded_again_to_fit(tmp_path):
+    source = tmp_path / "source.webm"
+    make_source(source, seconds=8)
+    out, poster = tmp_path / "clip.mp4", tmp_path / "poster.jpg"
+    catalog.encode(source, out, poster, start=0, duration=6, max_bytes=None)
+    unconstrained = out.stat().st_size
+    limit = int(unconstrained * 0.6)
+    catalog.encode(source, out, poster, start=0, duration=6, max_bytes=limit)
+    assert out.stat().st_size <= limit
+    assert catalog.index_at_front(out)
+
