@@ -36,6 +36,12 @@ class SecurityConfig:
     # Request size limits
     MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB
     MAX_JSON_SIZE = 1 * 1024 * 1024      # 1MB
+    # The media upload streams to disk and enforces its own per-type limits
+    # (lyo_app/routers/user_media.py: 200 MB video, 15 MB image). The blanket
+    # 10 MB cap above refused every video over it first, and a one-minute
+    # phone video is larger. Allow the largest video plus its multipart envelope.
+    MEDIA_UPLOAD_PATH = "/api/v1/media/upload"
+    MAX_MEDIA_UPLOAD_REQUEST_SIZE = 201 * 1024 * 1024
     
     # Security headers
     SECURITY_HEADERS = {
@@ -131,14 +137,17 @@ async def request_size_middleware(request: Request, call_next):
     """Limit request size."""
     content_length = request.headers.get("content-length")
     if content_length:
+        limit = (SecurityConfig.MAX_MEDIA_UPLOAD_REQUEST_SIZE
+                 if request.url.path == SecurityConfig.MEDIA_UPLOAD_PATH
+                 else SecurityConfig.MAX_REQUEST_SIZE)
         try:
             size = int(content_length)
-            if size > SecurityConfig.MAX_REQUEST_SIZE:
+            if size > limit:
                 return JSONResponse(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     content={
                         "error": "Request too large",
-                        "detail": f"Request size {size} exceeds limit {SecurityConfig.MAX_REQUEST_SIZE}"
+                        "detail": f"Request size {size} exceeds limit {limit}"
                     }
                 )
         except ValueError:
