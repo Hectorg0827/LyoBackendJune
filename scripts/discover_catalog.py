@@ -24,6 +24,10 @@ Licences: public domain, CC0, CC BY and CC BY-SA only. NonCommercial and
 NoDerivatives licences are refused (Lyo is a commercial product, and trimming
 and re-encoding is adapting). Material NASA did not make itself must be
 cleared by the reviewer; the search flags descriptions that mention it.
+NASA drafts, and public domain Commons drafts, are published silent
+(clip.audio "mute"): the footage is public domain, but the library music in
+many government videos is licensed to the agency alone. A reviewer who hears
+only narration or natural sound sets "keep".
 
   python scripts/discover_catalog.py search nasa "Perseverance landing" >> drafts.jsonl
   python scripts/discover_catalog.py search commons "mitosis" >> drafts.jsonl
@@ -43,6 +47,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -56,10 +61,19 @@ SOURCE_HOSTS = {"images-assets.nasa.gov", "images-api.nasa.gov", "upload.wikimed
 STEM_AREAS = ["science", "math", "engineering", "technology", "coding", "astronomy", "biology",
               "chemistry", "physics", "robotics", "environment"]
 LEVELS = {"beginner", "intermediate", "advanced"}
-MAX_DOWNLOAD_BYTES = 600 * 1024 * 1024
+# A source only has to fit on the runner's disk; a two-minute fractal zoom,
+# all detail, is over 600 MB.
+MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MIN_SECONDS, MAX_SECONDS = 5, 90
+# The API refuses any request over 10 MB (lyo_app/auth/security_middleware.py)
+# before the upload route's own limits apply; leave room for the multipart
+# envelope around the file.
+MAX_UPLOAD_BYTES = int(9.5 * 1024 * 1024)
+AUDIO_KBPS = 128
 NASA_GUIDELINES = "https://www.nasa.gov/nasa-brand-center/images-and-media/"
-THIRD_PARTY_HINTS = re.compile(r"copyright|©|courtesy of|used with permission|all rights reserved", re.I)
+THIRD_PARTY_HINTS = re.compile(r"copyright|©|courtesy of|used with permission|all rights reserved"
+                               r"|music (provided|licensed|courtesy)|production music|universal music", re.I)
+AUDIO_CHOICES = {"keep", "mute"}
 
 
 # ── Licences ────────────────────────────────────────────────────────────────
@@ -111,8 +125,11 @@ def nasa_entries(search_body, collections):
         if not preferred:
             continue
         center = data.get("center") or ""
-        credit = data.get("secondary_creator") or (f"NASA/{center}" if center else "NASA")
+        # secondary_creator names the video's producer, or sometimes its
+        # music licensor; neither is the credit NASA asks for.
+        credit = "NASA/JPL-Caltech" if center == "JPL" else f"NASA/{center}" if center else "NASA"
         description = _strip_html(data.get("description") or data.get("description_508"))
+        provenance = " ".join([description or "", data.get("secondary_creator") or "", data.get("photographer") or ""])
         entries.append(draft(
             f"nasa-{nasa_id}", data.get("title") or nasa_id, description,
             source={"name": "NASA Image and Video Library",
@@ -120,7 +137,11 @@ def nasa_entries(search_body, collections):
                     "mediaUrl": preferred, "license": "Public domain", "licenseUrl": NASA_GUIDELINES,
                     "credit": credit},
             tags=[k for k in (data.get("keywords") or [])][:8],
-            rights_check=bool(THIRD_PARTY_HINTS.search(description or "")),
+            rights_check=bool(THIRD_PARTY_HINTS.search(provenance)),
+            # NASA's footage is public domain; the library music many of its
+            # videos carry is licensed to NASA, not to us. A reviewer who hears
+            # only narration or natural sound can set "keep".
+            audio="mute",
         ))
     return entries
 
@@ -146,15 +167,19 @@ def commons_entries(body):
                     "credit": value("Artist") or value("Credit")},
             tags=[],
             rights_check=licence_family(licence) is None,
+            # A CC licence covers the whole file, soundtrack included. Public
+            # domain uploads are mostly US government videos, whose music is
+            # often licensed like NASA's.
+            audio="mute" if licence_family(licence) == "public-domain" else "keep",
         ))
     return entries
 
 
-def draft(entry_id, title, description, source, tags, rights_check):
+def draft(entry_id, title, description, source, tags, rights_check, audio="keep"):
     return {
         "id": entry_id, "title": (title or "")[:200], "description": description or "",
         "subject": None, "topic": None, "level": "beginner", "tags": tags, "keyPoints": [],
-        "source": source, "clip": {"start": 0, "duration": None},
+        "source": source, "clip": {"start": 0, "duration": None, "audio": audio},
         "review": {"approved": False, "reviewer": None, "factChecked": False, "ageAppropriate": False,
                    "rightsCleared": not rights_check, "notes": ""},
     }
@@ -210,6 +235,8 @@ def entry_problems(entry):
             problems.append(f"review.{flag} is not confirmed")
     if not (review.get("reviewer") or "").strip():
         problems.append("review.reviewer is not named")
+    if (entry.get("clip") or {}).get("audio", "keep") not in AUDIO_CHOICES:
+        problems.append("clip.audio must be keep or mute")
     return problems
 
 
@@ -275,9 +302,16 @@ def index_at_front(path):
                 handle.seek(size - 8, 1)
 
 
-def encode(source, out_video, out_poster, start, duration):
-    """Phone-friendly H.264 High/AAC MP4, index first, at most 1280px on the long edge."""
+def encode(source, out_video, out_poster, start, duration, mute=False, max_bytes=MAX_UPLOAD_BYTES):
+    """Phone-friendly H.264 High/AAC MP4, index first, at most 1280px on the long edge.
+
+    mute replaces the source's sound with silence, for footage whose soundtrack
+    is not ours to republish. A clip that comes out larger than max_bytes is
+    encoded again at the average bitrate that fits, so it can be uploaded.
+    """
     info = probe(source)
+    if mute:
+        info["audio"] = None
     if not info["video"]:
         raise ValueError("no video stream")
     length = max(0.0, info["duration"] - start)
@@ -287,19 +321,31 @@ def encode(source, out_video, out_poster, start, duration):
     width, height = int(info["video"].get("width") or 0), int(info["video"].get("height") or 0)
     if min(width, height) < 360:
         raise ValueError(f"resolution {width}x{height} is below 360p")
-    command = ["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{start}", "-t", f"{take}", "-i", str(source)]
-    if not info["audio"]:
-        # A silent track keeps every clip the same shape for players.
-        command += ["-f", "lavfi", "-t", f"{take}", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
-    command += [
-        "-map", "0:v:0", "-map", "0:a:0" if info["audio"] else "1:a:0",
-        "-vf", "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=fps='min(30,source_fps)'",
-        "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-profile:v", "high", "-level:v", "4.0",
-        "-pix_fmt", "yuv420p", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
-        "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
-        "-movflags", "+faststart", "-shortest", str(out_video),
-    ]
-    subprocess.run(command, check=True)
+    def run(rate):
+        command = ["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{start}", "-t", f"{take}", "-i", str(source)]
+        if not info["audio"]:
+            # A silent track keeps every clip the same shape for players.
+            command += ["-f", "lavfi", "-t", f"{take}", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+        command += [
+            "-map", "0:v:0", "-map", "0:a:0" if info["audio"] else "1:a:0",
+            "-vf", "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=fps='min(30,source_fps)'",
+            "-c:v", "libx264", "-preset", "slow", *rate, "-profile:v", "high", "-level:v", "4.0",
+            "-pix_fmt", "yuv420p", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+            "-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "2", "-ar", "44100",
+            "-movflags", "+faststart", "-shortest", str(out_video),
+        ]
+        subprocess.run(command, check=True)
+
+    run(["-crf", "23"])
+    if max_bytes and out_video.stat().st_size > max_bytes:
+        # 10% under the average that fits, and a cap on peaks, so the file lands
+        # inside the limit instead of near it.
+        video_kbps = int(max_bytes * 8 / 1000 / take * 0.9) - AUDIO_KBPS
+        if video_kbps < 300:
+            raise ValueError(f"{take:.0f}s cannot fit in {max_bytes // 1024} KB at a watchable bitrate")
+        run(["-b:v", f"{video_kbps}k", "-maxrate", f"{int(video_kbps * 1.2)}k", "-bufsize", f"{video_kbps * 2}k"])
+        if out_video.stat().st_size > max_bytes:
+            raise ValueError(f"encoded clip is {out_video.stat().st_size // 1024} KB, over the {max_bytes // 1024} KB upload limit")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{min(1.0, take / 3):.2f}", "-i", str(out_video),
                     "-frames:v", "1", "-q:v", "3", str(out_poster)], check=True)
     result = probe(out_video)
@@ -311,6 +357,31 @@ def encode(source, out_video, out_poster, start, duration):
 
 
 # ── Ingesting ───────────────────────────────────────────────────────────────
+
+class PatientTransport(httpx.BaseTransport):
+    """Waits and asks again when the API's rate limiter answers 429.
+
+    The API allows 120 requests a minute from one address, and checking one
+    clip (GET, HEAD, three ranges, four 416s, for video and poster) is a burst
+    of two dozen. A 429 comes from the limiter before the request is handled,
+    so asking again cannot publish anything twice.
+    """
+
+    def __init__(self, inner, waits=(15, 30, 60), sleep=time.sleep):
+        self.inner, self.waits, self.sleep = inner, waits, sleep
+
+    def handle_request(self, request):
+        for wait in self.waits:
+            response = self.inner.handle_request(request)
+            if response.status_code != 429:
+                return response
+            response.close()
+            self.sleep(wait)
+        return self.inner.handle_request(request)
+
+    def close(self):
+        self.inner.close()
+
 
 def download(client, url, destination):
     if urlsplit(url).hostname not in SOURCE_HOSTS:
@@ -334,8 +405,9 @@ def ingest_entry(api, auth, sources, entry, report, workdir):
     source = entry["source"]
     raw, video, poster = workdir / "source", workdir / "clip.mp4", workdir / "poster.jpg"
     download(sources, source["mediaUrl"], raw)
-    duration = encode(raw, video, poster, float((entry.get("clip") or {}).get("start") or 0),
-                      (entry.get("clip") or {}).get("duration"))
+    window = entry.get("clip") or {}
+    duration = encode(raw, video, poster, float(window.get("start") or 0), window.get("duration"),
+                      mute=window.get("audio") == "mute")
     uploaded = {}
     for label, folder, path, content_type in [("video", "clips", video, "video/mp4"),
                                               ("poster", "clip_thumbnails", poster, "image/jpeg")]:
@@ -390,7 +462,7 @@ def ingest(args):
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
     report = Report("catalog_ingest", args.api)
     report.data["manifest_gate"] = gate
-    with httpx.Client(base_url=args.api, timeout=300) as api, \
+    with httpx.Client(base_url=args.api, timeout=300, transport=PatientTransport(httpx.HTTPTransport())) as api, \
             httpx.Client(timeout=600, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as sources:
         auth = {"Authorization": f"Bearer {authenticate(api)}"}
         for entry in approved:

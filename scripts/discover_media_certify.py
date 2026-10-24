@@ -168,11 +168,24 @@ def authenticate(client):
     token = os.getenv("DISCOVER_CERTIFY_TOKEN")
     if token:
         return token
-    email, password = os.getenv("DISCOVER_CERTIFY_EMAIL"), os.getenv("DISCOVER_CERTIFY_PASSWORD")
+    # A secret pasted with its line break is refused as a wrong password, and
+    # neither an email address nor a typed password can end in one.
+    email = (os.getenv("DISCOVER_CERTIFY_EMAIL") or "").strip()
+    password = (os.getenv("DISCOVER_CERTIFY_PASSWORD") or "").strip("\r\n")
     if not (email and password):
         raise SystemExit("Set DISCOVER_CERTIFY_TOKEN, or DISCOVER_CERTIFY_EMAIL and DISCOVER_CERTIFY_PASSWORD")
     response = client.post("/auth/login", json={"email": email, "password": password})
-    response.raise_for_status()
+    if response.status_code != 200:
+        # Say why, so a wrong password, a disabled account and a rate limit
+        # are told apart; never echo the credentials.
+        try:
+            body = response.json()
+            reason = body.get("detail") or (body.get("error") or {}).get("message") or body
+        except ValueError:
+            reason = response.text[:200]
+        raise SystemExit(f"Sign-in at {client.base_url} was refused ({response.status_code}): {reason}. "
+                         "The account must sign in on the website with this email and password; "
+                         "an account made with Google or Apple sign-in has no password there.")
     return response.json()["access_token"]
 
 

@@ -1,0 +1,82 @@
+name: Discover library search
+
+# Searches NASA's Image and Video Library and Wikimedia Commons for every line
+# of catalog/queries.tsv, probes each video at its source, and commits the
+# unapproved drafts and a review table (catalog/CANDIDATES.md) back to the
+# branch. It reads public APIs only: nothing is downloaded whole, uploaded or
+# published, and nothing it writes is approved.
+#
+# It never runs on main, so a bot never commits there.
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - catalog/queries.tsv
+      - catalog/shortlist.py
+      - scripts/discover_catalog.py
+      - .github/workflows/discover-catalog-search.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: discover-catalog-search-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  search:
+    name: Search sources and list candidates
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install httpx and ffprobe
+        run: |
+          pip install 'httpx==0.25.2'
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Search every query
+        run: |
+          set -o pipefail
+          : > "$RUNNER_TEMP/raw.jsonl"
+          grep -v '^#' catalog/queries.tsv | while IFS=$'\t' read -r source area query; do
+            [ -n "$query" ] || continue
+            if ! python scripts/discover_catalog.py search "$source" "$query" --limit 8 \
+                | jq -c --arg area "$area" --arg query "$query" '. + {area: $area, query: $query}' \
+                >> "$RUNNER_TEMP/raw.jsonl"; then
+              echo "::warning::search $source \"$query\" failed"
+            fi
+          done
+          wc -l "$RUNNER_TEMP/raw.jsonl"
+
+      - name: Probe videos and write the review list
+        run: python catalog/shortlist.py "$RUNNER_TEMP/raw.jsonl" catalog
+
+      - name: Keep the review list as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: discover-candidates
+          path: |
+            catalog/drafts.jsonl
+            catalog/CANDIDATES.md
+
+      - name: Commit the review list to this branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog/drafts.jsonl catalog/CANDIDATES.md
+          if git diff --cached --quiet; then
+            echo "No change in candidates."
+            exit 0
+          fi
+          git commit -m "Discover library: candidates for review from catalog/queries.tsv"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

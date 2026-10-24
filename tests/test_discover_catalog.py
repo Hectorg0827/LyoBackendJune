@@ -9,6 +9,7 @@ import shutil
 from fractions import Fraction
 import subprocess
 
+import httpx
 import pytest
 
 from scripts import discover_catalog as catalog
@@ -40,7 +41,7 @@ def test_nasa_search_results_become_unapproved_drafts_with_their_credit():
     body = {"collection": {"items": [
         {"href": href, "data": [{"nasa_id": "X1", "media_type": "video", "title": "Rover landing",
                                  "center": "JPL", "description": "<p>Entry, descent &amp; landing.</p>",
-                                 "keywords": ["Mars", "rover"]}]},
+                                 "secondary_creator": "Jane Producer", "keywords": ["Mars", "rover"]}]},
         {"href": "https://images-assets.nasa.gov/image/Y/collection.json",
          "data": [{"nasa_id": "Y", "media_type": "image", "title": "A photo"}]},
     ]}}
@@ -51,10 +52,13 @@ def test_nasa_search_results_become_unapproved_drafts_with_their_credit():
     assert entry["id"] == "nasa-X1"
     assert entry["description"] == "Entry, descent & landing."
     assert entry["source"]["mediaUrl"] == "https://images-assets.nasa.gov/video/X1/X1~medium.mp4"
-    assert entry["source"]["credit"] == "NASA/JPL"
+    # The producer named in secondary_creator is not the credit NASA asks for.
+    assert entry["source"]["credit"] == "NASA/JPL-Caltech"
     assert entry["source"]["license"] == "Public domain"
     assert entry["review"]["approved"] is False
     assert entry["review"]["rightsCleared"] is True
+    # Many NASA videos carry library music licensed to NASA alone.
+    assert entry["clip"]["audio"] == "mute"
 
 
 def test_nasa_material_that_mentions_another_owner_needs_rights_clearance():
@@ -62,6 +66,17 @@ def test_nasa_material_that_mentions_another_owner_needs_rights_clearance():
     body = {"collection": {"items": [{"href": href, "data": [{
         "nasa_id": "Z", "media_type": "video", "title": "Concert", "description": "Footage courtesy of a TV network."}]}]}}
     [entry] = catalog.nasa_entries(body, {href: ["https://images-assets.nasa.gov/video/Z/Z~small.mp4"]})
+    assert entry["review"]["rightsCleared"] is False
+
+
+def test_a_music_licensor_in_nasa_metadata_needs_rights_clearance():
+    href = "https://images-assets.nasa.gov/video/V/collection.json"
+    body = {"collection": {"items": [{"href": href, "data": [{
+        "nasa_id": "V", "media_type": "video", "title": "Rover test", "center": "JSC",
+        "description": "A prototype drives down a ramp.",
+        "secondary_creator": "Music Provided by Universal Music: Shining Talent"}]}]}}
+    [entry] = catalog.nasa_entries(body, {href: ["https://images-assets.nasa.gov/video/V/V~medium.mp4"]})
+    assert entry["source"]["credit"] == "NASA/JSC"
     assert entry["review"]["rightsCleared"] is False
 
 
@@ -80,13 +95,21 @@ def test_commons_results_keep_the_licence_the_file_page_reports():
             "url": "https://upload.wikimedia.org/c/d/Lecture.webm", "mime": "video/webm",
             "descriptionurl": "https://commons.wikimedia.org/wiki/File:Lecture.webm",
             "extmetadata": {"LicenseShortName": {"value": "CC BY-NC 2.0"}}}]},
+        {"pageid": 10, "title": "File:Flame in microgravity.webm", "imageinfo": [{
+            "url": "https://upload.wikimedia.org/e/f/Flame.webm", "mime": "video/webm",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Flame_in_microgravity.webm",
+            "extmetadata": {"LicenseShortName": {"value": "Public domain"}, "Artist": {"value": "NASA"}}}]},
     ]}}
-    mitosis, lecture = catalog.commons_entries(body)
+    mitosis, lecture, flame = catalog.commons_entries(body)
     assert mitosis["title"] == "Mitosis in onion cells"
     assert mitosis["source"]["credit"] == "Jane Doe"
     assert mitosis["source"]["license"] == "CC BY-SA 4.0"
     assert mitosis["description"] == "Time-lapse of mitosis."
+    # A Commons licence covers the whole file, soundtrack included.
+    assert mitosis["clip"]["audio"] == "keep"
     assert lecture["review"]["rightsCleared"] is False
+    # Public domain uploads are mostly government videos with licensed music.
+    assert flame["clip"]["audio"] == "mute"
 
 
 def approved(entry_id, subject="Biology", **changes):
@@ -121,6 +144,11 @@ def test_the_gate_needs_twenty_cleared_reviewed_entries():
     assert blocked["status"] == "failed"
     assert set(blocked["problems"]) == {"e0", "e1", "e2"}
     assert blocked["ready"] == 17
+
+
+def test_the_sound_choice_must_be_keep_or_mute():
+    assert catalog.entry_problems(approved("a", clip={"audio": "mute"})) == []
+    assert "clip.audio must be keep or mute" in catalog.entry_problems(approved("a", clip={"audio": "loud"}))
 
 
 def test_drafts_do_not_count_toward_the_library():
@@ -162,6 +190,24 @@ def test_encoding_produces_a_phone_friendly_mp4_and_poster(tmp_path, audio):
     assert float(Fraction(info["video"]["avg_frame_rate"])) <= 30.01
     assert catalog.index_at_front(out)
     assert poster.stat().st_size > 0
+
+
+def max_volume(path):
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+                         capture_output=True, text=True, check=True).stderr
+    return float(out.split("max_volume:")[1].split("dB")[0])
+
+
+@needs_ffmpeg
+def test_a_muted_clip_keeps_a_silent_aac_track(tmp_path):
+    source = tmp_path / "source.webm"
+    make_source(source)
+    out, poster = tmp_path / "clip.mp4", tmp_path / "poster.jpg"
+    catalog.encode(source, out, poster, start=0, duration=5, mute=True)
+    assert catalog.probe(out)["audio"]["codec_name"] == "aac"
+    assert max_volume(out) < -80
+    catalog.encode(source, out, poster, start=0, duration=5)
+    assert max_volume(out) > -30
 
 
 @needs_ffmpeg
@@ -212,3 +258,36 @@ def test_the_ledger_is_replaced_whole(tmp_path):
     catalog.write_ledger(ledger, {"nasa-X1": {"clip_id": "7"}})
     assert json.loads(ledger.read_text()) == {"nasa-X1": {"clip_id": "7"}}
     assert [p.name for p in tmp_path.iterdir()] == ["ledger.json"]
+
+
+def test_a_rate_limited_request_waits_and_is_asked_again():
+    answers = iter([429, 429, 200])
+    waits = []
+    transport = catalog.PatientTransport(
+        httpx.MockTransport(lambda request: httpx.Response(next(answers))), sleep=waits.append)
+    with httpx.Client(transport=transport, base_url="https://api.example.test") as client:
+        assert client.post("/api/v1/media/upload", files={"file": ("a.mp4", b"x", "video/mp4")}).status_code == 200
+    assert waits == [15, 30]
+
+
+def test_the_limiter_is_not_waited_on_forever():
+    waits = []
+    transport = catalog.PatientTransport(
+        httpx.MockTransport(lambda request: httpx.Response(429)), waits=(1, 2), sleep=waits.append)
+    with httpx.Client(transport=transport, base_url="https://api.example.test") as client:
+        assert client.get("/health").status_code == 429
+    assert waits == [1, 2]
+
+
+@needs_ffmpeg
+def test_a_clip_over_the_upload_limit_is_encoded_again_to_fit(tmp_path):
+    source = tmp_path / "source.webm"
+    make_source(source, seconds=8)
+    out, poster = tmp_path / "clip.mp4", tmp_path / "poster.jpg"
+    catalog.encode(source, out, poster, start=0, duration=6, max_bytes=None)
+    unconstrained = out.stat().st_size
+    limit = int(unconstrained * 0.6)
+    catalog.encode(source, out, poster, start=0, duration=6, max_bytes=limit)
+    assert out.stat().st_size <= limit
+    assert catalog.index_at_front(out)
+

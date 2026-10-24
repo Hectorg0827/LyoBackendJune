@@ -1,0 +1,60 @@
+name: Discover live probe
+
+# Read-only checks against production, from a runner that can reach it:
+# which commit api.lyoai.app and lyoai.app are serving, and whether the media
+# route answers HEAD (405 before the Discover media fix, 404 for a missing
+# file after it). Sends no credentials and changes nothing.
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - .github/workflows/discover-live-probe.yml
+      # Publishing the library needs the Discover backend live, so every
+      # change to its manifest re-reads what production serves.
+      - catalog/catalog.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Backend health
+        run: curl -sS -m 30 https://api.lyoai.app/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
+
+      - name: Web health on both hostnames
+        # The Railway web service answers www.lyoai.app; the apex may be served
+        # by something else, which a deploy of that service does not update.
+        run: |
+          for host in lyoai.app www.lyoai.app; do
+            echo "$host: $(curl -sS -m 30 "https://$host/api/health")" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Where each hostname points
+        run: |
+          for host in lyoai.app www.lyoai.app api.lyoai.app; do
+            echo "$host -> $(dig +short "$host" | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          curl -sS -m 30 -o /dev/null -D - https://lyoai.app/ | grep -iE '^(HTTP|server|location|x-railway|x-vercel)' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The API accepts the website on both hostnames
+        # lyoai.app forwards to www.lyoai.app, so the API must allow www.
+        run: |
+          for origin in https://www.lyoai.app https://lyoai.app; do
+            allowed=$(curl -sS -m 30 -o /dev/null -D - -X OPTIONS https://api.lyoai.app/api/v1/clips/discover \
+              -H "Origin: $origin" -H "Access-Control-Request-Method: GET" \
+              -H "Access-Control-Request-Headers: authorization" \
+              | grep -i '^access-control-allow-origin' | tr -d '\r')
+            echo "$origin -> ${allowed:-not allowed}" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Media route answers HEAD
+        run: |
+          missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
+          head=$(curl -sS -m 30 -I -o /dev/null -w '%{http_code}' "$missing")
+          get=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' "$missing")
+          echo "HEAD missing clip -> $head; GET missing clip -> $get" | tee -a "$GITHUB_STEP_SUMMARY"

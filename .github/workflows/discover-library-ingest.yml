@@ -1,0 +1,109 @@
+name: Discover library publish
+
+# Publishes the approved entries of catalog/catalog.json to production:
+# downloads each video from NASA or Wikimedia Commons, encodes it for phones,
+# uploads it through the real API under the library account, publishes it
+# with its source, licence and credit, and checks GET, HEAD, 206 and 416 on
+# the result. catalog/ingest-ledger.json records what is already published,
+# so a rerun only does what is left; the API also refuses a source twice.
+#
+# It publishes nothing until three things are true, and says which is missing:
+#   1. the owner has said go: catalog/catalog.json has "publish": true
+#      (python catalog/review.py publish);
+#   2. the repository secrets DISCOVER_LIBRARY_EMAIL and DISCOVER_LIBRARY_PASSWORD
+#      hold the sign-in of the dedicated library account;
+#   3. api.lyoai.app runs the Discover release (its media route answers HEAD).
+# It never runs on main.
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - catalog/catalog.json
+      # A fix to the publishing scripts re-runs what is left to publish.
+      - scripts/discover_catalog.py
+      - scripts/discover_media_certify.py
+      - .github/workflows/discover-library-ingest.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Never cancel a publish half way; the next run waits instead.
+  group: discover-library-ingest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish approved library videos
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      API: https://api.lyoai.app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The branch as it is now, not the commit that triggered the run:
+          # a run queued behind another must see the ledger that one saved.
+          ref: ${{ github.ref_name }}
+
+      - name: Check the library account and the API are ready
+        id: ready
+        env:
+          LIBRARY_EMAIL: ${{ secrets.DISCOVER_LIBRARY_EMAIL }}
+          LIBRARY_PASSWORD: ${{ secrets.DISCOVER_LIBRARY_PASSWORD }}
+        run: |
+          go=true
+          if [ "$(jq -r '.publish // false' catalog/catalog.json)" != "true" ]; then
+            echo "The owner has not said go (catalog/catalog.json publish is not true); nothing published." | tee -a "$GITHUB_STEP_SUMMARY"
+            go=false
+          fi
+          if [ -z "$LIBRARY_EMAIL" ] || [ -z "$LIBRARY_PASSWORD" ]; then
+            echo "Waiting for the DISCOVER_LIBRARY_EMAIL and DISCOVER_LIBRARY_PASSWORD secrets; nothing published." | tee -a "$GITHUB_STEP_SUMMARY"
+            go=false
+          fi
+          missing="$API/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
+          head=$(curl -sS -m 30 -I -o /dev/null -w '%{http_code}' "$missing" || echo 000)
+          if [ "$head" != "404" ]; then
+            echo "api.lyoai.app is not on the Discover release yet (HEAD on a missing clip gave $head, expected 404); nothing published." | tee -a "$GITHUB_STEP_SUMMARY"
+            go=false
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.ready.outputs.go == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install httpx and ffmpeg
+        if: steps.ready.outputs.go == 'true'
+        run: |
+          pip install 'httpx==0.25.2'
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Publish
+        if: steps.ready.outputs.go == 'true'
+        env:
+          DISCOVER_CERTIFY_EMAIL: ${{ secrets.DISCOVER_LIBRARY_EMAIL }}
+          DISCOVER_CERTIFY_PASSWORD: ${{ secrets.DISCOVER_LIBRARY_PASSWORD }}
+        run: |
+          python scripts/discover_catalog.py ingest --manifest catalog/catalog.json --api "$API" \
+            --ledger catalog/ingest-ledger.json --report catalog/ingest-report.json
+
+      - name: Keep the ledger and report on this branch
+        # Also after a partial failure: the ledger is what makes the rerun safe.
+        if: always() && steps.ready.outputs.go == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog/ingest-ledger.json catalog/ingest-report.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No change to the ledger."
+            exit 0
+          fi
+          git commit -m "Discover library: publish ledger and report"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

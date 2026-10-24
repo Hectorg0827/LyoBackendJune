@@ -1,0 +1,45 @@
+# Searches for Discover's STEM library: source <TAB> area <TAB> query.
+# Pushing a change to this file runs .github/workflows/discover-catalog-search.yml,
+# which searches the source's own API and commits the drafts and a review list.
+nasa	Astronomy	James Webb
+nasa	Astronomy	solar eclipse
+nasa	Astronomy	solar flare
+nasa	Astronomy	Perseverance landing
+nasa	Astronomy	aurora from space station
+nasa	Physics	microgravity demonstration
+nasa	Physics	water in microgravity
+nasa	Chemistry	combustion experiment
+nasa	Chemistry	flame in microgravity
+nasa	Biology	plant growth space station
+nasa	Biology	astronaut exercise muscle
+nasa	Engineering	rocket engine test
+nasa	Engineering	parachute test
+nasa	Technology	satellite deployment
+nasa	Technology	3D printing space station
+nasa	Robotics	Robonaut
+nasa	Robotics	Ingenuity helicopter
+nasa	Robotics	rover driving
+nasa	Environment	sea ice
+nasa	Environment	hurricane from space
+nasa	Environment	wildfire smoke satellite
+commons	Astronomy	planet orbit animation
+commons	Astronomy	moon phases
+commons	Physics	pendulum
+commons	Physics	double pendulum
+commons	Physics	wave interference
+commons	Chemistry	chemical reaction
+commons	Chemistry	flame test
+commons	Chemistry	crystal growth timelapse
+commons	Biology	mitosis
+commons	Biology	cell division
+commons	Biology	bacteria under microscope
+commons	Math	fourier series animation
+commons	Math	pythagorean theorem
+commons	Math	fractal zoom
+commons	Engineering	bridge construction
+commons	Engineering	gear mechanism
+commons	Technology	transistor
+commons	Coding	sorting algorithm
+commons	Robotics	robot arm
+commons	Environment	water cycle
+commons	Environment	glacier timelapse

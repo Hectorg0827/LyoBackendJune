@@ -1,0 +1,254 @@
+{
+  "phase": "catalog_ingest",
+  "api": "https://api.lyoai.app",
+  "started_at": "2026-10-24T05:12:28Z",
+  "cases": [
+    {
+      "case": "commons-140667111_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 8516748,
+      "sha256": "d258d67240ba279901621048984b1933e59c4693e7228ca6be2d09a56c6ce47a"
+    },
+    {
+      "case": "commons-140667111_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-140667111_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-140667111_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "8516748"
+    },
+    {
+      "case": "commons-140667111_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8516748"
+    },
+    {
+      "case": "commons-140667111_video_range_bytes=4257862-4258885",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4257862-4258885/8516748"
+    },
+    {
+      "case": "commons-140667111_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8515724-8516747/8516748"
+    },
+    {
+      "case": "commons-140667111_video_range_bytes=8514748-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8514748-8516747/8516748"
+    },
+    {
+      "case": "commons-140667111_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8516748"
+    },
+    {
+      "case": "commons-140667111_video_get_invalid_bytes=8516748-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8516748"
+    },
+    {
+      "case": "commons-140667111_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8516748"
+    },
+    {
+      "case": "commons-140667111_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8516748"
+    },
+    {
+      "case": "commons-140667111_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8516748"
+    },
+    {
+      "case": "commons-140667111_video_head_invalid_bytes=8516748-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8516748"
+    },
+    {
+      "case": "commons-140667111_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 36784,
+      "sha256": "dba0415707419f331eea58ae638fa2c9d7c796db265584d0a9bd34a175d5a7b2"
+    },
+    {
+      "case": "commons-140667111_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-140667111_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-140667111_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "36784"
+    },
+    {
+      "case": "commons-140667111_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/36784"
+    },
+    {
+      "case": "commons-140667111_poster_range_bytes=17880-18903",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 17880-18903/36784"
+    },
+    {
+      "case": "commons-140667111_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 35760-36783/36784"
+    },
+    {
+      "case": "commons-140667111_poster_range_bytes=34784-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 34784-36783/36784"
+    },
+    {
+      "case": "commons-140667111_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/36784"
+    },
+    {
+      "case": "commons-140667111_poster_get_invalid_bytes=36784-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */36784"
+    },
+    {
+      "case": "commons-140667111_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */36784"
+    },
+    {
+      "case": "commons-140667111_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */36784"
+    },
+    {
+      "case": "commons-140667111_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */36784"
+    },
+    {
+      "case": "commons-140667111_poster_head_invalid_bytes=36784-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */36784"
+    },
+    {
+      "case": "commons-140667111_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-140667111_ingested",
+      "passed": true,
+      "clip_id": "40"
+    },
+    {
+      "case": "catalog_meets_minimum",
+      "passed": true,
+      "published": 37,
+      "minimum": 20
+    }
+  ],
+  "instances": [
+    "a6c73b6bf478"
+  ],
+  "manifest_gate": {
+    "entries": 37,
+    "approved": 37,
+    "ready": 37,
+    "minimum": 20,
+    "problems": {},
+    "duplicate_ids": [],
+    "areas_covered": [
+      "astronomy",
+      "biology",
+      "chemistry",
+      "coding",
+      "engineering",
+      "environment",
+      "math",
+      "physics",
+      "robotics",
+      "science",
+      "technology"
+    ],
+    "areas_missing": [],
+    "status": "passed"
+  },
+  "attribution_records": {
+    "nasa-GSFC_20170822_Total_m12690_Eclipse": "NASA/GSFC \u00b7 Public domain",
+    "nasa-2026 Solar Eclipse @ 50,000 Feet": "NASA/HQ \u00b7 Public domain",
+    "commons-67003693": "ESO \u00b7 CC BY 4.0",
+    "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars": "NASA/JPL-Caltech \u00b7 Public domain",
+    "nasa-Moving_Water_in_Space-8K": "NASA/JSC \u00b7 Public domain",
+    "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman": "NASA/JSC \u00b7 Public domain",
+    "commons-155549774": "Zvika \u00b7 CC0",
+    "commons-70748227": "heligone \u00b7 CC BY 3.0",
+    "commons-80366785": "Pnotporn \u00b7 CC BY-SA 4.0",
+    "commons-126049058": "North Carolina School of Science and Mathematics \u00b7 CC BY 3.0",
+    "commons-143032427": "NASA Johnson \u00b7 Public domain",
+    "commons-125299661": "Milliped \u00b7 CC BY-SA 4.0",
+    "commons-146945011": "Brandon Seah \u00b7 CC BY 4.0",
+    "commons-113750584": "Greg Sepesi \u00b7 CC BY 4.0",
+    "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE": "NASA/KSC \u00b7 Public domain",
+    "commons-105842656": "marble \u00b7 CC BY-SA 4.0",
+    "commons-56429231": "Mattwj2002 \u00b7 CC BY-SA 4.0",
+    "commons-151872767": "IBM Research \u00b7 CC BY 3.0",
+    "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096": "NASA/KSC \u00b7 Public domain",
+    "commons-45256156": "Timo Bingmann \u00b7 CC BY 3.0",
+    "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight": "NASA/JPL-Caltech \u00b7 Public domain",
+    "commons-113386725": "Giacomo Alessandroni \u00b7 CC BY-SA 4.0",
+    "commons-146077925": "Nathan J. Szymanski et al. \u00b7 CC BY 4.0",
+    "nasa-GSFC_20171011_Satellite_m12742_Wildfires": "NASA/GSFC \u00b7 Public domain",
+    "commons-122663253": "Google Earth \u00b7 CC BY 3.0",
+    "nasa-GSFC_20160426_SDO_m12224_SolarFlare": "NASA/GSFC \u00b7 Public domain",
+    "commons-125319404": "NASA/Goddard Space Flight Center \u00b7 Public domain",
+    "commons-123498313": "Spheroidite \u00b7 CC BY-SA 4.0",
+    "commons-31618879": "ScienceCOLA \u00b7 CC BY 3.0",
+    "nasa-Plant_Habitat-04_Pollination": "NASA/JSC \u00b7 Public domain",
+    "nasa-321_SS101-PlantGrowth-03": "NASA/HQ \u00b7 Public domain",
+    "nasa-PN068 HF-12-hd 09-27-2023": "NASA/MSFC \u00b7 Public domain",
+    "nasa-GSFC_20141121_MMS_m11702_launch": "NASA/GSFC \u00b7 Public domain",
+    "nasa-JPL-20220405-M2020f-0001-How Perseverance Drives on Mars-1080cc": "NASA/JPL-Caltech \u00b7 Public domain",
+    "nasa-GSFC_20181011_SeaIce_m13089_Thinning": "NASA/GSFC \u00b7 Public domain",
+    "nasa-GSFC_20171004_m12738_RapidIntensification": "NASA/GSFC \u00b7 Public domain",
+    "commons-140667111": "Cary Huang (carykh) \u00b7 CC BY 3.0"
+  },
+  "passed": 31,
+  "failed": 0,
+  "status": "passed"
+}
