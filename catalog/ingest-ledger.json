@@ -1,0 +1,403 @@
+{
+  "nasa-GSFC_20170822_Total_m12690_Eclipse": {
+    "clip_id": "4",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/28f83db734d3417982ad1cebf4c05cbc.mp4",
+    "video_sha256": "933cdcf97815251ecc23e1fc80e6114bc013bab457cacdc387bbd24d958b6bee",
+    "duration": 28.03,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/GSFC_20170822_Total_m12690_Eclipse",
+      "mediaUrl": "https://images-assets.nasa.gov/video/GSFC_20170822_Total_m12690_Eclipse/GSFC_20170822_Total_m12690_Eclipse~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/GSFC"
+    },
+    "attribution": "NASA/GSFC \u00b7 Public domain"
+  },
+  "nasa-2026 Solar Eclipse @ 50,000 Feet": {
+    "clip_id": "5",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/f43c102702734cddba7232c245c695b2.mp4",
+    "video_sha256": "c94353ce4ac5d9d416eca82cd500a7200d320836d71d08ca6ea6b5ae1e4f1e33",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/2026%20Solar%20Eclipse%20%40%2050%2C000%20Feet",
+      "mediaUrl": "https://images-assets.nasa.gov/video/2026 Solar Eclipse @ 50,000 Feet/2026 Solar Eclipse @ 50,000 Feet~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/HQ"
+    },
+    "attribution": "NASA/HQ \u00b7 Public domain"
+  },
+  "commons-67003693": {
+    "clip_id": "6",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/286c4d15bc5a4bf29edf1c20ea2d1135.mp4",
+    "video_sha256": "28799562d9e7ca72c613ac553e40e0500a689b994d63fa9373d87582f16df766",
+    "duration": 26.24,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Animation_of_the_planets_in_orbit_around_TRAPPIST-1.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/b/b0/Animation_of_the_planets_in_orbit_around_TRAPPIST-1.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+      "credit": "ESO"
+    },
+    "attribution": "ESO \u00b7 CC BY 4.0"
+  },
+  "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars": {
+    "clip_id": "7",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/4aa4092547ff49dbbd8e524ea47119b8.mp4",
+    "video_sha256": "f29d939af1579538b4387ace7cea2ac6070a5689b94bf8f86e6359745deb5199",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/JPL-20210222-M2020f-0001-Perseverance%20Rover%E2%80%99s%20Descent%20and%20Touchdown%20on%20Mars",
+      "mediaUrl": "https://images-assets.nasa.gov/video/JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars/JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/JPL-Caltech"
+    },
+    "attribution": "NASA/JPL-Caltech \u00b7 Public domain"
+  },
+  "nasa-Moving_Water_in_Space-8K": {
+    "clip_id": "8",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/77207f2607014850aeafc9fdf03fcc1e.mp4",
+    "video_sha256": "8bfb8e070fcb2df54790b29a933c74a06b4d9874de72915a84ea85323e1f78f5",
+    "duration": 89.2,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/Moving_Water_in_Space-8K",
+      "mediaUrl": "https://images-assets.nasa.gov/video/Moving_Water_in_Space-8K/Moving_Water_in_Space-8K~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/JSC"
+    },
+    "attribution": "NASA/JSC \u00b7 Public domain"
+  },
+  "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman": {
+    "clip_id": "9",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/900d4f09e89a427db3ab74cdeac9238d.mp4",
+    "video_sha256": "04b9a752bb89b96db7409b89a16566ed2ab0063b277d13e44780636eb2b8ffc3",
+    "duration": 42.73,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman",
+      "mediaUrl": "https://images-assets.nasa.gov/video/art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman/art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/JSC"
+    },
+    "attribution": "NASA/JSC \u00b7 Public domain"
+  },
+  "commons-155549774": {
+    "clip_id": "10",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/7ab1472128c54e2f8676d02609ed6588.mp4",
+    "video_sha256": "53b5a977eeff1b53cad3d63827f905d0f086f34657c006a1bd92121ca58d2fe9",
+    "duration": 40.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:3-double-pendulums.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/9/92/3-double-pendulums.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "credit": "Zvika"
+    },
+    "attribution": "Zvika \u00b7 CC0"
+  },
+  "commons-70748227": {
+    "clip_id": "11",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/982d4027235e4608a4e46fae773ca840.mp4",
+    "video_sha256": "e01659a6180a40bc09031552b3ce2f65b697d5b1226f8ccf453aa99463869fa1",
+    "duration": 61.16,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Single_particle_creates_interference_after_double_slit_-_Wave_particle_duality_at_the_workshop.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/f/f2/Single_particle_creates_interference_after_double_slit_-_Wave_particle_duality_at_the_workshop.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "heligone"
+    },
+    "attribution": "heligone \u00b7 CC BY 3.0"
+  },
+  "commons-80366785": {
+    "clip_id": "12",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/dd98119283b94505b82fb8fa79c47e69.mp4",
+    "video_sha256": "e9148ef31b19d2a2eeacbe773d2f82657badf3aae513e06626ee46fbcf97cf39",
+    "duration": 56.6,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Chemical_traffic_light_reaction_time-lapse.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/0/00/Chemical_traffic_light_reaction_time-lapse.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+      "credit": "Pnotporn"
+    },
+    "attribution": "Pnotporn \u00b7 CC BY-SA 4.0"
+  },
+  "commons-126049058": {
+    "clip_id": "13",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/c05359116d4c4bd99d6d64e37f23d94f.mp4",
+    "video_sha256": "7776a3249da66509512d5821c68f72c1385addb407a9a9cc4fdfc8082b5308c2",
+    "duration": 90.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Flame_Tests_of_Metal_Ions,_With_Labels.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/f/fa/Flame_Tests_of_Metal_Ions%2C_With_Labels.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "North Carolina School of Science and Mathematics"
+    },
+    "attribution": "North Carolina School of Science and Mathematics \u00b7 CC BY 3.0"
+  },
+  "commons-143032427": {
+    "clip_id": "14",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/1c66cb0c24bb42a0af4b9ad508b7eeb8.mp4",
+    "video_sha256": "56fdeec5a864b19cfdea5fbec9496177441150666daeb82fd2d6659177692144",
+    "duration": 64.8,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Amazing_Flame_Comes_to_Life_in_Space_Station_Microgravity_Combustion_Science.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Amazing_Flame_Comes_to_Life_in_Space_Station_Microgravity_Combustion_Science.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "Public domain",
+      "licenseUrl": null,
+      "credit": "NASA Johnson"
+    },
+    "attribution": "NASA Johnson \u00b7 Public domain"
+  },
+  "commons-125299661": {
+    "clip_id": "15",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/79854360453b4778a25e95936e27aac4.mp4",
+    "video_sha256": "a51d9edaf8ee9bcc3df83ed63dc8326b60d9331e88206a137ed4e37a8c724a83",
+    "duration": 19.77,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Crystal_growth-1eConstantijnHuijgenstraat-timelapse.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/0/0c/Crystal_growth-1eConstantijnHuijgenstraat-timelapse.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+      "credit": "Milliped"
+    },
+    "attribution": "Milliped \u00b7 CC BY-SA 4.0"
+  },
+  "commons-146945011": {
+    "clip_id": "16",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/9eaa2edf88994356bfdd68257553be8f.mp4",
+    "video_sha256": "1f16800af36d6a065def168d310121b5df3c0cc3870e788acc7b5d0b590f9415",
+    "duration": 38.54,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Bodo_bacteria_and_testate_amoeba_DSC_0978.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/7/77/Bodo_bacteria_and_testate_amoeba_DSC_0978.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+      "credit": "Brandon Seah"
+    },
+    "attribution": "Brandon Seah \u00b7 CC BY 4.0"
+  },
+  "commons-113750584": {
+    "clip_id": "17",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/25860185898e45288c00b08f60154bf2.mp4",
+    "video_sha256": "d8fe9db1064179d903f27378eb7323b38ca3830fb41b8fdfca277072d89b867d",
+    "duration": 90.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Complex_Fourier_series_animation_tracing_the_letter_%27e%27.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/b/b6/Complex_Fourier_series_animation_tracing_the_letter_%27e%27.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+      "credit": "Greg Sepesi"
+    },
+    "attribution": "Greg Sepesi \u00b7 CC BY 4.0"
+  },
+  "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE": {
+    "clip_id": "18",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/1897e06b245b48518a0e9b5d7c5f39bb.mp4",
+    "video_sha256": "0f97637d9ff0c60b4f7b127b4300221583cdf9c0e71e530fbedf59f1b1d02856",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/KSC-20190918-VP-MWC01-SPACEX-PARACHUTE",
+      "mediaUrl": "https://images-assets.nasa.gov/video/KSC-20190918-VP-MWC01-SPACEX-PARACHUTE/KSC-20190918-VP-MWC01-SPACEX-PARACHUTE~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/KSC"
+    },
+    "attribution": "NASA/KSC \u00b7 Public domain"
+  },
+  "commons-105842656": {
+    "clip_id": "19",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/6000b56f0e094f1e93f9907f776d403b.mp4",
+    "video_sha256": "9a9f5379d37c7fa773e4c3e3dcb526e98b27e28ef32429247326ce828acb5fa9",
+    "duration": 12.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Cycloidal_Gear_Animation_WEBM.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Cycloidal_Gear_Animation_WEBM.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+      "credit": "marble"
+    },
+    "attribution": "marble \u00b7 CC BY-SA 4.0"
+  },
+  "commons-56429231": {
+    "clip_id": "20",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/6e9b84cdf44c47bea31f686e5dfb42a8.mp4",
+    "video_sha256": "feb9d151d38b31dab9a6f40edfa75e863335485ac40a3cab2fdba588d2c0ae95",
+    "duration": 30.23,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Minneapolis_Highway_169_Bridge_Construction_Project_2017.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/5/51/Minneapolis_Highway_169_Bridge_Construction_Project_2017.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+      "credit": "Mattwj2002"
+    },
+    "attribution": "Mattwj2002 \u00b7 CC BY-SA 4.0"
+  },
+  "commons-151872767": {
+    "clip_id": "21",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/67cf33f8c4504c7f95204b59f5413587.mp4",
+    "video_sha256": "cd2b154e88bace83c6af7595d043c3c7ab913df36d3319e8ca349066cea8ece7",
+    "duration": 70.61,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:5_nanometer_transistor_--_how_they_did_it.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/f/f4/5_nanometer_transistor_--_how_they_did_it.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "IBM Research"
+    },
+    "attribution": "IBM Research \u00b7 CC BY 3.0"
+  },
+  "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096": {
+    "clip_id": "22",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/96a71ebcf837491299cdd99cb4ef3629.mp4",
+    "video_sha256": "38efdf3253963c8c67286cf8b55b32d9ccf2480089d894f1774d02776a99c9c1",
+    "duration": 50.7,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096",
+      "mediaUrl": "https://images-assets.nasa.gov/video/KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096/KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/KSC"
+    },
+    "attribution": "NASA/KSC \u00b7 Public domain"
+  },
+  "commons-45256156": {
+    "clip_id": "23",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/fee6efbbfaad4874ae52d74bb610d111.mp4",
+    "video_sha256": "afab938116e39887539abdca8d45bdc27c2bbab21c9c48e8ecb9ca2a7c1c1490",
+    "duration": 90.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:15_Sorting_Algorithms_in_6_Minutes.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/7/7b/15_Sorting_Algorithms_in_6_Minutes.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "Timo Bingmann"
+    },
+    "attribution": "Timo Bingmann \u00b7 CC BY 3.0"
+  },
+  "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight": {
+    "clip_id": "24",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/b7515141664a46e499c2fb498cd0cb6e.mp4",
+    "video_sha256": "350d549b1913fbe87ed6a704b6a43733cc5669ce082ec83d4fe9fb80e60240fd",
+    "duration": 38.33,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/JPL-20210425-TECHf-0002-Ingenuity%20Third%20Flight",
+      "mediaUrl": "https://images-assets.nasa.gov/video/JPL-20210425-TECHf-0002-Ingenuity Third Flight/JPL-20210425-TECHf-0002-Ingenuity Third Flight~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/JPL-Caltech"
+    },
+    "attribution": "NASA/JPL-Caltech \u00b7 Public domain"
+  },
+  "commons-113386725": {
+    "clip_id": "25",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/31c32f5c20f948a08ea7b88d4b7c3b01.mp4",
+    "video_sha256": "3bde99a6cfc93e176e84b158979443286bce8f10e51f9b850c1b2a38937efa6b",
+    "duration": 22.36,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Hand-made_robotic_arm_with_Arduino.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/9/9c/Hand-made_robotic_arm_with_Arduino.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+      "credit": "Giacomo Alessandroni"
+    },
+    "attribution": "Giacomo Alessandroni \u00b7 CC BY-SA 4.0"
+  },
+  "commons-146077925": {
+    "clip_id": "26",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/440803c10a3b4d069ff36eca75541493.mp4",
+    "video_sha256": "7fd9a51dd5dd4d7941ddd16f9122f3dd65a84c90eb08be5116cfeba027bccdff",
+    "duration": 48.42,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Robot_arm_R1_operation_of_the_autonomous_laboratory_for_the_accelerated_synthesis_of_novel_materials_(handling_powders_and_slurries_in_the_sample_preparation_station).webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/0/0f/Robot_arm_R1_operation_of_the_autonomous_laboratory_for_the_accelerated_synthesis_of_novel_materials_%28handling_powders_and_slurries_in_the_sample_preparation_station%29.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0",
+      "credit": "Nathan J. Szymanski et al.",
+      "sourceCredit": "Authors of the study: Nathan J. Szymanski, Bernardus Rendy, Yuxing Fei, Rishi E. Kumar, Tanjin He, David Milsted, Matthew J. McDermott, Max Gallant, Ekin Dogus Cubuk, Amil Merchant, Haegyeom Kim, Anubhav Jain, Christopher J. Bartel, Kristin Persson, Yan Zeng & Gerbrand Ceder"
+    },
+    "attribution": "Nathan J. Szymanski et al. \u00b7 CC BY 4.0"
+  },
+  "nasa-GSFC_20171011_Satellite_m12742_Wildfires": {
+    "clip_id": "27",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/c113bfb98fd8403e876d724137dccdfa.mp4",
+    "video_sha256": "be86033633618eff39bff91514c2bbf239f4bcf83e8a0b02d3565cc6e078655d",
+    "duration": 32.07,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/GSFC_20171011_Satellite_m12742_Wildfires",
+      "mediaUrl": "https://images-assets.nasa.gov/video/GSFC_20171011_Satellite_m12742_Wildfires/GSFC_20171011_Satellite_m12742_Wildfires~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/GSFC"
+    },
+    "attribution": "NASA/GSFC \u00b7 Public domain"
+  },
+  "commons-122663253": {
+    "clip_id": "28",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/7b2d40939bda4864b47d8c3a969cb530.mp4",
+    "video_sha256": "aafa1d6511d65488ce2352bc5f7a613d409e8d9e8294d33b3bd1cf981eaa0de7",
+    "duration": 12.3,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Google_Earth_Timelapse-_Columbia_Glacier,_Alaska.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/0/07/Google_Earth_Timelapse-_Columbia_Glacier%2C_Alaska.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "Google Earth"
+    },
+    "attribution": "Google Earth \u00b7 CC BY 3.0"
+  }
+}

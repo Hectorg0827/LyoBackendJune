@@ -1,0 +1,4618 @@
+{
+  "phase": "catalog_ingest",
+  "api": "https://api.lyoai.app",
+  "started_at": "2026-10-24T04:31:41Z",
+  "cases": [
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 4534936,
+      "sha256": "933cdcf97815251ecc23e1fc80e6114bc013bab457cacdc387bbd24d958b6bee"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_range_bytes=2266956-2267979",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2266956-2267979/4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4533912-4534935/4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_range_bytes=4532936-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4532936-4534935/4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_invalid_bytes=4534936-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_video_head_invalid_bytes=4534936-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4534936"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 77520,
+      "sha256": "3568b719463b2b3752ea7bba1769341c35ae41bb9ad0c751b9705580758e8b5b"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_range_bytes=38248-39271",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 38248-39271/77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 76496-77519/77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_range_bytes=75520-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 75520-77519/77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_invalid_bytes=77520-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_poster_head_invalid_bytes=77520-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */77520"
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-GSFC_20170822_Total_m12690_Eclipse_ingested",
+      "passed": true,
+      "clip_id": "4"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5023463,
+      "sha256": "c94353ce4ac5d9d416eca82cd500a7200d320836d71d08ca6ea6b5ae1e4f1e33"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_range_bytes=2511219-2512242",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2511219-2512242/5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5022439-5023462/5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_range_bytes=5021463-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5021463-5023462/5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_invalid_bytes=5023463-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_video_head_invalid_bytes=5023463-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5023463"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 50509,
+      "sha256": "4623a7721559035ca8ce5f07fde973c0677396c1b418ce913084e4983b879e3e"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_range_bytes=24742-25765",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 24742-25765/50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 49485-50508/50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_range_bytes=48509-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 48509-50508/50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_invalid_bytes=50509-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_poster_head_invalid_bytes=50509-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */50509"
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-2026 Solar Eclipse @ 50,000 Feet_ingested",
+      "passed": true,
+      "clip_id": "5"
+    },
+    {
+      "case": "nasa-GSFC_20160426_SDO_m12224_SolarFlare_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "commons-67003693_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 2839259,
+      "sha256": "28799562d9e7ca72c613ac553e40e0500a689b994d63fa9373d87582f16df766"
+    },
+    {
+      "case": "commons-67003693_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-67003693_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-67003693_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "2839259"
+    },
+    {
+      "case": "commons-67003693_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/2839259"
+    },
+    {
+      "case": "commons-67003693_video_range_bytes=1419117-1420140",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1419117-1420140/2839259"
+    },
+    {
+      "case": "commons-67003693_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2838235-2839258/2839259"
+    },
+    {
+      "case": "commons-67003693_video_range_bytes=2837259-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2837259-2839258/2839259"
+    },
+    {
+      "case": "commons-67003693_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/2839259"
+    },
+    {
+      "case": "commons-67003693_video_get_invalid_bytes=2839259-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2839259"
+    },
+    {
+      "case": "commons-67003693_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2839259"
+    },
+    {
+      "case": "commons-67003693_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2839259"
+    },
+    {
+      "case": "commons-67003693_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2839259"
+    },
+    {
+      "case": "commons-67003693_video_head_invalid_bytes=2839259-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2839259"
+    },
+    {
+      "case": "commons-67003693_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 47842,
+      "sha256": "1518df2d7f4e9cfb8697dd185843c75bf35a23d93b86cdab06a49eaf3887f089"
+    },
+    {
+      "case": "commons-67003693_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-67003693_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-67003693_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "47842"
+    },
+    {
+      "case": "commons-67003693_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/47842"
+    },
+    {
+      "case": "commons-67003693_poster_range_bytes=23409-24432",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 23409-24432/47842"
+    },
+    {
+      "case": "commons-67003693_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 46818-47841/47842"
+    },
+    {
+      "case": "commons-67003693_poster_range_bytes=45842-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 45842-47841/47842"
+    },
+    {
+      "case": "commons-67003693_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/47842"
+    },
+    {
+      "case": "commons-67003693_poster_get_invalid_bytes=47842-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */47842"
+    },
+    {
+      "case": "commons-67003693_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */47842"
+    },
+    {
+      "case": "commons-67003693_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */47842"
+    },
+    {
+      "case": "commons-67003693_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */47842"
+    },
+    {
+      "case": "commons-67003693_poster_head_invalid_bytes=47842-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */47842"
+    },
+    {
+      "case": "commons-67003693_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-67003693_ingested",
+      "passed": true,
+      "clip_id": "6"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 10187376,
+      "sha256": "f29d939af1579538b4387ace7cea2ac6070a5689b94bf8f86e6359745deb5199"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_range_bytes=5093176-5094199",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5093176-5094199/10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 10186352-10187375/10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_range_bytes=10185376-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 10185376-10187375/10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_invalid_bytes=10187376-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_video_head_invalid_bytes=10187376-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */10187376"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 113192,
+      "sha256": "8a502eee856648ffd12443f2f3e8b76fc6e9b70c55bc587a2950a4c3ed90b1c6"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_range_bytes=56084-57107",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 56084-57107/113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 112168-113191/113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_range_bytes=111192-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 111192-113191/113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_invalid_bytes=113192-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_poster_head_invalid_bytes=113192-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */113192"
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars_ingested",
+      "passed": true,
+      "clip_id": "7"
+    },
+    {
+      "case": "commons-125319404_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 8731828,
+      "sha256": "8bfb8e070fcb2df54790b29a933c74a06b4d9874de72915a84ea85323e1f78f5"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_range_bytes=4365402-4366425",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4365402-4366425/8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8730804-8731827/8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_range_bytes=8729828-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8729828-8731827/8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_invalid_bytes=8731828-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_video_head_invalid_bytes=8731828-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8731828"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 33341,
+      "sha256": "cf7ce52ef1f5c63c44d2cc9ef302f4b9a39a4166d0f4daf50bedb2ceae766a9c"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_range_bytes=16158-17181",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 16158-17181/33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 32317-33340/33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_range_bytes=31341-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 31341-33340/33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_invalid_bytes=33341-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_poster_head_invalid_bytes=33341-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */33341"
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-Moving_Water_in_Space-8K_ingested",
+      "passed": true,
+      "clip_id": "8"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 4059786,
+      "sha256": "04b9a752bb89b96db7409b89a16566ed2ab0063b277d13e44780636eb2b8ffc3"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_range_bytes=2029381-2030404",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2029381-2030404/4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4058762-4059785/4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_range_bytes=4057786-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4057786-4059785/4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_invalid_bytes=4059786-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_video_head_invalid_bytes=4059786-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4059786"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 24455,
+      "sha256": "87af1d478244167bff96f0a30e6060ed95b7050b8c5b80d6d34bd18a05935640"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_range_bytes=11715-12738",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 11715-12738/24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 23431-24454/24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_range_bytes=22455-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 22455-24454/24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_invalid_bytes=24455-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_poster_head_invalid_bytes=24455-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */24455"
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman_ingested",
+      "passed": true,
+      "clip_id": "9"
+    },
+    {
+      "case": "commons-155549774_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 3233953,
+      "sha256": "53b5a977eeff1b53cad3d63827f905d0f086f34657c006a1bd92121ca58d2fe9"
+    },
+    {
+      "case": "commons-155549774_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-155549774_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-155549774_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "3233953"
+    },
+    {
+      "case": "commons-155549774_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3233953"
+    },
+    {
+      "case": "commons-155549774_video_range_bytes=1616464-1617487",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1616464-1617487/3233953"
+    },
+    {
+      "case": "commons-155549774_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3232929-3233952/3233953"
+    },
+    {
+      "case": "commons-155549774_video_range_bytes=3231953-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3231953-3233952/3233953"
+    },
+    {
+      "case": "commons-155549774_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3233953"
+    },
+    {
+      "case": "commons-155549774_video_get_invalid_bytes=3233953-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3233953"
+    },
+    {
+      "case": "commons-155549774_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3233953"
+    },
+    {
+      "case": "commons-155549774_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3233953"
+    },
+    {
+      "case": "commons-155549774_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3233953"
+    },
+    {
+      "case": "commons-155549774_video_head_invalid_bytes=3233953-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3233953"
+    },
+    {
+      "case": "commons-155549774_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 17435,
+      "sha256": "df6049b7d1ca03650d4fe0b9e19dc2b70612d21633c34076be9ad6a85d76ecec"
+    },
+    {
+      "case": "commons-155549774_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-155549774_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-155549774_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "17435"
+    },
+    {
+      "case": "commons-155549774_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/17435"
+    },
+    {
+      "case": "commons-155549774_poster_range_bytes=8205-9228",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8205-9228/17435"
+    },
+    {
+      "case": "commons-155549774_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 16411-17434/17435"
+    },
+    {
+      "case": "commons-155549774_poster_range_bytes=15435-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 15435-17434/17435"
+    },
+    {
+      "case": "commons-155549774_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/17435"
+    },
+    {
+      "case": "commons-155549774_poster_get_invalid_bytes=17435-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */17435"
+    },
+    {
+      "case": "commons-155549774_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */17435"
+    },
+    {
+      "case": "commons-155549774_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */17435"
+    },
+    {
+      "case": "commons-155549774_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */17435"
+    },
+    {
+      "case": "commons-155549774_poster_head_invalid_bytes=17435-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */17435"
+    },
+    {
+      "case": "commons-155549774_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-155549774_ingested",
+      "passed": true,
+      "clip_id": "10"
+    },
+    {
+      "case": "commons-70748227_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 2960984,
+      "sha256": "e01659a6180a40bc09031552b3ce2f65b697d5b1226f8ccf453aa99463869fa1"
+    },
+    {
+      "case": "commons-70748227_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-70748227_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-70748227_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "2960984"
+    },
+    {
+      "case": "commons-70748227_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/2960984"
+    },
+    {
+      "case": "commons-70748227_video_range_bytes=1479980-1481003",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1479980-1481003/2960984"
+    },
+    {
+      "case": "commons-70748227_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2959960-2960983/2960984"
+    },
+    {
+      "case": "commons-70748227_video_range_bytes=2958984-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2958984-2960983/2960984"
+    },
+    {
+      "case": "commons-70748227_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/2960984"
+    },
+    {
+      "case": "commons-70748227_video_get_invalid_bytes=2960984-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2960984"
+    },
+    {
+      "case": "commons-70748227_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2960984"
+    },
+    {
+      "case": "commons-70748227_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2960984"
+    },
+    {
+      "case": "commons-70748227_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2960984"
+    },
+    {
+      "case": "commons-70748227_video_head_invalid_bytes=2960984-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */2960984"
+    },
+    {
+      "case": "commons-70748227_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 52340,
+      "sha256": "26235ce10ec86b135084eac4d7e2550afb621f3fe4898091782216a39fd87be0"
+    },
+    {
+      "case": "commons-70748227_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-70748227_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-70748227_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "52340"
+    },
+    {
+      "case": "commons-70748227_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/52340"
+    },
+    {
+      "case": "commons-70748227_poster_range_bytes=25658-26681",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 25658-26681/52340"
+    },
+    {
+      "case": "commons-70748227_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 51316-52339/52340"
+    },
+    {
+      "case": "commons-70748227_poster_range_bytes=50340-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 50340-52339/52340"
+    },
+    {
+      "case": "commons-70748227_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/52340"
+    },
+    {
+      "case": "commons-70748227_poster_get_invalid_bytes=52340-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */52340"
+    },
+    {
+      "case": "commons-70748227_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */52340"
+    },
+    {
+      "case": "commons-70748227_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */52340"
+    },
+    {
+      "case": "commons-70748227_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */52340"
+    },
+    {
+      "case": "commons-70748227_poster_head_invalid_bytes=52340-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */52340"
+    },
+    {
+      "case": "commons-70748227_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-70748227_ingested",
+      "passed": true,
+      "clip_id": "11"
+    },
+    {
+      "case": "commons-123498313_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 1544214,
+      "sha256": "3d5735e4575e0e7ba33839a3ae65884890254020a09b267bf9687159ddc05793"
+    },
+    {
+      "case": "commons-123498313_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-123498313_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-123498313_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "1544214"
+    },
+    {
+      "case": "commons-123498313_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/1544214"
+    },
+    {
+      "case": "commons-123498313_video_range_bytes=771595-772618",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 771595-772618/1544214"
+    },
+    {
+      "case": "commons-123498313_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1543190-1544213/1544214"
+    },
+    {
+      "case": "commons-123498313_video_range_bytes=1542214-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1542214-1544213/1544214"
+    },
+    {
+      "case": "commons-123498313_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/1544214"
+    },
+    {
+      "case": "commons-123498313_video_get_invalid_bytes=1544214-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1544214"
+    },
+    {
+      "case": "commons-123498313_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1544214"
+    },
+    {
+      "case": "commons-123498313_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1544214"
+    },
+    {
+      "case": "commons-123498313_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1544214"
+    },
+    {
+      "case": "commons-123498313_video_head_invalid_bytes=1544214-_416",
+      "passed": false,
+      "http_status": 429,
+      "content_range": null
+    },
+    {
+      "case": "commons-123498313_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '429 Too Many Requests' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"
+    },
+    {
+      "case": "commons-80366785_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 8059433,
+      "sha256": "e9148ef31b19d2a2eeacbe773d2f82657badf3aae513e06626ee46fbcf97cf39"
+    },
+    {
+      "case": "commons-80366785_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-80366785_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-80366785_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "8059433"
+    },
+    {
+      "case": "commons-80366785_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8059433"
+    },
+    {
+      "case": "commons-80366785_video_range_bytes=4029204-4030227",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4029204-4030227/8059433"
+    },
+    {
+      "case": "commons-80366785_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8058409-8059432/8059433"
+    },
+    {
+      "case": "commons-80366785_video_range_bytes=8057433-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8057433-8059432/8059433"
+    },
+    {
+      "case": "commons-80366785_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8059433"
+    },
+    {
+      "case": "commons-80366785_video_get_invalid_bytes=8059433-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8059433"
+    },
+    {
+      "case": "commons-80366785_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8059433"
+    },
+    {
+      "case": "commons-80366785_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8059433"
+    },
+    {
+      "case": "commons-80366785_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8059433"
+    },
+    {
+      "case": "commons-80366785_video_head_invalid_bytes=8059433-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8059433"
+    },
+    {
+      "case": "commons-80366785_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 37556,
+      "sha256": "f917fae33f646f2d695da8efa012899cbe8f8747deb06288191093f0ee43dbda"
+    },
+    {
+      "case": "commons-80366785_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-80366785_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-80366785_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "37556"
+    },
+    {
+      "case": "commons-80366785_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/37556"
+    },
+    {
+      "case": "commons-80366785_poster_range_bytes=18266-19289",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 18266-19289/37556"
+    },
+    {
+      "case": "commons-80366785_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 36532-37555/37556"
+    },
+    {
+      "case": "commons-80366785_poster_range_bytes=35556-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 35556-37555/37556"
+    },
+    {
+      "case": "commons-80366785_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/37556"
+    },
+    {
+      "case": "commons-80366785_poster_get_invalid_bytes=37556-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */37556"
+    },
+    {
+      "case": "commons-80366785_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */37556"
+    },
+    {
+      "case": "commons-80366785_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */37556"
+    },
+    {
+      "case": "commons-80366785_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */37556"
+    },
+    {
+      "case": "commons-80366785_poster_head_invalid_bytes=37556-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */37556"
+    },
+    {
+      "case": "commons-80366785_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-80366785_ingested",
+      "passed": true,
+      "clip_id": "12"
+    },
+    {
+      "case": "commons-126049058_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5452330,
+      "sha256": "7776a3249da66509512d5821c68f72c1385addb407a9a9cc4fdfc8082b5308c2"
+    },
+    {
+      "case": "commons-126049058_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-126049058_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-126049058_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5452330"
+    },
+    {
+      "case": "commons-126049058_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5452330"
+    },
+    {
+      "case": "commons-126049058_video_range_bytes=2725653-2726676",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2725653-2726676/5452330"
+    },
+    {
+      "case": "commons-126049058_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5451306-5452329/5452330"
+    },
+    {
+      "case": "commons-126049058_video_range_bytes=5450330-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5450330-5452329/5452330"
+    },
+    {
+      "case": "commons-126049058_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5452330"
+    },
+    {
+      "case": "commons-126049058_video_get_invalid_bytes=5452330-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5452330"
+    },
+    {
+      "case": "commons-126049058_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5452330"
+    },
+    {
+      "case": "commons-126049058_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5452330"
+    },
+    {
+      "case": "commons-126049058_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5452330"
+    },
+    {
+      "case": "commons-126049058_video_head_invalid_bytes=5452330-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5452330"
+    },
+    {
+      "case": "commons-126049058_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 11994,
+      "sha256": "aec84edc4e115e8f818b77b784b3b1e5b7a2ad7fc09218093922203d733fb997"
+    },
+    {
+      "case": "commons-126049058_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-126049058_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-126049058_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "11994"
+    },
+    {
+      "case": "commons-126049058_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/11994"
+    },
+    {
+      "case": "commons-126049058_poster_range_bytes=5485-6508",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5485-6508/11994"
+    },
+    {
+      "case": "commons-126049058_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 10970-11993/11994"
+    },
+    {
+      "case": "commons-126049058_poster_range_bytes=9994-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 9994-11993/11994"
+    },
+    {
+      "case": "commons-126049058_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/11994"
+    },
+    {
+      "case": "commons-126049058_poster_get_invalid_bytes=11994-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */11994"
+    },
+    {
+      "case": "commons-126049058_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */11994"
+    },
+    {
+      "case": "commons-126049058_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */11994"
+    },
+    {
+      "case": "commons-126049058_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */11994"
+    },
+    {
+      "case": "commons-126049058_poster_head_invalid_bytes=11994-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */11994"
+    },
+    {
+      "case": "commons-126049058_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-126049058_ingested",
+      "passed": true,
+      "clip_id": "13"
+    },
+    {
+      "case": "commons-143032427_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 4519814,
+      "sha256": "56fdeec5a864b19cfdea5fbec9496177441150666daeb82fd2d6659177692144"
+    },
+    {
+      "case": "commons-143032427_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-143032427_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-143032427_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "4519814"
+    },
+    {
+      "case": "commons-143032427_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4519814"
+    },
+    {
+      "case": "commons-143032427_video_range_bytes=2259395-2260418",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2259395-2260418/4519814"
+    },
+    {
+      "case": "commons-143032427_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4518790-4519813/4519814"
+    },
+    {
+      "case": "commons-143032427_video_range_bytes=4517814-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4517814-4519813/4519814"
+    },
+    {
+      "case": "commons-143032427_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4519814"
+    },
+    {
+      "case": "commons-143032427_video_get_invalid_bytes=4519814-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4519814"
+    },
+    {
+      "case": "commons-143032427_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4519814"
+    },
+    {
+      "case": "commons-143032427_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4519814"
+    },
+    {
+      "case": "commons-143032427_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4519814"
+    },
+    {
+      "case": "commons-143032427_video_head_invalid_bytes=4519814-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4519814"
+    },
+    {
+      "case": "commons-143032427_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 55444,
+      "sha256": "ece2c1ba1c4dc6d50cd0a203eaa4cbe079487504931dc59aec7cd0bf89a8a9e1"
+    },
+    {
+      "case": "commons-143032427_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-143032427_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-143032427_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "55444"
+    },
+    {
+      "case": "commons-143032427_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/55444"
+    },
+    {
+      "case": "commons-143032427_poster_range_bytes=27210-28233",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 27210-28233/55444"
+    },
+    {
+      "case": "commons-143032427_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 54420-55443/55444"
+    },
+    {
+      "case": "commons-143032427_poster_range_bytes=53444-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 53444-55443/55444"
+    },
+    {
+      "case": "commons-143032427_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/55444"
+    },
+    {
+      "case": "commons-143032427_poster_get_invalid_bytes=55444-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */55444"
+    },
+    {
+      "case": "commons-143032427_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */55444"
+    },
+    {
+      "case": "commons-143032427_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */55444"
+    },
+    {
+      "case": "commons-143032427_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */55444"
+    },
+    {
+      "case": "commons-143032427_poster_head_invalid_bytes=55444-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */55444"
+    },
+    {
+      "case": "commons-143032427_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-143032427_ingested",
+      "passed": true,
+      "clip_id": "14"
+    },
+    {
+      "case": "commons-125299661_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 4736429,
+      "sha256": "a51d9edaf8ee9bcc3df83ed63dc8326b60d9331e88206a137ed4e37a8c724a83"
+    },
+    {
+      "case": "commons-125299661_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-125299661_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-125299661_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "4736429"
+    },
+    {
+      "case": "commons-125299661_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4736429"
+    },
+    {
+      "case": "commons-125299661_video_range_bytes=2367702-2368725",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2367702-2368725/4736429"
+    },
+    {
+      "case": "commons-125299661_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4735405-4736428/4736429"
+    },
+    {
+      "case": "commons-125299661_video_range_bytes=4734429-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4734429-4736428/4736429"
+    },
+    {
+      "case": "commons-125299661_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4736429"
+    },
+    {
+      "case": "commons-125299661_video_get_invalid_bytes=4736429-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4736429"
+    },
+    {
+      "case": "commons-125299661_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4736429"
+    },
+    {
+      "case": "commons-125299661_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4736429"
+    },
+    {
+      "case": "commons-125299661_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4736429"
+    },
+    {
+      "case": "commons-125299661_video_head_invalid_bytes=4736429-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4736429"
+    },
+    {
+      "case": "commons-125299661_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 143918,
+      "sha256": "57b1a0ced5967e7c86786f304defd32d1510f6ac1879cc70ee7c68739a7935cf"
+    },
+    {
+      "case": "commons-125299661_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-125299661_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-125299661_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "143918"
+    },
+    {
+      "case": "commons-125299661_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/143918"
+    },
+    {
+      "case": "commons-125299661_poster_range_bytes=71447-72470",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 71447-72470/143918"
+    },
+    {
+      "case": "commons-125299661_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 142894-143917/143918"
+    },
+    {
+      "case": "commons-125299661_poster_range_bytes=141918-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 141918-143917/143918"
+    },
+    {
+      "case": "commons-125299661_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/143918"
+    },
+    {
+      "case": "commons-125299661_poster_get_invalid_bytes=143918-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */143918"
+    },
+    {
+      "case": "commons-125299661_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */143918"
+    },
+    {
+      "case": "commons-125299661_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */143918"
+    },
+    {
+      "case": "commons-125299661_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */143918"
+    },
+    {
+      "case": "commons-125299661_poster_head_invalid_bytes=143918-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */143918"
+    },
+    {
+      "case": "commons-125299661_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-125299661_ingested",
+      "passed": true,
+      "clip_id": "15"
+    },
+    {
+      "case": "commons-31618879_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5739671,
+      "sha256": "5a2ba703690b9c298b5b51fe803d81e40cae4a1d7eb1045ae5b0e4f71099ad0d"
+    },
+    {
+      "case": "commons-31618879_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-31618879_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-31618879_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5739671"
+    },
+    {
+      "case": "commons-31618879_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5739671"
+    },
+    {
+      "case": "commons-31618879_video_range_bytes=2869323-2870346",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2869323-2870346/5739671"
+    },
+    {
+      "case": "commons-31618879_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5738647-5739670/5739671"
+    },
+    {
+      "case": "commons-31618879_video_range_bytes=5737671-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5737671-5739670/5739671"
+    },
+    {
+      "case": "commons-31618879_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5739671"
+    },
+    {
+      "case": "commons-31618879_video_get_invalid_bytes=5739671-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5739671"
+    },
+    {
+      "case": "commons-31618879_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5739671"
+    },
+    {
+      "case": "commons-31618879_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5739671"
+    },
+    {
+      "case": "commons-31618879_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5739671"
+    },
+    {
+      "case": "commons-31618879_video_head_invalid_bytes=5739671-_416",
+      "passed": false,
+      "http_status": 429,
+      "content_range": null
+    },
+    {
+      "case": "commons-31618879_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '429 Too Many Requests' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"
+    },
+    {
+      "case": "nasa-Plant_Habitat-04_Pollination_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "commons-146945011_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5966880,
+      "sha256": "1f16800af36d6a065def168d310121b5df3c0cc3870e788acc7b5d0b590f9415"
+    },
+    {
+      "case": "commons-146945011_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-146945011_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-146945011_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5966880"
+    },
+    {
+      "case": "commons-146945011_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5966880"
+    },
+    {
+      "case": "commons-146945011_video_range_bytes=2982928-2983951",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2982928-2983951/5966880"
+    },
+    {
+      "case": "commons-146945011_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5965856-5966879/5966880"
+    },
+    {
+      "case": "commons-146945011_video_range_bytes=5964880-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5964880-5966879/5966880"
+    },
+    {
+      "case": "commons-146945011_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5966880"
+    },
+    {
+      "case": "commons-146945011_video_get_invalid_bytes=5966880-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5966880"
+    },
+    {
+      "case": "commons-146945011_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5966880"
+    },
+    {
+      "case": "commons-146945011_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5966880"
+    },
+    {
+      "case": "commons-146945011_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5966880"
+    },
+    {
+      "case": "commons-146945011_video_head_invalid_bytes=5966880-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5966880"
+    },
+    {
+      "case": "commons-146945011_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 23270,
+      "sha256": "ebc948c552266fb48ebe2577000d2a3214e3c3b586d3ce8e5281cb1a6b11d1b5"
+    },
+    {
+      "case": "commons-146945011_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-146945011_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-146945011_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "23270"
+    },
+    {
+      "case": "commons-146945011_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/23270"
+    },
+    {
+      "case": "commons-146945011_poster_range_bytes=11123-12146",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 11123-12146/23270"
+    },
+    {
+      "case": "commons-146945011_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 22246-23269/23270"
+    },
+    {
+      "case": "commons-146945011_poster_range_bytes=21270-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 21270-23269/23270"
+    },
+    {
+      "case": "commons-146945011_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/23270"
+    },
+    {
+      "case": "commons-146945011_poster_get_invalid_bytes=23270-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */23270"
+    },
+    {
+      "case": "commons-146945011_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */23270"
+    },
+    {
+      "case": "commons-146945011_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */23270"
+    },
+    {
+      "case": "commons-146945011_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */23270"
+    },
+    {
+      "case": "commons-146945011_poster_head_invalid_bytes=23270-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */23270"
+    },
+    {
+      "case": "commons-146945011_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-146945011_ingested",
+      "passed": true,
+      "clip_id": "16"
+    },
+    {
+      "case": "nasa-321_SS101-PlantGrowth-03_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "commons-113750584_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5225183,
+      "sha256": "d8fe9db1064179d903f27378eb7323b38ca3830fb41b8fdfca277072d89b867d"
+    },
+    {
+      "case": "commons-113750584_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-113750584_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-113750584_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5225183"
+    },
+    {
+      "case": "commons-113750584_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5225183"
+    },
+    {
+      "case": "commons-113750584_video_range_bytes=2612079-2613102",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2612079-2613102/5225183"
+    },
+    {
+      "case": "commons-113750584_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5224159-5225182/5225183"
+    },
+    {
+      "case": "commons-113750584_video_range_bytes=5223183-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5223183-5225182/5225183"
+    },
+    {
+      "case": "commons-113750584_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5225183"
+    },
+    {
+      "case": "commons-113750584_video_get_invalid_bytes=5225183-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5225183"
+    },
+    {
+      "case": "commons-113750584_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5225183"
+    },
+    {
+      "case": "commons-113750584_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5225183"
+    },
+    {
+      "case": "commons-113750584_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5225183"
+    },
+    {
+      "case": "commons-113750584_video_head_invalid_bytes=5225183-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5225183"
+    },
+    {
+      "case": "commons-113750584_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 53025,
+      "sha256": "6c675708ca4532e4079b131e3f97ada1ccf3fde1d2326c0290ec0c1e5710c874"
+    },
+    {
+      "case": "commons-113750584_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-113750584_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-113750584_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "53025"
+    },
+    {
+      "case": "commons-113750584_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/53025"
+    },
+    {
+      "case": "commons-113750584_poster_range_bytes=26000-27023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 26000-27023/53025"
+    },
+    {
+      "case": "commons-113750584_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 52001-53024/53025"
+    },
+    {
+      "case": "commons-113750584_poster_range_bytes=51025-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 51025-53024/53025"
+    },
+    {
+      "case": "commons-113750584_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/53025"
+    },
+    {
+      "case": "commons-113750584_poster_get_invalid_bytes=53025-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */53025"
+    },
+    {
+      "case": "commons-113750584_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */53025"
+    },
+    {
+      "case": "commons-113750584_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */53025"
+    },
+    {
+      "case": "commons-113750584_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */53025"
+    },
+    {
+      "case": "commons-113750584_poster_head_invalid_bytes=53025-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */53025"
+    },
+    {
+      "case": "commons-113750584_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-113750584_ingested",
+      "passed": true,
+      "clip_id": "17"
+    },
+    {
+      "case": "commons-140667111_ingested",
+      "passed": false,
+      "error": "ValueError: source file is larger than the download limit"
+    },
+    {
+      "case": "nasa-PN068 HF-12-hd 09-27-2023_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5796781,
+      "sha256": "0f97637d9ff0c60b4f7b127b4300221583cdf9c0e71e530fbedf59f1b1d02856"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_range_bytes=2897878-2898901",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2897878-2898901/5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5795757-5796780/5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_range_bytes=5794781-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5794781-5796780/5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_invalid_bytes=5796781-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_video_head_invalid_bytes=5796781-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5796781"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 28900,
+      "sha256": "3dd933e19ee0adb194184109213c59e30c3cf9b6dd99a1654d8d32f24339eacf"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_range_bytes=13938-14961",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 13938-14961/28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 27876-28899/28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_range_bytes=26900-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 26900-28899/28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_invalid_bytes=28900-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_poster_head_invalid_bytes=28900-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */28900"
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE_ingested",
+      "passed": true,
+      "clip_id": "18"
+    },
+    {
+      "case": "commons-105842656_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 1710886,
+      "sha256": "9a9f5379d37c7fa773e4c3e3dcb526e98b27e28ef32429247326ce828acb5fa9"
+    },
+    {
+      "case": "commons-105842656_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-105842656_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-105842656_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "1710886"
+    },
+    {
+      "case": "commons-105842656_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/1710886"
+    },
+    {
+      "case": "commons-105842656_video_range_bytes=854931-855954",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 854931-855954/1710886"
+    },
+    {
+      "case": "commons-105842656_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1709862-1710885/1710886"
+    },
+    {
+      "case": "commons-105842656_video_range_bytes=1708886-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1708886-1710885/1710886"
+    },
+    {
+      "case": "commons-105842656_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/1710886"
+    },
+    {
+      "case": "commons-105842656_video_get_invalid_bytes=1710886-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1710886"
+    },
+    {
+      "case": "commons-105842656_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1710886"
+    },
+    {
+      "case": "commons-105842656_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1710886"
+    },
+    {
+      "case": "commons-105842656_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1710886"
+    },
+    {
+      "case": "commons-105842656_video_head_invalid_bytes=1710886-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */1710886"
+    },
+    {
+      "case": "commons-105842656_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 56808,
+      "sha256": "2ecd39ff25b74508d06c46f40d76dc553ce79d3d4de79653e7ce2a18f99a7377"
+    },
+    {
+      "case": "commons-105842656_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-105842656_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-105842656_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "56808"
+    },
+    {
+      "case": "commons-105842656_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/56808"
+    },
+    {
+      "case": "commons-105842656_poster_range_bytes=27892-28915",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 27892-28915/56808"
+    },
+    {
+      "case": "commons-105842656_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 55784-56807/56808"
+    },
+    {
+      "case": "commons-105842656_poster_range_bytes=54808-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 54808-56807/56808"
+    },
+    {
+      "case": "commons-105842656_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/56808"
+    },
+    {
+      "case": "commons-105842656_poster_get_invalid_bytes=56808-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */56808"
+    },
+    {
+      "case": "commons-105842656_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */56808"
+    },
+    {
+      "case": "commons-105842656_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */56808"
+    },
+    {
+      "case": "commons-105842656_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */56808"
+    },
+    {
+      "case": "commons-105842656_poster_head_invalid_bytes=56808-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */56808"
+    },
+    {
+      "case": "commons-105842656_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-105842656_ingested",
+      "passed": true,
+      "clip_id": "19"
+    },
+    {
+      "case": "commons-56429231_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 3279360,
+      "sha256": "feb9d151d38b31dab9a6f40edfa75e863335485ac40a3cab2fdba588d2c0ae95"
+    },
+    {
+      "case": "commons-56429231_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-56429231_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-56429231_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "3279360"
+    },
+    {
+      "case": "commons-56429231_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3279360"
+    },
+    {
+      "case": "commons-56429231_video_range_bytes=1639168-1640191",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1639168-1640191/3279360"
+    },
+    {
+      "case": "commons-56429231_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3278336-3279359/3279360"
+    },
+    {
+      "case": "commons-56429231_video_range_bytes=3277360-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3277360-3279359/3279360"
+    },
+    {
+      "case": "commons-56429231_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3279360"
+    },
+    {
+      "case": "commons-56429231_video_get_invalid_bytes=3279360-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3279360"
+    },
+    {
+      "case": "commons-56429231_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3279360"
+    },
+    {
+      "case": "commons-56429231_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3279360"
+    },
+    {
+      "case": "commons-56429231_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3279360"
+    },
+    {
+      "case": "commons-56429231_video_head_invalid_bytes=3279360-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3279360"
+    },
+    {
+      "case": "commons-56429231_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 25023,
+      "sha256": "acf2a1f0d8dcf8aa1e458e8f2e337e0a06ca9c2e40231b2e04a416cec9a266ad"
+    },
+    {
+      "case": "commons-56429231_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-56429231_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-56429231_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "25023"
+    },
+    {
+      "case": "commons-56429231_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/25023"
+    },
+    {
+      "case": "commons-56429231_poster_range_bytes=11999-13022",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 11999-13022/25023"
+    },
+    {
+      "case": "commons-56429231_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 23999-25022/25023"
+    },
+    {
+      "case": "commons-56429231_poster_range_bytes=23023-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 23023-25022/25023"
+    },
+    {
+      "case": "commons-56429231_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/25023"
+    },
+    {
+      "case": "commons-56429231_poster_get_invalid_bytes=25023-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */25023"
+    },
+    {
+      "case": "commons-56429231_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */25023"
+    },
+    {
+      "case": "commons-56429231_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */25023"
+    },
+    {
+      "case": "commons-56429231_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */25023"
+    },
+    {
+      "case": "commons-56429231_poster_head_invalid_bytes=25023-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */25023"
+    },
+    {
+      "case": "commons-56429231_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-56429231_ingested",
+      "passed": true,
+      "clip_id": "20"
+    },
+    {
+      "case": "commons-151872767_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 8170304,
+      "sha256": "cd2b154e88bace83c6af7595d043c3c7ab913df36d3319e8ca349066cea8ece7"
+    },
+    {
+      "case": "commons-151872767_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-151872767_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-151872767_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "8170304"
+    },
+    {
+      "case": "commons-151872767_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8170304"
+    },
+    {
+      "case": "commons-151872767_video_range_bytes=4084640-4085663",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4084640-4085663/8170304"
+    },
+    {
+      "case": "commons-151872767_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8169280-8170303/8170304"
+    },
+    {
+      "case": "commons-151872767_video_range_bytes=8168304-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8168304-8170303/8170304"
+    },
+    {
+      "case": "commons-151872767_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8170304"
+    },
+    {
+      "case": "commons-151872767_video_get_invalid_bytes=8170304-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8170304"
+    },
+    {
+      "case": "commons-151872767_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8170304"
+    },
+    {
+      "case": "commons-151872767_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8170304"
+    },
+    {
+      "case": "commons-151872767_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8170304"
+    },
+    {
+      "case": "commons-151872767_video_head_invalid_bytes=8170304-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8170304"
+    },
+    {
+      "case": "commons-151872767_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 38073,
+      "sha256": "6c19379585c5f88a771321f9e76f255ecc4868a2fd1959bf279b6757c98a881a"
+    },
+    {
+      "case": "commons-151872767_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-151872767_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-151872767_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "38073"
+    },
+    {
+      "case": "commons-151872767_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/38073"
+    },
+    {
+      "case": "commons-151872767_poster_range_bytes=18524-19547",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 18524-19547/38073"
+    },
+    {
+      "case": "commons-151872767_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 37049-38072/38073"
+    },
+    {
+      "case": "commons-151872767_poster_range_bytes=36073-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 36073-38072/38073"
+    },
+    {
+      "case": "commons-151872767_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/38073"
+    },
+    {
+      "case": "commons-151872767_poster_get_invalid_bytes=38073-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */38073"
+    },
+    {
+      "case": "commons-151872767_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */38073"
+    },
+    {
+      "case": "commons-151872767_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */38073"
+    },
+    {
+      "case": "commons-151872767_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */38073"
+    },
+    {
+      "case": "commons-151872767_poster_head_invalid_bytes=38073-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */38073"
+    },
+    {
+      "case": "commons-151872767_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-151872767_ingested",
+      "passed": true,
+      "clip_id": "21"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 8913562,
+      "sha256": "38efdf3253963c8c67286cf8b55b32d9ccf2480089d894f1774d02776a99c9c1"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_range_bytes=4456269-4457292",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4456269-4457292/8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8912538-8913561/8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_range_bytes=8911562-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 8911562-8913561/8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_invalid_bytes=8913562-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_video_head_invalid_bytes=8913562-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */8913562"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 61612,
+      "sha256": "2b2255b44e8e5d58ef462682255a35d81e8f851619c249a6aae072fcbf19d8f7"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_range_bytes=30294-31317",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 30294-31317/61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 60588-61611/61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_range_bytes=59612-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 59612-61611/61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_invalid_bytes=61612-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_poster_head_invalid_bytes=61612-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */61612"
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096_ingested",
+      "passed": true,
+      "clip_id": "22"
+    },
+    {
+      "case": "nasa-GSFC_20141121_MMS_m11702_launch_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "commons-45256156_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 5055728,
+      "sha256": "afab938116e39887539abdca8d45bdc27c2bbab21c9c48e8ecb9ca2a7c1c1490"
+    },
+    {
+      "case": "commons-45256156_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-45256156_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-45256156_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "5055728"
+    },
+    {
+      "case": "commons-45256156_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5055728"
+    },
+    {
+      "case": "commons-45256156_video_range_bytes=2527352-2528375",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2527352-2528375/5055728"
+    },
+    {
+      "case": "commons-45256156_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5054704-5055727/5055728"
+    },
+    {
+      "case": "commons-45256156_video_range_bytes=5053728-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 5053728-5055727/5055728"
+    },
+    {
+      "case": "commons-45256156_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/5055728"
+    },
+    {
+      "case": "commons-45256156_video_get_invalid_bytes=5055728-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5055728"
+    },
+    {
+      "case": "commons-45256156_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5055728"
+    },
+    {
+      "case": "commons-45256156_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5055728"
+    },
+    {
+      "case": "commons-45256156_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5055728"
+    },
+    {
+      "case": "commons-45256156_video_head_invalid_bytes=5055728-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */5055728"
+    },
+    {
+      "case": "commons-45256156_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 107762,
+      "sha256": "231046bdb1ced9b1e7436831c95c7d579a591985cece680576fbecb384a1befd"
+    },
+    {
+      "case": "commons-45256156_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-45256156_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-45256156_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "107762"
+    },
+    {
+      "case": "commons-45256156_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/107762"
+    },
+    {
+      "case": "commons-45256156_poster_range_bytes=53369-54392",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 53369-54392/107762"
+    },
+    {
+      "case": "commons-45256156_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 106738-107761/107762"
+    },
+    {
+      "case": "commons-45256156_poster_range_bytes=105762-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 105762-107761/107762"
+    },
+    {
+      "case": "commons-45256156_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/107762"
+    },
+    {
+      "case": "commons-45256156_poster_get_invalid_bytes=107762-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */107762"
+    },
+    {
+      "case": "commons-45256156_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */107762"
+    },
+    {
+      "case": "commons-45256156_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */107762"
+    },
+    {
+      "case": "commons-45256156_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */107762"
+    },
+    {
+      "case": "commons-45256156_poster_head_invalid_bytes=107762-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */107762"
+    },
+    {
+      "case": "commons-45256156_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-45256156_ingested",
+      "passed": true,
+      "clip_id": "23"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 3976493,
+      "sha256": "350d549b1913fbe87ed6a704b6a43733cc5669ce082ec83d4fe9fb80e60240fd"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_range_bytes=1987734-1988757",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1987734-1988757/3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3975469-3976492/3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_range_bytes=3974493-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3974493-3976492/3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_invalid_bytes=3976493-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_video_head_invalid_bytes=3976493-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3976493"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 19415,
+      "sha256": "be1f3da9bf26d111040793da7c71dd4c60644b7d3e0e94ec25bbd3fead8d7124"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_range_bytes=9195-10218",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 9195-10218/19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 18391-19414/19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_range_bytes=17415-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 17415-19414/19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_invalid_bytes=19415-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_poster_head_invalid_bytes=19415-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */19415"
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight_ingested",
+      "passed": true,
+      "clip_id": "24"
+    },
+    {
+      "case": "nasa-JPL-20220405-M2020f-0001-How Perseverance Drives on Mars-1080cc_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "commons-113386725_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 3362341,
+      "sha256": "3bde99a6cfc93e176e84b158979443286bce8f10e51f9b850c1b2a38937efa6b"
+    },
+    {
+      "case": "commons-113386725_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-113386725_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-113386725_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "3362341"
+    },
+    {
+      "case": "commons-113386725_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3362341"
+    },
+    {
+      "case": "commons-113386725_video_range_bytes=1680658-1681681",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 1680658-1681681/3362341"
+    },
+    {
+      "case": "commons-113386725_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3361317-3362340/3362341"
+    },
+    {
+      "case": "commons-113386725_video_range_bytes=3360341-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3360341-3362340/3362341"
+    },
+    {
+      "case": "commons-113386725_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/3362341"
+    },
+    {
+      "case": "commons-113386725_video_get_invalid_bytes=3362341-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3362341"
+    },
+    {
+      "case": "commons-113386725_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3362341"
+    },
+    {
+      "case": "commons-113386725_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3362341"
+    },
+    {
+      "case": "commons-113386725_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3362341"
+    },
+    {
+      "case": "commons-113386725_video_head_invalid_bytes=3362341-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */3362341"
+    },
+    {
+      "case": "commons-113386725_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 70009,
+      "sha256": "5ebd879087dd694fbd4213858de6f0f3cc6d1072df6878ba66d4e45c92d0d5a4"
+    },
+    {
+      "case": "commons-113386725_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-113386725_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-113386725_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "70009"
+    },
+    {
+      "case": "commons-113386725_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/70009"
+    },
+    {
+      "case": "commons-113386725_poster_range_bytes=34492-35515",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 34492-35515/70009"
+    },
+    {
+      "case": "commons-113386725_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 68985-70008/70009"
+    },
+    {
+      "case": "commons-113386725_poster_range_bytes=68009-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 68009-70008/70009"
+    },
+    {
+      "case": "commons-113386725_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/70009"
+    },
+    {
+      "case": "commons-113386725_poster_get_invalid_bytes=70009-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */70009"
+    },
+    {
+      "case": "commons-113386725_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */70009"
+    },
+    {
+      "case": "commons-113386725_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */70009"
+    },
+    {
+      "case": "commons-113386725_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */70009"
+    },
+    {
+      "case": "commons-113386725_poster_head_invalid_bytes=70009-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */70009"
+    },
+    {
+      "case": "commons-113386725_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-113386725_ingested",
+      "passed": true,
+      "clip_id": "25"
+    },
+    {
+      "case": "commons-146077925_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 9500337,
+      "sha256": "7fd9a51dd5dd4d7941ddd16f9122f3dd65a84c90eb08be5116cfeba027bccdff"
+    },
+    {
+      "case": "commons-146077925_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-146077925_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-146077925_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "9500337"
+    },
+    {
+      "case": "commons-146077925_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/9500337"
+    },
+    {
+      "case": "commons-146077925_video_range_bytes=4749656-4750679",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4749656-4750679/9500337"
+    },
+    {
+      "case": "commons-146077925_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 9499313-9500336/9500337"
+    },
+    {
+      "case": "commons-146077925_video_range_bytes=9498337-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 9498337-9500336/9500337"
+    },
+    {
+      "case": "commons-146077925_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/9500337"
+    },
+    {
+      "case": "commons-146077925_video_get_invalid_bytes=9500337-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */9500337"
+    },
+    {
+      "case": "commons-146077925_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */9500337"
+    },
+    {
+      "case": "commons-146077925_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */9500337"
+    },
+    {
+      "case": "commons-146077925_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */9500337"
+    },
+    {
+      "case": "commons-146077925_video_head_invalid_bytes=9500337-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */9500337"
+    },
+    {
+      "case": "commons-146077925_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 141573,
+      "sha256": "1e35d93a7ac79698012a4a6c2d5eacc772272dd20e9d7e54b37da2ed21cb4fed"
+    },
+    {
+      "case": "commons-146077925_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-146077925_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-146077925_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "141573"
+    },
+    {
+      "case": "commons-146077925_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/141573"
+    },
+    {
+      "case": "commons-146077925_poster_range_bytes=70274-71297",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 70274-71297/141573"
+    },
+    {
+      "case": "commons-146077925_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 140549-141572/141573"
+    },
+    {
+      "case": "commons-146077925_poster_range_bytes=139573-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 139573-141572/141573"
+    },
+    {
+      "case": "commons-146077925_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/141573"
+    },
+    {
+      "case": "commons-146077925_poster_get_invalid_bytes=141573-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */141573"
+    },
+    {
+      "case": "commons-146077925_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */141573"
+    },
+    {
+      "case": "commons-146077925_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */141573"
+    },
+    {
+      "case": "commons-146077925_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */141573"
+    },
+    {
+      "case": "commons-146077925_poster_head_invalid_bytes=141573-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */141573"
+    },
+    {
+      "case": "commons-146077925_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-146077925_ingested",
+      "passed": true,
+      "clip_id": "26"
+    },
+    {
+      "case": "nasa-GSFC_20181011_SeaIce_m13089_Thinning_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 4762421,
+      "sha256": "be86033633618eff39bff91514c2bbf239f4bcf83e8a0b02d3565cc6e078655d"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_range_bytes=2380698-2381721",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 2380698-2381721/4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4761397-4762420/4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_range_bytes=4760421-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 4760421-4762420/4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_invalid_bytes=4762421-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_video_head_invalid_bytes=4762421-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */4762421"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 172978,
+      "sha256": "925d54264b07298fe8b8ca3e531a826e19890e5cdc2f8d070147d90a10302605"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_range_bytes=85977-87000",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 85977-87000/172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 171954-172977/172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_range_bytes=170978-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 170978-172977/172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_invalid_bytes=172978-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_poster_head_invalid_bytes=172978-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */172978"
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_published_ready",
+      "passed": true
+    },
+    {
+      "case": "nasa-GSFC_20171011_Satellite_m12742_Wildfires_ingested",
+      "passed": true,
+      "clip_id": "27"
+    },
+    {
+      "case": "commons-122663253_video_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 7244717,
+      "sha256": "aafa1d6511d65488ce2352bc5f7a613d409e8d9e8294d33b3bd1cf981eaa0de7"
+    },
+    {
+      "case": "commons-122663253_video_get_content_type",
+      "passed": true,
+      "content_type": "video/mp4"
+    },
+    {
+      "case": "commons-122663253_video_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-122663253_video_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "7244717"
+    },
+    {
+      "case": "commons-122663253_video_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/7244717"
+    },
+    {
+      "case": "commons-122663253_video_range_bytes=3621846-3622869",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 3621846-3622869/7244717"
+    },
+    {
+      "case": "commons-122663253_video_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 7243693-7244716/7244717"
+    },
+    {
+      "case": "commons-122663253_video_range_bytes=7242717-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 7242717-7244716/7244717"
+    },
+    {
+      "case": "commons-122663253_video_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/7244717"
+    },
+    {
+      "case": "commons-122663253_video_get_invalid_bytes=7244717-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */7244717"
+    },
+    {
+      "case": "commons-122663253_video_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */7244717"
+    },
+    {
+      "case": "commons-122663253_video_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */7244717"
+    },
+    {
+      "case": "commons-122663253_video_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */7244717"
+    },
+    {
+      "case": "commons-122663253_video_head_invalid_bytes=7244717-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */7244717"
+    },
+    {
+      "case": "commons-122663253_poster_get_200_exact_bytes",
+      "passed": true,
+      "http_status": 200,
+      "bytes": 231215,
+      "sha256": "62440bacec4c1360ed46af1c229c63e0a76c066ba4930d8dcc8c504968126545"
+    },
+    {
+      "case": "commons-122663253_poster_get_content_type",
+      "passed": true,
+      "content_type": "image/jpeg"
+    },
+    {
+      "case": "commons-122663253_poster_get_accepts_ranges",
+      "passed": true
+    },
+    {
+      "case": "commons-122663253_poster_head_200_length_no_body",
+      "passed": true,
+      "http_status": 200,
+      "content_length": "231215"
+    },
+    {
+      "case": "commons-122663253_poster_range_bytes=0-1023",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/231215"
+    },
+    {
+      "case": "commons-122663253_poster_range_bytes=115095-116118",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 115095-116118/231215"
+    },
+    {
+      "case": "commons-122663253_poster_range_bytes=-1024",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 230191-231214/231215"
+    },
+    {
+      "case": "commons-122663253_poster_range_bytes=229215-",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 229215-231214/231215"
+    },
+    {
+      "case": "commons-122663253_poster_head_range_206",
+      "passed": true,
+      "http_status": 206,
+      "content_range": "bytes 0-1023/231215"
+    },
+    {
+      "case": "commons-122663253_poster_get_invalid_bytes=231215-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */231215"
+    },
+    {
+      "case": "commons-122663253_poster_get_invalid_bytes=999999999-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */231215"
+    },
+    {
+      "case": "commons-122663253_poster_get_invalid_bytes=5-2_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */231215"
+    },
+    {
+      "case": "commons-122663253_poster_get_invalid_bytes=0-1,4-5_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */231215"
+    },
+    {
+      "case": "commons-122663253_poster_head_invalid_bytes=231215-_416",
+      "passed": true,
+      "http_status": 416,
+      "content_range": "bytes */231215"
+    },
+    {
+      "case": "commons-122663253_published_ready",
+      "passed": true
+    },
+    {
+      "case": "commons-122663253_ingested",
+      "passed": true,
+      "clip_id": "28"
+    },
+    {
+      "case": "nasa-GSFC_20171004_m12738_RapidIntensification_ingested",
+      "passed": false,
+      "error": "HTTPStatusError: Client error '413 Payload Too Large' for url 'https://api.lyoai.app/api/v1/media/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413"
+    },
+    {
+      "case": "catalog_meets_minimum",
+      "passed": true,
+      "published": 25,
+      "minimum": 20
+    }
+  ],
+  "instances": [
+    "a6c73b6bf478"
+  ],
+  "manifest_gate": {
+    "entries": 37,
+    "approved": 37,
+    "ready": 37,
+    "minimum": 20,
+    "problems": {},
+    "duplicate_ids": [],
+    "areas_covered": [
+      "astronomy",
+      "biology",
+      "chemistry",
+      "coding",
+      "engineering",
+      "environment",
+      "math",
+      "physics",
+      "robotics",
+      "science",
+      "technology"
+    ],
+    "areas_missing": [],
+    "status": "passed"
+  },
+  "attribution_records": {
+    "nasa-GSFC_20170822_Total_m12690_Eclipse": "NASA/GSFC \u00b7 Public domain",
+    "nasa-2026 Solar Eclipse @ 50,000 Feet": "NASA/HQ \u00b7 Public domain",
+    "commons-67003693": "ESO \u00b7 CC BY 4.0",
+    "nasa-JPL-20210222-M2020f-0001-Perseverance Rover\u2019s Descent and Touchdown on Mars": "NASA/JPL-Caltech \u00b7 Public domain",
+    "nasa-Moving_Water_in_Space-8K": "NASA/JSC \u00b7 Public domain",
+    "nasa-art002m1200950026_SHARED_Returned_0025_Z9_019_Wiseman": "NASA/JSC \u00b7 Public domain",
+    "commons-155549774": "Zvika \u00b7 CC0",
+    "commons-70748227": "heligone \u00b7 CC BY 3.0",
+    "commons-80366785": "Pnotporn \u00b7 CC BY-SA 4.0",
+    "commons-126049058": "North Carolina School of Science and Mathematics \u00b7 CC BY 3.0",
+    "commons-143032427": "NASA Johnson \u00b7 Public domain",
+    "commons-125299661": "Milliped \u00b7 CC BY-SA 4.0",
+    "commons-146945011": "Brandon Seah \u00b7 CC BY 4.0",
+    "commons-113750584": "Greg Sepesi \u00b7 CC BY 4.0",
+    "nasa-KSC-20190918-VP-MWC01-SPACEX-PARACHUTE": "NASA/KSC \u00b7 Public domain",
+    "commons-105842656": "marble \u00b7 CC BY-SA 4.0",
+    "commons-56429231": "Mattwj2002 \u00b7 CC BY-SA 4.0",
+    "commons-151872767": "IBM Research \u00b7 CC BY 3.0",
+    "nasa-KSC-20250122-MH-ANV01-0001-PUNCH_Satellites_Solar_Array_Deployment_Test_VSFB-M11096": "NASA/KSC \u00b7 Public domain",
+    "commons-45256156": "Timo Bingmann \u00b7 CC BY 3.0",
+    "nasa-JPL-20210425-TECHf-0002-Ingenuity Third Flight": "NASA/JPL-Caltech \u00b7 Public domain",
+    "commons-113386725": "Giacomo Alessandroni \u00b7 CC BY-SA 4.0",
+    "commons-146077925": "Nathan J. Szymanski et al. \u00b7 CC BY 4.0",
+    "nasa-GSFC_20171011_Satellite_m12742_Wildfires": "NASA/GSFC \u00b7 Public domain",
+    "commons-122663253": "Google Earth \u00b7 CC BY 3.0"
+  },
+  "passed": 777,
+  "failed": 14,
+  "status": "failed"
+}
