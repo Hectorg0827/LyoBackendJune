@@ -66,7 +66,7 @@ async def pg(monkeypatch, tmp_path):
                                          last_name="", username=f"mod{tag}{index}", avatar_url=None,
                                          is_superuser=False))
         await session.commit()
-    monkeypatch.setenv("DISCOVER_MODERATOR_EMAILS", f"someone@else.test, {users[MODERATOR].email.upper()}")
+    monkeypatch.setenv("DISCOVER_MODERATOR_EMAILS", f"someone@else.test, {users[MODERATOR].email} ")
 
     app = FastAPI()
     setup_error_handlers(app)
@@ -161,8 +161,10 @@ async def _report_statuses(pg, clip_id):
 
 
 def test_only_superusers_and_listed_emails_are_moderators(monkeypatch):
-    monkeypatch.setenv("DISCOVER_MODERATOR_EMAILS", " Owner@LyoAI.app ,other@lyoai.app")
+    monkeypatch.setenv("DISCOVER_MODERATOR_EMAILS", " owner@lyoai.app ,other@lyoai.app")
     assert clip_moderation.is_moderator(SimpleNamespace(email="owner@lyoai.app", is_superuser=False))
+    # Another account can hold the same address in other capitals.
+    assert not clip_moderation.is_moderator(SimpleNamespace(email="Owner@LyoAI.app", is_superuser=False))
     assert clip_moderation.is_moderator(SimpleNamespace(email="x@y.z", is_superuser=True))
     assert not clip_moderation.is_moderator(SimpleNamespace(email="x@y.z", is_superuser=False))
     assert not clip_moderation.is_moderator(SimpleNamespace(email="", is_superuser=False))

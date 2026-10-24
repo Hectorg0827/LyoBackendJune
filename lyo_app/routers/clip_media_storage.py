@@ -306,7 +306,8 @@ def set_media_removed(folder: str, name: str, local_root: Path, removed: bool) -
 
     Returns False when the file is in neither place. Moving twice is a no-op,
     so a retried decision cannot fail on the second try. Storage errors
-    propagate. With cloud storage the container's own copy of the file, if
+    propagate; a move that copied but could not delete the original deletes
+    the copy first, so a file is never left in both places. With cloud storage the container's own copy of the file, if
     the upload left one, is deleted on removal: it would still be served.
     """
     public_local = local_root / folder / name
@@ -329,8 +330,12 @@ def set_media_removed(folder: str, name: str, local_root: Path, removed: bool) -
         blob = bucket.get_blob(source)
         if blob is None:
             return bucket.get_blob(target) is not None
-        bucket.copy_blob(blob, bucket, target)
-        blob.delete()
+        copy = bucket.copy_blob(blob, bucket, target)
+        try:
+            blob.delete()
+        except Exception:
+            copy.delete()
+            raise
         return True
     from botocore.exceptions import ClientError
 
@@ -348,7 +353,11 @@ def set_media_removed(folder: str, name: str, local_root: Path, removed: bool) -
     if not exists(source):
         return exists(target)
     client.copy_object(Bucket=bucket_name, Key=target, CopySource={"Bucket": bucket_name, "Key": source})
-    client.delete_object(Bucket=bucket_name, Key=source)
+    try:
+        client.delete_object(Bucket=bucket_name, Key=source)
+    except Exception:
+        client.delete_object(Bucket=bucket_name, Key=target)
+        raise
     return True
 
 

@@ -11,9 +11,11 @@ reported clips, every clip, or the removed ones, and decides:
 - restore: a removed clip's media moves back and it is served again.
 
 A moderator is a superuser, or a learner whose email is listed in the API's
-DISCOVER_MODERATOR_EMAILS setting (comma-separated). List only emails of
-accounts that already exist: emails are unique, so nobody else can then
-sign up with one and inherit the role.
+DISCOVER_MODERATOR_EMAILS setting (comma-separated). An email must match the
+account's stored email exactly, capitals included: sign-up stores some
+emails as typed and lowercases others, so two accounts can differ only in
+case. List only emails of accounts that already exist; emails are unique,
+so nobody else can then take one and inherit the role.
 """
 import logging
 import os
@@ -52,8 +54,8 @@ NOTES_SHOWN = 5
 def is_moderator(user) -> bool:
     if getattr(user, "is_superuser", False):
         return True
-    email = (getattr(user, "email", None) or "").strip().lower()
-    listed = {e.strip().lower() for e in os.getenv("DISCOVER_MODERATOR_EMAILS", "").split(",") if e.strip()}
+    email = (getattr(user, "email", None) or "").strip()
+    listed = {e.strip() for e in os.getenv("DISCOVER_MODERATOR_EMAILS", "").split(",") if e.strip()}
     return bool(email) and email in listed
 
 

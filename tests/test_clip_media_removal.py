@@ -12,6 +12,7 @@ class FakeS3:
     def __init__(self, keys):
         self.objects = {key: b"bytes" for key in keys}
         self.calls = []
+        self.fail_deletes = set()
 
     def head_object(self, Bucket, Key):
         if Key not in self.objects:
@@ -24,6 +25,9 @@ class FakeS3:
 
     def delete_object(self, Bucket, Key):
         self.calls.append(("delete", Key))
+        if Key in self.fail_deletes:
+            self.fail_deletes.discard(Key)
+            raise ClientError({"Error": {"Code": "500"}}, "DeleteObject")
         self.objects.pop(Key, None)
 
 
@@ -55,3 +59,16 @@ def test_delete_removes_the_object_wherever_it_is(monkeypatch, tmp_path):
     media.delete_media("clips", "a.mp4", tmp_path)
     media.delete_media("clip_thumbnails", "p.jpg", tmp_path)
     assert s3.objects == {}
+
+
+def test_a_move_that_cannot_delete_the_original_leaves_one_copy(monkeypatch, tmp_path):
+    s3 = FakeS3({"removed/clips/a.mp4"})
+    use(monkeypatch, s3)
+    s3.fail_deletes = {"removed/clips/a.mp4"}
+    try:
+        media.set_media_removed("clips", "a.mp4", tmp_path, False)
+    except ClientError:
+        pass
+    else:
+        raise AssertionError("the failed delete must surface")
+    assert set(s3.objects) == {"removed/clips/a.mp4"}, "a removed video must not also be public"
