@@ -519,6 +519,14 @@ def create_app() -> FastAPI:
         logger.info("✅ Clips routes integrated - Video clips with AI course generation active!")
     except ImportError as e:
         logger.warning(f"Clips routes not available: {e}")
+
+    # Discover moderation - moderators keep, remove or restore reported clips
+    try:
+        from lyo_app.routers.clip_moderation import router as clip_moderation_router
+        app.include_router(clip_moderation_router, prefix="/api/v1")
+        logger.info("✅ Discover moderation routes integrated")
+    except ImportError as e:
+        logger.warning(f"Discover moderation routes not available: {e}")
     
     # Search Router - cross-entity search (users, groups, events, posts)
     try:

@@ -9,7 +9,7 @@ from typing import Optional, List, Literal
 from datetime import datetime
 from urllib.parse import urlsplit
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, or_, cast, exists, String
+from sqlalchemy import select, func, desc, delete, or_, cast, exists, String
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
@@ -21,7 +21,7 @@ from lyo_app.core.database import get_async_session
 from lyo_app.models.clips import (
     Clip, ClipLike, ClipView, ClipSave, ClipComment, MEDIA_READY, MODERATION_ACTIVE, MODERATION_HIDDEN,
 )
-from lyo_app.routers.clip_media_storage import media_path_parts, stat_durable_media
+from lyo_app.routers.clip_media_storage import delete_media, media_path_parts, stat_durable_media
 from lyo_app.routers.user_media import _media_root
 
 import logging
@@ -342,6 +342,26 @@ def _servable_to(clip: Clip, user_id: int) -> bool:
 def _open_to(clip: Optional[Clip], user_id: int) -> bool:
     """Whether a learner may see or act on this clip: a servable public one, or their own."""
     return clip is not None and (clip.is_public or clip.user_id == user_id) and _servable_to(clip, user_id)
+
+
+async def _unshared_media(db: AsyncSession, clip: Clip) -> list:
+    """(folder, name) of the clip's stored video and poster that no other clip uses.
+
+    Moving or deleting media another clip points at would break that clip.
+    """
+    media = []
+    for url in (clip.video_url, clip.thumbnail_url):
+        parts = media_path_parts(url)
+        if not parts:
+            continue
+        suffix = f"/{parts[0]}/{parts[1]}"
+        shared = await db.scalar(
+            select(func.count()).select_from(Clip)
+            .where(Clip.id != clip.id, or_(Clip.video_url.endswith(suffix), Clip.thumbnail_url.endswith(suffix)))
+        )
+        if not shared:
+            media.append(parts)
+    return media
 
 
 def _discover_order(sort: str):
@@ -702,11 +722,23 @@ async def delete_clip(
                 detail="You can only delete your own clips"
             )
         
-        await db.delete(clip)
+        # Its comments and views hold foreign keys to it, and its likes and
+        # saves are only cascaded by the ORM, which cannot lazy-load them
+        # here; delete them all explicitly, then the clip.
+        media = await _unshared_media(db, clip)
+        for model in (ClipComment, ClipView, ClipLike, ClipSave):
+            await db.execute(delete(model).where(model.clip_id == clip_id))
+        await db.execute(delete(Clip).where(Clip.id == clip_id))
         await db.commit()
-        
         logger.info(f"Clip deleted: {clip_id} by user {current_user.id}")
-        
+
+        # The row is gone either way; a file left behind is only storage.
+        for folder, name in media:
+            try:
+                await run_in_threadpool(delete_media, folder, name, _media_root())
+            except Exception:
+                logger.exception("Could not delete media %s/%s of deleted clip %s", folder, name, clip_id)
+
         return {"success": True, "message": "Clip deleted successfully"}
         
     except HTTPException:

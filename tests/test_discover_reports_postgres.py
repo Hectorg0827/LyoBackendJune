@@ -255,3 +255,18 @@ def test_the_community_report_endpoint_sends_videos_to_their_own_endpoint():
     with pytest.raises(ValidationError, match="/api/v1/clips/"):
         ReportCreate(target_type="clip", target_id="1", reason="spam")
     assert ReportCreate(target_type="post", target_id="1", reason="spam").target_type.value == "post"
+
+
+@pytest.mark.asyncio
+async def test_an_owner_can_delete_a_video_that_was_watched_and_commented_on(pg):
+    clip_id = await pg.publish()
+    assert (await pg.client.post(f"/api/v1/clips/{clip_id}/view", headers=pg.as_user(4))).status_code == 200
+    assert (await pg.client.post(f"/api/v1/clips/{clip_id}/like", headers=pg.as_user(4))).status_code == 200
+    comment = await pg.client.post(f"/api/v1/clips/{clip_id}/comments", headers=pg.as_user(4), json={"content": "Nice"})
+    assert comment.status_code == 201, comment.text
+
+    response = await pg.client.delete(f"/api/v1/clips/{clip_id}", headers=pg.as_user(0))
+    assert response.status_code == 200, response.text
+    async with pg.sessions() as session:
+        left = await session.scalar(text("SELECT count(*) FROM clips WHERE id = :id"), {"id": int(clip_id)})
+    assert left == 0

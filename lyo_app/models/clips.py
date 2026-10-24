@@ -17,9 +17,11 @@ MEDIA_MISSING = "missing"
 MEDIA_EXTERNAL = "external"
 
 # Learner reports can take a clip out of Discover: "hidden" clips wait for a
-# moderator and only their owner still sees them.
+# moderator and only their owner still sees them. "removed" is a moderator's
+# decision; its video and poster are moved out of public storage.
 MODERATION_ACTIVE = "active"
 MODERATION_HIDDEN = "hidden"
+MODERATION_REMOVED = "removed"
 
 from lyo_app.core.database import Base
 
@@ -72,6 +74,10 @@ class Clip(Base):
     # Whether reports have taken the clip out of Discover (see MODERATION_*).
     moderation_status = Column(String(16), nullable=False, default=MODERATION_ACTIVE,
                                server_default=MODERATION_ACTIVE, index=True)
+    # The last moderator decision on the clip: who, when, and their note.
+    moderated_at = Column(DateTime, nullable=True)
+    moderated_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    moderation_note = Column(String(500), nullable=True)
 
     # Provenance for library videos: a Creative Commons licence is only met
     # when the credit travels with the video, so clients show these fields.
@@ -87,7 +93,8 @@ class Clip(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    user = relationship("User", back_populates="clips")
+    # The author. moderated_by_id is a second link to users, so name this one.
+    user = relationship("User", back_populates="clips", foreign_keys=[user_id])
     likes = relationship("ClipLike", back_populates="clip", cascade="all, delete-orphan")
     saves = relationship("ClipSave", back_populates="clip", cascade="all, delete-orphan")
     
