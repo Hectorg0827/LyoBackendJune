@@ -3,7 +3,8 @@ name: Discover live probe
 # Read-only checks against production, from a runner that can reach it:
 # which commit api.lyoai.app and lyoai.app are serving, and whether the media
 # route answers HEAD (405 before the Discover media fix, 404 for a missing
-# file after it). Sends no credentials and changes nothing.
+# file after it). Changes nothing. The last step signs in as the library
+# account, when its secrets are set, to read the Discover feed a user would get.
 on:
   push:
     branches-ignore: [main]
@@ -12,6 +13,7 @@ on:
       # Publishing the library needs the Discover backend live, so every
       # change to its manifest re-reads what production serves.
       - catalog/catalog.json
+      - catalog/serving_check.py
   workflow_dispatch:
 
 permissions:
@@ -21,7 +23,7 @@ jobs:
   probe:
     name: Probe production
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Backend health
         run: curl -sS -m 30 https://api.lyoai.app/health | tee -a "$GITHUB_STEP_SUMMARY"; echo
@@ -68,3 +70,24 @@ jobs:
           head=$(curl -sS -m 30 -I -o /dev/null -w '%{http_code}' "$missing")
           get=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' "$missing")
           echo "HEAD missing clip -> $head; GET missing clip -> $get" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: The Discover feed a signed-in user gets
+        env:
+          DISCOVER_CERTIFY_EMAIL: ${{ secrets.DISCOVER_LIBRARY_EMAIL }}
+          DISCOVER_CERTIFY_PASSWORD: ${{ secrets.DISCOVER_LIBRARY_PASSWORD }}
+        run: |
+          if [ -z "$DISCOVER_CERTIFY_EMAIL" ]; then
+            echo "No library account secrets; feed not read." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          pip install -q 'httpx==0.25.2'
+          python catalog/serving_check.py | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
