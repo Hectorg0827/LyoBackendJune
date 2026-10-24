@@ -134,7 +134,8 @@ class User(Base):
     gamification_profile = relationship("lyo_app.models.enhanced.GamificationProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     
     # Clips relationship
-    clips = relationship("lyo_app.models.clips.Clip", back_populates="user", cascade="all, delete-orphan", lazy="noload")
+    clips = relationship("lyo_app.models.clips.Clip", back_populates="user", cascade="all, delete-orphan", lazy="noload",
+                         foreign_keys="lyo_app.models.clips.Clip.user_id")
     
     # Stories relationship (for social features)
     stories = relationship("lyo_app.models.social.Story", back_populates="user", cascade="all, delete-orphan", lazy="noload")

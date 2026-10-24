@@ -77,8 +77,11 @@ async def main():
     apply = guard(url)
     connection = await asyncpg.connect(url, timeout=30)
     try:
+        # A removed clip's video sits outside the served storage on purpose;
+        # auditing it would mark it missing and break its restore.
         rows = await connection.fetch(
-            "SELECT id, video_url, media_status, is_public FROM clips ORDER BY id"
+            "SELECT id, video_url, media_status, is_public FROM clips "
+            "WHERE moderation_status <> 'removed' ORDER BY id"
         )
         findings = []
         for row in rows:

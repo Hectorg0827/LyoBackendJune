@@ -292,3 +292,91 @@ def stream_clip_from_cloud(folder: str, name: str, request: Request):
         status_code=status_code,
         headers=headers,
     )
+
+
+# Media a moderator removed. /api/v1/media/file only serves media/<folder>/
+# in the bucket and <root>/<folder>/ on disk, so a removed file's URL stops
+# working while its bytes stay here for a restore.
+REMOVED_PREFIX = "removed"
+LOCAL_REMOVED_DIR = ".removed"
+
+
+def set_media_removed(folder: str, name: str, local_root: Path, removed: bool) -> bool:
+    """Move stored Discover media out of public reach, or back into it.
+
+    Returns False when the file is in neither place. Moving twice is a no-op,
+    so a retried decision cannot fail on the second try. Storage errors
+    propagate; a move that copied but could not delete the original deletes
+    the copy first, so a file is never left in both places. With cloud storage the container's own copy of the file, if
+    the upload left one, is deleted on removal: it would still be served.
+    """
+    public_local = local_root / folder / name
+    removed_local = local_root / LOCAL_REMOVED_DIR / folder / name
+    config = _provider()
+    if not config:
+        source, target = (public_local, removed_local) if removed else (removed_local, public_local)
+        if source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(source, target)
+            return True
+        return target.is_file()
+    if removed:
+        public_local.unlink(missing_ok=True)
+    provider, bucket_name = config
+    public_key, removed_key = _key(folder, name), f"{REMOVED_PREFIX}/{folder}/{name}"
+    source, target = (public_key, removed_key) if removed else (removed_key, public_key)
+    if provider == "gcs":
+        bucket = _gcs_bucket(bucket_name)
+        blob = bucket.get_blob(source)
+        if blob is None:
+            return bucket.get_blob(target) is not None
+        copy = bucket.copy_blob(blob, bucket, target)
+        try:
+            blob.delete()
+        except Exception:
+            copy.delete()
+            raise
+        return True
+    from botocore.exceptions import ClientError
+
+    client = _s3_client(provider)
+
+    def exists(key: str) -> bool:
+        try:
+            client.head_object(Bucket=bucket_name, Key=key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                return False
+            raise
+        return True
+
+    if not exists(source):
+        return exists(target)
+    client.copy_object(Bucket=bucket_name, Key=target, CopySource={"Bucket": bucket_name, "Key": source})
+    try:
+        client.delete_object(Bucket=bucket_name, Key=source)
+    except Exception:
+        client.delete_object(Bucket=bucket_name, Key=target)
+        raise
+    return True
+
+
+def delete_media(folder: str, name: str, local_root: Path) -> None:
+    """Delete stored Discover media wherever it is, public or removed."""
+    for path in (local_root / folder / name, local_root / LOCAL_REMOVED_DIR / folder / name):
+        path.unlink(missing_ok=True)
+    config = _provider()
+    if not config:
+        return
+    provider, bucket_name = config
+    keys = (_key(folder, name), f"{REMOVED_PREFIX}/{folder}/{name}")
+    if provider == "gcs":
+        bucket = _gcs_bucket(bucket_name)
+        for key in keys:
+            blob = bucket.get_blob(key)
+            if blob is not None:
+                blob.delete()
+        return
+    client = _s3_client(provider)
+    for key in keys:
+        client.delete_object(Bucket=bucket_name, Key=key)  # S3 treats a missing key as deleted

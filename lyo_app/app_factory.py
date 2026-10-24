@@ -22,6 +22,7 @@ from .routers import practice
 from .routers import resources
 from .routers import search
 from .routers import moderation
+from .routers import clip_moderation
 from .routers import admin
 from .routers import performance
 from .routers import memory
@@ -311,6 +312,7 @@ def create_app() -> FastAPI:
         (hooks.router, "/api/v1", "Behavioral Hooks"),
         (sync.router, "/api/v1", "Multi-Device Sync"),
         (clips.router, "/api/v1", "Educational Clips"),  # NEW: Clips router
+        (clip_moderation.router, "/api/v1", "Discover Moderation"),
         (classroom_router, "/api/v1", "Lyo Classroom Streams"), # NEW: Classroom router
         (classroom_analytics_router, "/api/v1/classroom/analytics", "Classroom Analytics"), # Sprint 4: Analytics
         (community_router, "/api/v1/community", "Community Hub"),

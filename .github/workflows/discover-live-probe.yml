@@ -48,6 +48,10 @@ jobs:
             else state="unknown (neither marker found)"
             fi
             echo "$host/discover -> $state" | tee -a "$GITHUB_STEP_SUMMARY"
+            # The report sheet ships in the Discover page's own script.
+            chunk=$(grep -oE '/_next/static/chunks/app/[^"]*discover/page-[^"]*\.js' <<<"$page" | head -1)
+            if [ -n "$chunk" ] && curl -sS -m 30 "https://$host$chunk" | grep -q 'Send report'; then report=yes; else report=no; fi
+            echo "$host/discover report button -> $report" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Where each hostname points
@@ -77,6 +81,15 @@ jobs:
             -F "folder=clips" -F "file=@$RUNNER_TEMP/eleven-mb.mp4;type=video/mp4" \
             https://api.lyoai.app/api/v1/media/upload)
           echo "11 MB upload without a sign-in -> $code (413 = refused for size; 401 = reached the route)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Videos can be reported
+        # 401 means the report route exists and asks for a sign-in; 404 means
+        # the API predates it.
+        run: |
+          code=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' -d '{"reason":"other"}' \
+            https://api.lyoai.app/api/v1/clips/1/report)
+          echo "Report without a sign-in -> $code (401 = route live; 404 = not deployed)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Media route answers HEAD
         run: |
