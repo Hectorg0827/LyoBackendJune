@@ -52,6 +52,16 @@ jobs:
             echo "$origin -> ${allowed:-not allowed}" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: A video over 10 MB reaches the upload route
+        # 413 means a blanket size cap refused it before the route; 401 means
+        # it got through to the route, which then asks for a sign-in.
+        run: |
+          head -c $((11 * 1024 * 1024)) /dev/zero > "$RUNNER_TEMP/eleven-mb.mp4"
+          code=$(curl -sS -m 120 -o /dev/null -w '%{http_code}' \
+            -F "folder=clips" -F "file=@$RUNNER_TEMP/eleven-mb.mp4;type=video/mp4" \
+            https://api.lyoai.app/api/v1/media/upload)
+          echo "11 MB upload without a sign-in -> $code (413 = refused for size; 401 = reached the route)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
