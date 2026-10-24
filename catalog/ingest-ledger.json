@@ -575,5 +575,21 @@
       "credit": "NASA/GSFC"
     },
     "attribution": "NASA/GSFC \u00b7 Public domain"
+  },
+  "commons-140667111": {
+    "clip_id": "40",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/ce9195d4022a45c6a9ca76d8bb881ede.mp4",
+    "video_sha256": "d258d67240ba279901621048984b1933e59c4693e7228ca6be2d09a56c6ce47a",
+    "duration": 90.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Mandelbrot_set_fractal_zoom.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/c/c4/Mandelbrot_set_fractal_zoom.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "Cary Huang (carykh)"
+    },
+    "attribution": "Cary Huang (carykh) \u00b7 CC BY 3.0"
   }
 }
