@@ -111,6 +111,28 @@ jobs:
             echo "$host/moderation page -> $shipped" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Block is live
+        # The API's block list asks for a sign-in (401; 404 = not deployed).
+        # Discover ships Block inside its report sheet and Settings lists
+        # blocked accounts; a web deploy may still be rolling out, so wait.
+        run: |
+          code=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' https://api.lyoai.app/api/v1/community/blocks)
+          echo "GET /api/v1/community/blocks without a sign-in -> $code (401 = route live)" | tee -a "$GITHUB_STEP_SUMMARY"
+          shipped() {
+            page=$(curl -sS -m 30 -L "https://$1/$2" || true)
+            chunk=$(grep -oE "/_next/static/chunks/app/[^\"]*$2/page-[^\"]*\.js" <<<"$page" | head -1)
+            [ -n "$chunk" ] && curl -sS -m 30 "https://$1$chunk" | grep -q "$3"
+          }
+          for host in www.lyoai.app lyoai.app; do
+            block=no
+            for attempt in $(seq 40); do
+              if shipped "$host" discover 'unblock them in Settings'; then block=yes; break; fi
+              sleep 30
+            done
+            if shipped "$host" settings 'Blocked accounts'; then list=yes; else list=no; fi
+            echo "$host/discover Block -> $block; $host/settings Blocked accounts -> $list" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"

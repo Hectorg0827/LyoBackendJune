@@ -751,3 +751,9 @@ async def fix_db_schema(
     except Exception as e:
         logger.error(f"Schema fix failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# Forgotten passwords: /auth/password-reset/request and /auth/password-reset/confirm.
+from lyo_app.auth.password_reset import router as password_reset_router  # noqa: E402
+
+router.include_router(password_reset_router)
