@@ -19,6 +19,9 @@ on:
     branches-ignore: [main]
     paths:
       - catalog/catalog.json
+      # A fix to the publishing scripts re-runs what is left to publish.
+      - scripts/discover_catalog.py
+      - scripts/discover_media_certify.py
       - .github/workflows/discover-library-ingest.yml
   workflow_dispatch:
 
