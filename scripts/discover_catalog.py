@@ -61,7 +61,9 @@ SOURCE_HOSTS = {"images-assets.nasa.gov", "images-api.nasa.gov", "upload.wikimed
 STEM_AREAS = ["science", "math", "engineering", "technology", "coding", "astronomy", "biology",
               "chemistry", "physics", "robotics", "environment"]
 LEVELS = {"beginner", "intermediate", "advanced"}
-MAX_DOWNLOAD_BYTES = 600 * 1024 * 1024
+# A source only has to fit on the runner's disk; a two-minute fractal zoom,
+# all detail, is over 600 MB.
+MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MIN_SECONDS, MAX_SECONDS = 5, 90
 # The API refuses any request over 10 MB (lyo_app/auth/security_middleware.py)
 # before the upload route's own limits apply; leave room for the multipart
