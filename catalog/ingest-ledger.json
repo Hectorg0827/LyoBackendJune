@@ -399,5 +399,181 @@
       "credit": "Google Earth"
     },
     "attribution": "Google Earth \u00b7 CC BY 3.0"
+  },
+  "nasa-GSFC_20160426_SDO_m12224_SolarFlare": {
+    "clip_id": "29",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/b0a3011e1af54fcc9e828f7b7e688d6f.mp4",
+    "video_sha256": "ddd6e7ee509eb827f8c0cc388ecc81582037a996398ed51f51774d99e8d34381",
+    "duration": 79.57,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/GSFC_20160426_SDO_m12224_SolarFlare",
+      "mediaUrl": "https://images-assets.nasa.gov/video/GSFC_20160426_SDO_m12224_SolarFlare/GSFC_20160426_SDO_m12224_SolarFlare~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/GSFC"
+    },
+    "attribution": "NASA/GSFC \u00b7 Public domain"
+  },
+  "commons-125319404": {
+    "clip_id": "30",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/700d5ca4121a453a806971e07e2262fc.mp4",
+    "video_sha256": "213203e822211fe57b3c0a39839f9c939f5c727041531476fd6691c891d36905",
+    "duration": 90.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Moon_Phases_2023_%E2%80%93_Northern_Hemisphere_%E2%80%93_4K.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/6/6f/Moon_Phases_2023_%E2%80%93_Northern_Hemisphere_%E2%80%93_4K.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "Public domain",
+      "licenseUrl": null,
+      "credit": "NASA/Goddard Space Flight Center"
+    },
+    "attribution": "NASA/Goddard Space Flight Center \u00b7 Public domain"
+  },
+  "commons-123498313": {
+    "clip_id": "31",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/43a902f3bd5241458a332d9e80160da2.mp4",
+    "video_sha256": "3d5735e4575e0e7ba33839a3ae65884890254020a09b267bf9687159ddc05793",
+    "duration": 9.53,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Foucault_pendulum_utexas_motion.webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/5/5f/Foucault_pendulum_utexas_motion.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+      "credit": "Spheroidite"
+    },
+    "attribution": "Spheroidite \u00b7 CC BY-SA 4.0"
+  },
+  "commons-31618879": {
+    "clip_id": "32",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/497280933b164f88b41f4915eb386a31.mp4",
+    "video_sha256": "5a2ba703690b9c298b5b51fe803d81e40cae4a1d7eb1045ae5b0e4f71099ad0d",
+    "duration": 90.0,
+    "source": {
+      "name": "Wikimedia Commons",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Blue_bottle_(chemical_reaction).webm",
+      "mediaUrl": "https://upload.wikimedia.org/wikipedia/commons/9/96/Blue_bottle_%28chemical_reaction%29.webm?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "license": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0",
+      "credit": "ScienceCOLA"
+    },
+    "attribution": "ScienceCOLA \u00b7 CC BY 3.0"
+  },
+  "nasa-Plant_Habitat-04_Pollination": {
+    "clip_id": "33",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/f9edb2d871c9403281d9cf73e2c3cf59.mp4",
+    "video_sha256": "caf166e59417d095e126e34539cc61fdeb8a898b73687fea8b67e2415d368380",
+    "duration": 56.4,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/Plant_Habitat-04_Pollination",
+      "mediaUrl": "https://images-assets.nasa.gov/video/Plant_Habitat-04_Pollination/Plant_Habitat-04_Pollination~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/JSC"
+    },
+    "attribution": "NASA/JSC \u00b7 Public domain"
+  },
+  "nasa-321_SS101-PlantGrowth-03": {
+    "clip_id": "34",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/7eeada2c3d7e46aabea3067742c518bf.mp4",
+    "video_sha256": "c158b07c28b262725a27694768059d3faed3192fa772be0ff62464a96e0a16da",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/321_SS101-PlantGrowth-03",
+      "mediaUrl": "https://images-assets.nasa.gov/video/321_SS101-PlantGrowth-03/321_SS101-PlantGrowth-03~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/HQ"
+    },
+    "attribution": "NASA/HQ \u00b7 Public domain"
+  },
+  "nasa-PN068 HF-12-hd 09-27-2023": {
+    "clip_id": "35",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/0ade1e41f38043d2b332ccaa2f1f62da.mp4",
+    "video_sha256": "d65ce74ee7d8fcde6d98ac11d6448e57221d6a16519ea6076be4cffdc23d0d53",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/PN068%20HF-12-hd%2009-27-2023",
+      "mediaUrl": "https://images-assets.nasa.gov/video/PN068 HF-12-hd 09-27-2023/PN068 HF-12-hd 09-27-2023~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/MSFC"
+    },
+    "attribution": "NASA/MSFC \u00b7 Public domain"
+  },
+  "nasa-GSFC_20141121_MMS_m11702_launch": {
+    "clip_id": "36",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/9dcc65626f824845a7e5ff23719ae2a0.mp4",
+    "video_sha256": "71e290cc71379c5ebb3560748fc355e6bbec6df0b0cfddb72a0bcbac742c48f7",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/GSFC_20141121_MMS_m11702_launch",
+      "mediaUrl": "https://images-assets.nasa.gov/video/GSFC_20141121_MMS_m11702_launch/GSFC_20141121_MMS_m11702_launch~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/GSFC"
+    },
+    "attribution": "NASA/GSFC \u00b7 Public domain"
+  },
+  "nasa-JPL-20220405-M2020f-0001-How Perseverance Drives on Mars-1080cc": {
+    "clip_id": "37",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/0af4e3c6a2714b62b6968aca4380f95f.mp4",
+    "video_sha256": "c592662893bb0236bae10c0fbe2d41eda32fd8e471a34b6dbab963496a6142c8",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/JPL-20220405-M2020f-0001-How%20Perseverance%20Drives%20on%20Mars-1080cc",
+      "mediaUrl": "https://images-assets.nasa.gov/video/JPL-20220405-M2020f-0001-How Perseverance Drives on Mars-1080cc/JPL-20220405-M2020f-0001-How Perseverance Drives on Mars-1080cc~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/JPL-Caltech"
+    },
+    "attribution": "NASA/JPL-Caltech \u00b7 Public domain"
+  },
+  "nasa-GSFC_20181011_SeaIce_m13089_Thinning": {
+    "clip_id": "38",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/e6e287e189fd4268a9bedb95193cc034.mp4",
+    "video_sha256": "31b5d1a3e2dd65e8c24b66d33b7371732a62c074835a1ff1fd5953b2f54580b6",
+    "duration": 71.27,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/GSFC_20181011_SeaIce_m13089_Thinning",
+      "mediaUrl": "https://images-assets.nasa.gov/video/GSFC_20181011_SeaIce_m13089_Thinning/GSFC_20181011_SeaIce_m13089_Thinning~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/GSFC"
+    },
+    "attribution": "NASA/GSFC \u00b7 Public domain"
+  },
+  "nasa-GSFC_20171004_m12738_RapidIntensification": {
+    "clip_id": "39",
+    "status": "published",
+    "video_url": "https://api.lyoai.app/api/v1/media/file/clips/9737ba8a94ec4fb4aaf0b16bf1d7d6a4.mp4",
+    "video_sha256": "8ac5e3a302ee65941274c9329eb8bb058b2679efefa0b4d539ce5709758be0ee",
+    "duration": 90.0,
+    "source": {
+      "name": "NASA Image and Video Library",
+      "pageUrl": "https://images.nasa.gov/details/GSFC_20171004_m12738_RapidIntensification",
+      "mediaUrl": "https://images-assets.nasa.gov/video/GSFC_20171004_m12738_RapidIntensification/GSFC_20171004_m12738_RapidIntensification~medium.mp4",
+      "license": "Public domain",
+      "licenseUrl": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+      "credit": "NASA/GSFC"
+    },
+    "attribution": "NASA/GSFC \u00b7 Public domain"
   }
 }
