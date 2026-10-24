@@ -48,6 +48,10 @@ jobs:
             else state="unknown (neither marker found)"
             fi
             echo "$host/discover -> $state" | tee -a "$GITHUB_STEP_SUMMARY"
+            # The report sheet ships in the Discover page's own script.
+            chunk=$(grep -oE '/_next/static/chunks/app/[^"]*discover/page-[^"]*\.js' <<<"$page" | head -1)
+            if [ -n "$chunk" ] && curl -sS -m 30 "https://$host$chunk" | grep -q 'Send report'; then report=yes; else report=no; fi
+            echo "$host/discover report button -> $report" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Where each hostname points
