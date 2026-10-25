@@ -69,6 +69,13 @@ MAX_SAVED_NODES_PER_USER = 500
 # only look up public institutions within this radius of the center.
 MAX_PLACE_RADIUS_KM = 25.0
 WHEN_FILTERS = {"today", "week"}
+DEFAULT_OVERPASS_ENDPOINTS = (
+    # The main public instance has repeatedly returned 429/502/504 for Lyo.
+    # Private.coffee explicitly permits application use; keep the other
+    # public instance as a bounded fallback, not a source of fabricated POIs.
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+)
 
 _PLACE_RELEVANCE = {
     "library": "Free study space, books, and public learning programs.",
@@ -252,6 +259,22 @@ class LearningAroundService:
     # learner just tapped never needs a second provider round-trip.
     _place_index: dict[str, tuple[float, LearningNode]] = {}
     _place_index_limit = 4000
+
+    @staticmethod
+    def _overpass_endpoints() -> list[str]:
+        """Honor explicit provider configuration; otherwise use two OSM sources.
+
+        An intentionally blank COMMUNITY_OVERPASS_URL disables live lookups.
+        A private configured provider is never silently bypassed with public
+        services. Operators can opt into comma-separated fallback URLs.
+        """
+        configured = os.getenv("COMMUNITY_OVERPASS_URL")
+        primary = (
+            [configured.strip()] if configured is not None else list(DEFAULT_OVERPASS_ENDPOINTS)
+        )
+        extra = os.getenv("COMMUNITY_OVERPASS_FALLBACK_URLS", "")
+        candidates = primary + [item.strip() for item in extra.split(",")]
+        return list(dict.fromkeys(endpoint for endpoint in candidates if endpoint))[:3]
 
     # ------------------------------------------------------------------
     # Discovery
@@ -1394,8 +1417,8 @@ class LearningAroundService:
         if cached and time.monotonic() - cached[0] < self._poi_cache_ttl_seconds:
             return [node.model_copy(deep=True) for node in cached[1]], True
 
-        endpoint = os.getenv("COMMUNITY_OVERPASS_URL", "https://overpass-api.de/api/interpreter")
-        if not endpoint:
+        endpoints = self._overpass_endpoints()
+        if not endpoints:
             return [], True
 
         south, north, west, east = _bounds(latitude, longitude, radius_km)
@@ -1409,7 +1432,11 @@ class LearningAroundService:
         );
         out center tags;
         """
-        elements = await self._overpass(endpoint, overpass_query)
+        elements = None
+        for endpoint in endpoints:
+            elements = await self._overpass(endpoint, overpass_query)
+            if elements is not None:
+                break
         if elements is None:
             stale = self._poi_cache.get(cache_key)
             if stale:  # Serve the last good answer rather than an empty map.
@@ -1528,15 +1555,17 @@ class LearningAroundService:
             return remembered[1].model_copy(deep=True)
         parts = node_id.split(":")
         if len(parts) == 3 and parts[0] == "osm" and parts[1] in {"node", "way", "relation"} and parts[2].isdigit():
-            endpoint = os.getenv("COMMUNITY_OVERPASS_URL", "https://overpass-api.de/api/interpreter")
-            if endpoint:
+            for endpoint in self._overpass_endpoints():
                 elements = await self._overpass(
                     endpoint, f"[out:json][timeout:8];{parts[1]}({parts[2]});out center tags;"
                 )
-                for node in self._places_from_elements(elements or [], None, None):
+                if elements is None:
+                    continue
+                for node in self._places_from_elements(elements, None, None):
                     if node.key == key:
                         self._remember_places([node])
                         return node
+                break  # A successful response is authoritative, even if empty.
         # Fall back to the learner's own saved copy of the place.
         result = await db.execute(
             select(CommunitySavedNode).where(
