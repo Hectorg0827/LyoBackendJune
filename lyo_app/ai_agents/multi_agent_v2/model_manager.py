@@ -75,24 +75,24 @@ class ModelManager:
     # Model configurations
     MODELS = {
         ModelTier.PREMIUM: ModelConfig(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.8-flash",
             temperature=0.7,
             max_tokens=16384,
-            description="Gemini 2.0 Pro - Best for complex reasoning",
+            description="Gemini 3.8 Flash - High output budget for complex reasoning",
             cost_per_1k_tokens=0.00125  # Approximate
         ),
         ModelTier.STANDARD: ModelConfig(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.8-flash",
             temperature=0.7,
             max_tokens=8192,
-            description="Gemini 2.0 Flash - Fast and cost-effective",
+            description="Gemini 3.8 Flash - Balanced content generation",
             cost_per_1k_tokens=0.000075  # Approximate
         ),
         ModelTier.ECONOMY: ModelConfig(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.8-flash",
             temperature=0.5,  # Lower temperature for consistency
             max_tokens=4096,
-            description="Gemini 2.0 Flash Lite (Economy) - Simple tasks",
+            description="Gemini 3.8 Flash - Lower output budget for simple tasks",
             cost_per_1k_tokens=0.000075
         )
     }

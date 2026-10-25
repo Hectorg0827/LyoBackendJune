@@ -28,7 +28,7 @@ class TestPrepAgent(BaseAgent[TestPrepExtraction]):
         super().__init__(
             name="test_prep_agent",
             output_schema=TestPrepExtraction,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.8-flash",
             temperature=0.3, # Keep low for reliable extraction
             max_tokens=4096
         )

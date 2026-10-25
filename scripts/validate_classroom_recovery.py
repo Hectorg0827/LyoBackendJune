@@ -193,7 +193,7 @@ async def run(output, contracts=True):
         Path(output).write_text(json.dumps(REPORT, indent=2))
         print("CLASSROOM_VALIDATION " + json.dumps({"recovery": REPORT["recovery"][-1] | {"scene": None}}), flush=True)
     if contracts:
-        for provider in ("gemini-2.5-pro", "gemini-2.5-flash", "gpt-4o-mini", "gpt-4o"):
+        for provider in ("gemini-3.8-flash", "gemini-3.8-flash", "gpt-4o-mini", "gpt-4o"):
             for schema, example in contract_examples().items():
                 try:
                     entry = await contract_probe(provider, schema, example)

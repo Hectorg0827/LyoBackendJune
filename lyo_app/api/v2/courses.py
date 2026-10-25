@@ -1310,7 +1310,7 @@ async def _generate_module_content(
         ],
         temperature=0.4,
         max_tokens=6000,
-        provider_order=["gemini-2.5-flash", "gpt-4o"],
+        provider_order=["gemini-3.8-flash", "gpt-4o"],
     )
 
     raw = ai_response.get("content", "")
