@@ -24,7 +24,7 @@ def provider_order_for_tier(
     make the whole product depend on a single provider.
     """
     if has_media:
-        return ["gpt-4o-mini", "gemini-2.5-flash", "gpt-4o"]
+        return ["gpt-4o-mini", "gemini-3.8-flash", "gpt-4o"]
 
     normalized = (tier or "teaching").strip().lower()
 
@@ -35,20 +35,20 @@ def provider_order_for_tier(
     # OpenAI model rather than silently downgrading reasoning quality.
     if prefer_low_latency:
         if normalized == "deliberation":
-            return ["gpt-4o", "gpt-4o-mini", "gemini-2.5-pro", "gemini-2.5-flash"]
-        return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-flash"]
+            return ["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash", "gemini-3.8-flash"]
+        return ["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash"]
 
     if normalized == "deliberation":
         return [
-            "gemini-2.5-pro",
+            "gemini-3.8-flash",
             "gpt-4o",
-            "gemini-2.5-flash",
+            "gemini-3.6-flash",
             "gpt-4o-mini",
         ]
     if normalized == "reflex":
-        return ["gpt-4o-mini", "gemini-2.5-flash"]
+        return ["gpt-4o-mini", "gemini-3.8-flash"]
 
-    return ["gemini-2.5-flash", "gpt-4o-mini"]
+    return ["gemini-3.8-flash", "gpt-4o-mini"]
 
 
 def thinking_budget_for_tier(tier: str) -> int:

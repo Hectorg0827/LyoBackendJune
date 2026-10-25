@@ -89,3 +89,27 @@ async def test_gemini_prewarm_uses_header_not_query():
     await manager._prewarm_connections()
     assert len(manager.session.calls) == 1
     check_call(*manager.session.calls[0])
+
+ 
+@pytest.mark.parametrize(
+    "budget,expected_level",
+    [(0, "low"), (256, "medium"), (-1, "high")],
+)
+@pytest.mark.asyncio
+async def test_gemini_38_stream_uses_thinking_levels_not_numeric_budgets(
+    budget, expected_level,
+):
+    manager = AIResilienceManager()
+    manager.session = CapturingSession()
+    stream = manager._stream_gemini(
+        "gemini-3.8-flash", config(),
+        [{"role": "user", "content": "Explain fractions"}],
+        temperature=0.2, max_tokens=300,
+        thinking_budget=budget,
+    )
+    with pytest.raises(StopRequest):
+        await anext(stream)
+    payload = manager.session.calls[0][2]["json"]
+    thinking = payload["generationConfig"]["thinkingConfig"]
+    assert thinking == {"thinkingLevel": expected_level}
+    assert "thinkingBudget" not in thinking
