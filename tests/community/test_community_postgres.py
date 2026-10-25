@@ -94,6 +94,16 @@ async def pg(monkeypatch):
                 params,
             )
         for statement in (
+            # Remove test-owned feed records before users; social tables have
+            # foreign keys and otherwise make fixture teardown fail.
+            "DELETE FROM post_likes WHERE user_id = ANY(:ids) OR post_id IN "
+            "(SELECT id FROM community_posts WHERE author_id = ANY(:ids)) OR comment_id IN "
+            "(SELECT id FROM post_comments WHERE author_id = ANY(:ids))",
+            "DELETE FROM post_bookmarks WHERE user_id = ANY(:ids) OR post_id IN "
+            "(SELECT id FROM community_posts WHERE author_id = ANY(:ids))",
+            "DELETE FROM post_comments WHERE author_id = ANY(:ids) OR post_id IN "
+            "(SELECT id FROM community_posts WHERE author_id = ANY(:ids))",
+            "DELETE FROM community_posts WHERE author_id = ANY(:ids)",
             "DELETE FROM community_event_guests WHERE user_id = ANY(:ids) OR event_id IN "
             "(SELECT id FROM community_events WHERE organizer_id = ANY(:ids))",
             "DELETE FROM community_event_invites WHERE created_by_id = ANY(:ids)",
@@ -283,3 +293,65 @@ async def test_private_event_invites_on_postgres(pg):
     deleted = await pg.client.delete(f"/community/events/{event_id}", headers=pg.a)
     assert deleted.status_code == 204, deleted.text
     assert (await pg.client.get(f"/community/invites/{token}", headers=pg.b)).status_code == 404
+
+
+async def test_social_photo_posts_work_on_migrated_postgres(pg):
+    """The + Create and Community feed contract must work on a real PG schema.
+
+    The original community_feed_001 migration used text[] and restrictive
+    lowercase native enums, but the ORM sent JSON and uppercase enum names.
+    A newly migrated Railway database therefore returned 500 for both routes.
+    """
+    media_url = "https://example.com/lyo-staging-photo.png"
+    created_ids = []
+    for kind in ("text", "image", "question_discussion", "study_tip"):
+        payload = {
+            "content": f"Community PostgreSQL validation: {kind}",
+            "post_type": kind,
+            "media_urls": [media_url] if kind == "image" else [],
+            "tags": ["science", "learning"],
+            "visibility": "public",
+        }
+        created = await pg.client.post("/community/posts", headers=pg.a, json=payload)
+        assert created.status_code == 201, (kind, created.text)
+        body = created.json()
+        assert body["post_type"] == kind
+        assert body["media_urls"] == payload["media_urls"]
+        assert body["tags"] == ["science", "learning"]
+        created_ids.append(body["id"])
+
+    feed = await pg.client.get("/community/posts", headers=pg.b)
+    assert feed.status_code == 200, feed.text
+    items = {p["id"]: p for p in feed.json()["items"]}
+    assert set(created_ids).issubset(items)
+    assert items[created_ids[1]]["media_urls"] == [media_url]
+
+    detail = await pg.client.get(f"/community/posts/{created_ids[1]}", headers=pg.b)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["post_type"] == "image"
+
+    like = await pg.client.post(f"/community/posts/{created_ids[1]}/like", headers=pg.b)
+    assert like.status_code == 200, like.text
+    bookmark = await pg.client.post(
+        f"/community/posts/{created_ids[1]}/bookmark", headers=pg.b
+    )
+    assert bookmark.status_code == 200, bookmark.text
+
+    comment = await pg.client.post(
+        f"/community/posts/{created_ids[1]}/comments",
+        headers=pg.b,
+        json={"content": "Useful photo study note!"},
+    )
+    assert comment.status_code == 201, comment.text
+    comment_id = comment.json()["id"]
+    comment_like = await pg.client.post(
+        f"/community/posts/{created_ids[1]}/comments/{comment_id}/like",
+        headers=pg.a,
+    )
+    assert comment_like.status_code == 200, comment_like.text
+
+    comments = await pg.client.get(
+        f"/community/posts/{created_ids[1]}/comments", headers=pg.a
+    )
+    assert comments.status_code == 200, comments.text
+    assert any(c["id"] == comment_id for c in comments.json()["items"])
