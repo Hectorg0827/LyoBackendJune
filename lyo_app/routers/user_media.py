@@ -42,6 +42,7 @@ ALLOWED_TYPES = {
     "image/png": ".png",
     "image/webp": ".webp",
     "image/heic": ".heic",
+    "image/heif": ".heic",  # Some Android and iOS galleries use the HEIF MIME alias.
     "application/pdf": ".pdf",
     "text/plain": ".txt",
     "text/markdown": ".md",

@@ -23,7 +23,8 @@ from lyo_app.core.config import settings
 
 CHUNK_SIZE = 1024 * 1024
 FIRST_CHUNK_SIZE = 64 * 1024
-DURABLE_MEDIA_FOLDERS = {"clips", "clip_thumbnails"}
+# Community photos must survive backend redeploys just like Discover clips.
+DURABLE_MEDIA_FOLDERS = {"clips", "clip_thumbnails", "community"}
 # One value per running process. Release checks read it from media responses
 # to prove a URL was served by a new deployment or by a second replica.
 INSTANCE_ID = uuid.uuid4().hex[:12]

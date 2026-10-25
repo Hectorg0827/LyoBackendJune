@@ -747,6 +747,77 @@ async def test_place_provider_outage_is_reported_not_fatal(clients, monkeypatch)
     assert [item["title"] for item in response.json()["items"]] == ["Still here"]
 
 
+async def test_default_place_provider_fails_over_and_caches_real_nodes(monkeypatch):
+    monkeypatch.delenv("COMMUNITY_OVERPASS_URL", raising=False)
+    monkeypatch.delenv("COMMUNITY_OVERPASS_FALLBACK_URLS", raising=False)
+    endpoints = LearningAroundService._overpass_endpoints()
+    assert endpoints == [
+        "https://overpass.private.coffee/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+    ]
+    calls = []
+
+    async def fake_overpass(self, endpoint, query):
+        calls.append(endpoint)
+        if endpoint == endpoints[0]:
+            return None  # e.g. 502 or a timeout
+        return [{
+            "type": "node", "id": 17001, "lat": 37.123, "lon": -122.456,
+            "tags": {"amenity": "library", "name": "Public Learning Library"},
+        }]
+
+    monkeypatch.setattr(LearningAroundService, "_overpass", fake_overpass)
+    service = LearningAroundService()
+    places, ok = await service._fetch_osm_places(37.123, -122.456, 1.5)
+    assert ok is True
+    assert [node.title for node in places] == ["Public Learning Library"]
+    assert calls == endpoints
+
+    # Normal cache hit does not consume another public provider request.
+    cached, cached_ok = await service._fetch_osm_places(37.123, -122.456, 1.5)
+    assert cached_ok is True
+    assert [node.key for node in cached] == [node.key for node in places]
+    assert calls == endpoints
+
+
+async def test_explicit_place_provider_does_not_leak_to_public_fallback(monkeypatch):
+    monkeypatch.setenv("COMMUNITY_OVERPASS_URL", "https://private.example/api")
+    monkeypatch.delenv("COMMUNITY_OVERPASS_FALLBACK_URLS", raising=False)
+    assert LearningAroundService._overpass_endpoints() == ["https://private.example/api"]
+
+    calls = []
+
+    async def unavailable(self, endpoint, query):
+        calls.append(endpoint)
+        return None
+
+    monkeypatch.setattr(LearningAroundService, "_overpass", unavailable)
+    service = LearningAroundService()
+    places, ok = await service._fetch_osm_places(37.124, -122.457, 1.5)
+    assert (places, ok) == ([], False)
+    assert calls == ["https://private.example/api"]
+
+    monkeypatch.setenv("COMMUNITY_OVERPASS_FALLBACK_URLS", "https://backup.example/api")
+    assert LearningAroundService._overpass_endpoints() == [
+        "https://private.example/api", "https://backup.example/api",
+    ]
+
+
+async def test_successfully_empty_provider_response_does_not_fail_over(monkeypatch):
+    monkeypatch.delenv("COMMUNITY_OVERPASS_URL", raising=False)
+    monkeypatch.delenv("COMMUNITY_OVERPASS_FALLBACK_URLS", raising=False)
+    calls = []
+
+    async def empty_overpass(self, endpoint, query):
+        calls.append(endpoint)
+        return []
+
+    monkeypatch.setattr(LearningAroundService, "_overpass", empty_overpass)
+    places, ok = await LearningAroundService()._fetch_osm_places(37.125, -122.458, 1.5)
+    assert (places, ok) == ([], True)
+    assert calls == [LearningAroundService._overpass_endpoints()[0]]
+
+
 async def test_search_resolve_distinguishes_places_and_topics(clients, monkeypatch):
     bronx = PlaceSuggestion(name="The Bronx", label="The Bronx, New York", kind="borough",
                             latitude=40.8448, longitude=-73.8648, radius_km=8.0, is_area=True)
