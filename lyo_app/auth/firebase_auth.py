@@ -233,7 +233,12 @@ class FirebaseAuthService:
         
         # Try to find existing user
         user = await self.get_user_by_firebase_uid(db, firebase_uid)
-        
+
+        if not user and email and not token_data.get("email_verified"):
+            # Anyone can make a Firebase account with someone else's email;
+            # until the email is confirmed it must not open or claim an account.
+            raise ValueError("Confirm your email address before signing in with it")
+
         if not user and email:
             # Check if user exists with this email
             user = await self.get_user_by_email(db, email)
