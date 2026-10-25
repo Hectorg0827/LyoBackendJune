@@ -206,7 +206,7 @@ REVISED:
         response = await asyncio.wait_for(
             ai_resilience_manager.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
-                provider_order=["gpt-4o-mini", "gemini-2.5-flash"],
+                provider_order=["gpt-4o-mini", "gemini-3.8-flash"],
                 temperature=0.0,
                 max_tokens=1200,
                 use_cache=False,

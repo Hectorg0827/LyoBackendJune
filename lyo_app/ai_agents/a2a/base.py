@@ -466,7 +466,7 @@ class A2ABaseAgent(ABC, Generic[T]):
                         messages=messages,
                         temperature=self.temperature,
                         max_tokens=self.max_tokens,
-                        provider_order=[self.model_name, "gemini-2.5-flash", "gpt-4o-mini"]
+                        provider_order=[self.model_name, "gemini-3.8-flash", "gpt-4o-mini"]
                     ),
                     timeout=self.timeout_seconds
                 )

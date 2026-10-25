@@ -113,7 +113,7 @@ async def generate_instant_payload(topic: str, level: str) -> dict:
                 ],
                 temperature=0.3,
                 max_tokens=600,
-                provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                provider_order=["gemini-3.8-flash", "gpt-4o-mini"],
             ),
             timeout=5.0,
         )

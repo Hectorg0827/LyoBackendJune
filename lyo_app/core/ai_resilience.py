@@ -570,9 +570,21 @@ class AIResilienceManager:
             "topK": 40,
         }
         if thinking_budget is not None:
-            generation_config["thinkingConfig"] = {
-                "thinkingBudget": int(thinking_budget)
-            }
+            # Gemini 3.x uses thinking levels rather than numeric budgets.
+            # Retain the legacy budget field only for Gemini 2.x callers.
+            if model_key.startswith("gemini-3."):
+                thinking_level = (
+                    "high" if thinking_budget < 0
+                    else "low" if thinking_budget == 0
+                    else "medium"
+                )
+                generation_config["thinkingConfig"] = {
+                    "thinkingLevel": thinking_level
+                }
+            else:
+                generation_config["thinkingConfig"] = {
+                    "thinkingBudget": int(thinking_budget)
+                }
 
         payload: Dict[str, Any] = {
             "contents": contents,
@@ -976,7 +988,7 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-2.5-flash"]  # Default
+            return ["gemini-3.8-flash", "gpt-4o-mini"]  # Default
         
         def _text_content(message: Dict[str, Any]) -> str:
             content = message.get("content", "")
@@ -1013,9 +1025,9 @@ class AIResilienceManager:
         # failure before falling through to OpenAI. Keep Gemini as a later
         # fallback for the day its key is restored.
         if is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-pro", "gemini-2.5-flash"]
+            return ["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash", "gemini-3.6-flash"]
         else:
-            return ["gpt-4o-mini", "gemini-2.5-flash"]
+            return ["gpt-4o-mini", "gemini-3.8-flash", "gemini-3.6-flash"]
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:

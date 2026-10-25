@@ -128,7 +128,7 @@ class TutorAgent:
     
     def __init__(self):
         self.name = "tutor_agent"
-        self.model_name = "gemini-2.5-flash"
+        self.model_name = "gemini-3.8-flash"
         self.temperature = 0.7
         self._available = False
         self.model = None
