@@ -38,7 +38,14 @@ async def award_xp(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Award XP to the current user (typically called by system)."""
+    """Administrative XP grant. Normal learners earn XP only from verified server events."""
+    # Never trust a learner-supplied action_type, context or arbitrary xp_earned.
+    # This endpoint is exposed at both legacy and /api/v1 prefixes.
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="XP awards are reserved for trusted server-side workflows",
+        )
     try:
         xp_record = await gamification_service.award_xp(
             db=db,
