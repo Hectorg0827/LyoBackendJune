@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # emitting), so this is not additional perceived latency.
 COMPOSE_TIMEOUT_SECONDS = 45.0
 
-PROVIDER_ORDER = ["gemini-2.5-flash", "gpt-4o-mini"]
+PROVIDER_ORDER = ["gemini-3.8-flash", "gpt-4o-mini"]
 
 
 class SectionKind(str, Enum):

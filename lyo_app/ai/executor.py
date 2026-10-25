@@ -87,7 +87,7 @@ def _get_gemini_model():
     genai.configure(api_key=api_key)
     logger.info(f"✅ Gemini executor model initialised (key ...{api_key[-4:]})")
     return genai.GenerativeModel(
-        "gemini-2.5-flash",
+        "gemini-3.8-flash",
         generation_config={"temperature": 0.7, "max_output_tokens": 2048},
     )
 
@@ -104,7 +104,7 @@ def _get_json_gemini_model():
         return None
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        "gemini-2.5-flash",
+        "gemini-3.8-flash",
         generation_config={
             "temperature": 0.5,
             "max_output_tokens": 2048,
@@ -1007,7 +1007,7 @@ Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-3.8-flash", "gpt-4o-mini"]
                 ),
                 timeout=45.0
             )
@@ -1087,7 +1087,7 @@ Include 3-4 body_sections and 3-5 key_points. Keep each section focused and clea
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"],
+                    provider_order=["gemini-3.8-flash", "gpt-4o-mini"],
                     response_format={"type": "json_object"} if self._gemini_json else None
                 ),
                 timeout=45.0
@@ -1149,7 +1149,7 @@ Make options plausible but with one clear correct answer. correct_answer is the 
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-2.5-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-3.8-flash", "gpt-4o-mini"]
                 ),
                 timeout=45.0
             )

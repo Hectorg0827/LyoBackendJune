@@ -497,7 +497,7 @@ class ConversationManager:
                 messages=messages,
                 temperature=0.7,
                 max_tokens=1500,
-                provider_order=["gpt-4o-mini", "gpt-4o", "gemini-2.5-pro", "gemini-2.5-flash"]
+                provider_order=["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash", "gemini-3.8-flash"]
             )
             
             content = response.get("content") or response.get("response") or ""

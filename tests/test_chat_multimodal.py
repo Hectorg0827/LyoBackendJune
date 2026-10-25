@@ -204,5 +204,5 @@ def test_multimodal_teaching_has_more_than_one_provider() -> None:
     order = provider_order_for_tier("teaching", has_media=True)
 
     assert order[0] == "gpt-4o-mini"
-    assert "gemini-2.5-flash" in order
+    assert "gemini-3.8-flash" in order
     assert len(order) >= 2
