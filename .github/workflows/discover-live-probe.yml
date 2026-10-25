@@ -133,6 +133,31 @@ jobs:
             echo "$host/discover Block -> $block; $host/settings Blocked accounts -> $list" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Password reset is live
+        # A made-up link is refused (400 with the reset's own message; 404 =
+        # not deployed). No email is sent and nothing changes. The website
+        # ships Forgot password? on login and the page that asks for a link.
+        run: |
+          answer=$(curl -sS -m 30 -X POST -H 'Content-Type: application/json' \
+            -d '{"token":"probe-not-a-real-link-0000000000","new_password":"Probe-Only-Pass9"}' \
+            -w ' -> %{http_code}' https://api.lyoai.app/auth/password-reset/confirm)
+          echo "POST /auth/password-reset/confirm with a made-up link: $answer" | tee -a "$GITHUB_STEP_SUMMARY"
+          shipped() {
+            page=$(curl -sS -m 30 -L "https://$1/$2" || true)
+            chunk=$(grep -oE "/_next/static/chunks/app/[^\"]*$2/page-[^\"]*\.js" <<<"$page" | head -1)
+            [ -n "$chunk" ] && curl -sS -m 30 "https://$1$chunk" | grep -q "$3"
+          }
+          for host in www.lyoai.app lyoai.app; do
+            forgot=no
+            for attempt in $(seq 40); do
+              if shipped "$host" auth/forgot-password 'Send reset link'; then forgot=yes; break; fi
+              sleep 30
+            done
+            if shipped "$host" auth/login 'Forgot password?'; then login=yes; else login=no; fi
+            if shipped "$host" auth/reset-password 'Save new password'; then reset=yes; else reset=no; fi
+            echo "$host forgot-password page -> $forgot; login link -> $login; reset page -> $reset" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"

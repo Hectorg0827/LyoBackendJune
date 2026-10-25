@@ -113,7 +113,10 @@ async def get_current_user(
             # Try to find user by Firebase UID
             user = await firebase_auth_service.get_user_by_firebase_uid(db, firebase_uid)
             
-            # If not found by UID, try by email
+            # If not found by UID, try by email, but only a confirmed one:
+            # anyone can make a Firebase account with someone else's email.
+            if not user and email and not firebase_data.get("email_verified"):
+                raise ValueError("Firebase email is not verified")
             if not user and email:
                 user = await firebase_auth_service.get_user_by_email(db, email)
             
