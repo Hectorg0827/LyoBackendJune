@@ -22,6 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 import uuid
 
@@ -569,6 +570,9 @@ class PostType(str, Enum):
     COURSE_SHARE = "course_share"
     QUESTION_DISCUSSION = "question_discussion"
     STUDY_TIP = "study_tip"
+    # Historic values remain readable when older Community posts are present.
+    QUESTION = "question"
+    STUDY_GROUP = "study_group"
 
 
 class PostVisibility(str, Enum):
@@ -611,6 +615,17 @@ class ReportStatus(str, Enum):
     DISMISSED = "dismissed"
 
 
+def _feed_enum(enum_class):
+    """Store the public lower-case wire values without a restrictive PG enum."""
+    return SQLEnum(
+        enum_class,
+        native_enum=False,
+        values_callable=lambda members: [member.value for member in members],
+        length=30,
+        validate_strings=True,
+    )
+
+
 class CommunityPost(Base):
     """
     Community post model for social feed.
@@ -628,12 +643,12 @@ class CommunityPost(Base):
 
     # Content
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    media_urls = Column(JSON, nullable=True)  # List of media URLs
-    tags = Column(JSON, nullable=True)  # List of tags
+    media_urls = Column(JSON().with_variant(postgresql.JSONB(), 'postgresql'), nullable=True)
+    tags = Column(JSON().with_variant(postgresql.JSONB(), 'postgresql'), nullable=True)
 
     # Type and visibility
-    post_type: Mapped[PostType] = mapped_column(SQLEnum(PostType), default=PostType.TEXT)
-    visibility: Mapped[PostVisibility] = mapped_column(SQLEnum(PostVisibility), default=PostVisibility.PUBLIC)
+    post_type: Mapped[PostType] = mapped_column(_feed_enum(PostType), default=PostType.TEXT)
+    visibility: Mapped[PostVisibility] = mapped_column(_feed_enum(PostVisibility), default=PostVisibility.PUBLIC)
 
     # Linked content
     linked_course_id: Mapped[Optional[int]] = mapped_column(ForeignKey("courses.id"), nullable=True)
