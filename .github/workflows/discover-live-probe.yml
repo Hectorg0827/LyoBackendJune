@@ -206,6 +206,8 @@ jobs:
             dkim=$(dig +short $server TXT resend._domainkey.lyoai.app | tr -d '" \n')
             echo "TXT resend._domainkey.lyoai.app -> ${dkim:0:12}${dkim:+… (${#dkim} characters)}" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "TXT _dmarc.lyoai.app -> $(dig +short $server TXT _dmarc.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+            # Records meant for send or resend._domainkey but saved on lyoai.app itself.
+            echo "MX lyoai.app -> $(dig +short $server MX lyoai.app | tr '\n' ' '); TXT lyoai.app -> $(dig +short $server TXT lyoai.app | cut -c1-60 | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
             # A name typed with the domain on Railway ends up doubled.
             echo "Doubled names (should be empty) -> $(dig +short $server TXT send.lyoai.app.lyoai.app; dig +short $server TXT resend._domainkey.lyoai.app.lyoai.app; dig +short $server MX send.lyoai.app.lyoai.app)" | tee -a "$GITHUB_STEP_SUMMARY"
           done
