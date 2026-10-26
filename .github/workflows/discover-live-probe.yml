@@ -158,6 +158,33 @@ jobs:
             echo "$host forgot-password page -> $forgot; login link -> $login; reset page -> $reset" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Continue with Google is ready
+        # Read-only. The login page should ship the button with the Firebase web
+        # settings (waiting up to 20 minutes for a rolling deploy); Google should
+        # accept that key for project lyo-app, list both web addresses as
+        # authorized domains, and offer Google as a sign-in provider.
+        run: |
+          key="" button=no
+          for attempt in $(seq 40); do
+            page=$(curl -sS -m 30 -L https://www.lyoai.app/auth/login || true)
+            for chunk in $(grep -oE '/_next/static/chunks/[^"]+\.js' <<<"$page" | sort -u); do
+              js=$(curl -sS -m 30 "https://www.lyoai.app$chunk" || true)
+              if grep -q 'Continue with Google' <<<"$js"; then button=yes; fi
+              found=$(grep -oE 'AIza[0-9A-Za-z_-]{35}' <<<"$js" | head -1 || true)
+              if [ -n "$found" ]; then key=$found; fi
+            done
+            if [ "$button" = yes ] && [ -n "$key" ]; then break; fi
+            sleep 30
+          done
+          echo "www.lyoai.app/auth/login: Continue with Google -> $button; Firebase web key in the page -> $([ -n "$key" ] && echo yes || echo no)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -z "$key" ]; then exit 0; fi
+          config=$(curl -sS -m 30 -H 'Referer: https://www.lyoai.app/' "https://identitytoolkit.googleapis.com/v1/projects?key=$key")
+          echo "Google's project config for that key: $(jq -c '{projectId, authorizedDomains, error: .error.message}' <<<"$config")" | tee -a "$GITHUB_STEP_SUMMARY"
+          provider=$(curl -sS -m 30 -X POST -H 'Content-Type: application/json' -H 'Referer: https://www.lyoai.app/' \
+            -d '{"providerId":"google.com","continueUri":"https://www.lyoai.app/auth/login"}' \
+            "https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=$key")
+          echo "Google as a sign-in provider: $(jq -c 'if .authUri then "enabled" else (.error.message // .) end' <<<"$provider")" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
