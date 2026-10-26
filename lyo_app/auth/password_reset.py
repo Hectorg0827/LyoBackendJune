@@ -14,9 +14,10 @@ Emails are sent with Resend's HTTP API (Railway blocks outbound SMTP on most
 plans). Settings:
 
 - RESEND_API_KEY: required; without it no email is sent and an error is logged.
-- EMAIL_FROM: the sender, such as "Lyo <no-reply@lyoai.app>" once lyoai.app is
-  verified in Resend. Until then the default, Resend's onboarding@resend.dev,
-  can only send to the email address the Resend account was made with.
+- EMAIL_FROM: the sender, such as "Lyo <no-reply@lyoai.app>". While Resend has
+  not verified its domain, emails go from the default instead: Resend's
+  onboarding@resend.dev, which can only send to the email address the Resend
+  account was made with.
 - WEB_APP_URL: the website the link opens, https://www.lyoai.app by default.
 """
 import hashlib
@@ -129,16 +130,22 @@ async def send_reset_email(to: str, link: str) -> bool:
         f'<p><a href="{link}">Choose a new password</a>. The link works once, for one hour.</p>'
         "<p>If it wasn't you, ignore this email: your password stays the same.</p>"
     )
+    sender = os.getenv("EMAIL_FROM", "").strip() or DEFAULT_FROM
     body = {
-        "from": os.getenv("EMAIL_FROM", "").strip() or DEFAULT_FROM,
+        "from": sender,
         "to": [to],
         "subject": "Reset your Lyo password",
         "text": text,
         "html": html,
     }
+    headers = {"Authorization": f"Bearer {key}"}
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(RESEND_URL, json=body, headers={"Authorization": f"Bearer {key}"})
+            response = await client.post(RESEND_URL, json=body, headers=headers)
+            if sender != DEFAULT_FROM and response.status_code == 403 and "not verified" in response.text.lower():
+                # EMAIL_FROM's domain is still being verified in Resend.
+                logger.warning("Resend has not verified EMAIL_FROM's domain yet; sending from %s", DEFAULT_FROM)
+                response = await client.post(RESEND_URL, json={**body, "from": DEFAULT_FROM}, headers=headers)
     except httpx.HTTPError:
         logger.exception("Password reset email could not reach Resend")
         return False

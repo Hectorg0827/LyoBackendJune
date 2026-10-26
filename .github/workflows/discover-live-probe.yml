@@ -158,6 +158,51 @@ jobs:
             echo "$host forgot-password page -> $forgot; login link -> $login; reset page -> $reset" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Continue with Google is ready
+        # Read-only. Each address's login page should ship the button with the
+        # Firebase web settings (www.lyoai.app and lyoai.app are separate
+        # Railway services; waiting up to 20 minutes for a rolling deploy), and
+        # Google should accept that key for project lyo-app, list both
+        # addresses as authorized domains, and offer Google as a provider.
+        run: |
+          page_key() {
+            local page chunk js found=""
+            page=$(curl -sS -m 30 -L "https://$1/auth/login" || true)
+            for chunk in $(grep -oE '/_next/static/chunks/[^"]+\.js' <<<"$page" | sort -u); do
+              js=$(curl -sS -m 30 "https://$1$chunk" || true)
+              found=$(grep -oE 'AIza[0-9A-Za-z_-]{35}' <<<"$js" | head -1 || true)
+              if [ -n "$found" ]; then echo "$found"; return; fi
+            done
+          }
+          key="" www="" apex=""
+          for attempt in $(seq 40); do
+            www=$(page_key www.lyoai.app); apex=$(page_key lyoai.app)
+            if [ -n "$www" ] && [ -n "$apex" ]; then break; fi
+            sleep 30
+          done
+          key=${www:-$apex}
+          echo "Firebase web settings in the login page: www.lyoai.app -> $([ -n "$www" ] && echo yes || echo no); lyoai.app -> $([ -n "$apex" ] && echo yes || echo no); same key -> $([ "$www" = "$apex" ] && echo yes || echo no)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -z "$key" ]; then exit 0; fi
+          config=$(curl -sS -m 30 -H 'Referer: https://www.lyoai.app/' "https://identitytoolkit.googleapis.com/v1/projects?key=$key")
+          echo "Google's project config for that key: $(jq -c '{projectId, authorizedDomains, error: .error.message}' <<<"$config")" | tee -a "$GITHUB_STEP_SUMMARY"
+          provider=$(curl -sS -m 30 -X POST -H 'Content-Type: application/json' -H 'Referer: https://www.lyoai.app/' \
+            -d '{"providerId":"google.com","continueUri":"https://www.lyoai.app/auth/login"}' \
+            "https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=$key")
+          echo "Google as a sign-in provider: $(jq -c 'if .authUri then "enabled" else (.error.message // .) end' <<<"$provider")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Email sender records for lyoai.app
+        # Read-only DNS lookups. Resend sends as @lyoai.app once these exist:
+        # MX and SPF on send.lyoai.app, DKIM on resend._domainkey (only its start
+        # is shown), and optionally DMARC.
+        run: |
+          echo "MX send.lyoai.app -> $(dig +short MX send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "TXT send.lyoai.app -> $(dig +short TXT send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          dkim=$(dig +short TXT resend._domainkey.lyoai.app | tr -d '" \n')
+          echo "TXT resend._domainkey.lyoai.app -> ${dkim:0:12}${dkim:+… (${#dkim} characters)}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "TXT _dmarc.lyoai.app -> $(dig +short TXT _dmarc.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          # A name typed with the domain on Railway ends up doubled.
+          echo "Doubled names (should be empty) -> $(dig +short TXT send.lyoai.app.lyoai.app; dig +short TXT resend._domainkey.lyoai.app.lyoai.app; dig +short MX send.lyoai.app.lyoai.app)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
