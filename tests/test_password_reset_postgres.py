@@ -227,6 +227,32 @@ async def test_the_email_goes_through_resend_with_the_configured_sender(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_a_sender_domain_resend_has_not_verified_falls_back_to_its_onboarding_sender(monkeypatch):
+    import json
+    senders = []
+    refusal = {"message": "The lyoai.app domain is not verified. Please, add and verify your domain on https://resend.com/domains"}
+
+    def handler(request):
+        sender = json.loads(request.content)["from"]
+        senders.append(sender)
+        if sender == "Lyo <onboarding@resend.dev>":
+            return httpx.Response(200, json={"id": "email_2"})
+        return httpx.Response(403, json={"statusCode": 403, "name": "validation_error", **refusal})
+
+    _resend(monkeypatch, handler)
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("EMAIL_FROM", "Lyo <no-reply@lyoai.app>")
+    assert await password_reset.send_reset_email("a@b.co", "https://x")
+    assert senders == ["Lyo <no-reply@lyoai.app>", "Lyo <onboarding@resend.dev>"]
+
+    # Any other refusal is not retried.
+    senders.clear()
+    refusal["message"] = "API key is invalid"
+    assert not await password_reset.send_reset_email("a@b.co", "https://x")
+    assert senders == ["Lyo <no-reply@lyoai.app>"]
+
+
+@pytest.mark.asyncio
 async def test_no_key_or_a_refusal_sends_nothing_and_says_so(monkeypatch):
     calls = []
     _resend(monkeypatch, lambda request: calls.append(request) or httpx.Response(403, json={"message": "no"}))
