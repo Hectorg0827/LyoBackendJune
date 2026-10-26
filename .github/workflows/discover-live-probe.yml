@@ -159,24 +159,29 @@ jobs:
           done
 
       - name: Continue with Google is ready
-        # Read-only. The login page should ship the button with the Firebase web
-        # settings (waiting up to 20 minutes for a rolling deploy); Google should
-        # accept that key for project lyo-app, list both web addresses as
-        # authorized domains, and offer Google as a sign-in provider.
+        # Read-only. Each address's login page should ship the button with the
+        # Firebase web settings (www.lyoai.app and lyoai.app are separate
+        # Railway services; waiting up to 20 minutes for a rolling deploy), and
+        # Google should accept that key for project lyo-app, list both
+        # addresses as authorized domains, and offer Google as a provider.
         run: |
-          key="" button=no
-          for attempt in $(seq 40); do
-            page=$(curl -sS -m 30 -L https://www.lyoai.app/auth/login || true)
+          page_key() {
+            local page chunk js found=""
+            page=$(curl -sS -m 30 -L "https://$1/auth/login" || true)
             for chunk in $(grep -oE '/_next/static/chunks/[^"]+\.js' <<<"$page" | sort -u); do
-              js=$(curl -sS -m 30 "https://www.lyoai.app$chunk" || true)
-              if grep -q 'Continue with Google' <<<"$js"; then button=yes; fi
+              js=$(curl -sS -m 30 "https://$1$chunk" || true)
               found=$(grep -oE 'AIza[0-9A-Za-z_-]{35}' <<<"$js" | head -1 || true)
-              if [ -n "$found" ]; then key=$found; fi
+              if [ -n "$found" ]; then echo "$found"; return; fi
             done
-            if [ "$button" = yes ] && [ -n "$key" ]; then break; fi
+          }
+          key="" www="" apex=""
+          for attempt in $(seq 40); do
+            www=$(page_key www.lyoai.app); apex=$(page_key lyoai.app)
+            if [ -n "$www" ] && [ -n "$apex" ]; then break; fi
             sleep 30
           done
-          echo "www.lyoai.app/auth/login: Continue with Google -> $button; Firebase web key in the page -> $([ -n "$key" ] && echo yes || echo no)" | tee -a "$GITHUB_STEP_SUMMARY"
+          key=${www:-$apex}
+          echo "Firebase web settings in the login page: www.lyoai.app -> $([ -n "$www" ] && echo yes || echo no); lyoai.app -> $([ -n "$apex" ] && echo yes || echo no); same key -> $([ "$www" = "$apex" ] && echo yes || echo no)" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ -z "$key" ]; then exit 0; fi
           config=$(curl -sS -m 30 -H 'Referer: https://www.lyoai.app/' "https://identitytoolkit.googleapis.com/v1/projects?key=$key")
           echo "Google's project config for that key: $(jq -c '{projectId, authorizedDomains, error: .error.message}' <<<"$config")" | tee -a "$GITHUB_STEP_SUMMARY"
