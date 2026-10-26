@@ -200,7 +200,7 @@ jobs:
           ns=$(dig +short NS lyoai.app | head -1)
           echo "lyoai.app name servers -> $(dig +short NS lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
           for server in "" "@$ns"; do
-            echo "Asking ${server:-the runner's resolver}:" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Asking ${server:-the public resolver}:" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "MX send.lyoai.app -> $(dig +short $server MX send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "TXT send.lyoai.app -> $(dig +short $server TXT send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
             dkim=$(dig +short $server TXT resend._domainkey.lyoai.app | tr -d '" \n')
