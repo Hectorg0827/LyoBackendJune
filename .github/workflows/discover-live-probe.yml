@@ -194,14 +194,21 @@ jobs:
         # Read-only DNS lookups. Resend sends as @lyoai.app once these exist:
         # MX and SPF on send.lyoai.app, DKIM on resend._domainkey (only its start
         # is shown), and optionally DMARC.
+        # Asked of lyoai.app's own name server too, so a record added minutes ago
+        # shows even while public resolvers still remember it missing.
         run: |
-          echo "MX send.lyoai.app -> $(dig +short MX send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "TXT send.lyoai.app -> $(dig +short TXT send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
-          dkim=$(dig +short TXT resend._domainkey.lyoai.app | tr -d '" \n')
-          echo "TXT resend._domainkey.lyoai.app -> ${dkim:0:12}${dkim:+… (${#dkim} characters)}" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "TXT _dmarc.lyoai.app -> $(dig +short TXT _dmarc.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
-          # A name typed with the domain on Railway ends up doubled.
-          echo "Doubled names (should be empty) -> $(dig +short TXT send.lyoai.app.lyoai.app; dig +short TXT resend._domainkey.lyoai.app.lyoai.app; dig +short MX send.lyoai.app.lyoai.app)" | tee -a "$GITHUB_STEP_SUMMARY"
+          ns=$(dig +short NS lyoai.app | head -1)
+          echo "lyoai.app name servers -> $(dig +short NS lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          for server in "" "@$ns"; do
+            echo "Asking ${server:-the runner's resolver}:" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "MX send.lyoai.app -> $(dig +short $server MX send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "TXT send.lyoai.app -> $(dig +short $server TXT send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+            dkim=$(dig +short $server TXT resend._domainkey.lyoai.app | tr -d '" \n')
+            echo "TXT resend._domainkey.lyoai.app -> ${dkim:0:12}${dkim:+… (${#dkim} characters)}" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "TXT _dmarc.lyoai.app -> $(dig +short $server TXT _dmarc.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+            # A name typed with the domain on Railway ends up doubled.
+            echo "Doubled names (should be empty) -> $(dig +short $server TXT send.lyoai.app.lyoai.app; dig +short $server TXT resend._domainkey.lyoai.app.lyoai.app; dig +short $server MX send.lyoai.app.lyoai.app)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Media route answers HEAD
         run: |
