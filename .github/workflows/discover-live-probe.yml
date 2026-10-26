@@ -190,6 +190,19 @@ jobs:
             "https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=$key")
           echo "Google as a sign-in provider: $(jq -c 'if .authUri then "enabled" else (.error.message // .) end' <<<"$provider")" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Email sender records for lyoai.app
+        # Read-only DNS lookups. Resend sends as @lyoai.app once these exist:
+        # MX and SPF on send.lyoai.app, DKIM on resend._domainkey (only its start
+        # is shown), and optionally DMARC.
+        run: |
+          echo "MX send.lyoai.app -> $(dig +short MX send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "TXT send.lyoai.app -> $(dig +short TXT send.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          dkim=$(dig +short TXT resend._domainkey.lyoai.app | tr -d '" \n')
+          echo "TXT resend._domainkey.lyoai.app -> ${dkim:0:12}${dkim:+… (${#dkim} characters)}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "TXT _dmarc.lyoai.app -> $(dig +short TXT _dmarc.lyoai.app | tr '\n' ' ')" | tee -a "$GITHUB_STEP_SUMMARY"
+          # A name typed with the domain on Railway ends up doubled.
+          echo "Doubled names (should be empty) -> $(dig +short TXT send.lyoai.app.lyoai.app; dig +short TXT resend._domainkey.lyoai.app.lyoai.app; dig +short MX send.lyoai.app.lyoai.app)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Media route answers HEAD
         run: |
           missing="https://api.lyoai.app/api/v1/media/file/clips/$(printf '0%.0s' {1..32}).mp4"
