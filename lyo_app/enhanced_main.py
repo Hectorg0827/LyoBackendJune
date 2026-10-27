@@ -166,6 +166,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     start_time = time.time()
     logger.info("🚀 Starting LyoBackend with enhanced features...")
     setup_logging()
+
+    # Deployed instances must not start without durable upload storage: files
+    # on the container disk vanish on redeploy and are missing on replicas.
+    from lyo_app.routers.clip_media_storage import check_storage_at_startup
+    storage = check_storage_at_startup()
+    print(f">>> [LIFESPAN] Media storage: {storage[0] if storage else 'local disk (development)'}", flush=True)
     
     # Offload all heavy/potentially-blocking initializations to a background task
     async def run_async_initializations():

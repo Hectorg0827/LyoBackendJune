@@ -8,6 +8,8 @@ import os
 # Unit/SQL integration tests use test doubles for cloud services. Never probe
 # an executor's instance metadata for credentials while constructing an SDK.
 os.environ.setdefault("NO_GCE_CHECK", "true")
+# Uploads go to a test's local disk unless a test configures cloud storage.
+os.environ.setdefault("STORAGE_PROVIDER", "local")
 
 import asyncio
 import pytest
