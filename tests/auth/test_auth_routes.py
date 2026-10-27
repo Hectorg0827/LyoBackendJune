@@ -193,25 +193,91 @@ class TestAuthRoutes:
             # Register a user first
             register_response = await client.post("/auth/register", json=valid_user_data)
             user_id = register_response.json()["user"]["id"]
-            
-            # Get user by ID
-            response = await client.get(f"/auth/users/{user_id}")
-            
+            token = register_response.json()["access_token"]
+
+            # Their own record, signed in, includes the email
+            response = await client.get(
+                f"/auth/users/{user_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
             assert response.status_code == 200
             data = response.json()
             assert data["id"] == user_id
             assert data["email"] == valid_user_data["email"]
 
+    async def test_get_user_requires_sign_in(
+        self,
+        app: FastAPI,
+        valid_user_data: dict,
+        db_session: AsyncSession
+    ):
+        """A profile cannot be read without signing in."""
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            app.dependency_overrides[get_db] = lambda: db_session
+
+            register_response = await client.post("/auth/register", json=valid_user_data)
+            user_id = register_response.json()["user"]["id"]
+
+            response = await client.get(f"/auth/users/{user_id}")
+
+            assert response.status_code in (401, 403)
+            assert "email" not in response.text
+
+    async def test_get_other_user_hides_private_fields(
+        self,
+        app: FastAPI,
+        valid_user_data: dict,
+        db_session: AsyncSession
+    ):
+        """Another learner's profile comes back without email or login details."""
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            app.dependency_overrides[get_db] = lambda: db_session
+
+            first = await client.post("/auth/register", json=valid_user_data)
+            first_id = first.json()["user"]["id"]
+            second = await client.post("/auth/register", json={
+                **valid_user_data,
+                "email": "other@example.com",
+                "username": "otheruser",
+            })
+            token = second.json()["access_token"]
+
+            response = await client.get(
+                f"/auth/users/{first_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == first_id
+            assert data["username"] == valid_user_data["username"]
+            for private in ("email", "is_verified", "last_login", "is_active"):
+                assert private not in data
+
+    async def test_schema_repair_endpoint_is_gone(self, app: FastAPI):
+        """The old schema-repair route accepted any X-API-Key; it no longer exists."""
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/auth/fix-db-schema", headers={"X-API-Key": "anything"})
+
+            assert response.status_code == 404
+
     async def test_get_user_not_found(
         self,
         app: FastAPI,
+        valid_user_data: dict,
         db_session: AsyncSession
     ):
         """Test getting non-existent user returns 404."""
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             app.dependency_overrides[get_db] = lambda: db_session
             
-            response = await client.get("/auth/users/999")
+            registered = await client.post("/auth/register", json=valid_user_data)
+            token = registered.json()["access_token"]
+            response = await client.get(
+                "/auth/users/999",
+                headers={"Authorization": f"Bearer {token}"},
+            )
             
             assert response.status_code == 404
             assert "User not found" in response.json()["detail"]
