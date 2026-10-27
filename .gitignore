@@ -177,3 +177,18 @@ logs/
 lyobackend-service-account-key.json
 .env
 .env.production
+
+# Local artifacts that must never be committed (this repository is public)
+.new_venv/
+.venv*/
+venv*/
+server_log*.txt
+railway_logs.txt
+railway_status.txt
+debug.txt
+test_output*.txt
+verify_output*.txt
+*.db.backup
+*.pcm
+*.bak
+*.backup

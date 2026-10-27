@@ -4,32 +4,20 @@ Provides FastAPI endpoints for the authentication module.
 """
 
 import logging
-from typing import Annotated
+from typing import Annotated, Union
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Security
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from lyo_app.models.enhanced import User
-from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, Token, LoginResponse, RefreshTokenRequest
+from lyo_app.auth.schemas import UserCreate, UserLogin, UserRead, PublicUserRead, Token, LoginResponse, RefreshTokenRequest
 from lyo_app.auth.service import AuthService
 from lyo_app.auth.security import verify_token
 from lyo_app.core.database import get_db
 from lyo_app.core.rate_limiter import RedisRateLimiter
-
-# Security scheme for API Key
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-async def get_api_key(api_key: str = Security(api_key_header)):
-    """Simple API key dependency."""
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="API Key required"
-        )
-    return api_key
 
 router = APIRouter()
 auth_service = AuthService()
@@ -105,65 +93,10 @@ async def get_current_user(
         from lyo_app.auth.firebase_auth import firebase_auth_service
         
         if firebase_auth_service.is_available():
-            # Try to verify as Firebase ID token
+            # Try to verify as Firebase ID token; same account rules as POST /auth/firebase
             firebase_data = await firebase_auth_service.verify_firebase_token(token)
-            firebase_uid = firebase_data.get("uid")
-            email = firebase_data.get("email")
-            
-            # Try to find user by Firebase UID
-            user = await firebase_auth_service.get_user_by_firebase_uid(db, firebase_uid)
-            
-            # If not found by UID, try by email, but only a confirmed one:
-            # anyone can make a Firebase account with someone else's email.
-            if not user and email and not firebase_data.get("email_verified"):
-                raise ValueError("Firebase email is not verified")
-            if not user and email:
-                user = await firebase_auth_service.get_user_by_email(db, email)
-            
-            # If user found, return it
-            if user:
-                return UserRead.model_validate(user)
-            
-            # User not found - auto-create from Firebase data
-            from lyo_app.models.enhanced import User
-            from lyo_app.auth.security import hash_password
-            import secrets
-            import logging
-            logger = logging.getLogger(__name__)
-            
-            # Generate unique username from email or firebase_uid
-            base_username = (email.split('@')[0] if email else firebase_uid)[:40]
-            username = base_username
-            # Make username unique by appending random suffix
-            username = f"{base_username}_{secrets.token_hex(4)}"
-            
-            # Parse name if available
-            name = firebase_data.get("name", "")
-            first_name = ""
-            last_name = ""
-            if name:
-                parts = name.split(" ", 1)
-                first_name = parts[0]
-                last_name = parts[1] if len(parts) > 1 else ""
-            
-            logger.info(f"Auto-creating user from Firebase: email={email}, uid={firebase_uid}, username={username}")
-            
-            new_user = User(
-                email=email or f"{firebase_uid}@firebase.local",
-                username=username,
-                hashed_password=hash_password(secrets.token_urlsafe(32)),
-                first_name=first_name,
-                last_name=last_name,
-                firebase_uid=firebase_uid,
-                auth_provider="firebase",
-                is_active=True,
-                is_verified=firebase_data.get("email_verified", False)
-            )
-            db.add(new_user)
-            await db.commit()
-            await db.refresh(new_user)
-            logger.info(f"Created user id={new_user.id} for Firebase uid={firebase_uid}")
-            return UserRead.model_validate(new_user)
+            user, _is_new = await firebase_auth_service.find_or_create_user(db, firebase_data)
+            return UserRead.model_validate(user)
             
     except ValueError as e:
         # Firebase token verification failed
@@ -343,21 +276,43 @@ async def read_users_me(
     return current_user
 
 
-@router.get("/users/{user_id}", response_model=UserRead)
+@router.delete("/me")
+async def delete_my_account(
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """
+    Permanently delete the signed-in account.
+
+    Deletes the user and their personal data (profile, posts, messages,
+    clips, push devices, refresh tokens, uploaded files...), signs out every
+    device and deletes their Firebase account. It cannot be undone.
+    """
+    from lyo_app.auth.account_deletion import delete_account
+
+    try:
+        await delete_account(db, current_user.id)
+    except Exception:
+        logger.exception("Account deletion failed for user %s", current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Account deletion failed. Nothing was deleted; please try again."
+        )
+    return {"deleted": True}
+
+
+@router.get("/users/{user_id}", response_model=Union[UserRead, PublicUserRead])
 async def get_user(
     user_id: int,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)]
-) -> UserRead:
+) -> Union[UserRead, PublicUserRead]:
     """
-    Get user by ID.
-    
-    Args:
-        user_id: User ID to retrieve
-        db: Database session
-        
-    Returns:
-        User data
-        
+    Get a user's profile by ID. Requires sign-in.
+
+    Learners see their own full record; anyone else's comes back as the
+    public profile, without email, verification state or login times.
+
     Raises:
         HTTPException: If user not found
     """
@@ -367,7 +322,9 @@ async def get_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    return UserRead.model_validate(user)
+    if str(user.id) == str(current_user.id):
+        return UserRead.model_validate(user)
+    return PublicUserRead.model_validate(user)
 
 
 # ============================================================================
@@ -478,10 +435,9 @@ async def delete_account(
     except Exception as e:
         pass  # Don't fail deletion if email fails
     
-    # Delete user (cascade will handle related data)
-    await db.delete(user)
-    await db.commit()
-    
+    from lyo_app.auth.account_deletion import delete_account as delete_account_data
+
+    await delete_account_data(db, user.id)
     return {"message": "Account deleted successfully"}
 
 
@@ -598,23 +554,11 @@ async def authenticate_with_firebase(
         )
     
     try:
-        # Check if user exists before auth to determine if new
+        # Google, Apple (including hidden / private-relay emails), email...
         firebase_token_data = await firebase_auth_service.verify_firebase_token(firebase_data.id_token)
-        existing_user = await firebase_auth_service.get_user_by_firebase_uid(
-            db, firebase_token_data.get("uid", "")
-        )
-        if not existing_user and firebase_token_data.get("email"):
-            existing_user = await firebase_auth_service.get_user_by_email(
-                db, firebase_token_data.get("email")
-            )
-        
-        is_new_user = existing_user is None
-        
-        # Authenticate with Firebase
-        user, token = await firebase_auth_service.authenticate_with_firebase(
-            db, firebase_data.id_token
-        )
-        
+        user, is_new_user = await firebase_auth_service.find_or_create_user(db, firebase_token_data)
+        token = await firebase_auth_service.issue_tokens(db, user)
+
         return FirebaseAuthResponse(
             user=UserRead.model_validate(user),
             access_token=token.access_token,
@@ -735,26 +679,6 @@ async def get_firebase_status():
         "firebase_available": firebase_auth_service.is_available(),
         "supported_providers": ["google.com", "apple.com", "password", "phone"] if firebase_auth_service.is_available() else []
     }
-
-@router.post("/fix-db-schema")
-async def fix_db_schema(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    api_key: str = Security(get_api_key) 
-):
-    """
-    Emergency endpoint to manually trigger database schema repair.
-    Fixes missing refresh_tokens table.
-    """
-    from lyo_app.core.database import _ensure_refresh_tokens_table, engine
-    try:
-        # Use engine.begin() for direct connection without session transaction wrapping
-        async with engine.begin() as conn:
-            await _ensure_refresh_tokens_table(conn)
-        return {"status": "success", "message": "Schema fix executed successfully"}
-    except Exception as e:
-        logger.error(f"Schema fix failed: {e}")
-        return {"status": "error", "message": str(e)}
-
 
 # Forgotten passwords: /auth/password-reset/request and /auth/password-reset/confirm.
 from lyo_app.auth.password_reset import router as password_reset_router  # noqa: E402

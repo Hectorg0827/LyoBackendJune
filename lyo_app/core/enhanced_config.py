@@ -40,6 +40,9 @@ class EnhancedSettings(BaseSettings):
     # Environment
     ENVIRONMENT: str = Field("development", description="Environment (development, staging, production)")
     DEBUG: bool = Field(True, description="Debug mode")
+
+    # Error tracking (Sentry). Unset = disabled.
+    SENTRY_DSN: Optional[str] = Field(None, description="Sentry DSN for error tracking")
     
     # Server
     HOST: str = Field("0.0.0.0", description="Server host")

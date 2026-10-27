@@ -3,11 +3,11 @@ Simple authenticated media upload + public serving for user content
 (chat attachments, reel videos, thumbnails, and post images).
 
 This is the consumer-grade path every client uses via multipart POST —
-no presigned URLs and no organization gating. Files land under the
-local uploads directory; when cloud storage credentials are configured
-the enhanced storage service can replace the disk write transparently.
-Note Railway's container disk is ephemeral across redeploys, so cloud
-storage should be configured for durable production media.
+no presigned URLs and no organization gating. Every folder (chat, test-prep,
+classroom, avatars, posts, clips...) is stored in the configured object
+storage (see clip_media_storage); the upload is staged on local disk only
+while it streams in. Local disk as the final home is an explicit
+development option: Railway's container disk is lost on every redeploy.
 """
 import logging
 import re
@@ -111,25 +111,24 @@ async def upload_media(
         logger.error(f"Media upload failed for user {current_user.id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed")
 
-    if folder in DURABLE_MEDIA_FOLDERS:
-        if not size:
+    if folder in DURABLE_MEDIA_FOLDERS and not size:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Media file is empty")
+    try:
+        # A stable URL must point to durable bytes, not Railway's ephemeral
+        # container filesystem. Local storage is an explicit dev option.
+        stored_in_cloud = await run_in_threadpool(
+            save_clip_to_cloud, dest, folder, name, content_type
+        )
+        if stored_in_cloud:
             dest.unlink(missing_ok=True)
-            raise HTTPException(status_code=400, detail="Media file is empty")
-        try:
-            # A stable URL must point to durable bytes, not Railway's ephemeral
-            # container filesystem. Local storage is an explicit dev option.
-            stored_in_cloud = await run_in_threadpool(
-                save_clip_to_cloud, dest, folder, name, content_type
-            )
-            if stored_in_cloud:
-                dest.unlink(missing_ok=True)
-        except Exception:
-            dest.unlink(missing_ok=True)
-            logger.exception("Persistent clip upload failed for user %s", current_user.id)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Clip storage is unavailable. Please retry the upload.",
-            )
+    except Exception:
+        dest.unlink(missing_ok=True)
+        logger.exception("Persistent media upload failed for user %s", current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Media storage is unavailable. Please retry the upload.",
+        )
 
     path = f"/api/v1/media/file/{folder}/{name}"
     absolute = str(request.base_url).rstrip("/") + path
@@ -145,7 +144,7 @@ async def upload_media(
 
 @router.api_route("/file/{folder}/{name}", methods=["GET", "HEAD"])
 async def serve_media(folder: str, name: str, request: Request):
-    """Public media URL. Persisted clips are seekable and survive redeploys.
+    """Public media URL. Stored media is seekable and survives redeploys.
 
     HEAD is answered as well as GET: video players and CDNs probe a URL's
     length and range support with HEAD, and FastAPI does not add it for us.
@@ -155,14 +154,13 @@ async def serve_media(folder: str, name: str, request: Request):
     path = _media_root() / folder / name
     if path.is_file():
         return FileResponse(path, headers={"X-Media-Instance": INSTANCE_ID})
-    if folder in DURABLE_MEDIA_FOLDERS:
-        try:
-            response = await run_in_threadpool(stream_clip_from_cloud, folder, name, request)
-            if response is not None:
-                return response
-        except HTTPException:
-            raise
-        except Exception:
-            logger.exception("Unable to stream clip from cloud: %s", name)
-            raise HTTPException(status_code=503, detail="Video storage temporarily unavailable")
+    try:
+        response = await run_in_threadpool(stream_clip_from_cloud, folder, name, request)
+        if response is not None:
+            return response
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unable to stream media from cloud: %s/%s", folder, name)
+        raise HTTPException(status_code=503, detail="Media storage temporarily unavailable")
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")

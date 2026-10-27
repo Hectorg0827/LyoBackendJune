@@ -203,11 +203,16 @@ def test_large_video_prefetch_is_bounded_and_remaining_body_is_exact(client, mon
     assert all(raw.closed for raw in fake.streams)
 
 
-def test_other_attachments_keep_existing_storage_contract(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(media, "_provider", lambda: (_ for _ in ()).throw(AssertionError("unrelated attachment used Discover storage")))
-    response = client.post("/api/v1/media/upload", data={"folder": "chat"}, files={"file": ("note.txt", b"note", "text/plain")})
+@pytest.mark.parametrize("folder", ["chat", "test-prep", "classroom", "avatars", "content"])
+def test_every_upload_folder_uses_the_same_durable_storage(client, monkeypatch, tmp_path, folder):
+    # Attachments and avatars used to stay on the container disk, which a
+    # redeploy wipes; they now share the clips' object storage.
+    fake = configure_s3(monkeypatch)
+    response = client.post("/api/v1/media/upload", data={"folder": folder}, files={"file": ("photo.jpg", b"durable", "image/jpeg")})
     assert response.status_code == 200
-    assert client.get(response.json()["path"]).content == b"note"
+    name = response.json()["path"].split("/")[-1]
+    assert fake.objects == {f"media/{folder}/{name}": b"durable"}
+    assert not any(path.is_file() for path in tmp_path.rglob("*"))
 
 
 @pytest.mark.parametrize("folder", ["clips", "clip_thumbnails"])

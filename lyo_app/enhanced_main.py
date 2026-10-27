@@ -159,6 +159,25 @@ def _log_startup_task_result(task: asyncio.Task) -> None:
         logger.info(f"Startup background task {task.get_name()} completed successfully")
 
 
+def _init_sentry() -> bool:
+    """Report errors to Sentry when SENTRY_DSN is set, tagged with ENVIRONMENT."""
+    dsn = getattr(settings, "SENTRY_DSN", None) or os.getenv("SENTRY_DSN")
+    if not dsn or not SENTRY_AVAILABLE:
+        return False
+    try:
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=settings.ENVIRONMENT,
+            release=settings.APP_VERSION,
+            traces_sample_rate=0.1 if settings.is_production() else 1.0,
+        )
+    except Exception as e:  # noqa: BLE001 — never block startup on monitoring
+        print(f">>> [LIFESPAN] Sentry initialization failed: {e}", flush=True)
+        return False
+    print(f">>> [LIFESPAN] Sentry initialized (environment={settings.ENVIRONMENT})", flush=True)
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup & shutdown lifecycle with parallel initialization."""
@@ -166,6 +185,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     start_time = time.time()
     logger.info("🚀 Starting LyoBackend with enhanced features...")
     setup_logging()
+    # First, so that errors anywhere in startup are reported too.
+    _init_sentry()
+
+    # Deployed instances must not start without durable upload storage: files
+    # on the container disk vanish on redeploy and are missing on replicas.
+    from lyo_app.routers.clip_media_storage import check_storage_at_startup
+    storage = check_storage_at_startup()
+    print(f">>> [LIFESPAN] Media storage: {storage[0] if storage else 'local disk (development)'}", flush=True)
     
     # Offload all heavy/potentially-blocking initializations to a background task
     async def run_async_initializations():
@@ -176,22 +203,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             print(f">>> [LIFESPAN] Database initialization FAILED: {e}", flush=True)
             
-        try:
-            if (
-                hasattr(settings, "SENTRY_DSN")
-                and getattr(settings, "SENTRY_DSN", None)
-                and SENTRY_AVAILABLE
-            ):
-                sentry_sdk.init(
-                    dsn=settings.SENTRY_DSN,
-                    environment=settings.ENVIRONMENT,
-                    release=settings.APP_VERSION,
-                    traces_sample_rate=0.1 if settings.is_production() else 1.0,
-                )
-                print(">>> [LIFESPAN] Sentry initialized", flush=True)
-        except Exception as e:
-            print(f">>> [LIFESPAN] Sentry initialization failed: {e}", flush=True)
-
         print(">>> [LIFESPAN] Initializing parallel services in background...", flush=True)
         init_tasks = [
             _init_redis_safe(),

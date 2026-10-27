@@ -61,6 +61,21 @@ class UserRead(UserBase):
     last_login: Optional[datetime] = Field(None, description="Last login timestamp")
 
 
+class PublicUserRead(BaseModel):
+    """Another learner's profile as anyone signed in may see it: no email,
+    verification state or login times."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Union[int, UUID] = Field(..., description="User's unique ID")
+    username: str = Field(..., description="Unique username")
+    first_name: Optional[str] = Field(None, description="User's first name")
+    last_name: Optional[str] = Field(None, description="User's last name")
+    bio: Optional[str] = Field(None, description="User's bio")
+    avatar_url: Optional[str] = Field(None, description="URL to user's avatar image")
+    created_at: datetime = Field(..., description="User registration timestamp")
+
+
 class UserUpdate(BaseModel):
     """Schema for updating user profile."""
     

@@ -603,7 +603,13 @@ class EnhancedStorageSystem:
         )
     
     async def _upload_to_local(self, file_data: bytes, storage_path: str):
-        """Upload to local storage"""
+        """Upload to local storage (development only)"""
+        from lyo_app.routers.clip_media_storage import is_deployed
+
+        if is_deployed():
+            # The container disk is lost on every deploy: fail the upload
+            # rather than hand out a URL whose file will disappear.
+            raise RuntimeError("Local file storage is disabled in deployed environments")
         
         local_path = Path(getattr(settings, "upload_dir", None) or "uploads") / storage_path
         local_path.parent.mkdir(parents=True, exist_ok=True)

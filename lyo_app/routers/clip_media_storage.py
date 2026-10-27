@@ -1,9 +1,25 @@
-"""Durable clip media storage and byte-range playback.
+"""Durable storage for every user upload, with byte-range playback.
 
-Uploads keep their stable /api/v1/media/file/... URL. If persistent object
-storage is configured, clip bytes are saved outside Railway's ephemeral
-container and streamed with HTTP Range support for seekable HTML5/Media3 video.
-Chat/Test Prep/Classroom attachments retain their existing local storage path.
+Uploads keep their stable /api/v1/media/file/... URL. Their bytes are saved
+in object storage (GCS, S3-compatible such as a Railway bucket, or Cloudflare
+R2), outside Railway's ephemeral container, and streamed back with HTTP Range
+support for seekable HTML5/Media3 video. This covers Discover clips, chat,
+Test Prep and Classroom attachments, avatars, posts and reels alike.
+
+Local disk is an explicit development option (STORAGE_PROVIDER=local). A
+deployed environment refuses it, and refuses to start without a provider:
+files on the container's disk vanish on the next deploy, and a second replica
+never has them. Configuration (environment variables):
+
+- STORAGE_PROVIDER: gcs | aws_s3 | cloudflare_r2 | local
+  (DISCOVER_STORAGE_PROVIDER, if set, takes precedence; same values)
+- bucket: DISCOVER_STORAGE_BUCKET, else STORAGE_BUCKET
+  (gcs also reads GCS_BUCKET; R2 also reads R2_BUCKET)
+- aws_s3 (also Railway buckets and other S3-compatible stores):
+  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL (non-AWS
+  stores), AWS_REGION, AWS_S3_ADDRESSING_STYLE; or the DISCOVER_S3_* variants
+- cloudflare_r2: R2_ENDPOINT, R2_ACCESS_KEY, R2_SECRET_KEY
+- gcs: GOOGLE_APPLICATION_CREDENTIALS (service account), GCS_PROJECT_ID
 """
 import mimetypes
 import os
@@ -14,12 +30,16 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 from urllib.parse import urlsplit
 
+import logging
+
 import anyio
 from fastapi import HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from lyo_app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1024 * 1024
 FIRST_CHUNK_SIZE = 64 * 1024
@@ -35,13 +55,18 @@ MEDIA_PATH = re.compile(
 FOLDER_EXTENSIONS = {"clips": {"mp4", "mov", "webm"}, "clip_thumbnails": {"jpg", "png", "webp", "heic"}}
 
 
+def is_deployed() -> bool:
+    """True outside local development: on Railway, or in staging/production."""
+    environment = (getattr(settings, "environment", "") or "").lower()
+    return environment not in {"development", "dev", "test", "testing"} or bool(os.getenv("RAILWAY_ENVIRONMENT_ID"))
+
+
 def _provider():
     name = (getattr(settings, "discover_storage_provider", None) or getattr(settings, "storage_provider", "") or "").strip().lower()
     discover_bucket = getattr(settings, "discover_storage_bucket", None)
     if name == "local":
-        environment = (getattr(settings, "environment", "") or "").lower()
-        if environment not in {"development", "dev", "test", "testing"} or os.getenv("RAILWAY_ENVIRONMENT_ID"):
-            raise RuntimeError("Discover uploads require durable object storage in deployed environments")
+        if is_deployed():
+            raise RuntimeError("Uploads require durable object storage in deployed environments")
         return None
     if name in {"gcs", "google_cloud_storage"}:
         bucket = discover_bucket or getattr(settings, "gcs_bucket", None) or getattr(settings, "storage_bucket", None)
@@ -54,12 +79,27 @@ def _provider():
         )
         provider = "r2" if name in {"cloudflare_r2", "r2"} else "s3"
         if provider == "r2" and not all(getattr(settings, key, None) for key in ("r2_endpoint", "r2_access_key", "r2_secret_key")):
-            raise RuntimeError("R2 endpoint and credentials must be configured for Discover media")
+            raise RuntimeError("R2 endpoint and credentials must be configured for media storage")
     else:
-        raise RuntimeError("Select a supported Discover storage provider")
+        raise RuntimeError("Select a supported storage provider (STORAGE_PROVIDER: gcs, aws_s3, cloudflare_r2, or local for development)")
     if not bucket or not bucket.strip():
-        raise RuntimeError("Discover storage bucket must be configured")
+        raise RuntimeError("Media storage bucket must be configured (STORAGE_BUCKET)")
     return provider, bucket.strip()
+
+
+def check_storage_at_startup():
+    """Fail a deployed instance's startup when uploads would not be durable.
+
+    Returns the (provider, bucket) in use, or None for local development disk.
+    Only the configuration is checked; no network call is made.
+    """
+    try:
+        return _provider()
+    except RuntimeError as exc:
+        if is_deployed():
+            raise RuntimeError(f"Refusing to start: {exc}. User uploads would be lost on the next deploy.") from exc
+        logger.warning("Media storage is not configured (%s); set STORAGE_PROVIDER=local for development uploads", exc)
+        return None
 
 
 @lru_cache(maxsize=2)
@@ -99,7 +139,7 @@ def _key(folder: str, name: str) -> str:
 
 
 def save_clip_to_cloud(local_file: Path, folder: str, name: str, content_type: str) -> bool:
-    """Upload finished Discover media; local storage is an explicit dev option.
+    """Upload a finished user upload; local storage is an explicit dev option.
 
     A cloud write failure must not silently create a clip whose URL will 404
     after the next deployment. Caller removes the uncommitted local file.
@@ -154,6 +194,44 @@ def stat_durable_media(folder: str, name: str, local_root: Path) -> Optional[int
             return None
         raise
     return int(head.get("ContentLength", 0))
+
+
+def media_size(folder: str, name: str, local_root: Path) -> Optional[int]:
+    """Size of a stored upload, on this disk or in the bucket; None if missing."""
+    local = local_root / folder / name
+    if local.is_file():
+        return local.stat().st_size
+    if not _provider():
+        return None
+    return stat_durable_media(folder, name, local_root)
+
+
+def read_media_bytes(folder: str, name: str, local_root: Path) -> Optional[bytes]:
+    """The whole stored upload, or None if it is missing. Check media_size first."""
+    local = local_root / folder / name
+    if local.is_file():
+        return local.read_bytes()
+    config = _provider()
+    if not config:
+        return None
+    provider, bucket_name = config
+    key = _key(folder, name)
+    if provider == "gcs":
+        blob = _gcs_bucket(bucket_name).get_blob(key)
+        return blob.download_as_bytes() if blob is not None else None
+    from botocore.exceptions import ClientError
+
+    try:
+        obj = _s3_client(provider).get_object(Bucket=bucket_name, Key=key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise
+    body = obj["Body"]
+    try:
+        return body.read()
+    finally:
+        body.close()
 
 
 def parse_byte_range(header: str | None, size: int) -> tuple[int, int, bool]:

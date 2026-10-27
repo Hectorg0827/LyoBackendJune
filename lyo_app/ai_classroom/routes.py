@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 # Authentication dependencies
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
-from lyo_app.auth.routes import api_key_header
 
 # Optional security checks (auto_error=False allows us to handle missing creds manually)
 optional_bearer = HTTPBearer(auto_error=False)

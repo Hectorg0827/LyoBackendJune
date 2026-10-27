@@ -1,8 +1,9 @@
 """Validation and model preparation for Lyo AI attachments.
 
 Only files uploaded through Lyo's own authenticated ``/api/v1/media/upload``
-route are accepted. Resolving those URLs to server-owned storage avoids
-arbitrary URL fetching and keeps the multimodal path SSRF-safe.
+route are accepted. Resolving those URLs to server-owned storage (the
+configured bucket, or local disk in development) avoids arbitrary URL
+fetching and keeps the multimodal path SSRF-safe.
 
 The same loader is shared by Chat, Test Prep, and Classroom entry points.
 """
@@ -21,6 +22,7 @@ from fastapi import HTTPException, status
 
 from lyo_app.ai.schemas.lyo2 import InputModality, MediaRef
 from lyo_app.core.config import settings
+from lyo_app.routers.clip_media_storage import media_size, read_media_bytes
 
 MAX_CHAT_ATTACHMENTS = 4
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -96,11 +98,15 @@ def _local_media_path(uri: str) -> Path:
     ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment path")
 
-    root = (Path(getattr(settings, "upload_dir", None) or "uploads") / "media").resolve()
+    root = _media_root()
     candidate = (root / folder / filename).resolve()
     if root not in candidate.parents:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment path")
     return candidate
+
+
+def _media_root() -> Path:
+    return (Path(getattr(settings, "upload_dir", None) or "uploads") / "media").resolve()
 
 
 def _extract_document_source(data: bytes, mime_type: str) -> Dict[str, Any]:
@@ -238,29 +244,36 @@ async def load_media_attachments(
             )
 
         path = _local_media_path(item.uri)
-        try:
-            stat = await asyncio.to_thread(path.stat)
-        except FileNotFoundError as exc:
+        folder, filename = path.parent.name, path.name
+        size = await asyncio.to_thread(media_size, folder, filename, _media_root())
+        if size is None:
             if missing_ok:
                 continue
             raise HTTPException(
                 status_code=status.HTTP_410_GONE,
                 detail="The attachment is no longer available. Please upload it again.",
-            ) from exc
+            )
 
-        if stat.st_size > MAX_ATTACHMENT_BYTES:
+        if size > MAX_ATTACHMENT_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="Each AI attachment must be 10MB or smaller.",
             )
-        total_size += stat.st_size
+        total_size += size
         if total_size > MAX_TOTAL_ATTACHMENT_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="AI attachments may total at most 20MB per message.",
             )
 
-        data = await asyncio.to_thread(path.read_bytes)
+        data = await asyncio.to_thread(read_media_bytes, folder, filename, _media_root())
+        if data is None:
+            if missing_ok:
+                continue
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="The attachment is no longer available. Please upload it again.",
+            )
         part: Dict[str, Any] = {
             "type": "media_base64",
             "mime_type": mime_type,
