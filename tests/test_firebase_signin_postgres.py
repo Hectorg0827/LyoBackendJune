@@ -65,11 +65,15 @@ async def fb(monkeypatch):
 
     monkeypatch.setattr(firebase_auth_service, "verify_firebase_token", verify)
 
-    def token(uid, email, verified, provider="google.com"):
-        name = f"firebase-{uuid.uuid4().hex}"
-        tokens[name] = {"uid": f"{uid}-{tag}", "email": email, "email_verified": verified,
-                        "name": "Test Person", "firebase": {"sign_in_provider": provider}}
-        return name
+    def token(uid, email, verified, provider="google.com", name="Test Person"):
+        token_name = f"firebase-{uuid.uuid4().hex}"
+        claims = {"uid": f"{uid}-{tag}", "email_verified": verified, "firebase": {"sign_in_provider": provider}}
+        if email is not None:
+            claims["email"] = email
+        if name is not None:
+            claims["name"] = name
+        tokens[token_name] = claims
+        return token_name
 
     app = FastAPI()
     setup_error_handlers(app)
@@ -93,12 +97,18 @@ async def fb(monkeypatch):
         async def me(bearer):
             return await client.get("/auth/me", headers={"Authorization": f"Bearer {bearer}"})
 
+        async def user_by_uid(uid):
+            async with sessions() as session:
+                return (await session.execute(text(
+                    "SELECT id, email, username, first_name, auth_provider, is_verified FROM users "
+                    "WHERE firebase_uid = :uid"), {"uid": f"{uid}-{tag}"})).first()
+
         yield SimpleNamespace(tag=tag, owner_email=owner_email, owner_id=owner_id, token=token,
-                              sign_in=sign_in, me=me, row=row)
+                              sign_in=sign_in, me=me, row=row, user_by_uid=user_by_uid, sessions=sessions)
 
     async with sessions() as session:
-        ids = (await session.execute(text("SELECT id FROM users WHERE email LIKE :pattern"),
-                                     {"pattern": f"%-{tag}@lyoai.app"})).scalars().all()
+        ids = (await session.execute(text("SELECT id FROM users WHERE email LIKE :pattern OR firebase_uid LIKE :uid"),
+                                     {"pattern": f"%-{tag}@lyoai.app", "uid": f"%-{tag}"})).scalars().all()
         await session.execute(text("DELETE FROM refresh_tokens WHERE user_id = ANY(:ids)"), {"ids": list(ids)})
         await session.execute(text("DELETE FROM users WHERE id = ANY(:ids)"), {"ids": list(ids)})
         await session.commit()
@@ -154,3 +164,74 @@ async def test_an_account_already_linked_still_signs_in_by_its_firebase_id(fb):
     assert signed_in.status_code == 200, signed_in.text
     assert signed_in.json()["user"]["id"] == (await fb.row(email)).id
     assert (await fb.me(again)).status_code == 200
+
+
+# Sign in with Apple. The apps use Firebase's Apple provider and send its ID
+# token to POST /auth/firebase, the same as Google.
+
+@pytest.mark.asyncio
+async def test_apple_with_a_private_relay_email_and_no_name_gets_an_account(fb):
+    relay = f"x7k2p9-{fb.tag}@privaterelay.appleid.com"
+    signed_in = await fb.sign_in(fb.token("relay", relay, verified=True, provider="apple.com", name=None))
+    assert signed_in.status_code == 200, signed_in.text
+    body = signed_in.json()
+    assert body["is_new_user"] is True
+    assert body["user"]["email"] == relay
+    assert body["user"]["first_name"] == "User"
+    assert not body["user"]["username"].startswith("x7k2p9"), "a relay address's random part makes a poor username"
+    stored = await fb.user_by_uid("relay")
+    assert stored.auth_provider == "apple.com" and stored.is_verified is True
+    assert (await fb.me(body["access_token"])).json()["id"] == stored.id
+
+    again = await fb.sign_in(fb.token("relay", relay, verified=True, provider="apple.com", name=None))
+    assert again.status_code == 200 and again.json()["user"]["id"] == stored.id
+    assert again.json()["is_new_user"] is False
+
+
+@pytest.mark.asyncio
+async def test_apple_without_any_email_signs_in_by_its_firebase_id(fb):
+    signed_in = await fb.sign_in(fb.token("hidden", None, verified=False, provider="apple.com", name=None))
+    assert signed_in.status_code == 200, signed_in.text
+    user = signed_in.json()["user"]
+    assert user["email"] == f"hidden-{fb.tag}@users.lyoai.app"
+    assert len(user["username"]) >= 3
+    assert (await fb.user_by_uid("hidden")).is_verified is False
+
+    # Later sign-ins (Apple sends the email only the first time) and the
+    # Firebase token used directly as the bearer find the same account.
+    later = fb.token("hidden", None, verified=False, provider="apple.com", name=None)
+    assert (await fb.sign_in(later)).json()["user"]["id"] == user["id"]
+    assert (await fb.me(later)).json()["id"] == user["id"]
+
+
+@pytest.mark.asyncio
+async def test_apple_with_a_display_name_keeps_it(fb):
+    signed_in = await fb.sign_in(fb.token("named", f"named-{fb.tag}@lyoai.app", verified=True,
+                                          provider="apple.com", name="Ada Lovelace"))
+    assert signed_in.status_code == 200, signed_in.text
+    assert (signed_in.json()["user"]["first_name"], signed_in.json()["user"]["last_name"]) == ("Ada", "Lovelace")
+
+
+@pytest.mark.asyncio
+async def test_apple_with_an_unconfirmed_email_gets_its_own_account_not_the_owners(fb):
+    signed_in = await fb.sign_in(fb.token("unconfirmed", fb.owner_email, verified=False, provider="apple.com"))
+    assert signed_in.status_code == 200, signed_in.text
+    user = signed_in.json()["user"]
+    assert user["id"] != fb.owner_id
+    assert user["email"] == f"unconfirmed-{fb.tag}@users.lyoai.app", "an unconfirmed email is not claimed"
+    assert (await fb.row(fb.owner_email)).firebase_uid is None, "the owner's account stays unlinked"
+
+
+@pytest.mark.asyncio
+async def test_an_old_stand_in_email_is_repaired_on_sign_in(fb):
+    # Accounts made without an email used to get <uid>@firebase.local, which
+    # fails email validation, so every sign-in to them was a server error.
+    async with fb.sessions() as session:
+        await session.execute(text(
+            "INSERT INTO users (email, username, hashed_password, is_active, is_verified, is_superuser, "
+            "firebase_uid, created_at, updated_at) VALUES (:email, :username, 'x', true, false, false, :uid, now(), now())"),
+            {"email": f"legacy-{fb.tag}@firebase.local", "username": f"legacy{fb.tag}", "uid": f"legacy-{fb.tag}"})
+        await session.commit()
+    signed_in = await fb.sign_in(fb.token("legacy", None, verified=False, provider="apple.com", name=None))
+    assert signed_in.status_code == 200, signed_in.text
+    assert signed_in.json()["user"]["email"] == f"legacy-{fb.tag}@users.lyoai.app"

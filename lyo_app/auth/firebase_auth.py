@@ -5,6 +5,7 @@ Handles Firebase token verification and user authentication/registration.
 
 import logging
 import os
+import re
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta
 
@@ -23,6 +24,25 @@ except ImportError:
     logger.warning("Firebase Admin SDK not installed")
     firebase_admin = None
     firebase_auth = None
+
+
+APPLE_PROVIDER = "apple.com"
+# "Hide My Email" addresses; Apple forwards them to the person.
+APPLE_RELAY_DOMAIN = "privaterelay.appleid.com"
+# Accounts with no shareable email get this stand-in address. It must pass
+# email validation (".local" does not), and lyoai.app is ours, so nothing
+# sent to it can reach anyone else.
+PLACEHOLDER_EMAIL_DOMAIN = "users.lyoai.app"
+LEGACY_PLACEHOLDER_SUFFIX = "@firebase.local"
+
+
+def sign_in_provider(token_data: Dict[str, Any]) -> str:
+    """How the person signed in to Firebase: apple.com, google.com, password..."""
+    return (token_data.get("firebase") or {}).get("sign_in_provider") or "unknown"
+
+
+def placeholder_email(firebase_uid: str) -> str:
+    return f"{firebase_uid.lower()}@{PLACEHOLDER_EMAIL_DOMAIN}"
 
 
 class FirebaseAuthService:
@@ -203,6 +223,114 @@ class FirebaseAuthService:
         )
         return result.scalar_one_or_none()
     
+    async def find_or_create_user(self, db: AsyncSession, token_data: Dict[str, Any]) -> Tuple[Any, bool]:
+        """The account a verified Firebase token signs in to, and whether it is new.
+
+        An account already linked to the Firebase uid always signs in by it.
+        Otherwise a confirmed email opens the account that has it (and links
+        it); an unconfirmed one neither opens nor creates an account, because
+        anyone can make a Firebase account with someone else's email.
+
+        Sign in with Apple is the exception to refusing: Apple users cannot
+        confirm an email with us, and may hide it, share a private-relay
+        address, or (on later sign-ins) send none at all, and Apple sends no
+        name to the server. An Apple sign-in therefore always gets an account,
+        keyed by its Firebase uid; it only claims an email Firebase confirmed.
+        """
+        from lyo_app.auth.models import User
+        from lyo_app.auth.security import hash_password
+        import secrets
+
+        firebase_uid = token_data.get("uid")
+        if not firebase_uid:
+            raise ValueError("Invalid token: missing UID")
+        provider = sign_in_provider(token_data)
+
+        user = await self.get_user_by_firebase_uid(db, firebase_uid)
+        if user:
+            if user.email and user.email.endswith(LEGACY_PLACEHOLDER_SUFFIX):
+                # The old stand-in address fails email validation, so the
+                # account could not be returned to the app at all.
+                user.email = placeholder_email(firebase_uid)
+                await db.commit()
+            return user, False
+
+        email = (token_data.get("email") or "").strip() or None
+        if email and not token_data.get("email_verified"):
+            if provider != APPLE_PROVIDER:
+                raise ValueError("Confirm your email address before signing in with it")
+            email = None
+
+        if email:
+            user = await self.get_user_by_email(db, email)
+            if user:
+                user.firebase_uid = firebase_uid
+                user.auth_provider = provider
+                await db.commit()
+                return user, False
+
+        name = (token_data.get("name") or "").strip()
+        name_parts = name.split(" ", 1) if name else ["User", ""]
+        user = User(
+            email=email or placeholder_email(firebase_uid),
+            username=await self._unique_username(db, email, name, firebase_uid),
+            # Random password: this account signs in through Firebase.
+            hashed_password=hash_password(secrets.token_urlsafe(32)),
+            first_name=name_parts[0],
+            last_name=name_parts[1] if len(name_parts) > 1 else "",
+            firebase_uid=firebase_uid,
+            auth_provider=provider,
+            is_verified=bool(email),
+            is_active=True,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        logger.info("Created user %s from Firebase (%s)", user.id, provider)
+        return user, True
+
+    async def _unique_username(self, db: AsyncSession, email: Optional[str], name: str, firebase_uid: str) -> str:
+        from lyo_app.auth.models import User
+        import secrets
+
+        if email and not email.lower().endswith("@" + APPLE_RELAY_DOMAIN):
+            base = email.split("@", 1)[0]
+        else:
+            # A relay address's local part is random; prefer the name.
+            base = name or "learner"
+        base = re.sub(r"[^a-z0-9_.]+", "_", base.lower()).strip("_.")[:40]
+        if len(base) < 3:
+            base = "learner"
+        username = base
+        while (await db.execute(select(User.id).where(User.username == username))).first():
+            username = f"{base}_{secrets.token_hex(3)}"
+        return username
+
+    async def issue_tokens(self, db: AsyncSession, user: Any):
+        """Backend access and refresh tokens for ``user``; the refresh token is stored."""
+        from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
+        from lyo_app.auth.models import RefreshToken as RefreshTokenModel
+        from lyo_app.auth.schemas import Token
+        from lyo_app.core.settings import settings as jwt_settings
+
+        # jwt_auth tokens are the ones every route's verification accepts.
+        access_token = create_access_token(user_id=str(user.id))
+        refresh_token_str = create_refresh_token(user_id=str(user.id))
+        # Stored so /auth/refresh can validate (and account deletion revoke) it.
+        db.add(RefreshTokenModel(
+            user_id=user.id,
+            token=refresh_token_str,
+            expires_at=datetime.utcnow() + timedelta(days=jwt_settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+            is_revoked=False
+        ))
+        await db.commit()
+        return Token(
+            access_token=access_token,
+            refresh_token=refresh_token_str,
+            token_type="bearer",
+            expires_in=jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+
     async def authenticate_with_firebase(
         self, 
         db: AsyncSession, 
@@ -215,106 +343,9 @@ class FirebaseAuthService:
         Returns:
             Tuple of (user, token)
         """
-        from lyo_app.auth.models import User
-        from lyo_app.auth.security import create_access_token, hash_password
-        from lyo_app.auth.schemas import Token
-        import secrets
-        
-        # Verify the Firebase token
         token_data = await self.verify_firebase_token(id_token)
-        
-        firebase_uid = token_data.get("uid")
-        email = token_data.get("email")
-        name = token_data.get("name", "")
-        provider = token_data.get("firebase", {}).get("sign_in_provider", "unknown")
-        
-        if not firebase_uid:
-            raise ValueError("Invalid token: missing UID")
-        
-        # Try to find existing user
-        user = await self.get_user_by_firebase_uid(db, firebase_uid)
-
-        if not user and email and not token_data.get("email_verified"):
-            # Anyone can make a Firebase account with someone else's email;
-            # until the email is confirmed it must not open or claim an account.
-            raise ValueError("Confirm your email address before signing in with it")
-
-        if not user and email:
-            # Check if user exists with this email
-            user = await self.get_user_by_email(db, email)
-            if user:
-                # Link Firebase to existing user
-                user.firebase_uid = firebase_uid
-                user.auth_provider = provider
-                await db.commit()
-        
-        if not user:
-            # Create new user
-            # Generate a unique username from email or name
-            base_username = email.split("@")[0] if email else name.replace(" ", "_").lower()
-            username = base_username[:45]  # Leave room for suffix
-            
-            # Check username uniqueness
-            existing = await db.execute(
-                select(User).where(User.username == username)
-            )
-            if existing.scalar_one_or_none():
-                username = f"{username}_{secrets.token_hex(3)}"
-            
-            # Parse name
-            name_parts = name.split(" ", 1) if name else ["User", ""]
-            first_name = name_parts[0]
-            last_name = name_parts[1] if len(name_parts) > 1 else ""
-            
-            # Create user with random password (won't be used for Firebase auth)
-            user = User(
-                email=email or f"{firebase_uid}@firebase.local",
-                username=username,
-                hashed_password=hash_password(secrets.token_urlsafe(32)),
-                first_name=first_name,
-                last_name=last_name,
-                firebase_uid=firebase_uid,
-                auth_provider=provider,
-                is_verified=True,  # Firebase verifies email
-                is_active=True
-            )
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-            logger.info(f"Created new user from Firebase: {email}")
-        
-        
-        # Create access and refresh tokens using jwt_auth module for consistency
-        # with the token verification used by chat endpoints (get_optional_current_user)
-        from lyo_app.auth.jwt_auth import create_access_token, create_refresh_token
-        from lyo_app.auth.models import RefreshToken as RefreshTokenModel
-        from lyo_app.core.settings import settings as jwt_settings
-        
-        access_token = create_access_token(user_id=str(user.id))
-        refresh_token_str = create_refresh_token(user_id=str(user.id))
-        
-        # CRITICAL FIX: Store refresh token in database so /auth/refresh can validate it
-        refresh_token_record = RefreshTokenModel(
-            user_id=user.id,
-            token=refresh_token_str,
-            expires_at=datetime.utcnow() + timedelta(days=jwt_settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
-            is_revoked=False
-        )
-        db.add(refresh_token_record)
-        await db.commit()
-        logger.info(f"Stored refresh token for user {user.id}")
-        
-        # Get expiration time from settings
-        expires_in = jwt_settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        
-        token = Token(
-            access_token=access_token,
-            refresh_token=refresh_token_str,
-            token_type="bearer",
-            expires_in=expires_in
-        )
-        
-        return user, token
+        user, _is_new = await self.find_or_create_user(db, token_data)
+        return user, await self.issue_tokens(db, user)
     
     def delete_firebase_user(self, firebase_uid: str) -> bool:
         """Delete the Firebase account (blocking). True if it is gone.
