@@ -17,7 +17,10 @@ database is read at deletion time instead:
 
 Files the user uploaded through ``/api/v1/media/upload`` are found in the
 rows being deleted (avatar, clips, posts, chat attachments...) and deleted
-from storage once the database part is committed. The Firebase account, if
+from storage once the database part is committed, unless a row that is left
+still links to one. Uploads have no owner record, so a URL in the deleted
+rows does not prove the file was theirs: anyone can paste another learner's
+avatar URL into a post, and deleting that account must not take the avatar. The Firebase account, if
 any, is deleted last, so the same Apple or Google sign-in cannot open the old
 account again.
 """
@@ -170,6 +173,20 @@ def _purge_user(conn: Connection, user_id: int) -> Optional[_Purge]:
     return purge
 
 
+def _still_referenced(conn: Connection, media: Set[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+    """The files in ``media`` that a remaining row still links to."""
+    schema = _Schema(conn)
+    found: Set[Tuple[str, str]] = set()
+    for name in schema.columns:
+        t = schema.table(name)
+        for col in schema.text_columns(name):
+            text = sa.cast(t.c[col], sa.Text)
+            for (value,) in conn.execute(sa.select(text).where(text.like("%/api/v1/media/file/%"))):
+                if value:
+                    found.update(_MEDIA_URL.findall(str(value)))
+    return found & media
+
+
 def _delete_files(media: Iterable[Tuple[str, str]], user_id: int) -> None:
     from lyo_app.routers.clip_media_storage import delete_media
     from lyo_app.routers.user_media import _media_root
@@ -232,7 +249,21 @@ async def delete_account(db: AsyncSession, user_id: int) -> bool:
         "Deleted account %s: rows deleted %s; links cleared %s; files %d",
         user_id, purge.deleted, purge.cleared, len(purge.media),
     )
-    await run_in_threadpool(_delete_files, purge.media, user_id)
+    media = set(purge.media)
+    if media:
+        try:
+            conn = await db.connection()
+            shared = await conn.run_sync(_still_referenced, media)
+            await db.rollback()
+        except Exception:
+            # Without the check a file might be someone else's: keep them all.
+            logger.exception("Account %s deleted; could not check which of its files are shared, kept all %d", user_id, len(media))
+            await db.rollback()
+            shared = media
+        if shared:
+            logger.info("Account %s deleted; kept %d file(s) other rows still link to", user_id, len(shared))
+        media -= shared
+    await run_in_threadpool(_delete_files, media, user_id)
     await _disconnect_sync_devices(user_id)
     if purge.firebase_uid:
         await run_in_threadpool(firebase_auth_service.delete_firebase_user, purge.firebase_uid)

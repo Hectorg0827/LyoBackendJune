@@ -102,3 +102,21 @@ async def test_deleting_a_missing_account_reports_it(db):
     async with sessions() as session:
         assert await account_deletion.delete_account(session, 999_999) is False
     assert deleted_firebase == []
+
+
+@pytest.mark.asyncio
+async def test_deletion_keeps_files_other_rows_still_link_to(db, monkeypatch):
+    """Pasting someone else's file URL, then deleting the account, leaves the file."""
+    sessions, _metadata, _deleted_firebase = db
+    own = "/api/v1/media/file/avatars/" + "a" * 32 + ".jpg"
+    bobs = "/api/v1/media/file/avatars/" + "b" * 32 + ".jpg"
+    async with sessions() as session:
+        alice = await _add_user(session, "alice", avatar_url=f"https://api.test{own}", bio=f"look https://api.test{bobs}")
+        await _add_user(session, "bob", avatar_url=f"https://api.test{bobs}")
+
+    removed = []
+    monkeypatch.setattr(account_deletion, "_delete_files", lambda media, _user_id: removed.extend(sorted(media)))
+    async with sessions() as session:
+        assert await account_deletion.delete_account(session, alice) is True
+
+    assert removed == [("avatars", "a" * 32 + ".jpg")]
