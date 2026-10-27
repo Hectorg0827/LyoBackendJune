@@ -316,6 +316,29 @@ class FirebaseAuthService:
         
         return user, token
     
+    def delete_firebase_user(self, firebase_uid: str) -> bool:
+        """Delete the Firebase account (blocking). True if it is gone.
+
+        Needs service-account credentials (FIREBASE_CREDENTIALS_JSON or
+        FIREBASE_CREDENTIALS_PATH) with permission on the app's Firebase
+        project; public-key verification alone cannot delete anyone.
+        """
+        if not (FIREBASE_AVAILABLE and self._initialized):
+            logger.error(
+                "Firebase user %s was not deleted: Firebase Admin credentials are not configured",
+                firebase_uid,
+            )
+            return False
+        try:
+            firebase_auth.delete_user(firebase_uid)
+        except firebase_auth.UserNotFoundError:
+            pass
+        except Exception:
+            logger.exception("Firebase user %s could not be deleted", firebase_uid)
+            return False
+        logger.info("Deleted Firebase user %s", firebase_uid)
+        return True
+
     async def link_firebase_to_user(
         self, 
         db: AsyncSession, 

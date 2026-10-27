@@ -343,6 +343,31 @@ async def read_users_me(
     return current_user
 
 
+@router.delete("/me")
+async def delete_my_account(
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """
+    Permanently delete the signed-in account.
+
+    Deletes the user and their personal data (profile, posts, messages,
+    clips, push devices, refresh tokens, uploaded files...), signs out every
+    device and deletes their Firebase account. It cannot be undone.
+    """
+    from lyo_app.auth.account_deletion import delete_account
+
+    try:
+        await delete_account(db, current_user.id)
+    except Exception:
+        logger.exception("Account deletion failed for user %s", current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Account deletion failed. Nothing was deleted; please try again."
+        )
+    return {"deleted": True}
+
+
 @router.get("/users/{user_id}", response_model=UserRead)
 async def get_user(
     user_id: int,
@@ -478,10 +503,9 @@ async def delete_account(
     except Exception as e:
         pass  # Don't fail deletion if email fails
     
-    # Delete user (cascade will handle related data)
-    await db.delete(user)
-    await db.commit()
-    
+    from lyo_app.auth.account_deletion import delete_account as delete_account_data
+
+    await delete_account_data(db, user.id)
     return {"message": "Account deleted successfully"}
 
 
