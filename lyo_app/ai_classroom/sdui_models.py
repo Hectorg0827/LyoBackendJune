@@ -614,6 +614,7 @@ class WebSocketEventType(str, Enum):
     SCENE_UPDATE = "scene_update"
     SCENE_COMPLETE = "scene_complete"
     COMPONENT_RENDER = "component_render"
+    ANSWER_FEEDBACK = "answer_feedback"
     USER_ACTION = "user_action"
     SYSTEM_STATE = "system_state"
     ERROR = "error"

@@ -10,6 +10,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.pool import StaticPool
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
@@ -418,6 +419,48 @@ async def test_production_engine_installs_database_cache_for_its_default_teacher
         assert len((await db.execute(select(ClassroomUnitPackage))).scalars().all()) == 0
         assert len((await db.execute(select(ClassroomQuestionExposure))).scalars().all()) == 1
     finally:
+        _SESSION_PROGRESS.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_retained_teacher_uses_current_turn_connection_after_previous_connection_closes(db):
+    ctx, unit_plan = context(target_duration_minutes=8), plan(1)
+    scripted = ScriptedTeacher()
+
+    async def generate(_prompt, payload, schema):
+        if schema is LearningPlan:
+            return unit_plan
+        return scripted._turn(ctx, GuidedState(owner=ctx.user_id, plan=unit_plan), payload["move"])
+
+    instance = classroom_engine(ctx)
+    del instance.skill_resolver
+    teacher = AdaptiveTeacher(generate=generate, fast_start=True)
+    # This test exercises DB ownership, not speculative provider requests.
+    teacher.schedule_package_prefetch = lambda *args: None
+    instance.adaptive_teacher = teacher
+    key = session_progress_key(ctx.user_id, ctx.session_id)
+    _SESSION_PROGRESS.pop(key, None)
+    try:
+        async with db.bind.connect() as connection:
+            async with AsyncSession(bind=connection, expire_on_commit=False) as first_db:
+                instance.db = instance.context_assembler.db = first_db
+                teacher.package_cache = DatabaseUnitPackageCache(first_db)
+                await instance.process_trigger(action(welcome=True))
+                await first_db.commit()
+                previous_cache = teacher.package_cache
+                pending = GuidedState.model_validate(_SESSION_PROGRESS[key]["guided_state"]).pending
+        assert connection.closed
+        instance.db = instance.context_assembler.db = db
+        scene = await instance.process_trigger(action(ActionIntent.SUBMIT_ANSWER, pending.id,
+                                                      answer_data={"selected_option_id": "a"}))
+        assert teacher is instance.adaptive_teacher
+        assert teacher.package_cache is not previous_cache
+        assert teacher.package_cache.db is db
+        assert any(isinstance(c, QuizCard) for c in scene.components)
+        assert GuidedState.model_validate(_SESSION_PROGRESS[key]["guided_state"]).phase == "guided"
+        assert not any(getattr(c, "action_intent", None) == ActionIntent.RETRY for c in scene.components)
+    finally:
+        teacher.cancel_package_prefetch()
         _SESSION_PROGRESS.pop(key, None)
 
 

@@ -142,6 +142,10 @@ REWORDED = {
         ("Explicitly model the missing step with a DIFFERENT representation or example;",
          "For prerequisite teach the particular prerequisite the learner is missing, "
          "then bridge back to the original goal."),
+    # Feedback now reaches the learner before the next teaching turn is ready.
+    "Option feedback is the server's note on what the tap shows, not a verdict for the learner to read.":
+        ("Option feedback is spoken immediately AFTER submission:",
+         "warmly explain why that choice is right or wrong, including the correct principle."),
     # The visual system expanded from four decorative-capable primitives into
     # a server-directed teaching vocabulary. These old sentences are preserved
     # semantically by the new policy rather than verbatim.
