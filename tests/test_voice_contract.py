@@ -77,6 +77,23 @@ def test_interrupt_metadata_only_affects_spoken_turn_taking():
     assert text_contract.voice_interrupted_previous_turn is False
 
 
+def test_conversational_style_is_voice_only_and_respects_requested_depth():
+    voice = contract_prompt(interaction_contract_for_request(text='Explain roots', voice_mode=True))
+    text = contract_prompt(interaction_contract_for_request(text='Explain roots'))
+    assert 'warm, casually expressive' in voice
+    assert 'at most one thoughtful, specific follow-up' in voice
+    assert 'Answer their request first' in voice
+    assert 'usually 2-4 sentences' in voice
+    assert 'usually 2-4 short paragraphs' not in voice
+    assert 'warm, casually expressive' not in text
+    assert 'usually 2-4 short paragraphs' in text
+
+    deep = contract_prompt(interaction_contract_for_request(text='Give a deep dive into gravity', voice_mode=True))
+    concise = contract_prompt(interaction_contract_for_request(text='Just answer briefly: what is gravity?', voice_mode=True))
+    assert 'Go deeper: explain reasoning' in deep
+    assert 'shortest complete form' in concise
+
+
 @pytest.mark.asyncio
 async def test_voice_generation_does_not_require_legacy_gemini_model(monkeypatch):
     executor = LyoExecutor.__new__(LyoExecutor)

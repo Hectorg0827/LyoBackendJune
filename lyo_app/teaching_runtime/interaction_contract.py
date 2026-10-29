@@ -404,15 +404,23 @@ def contract_prompt(contract: InteractionContract) -> str:
         f"Mode: {contract.mode.value}",
         f"Depth: {contract.depth.value}",
         f"Delivery: {contract.delivery_mode.value}",
-        depth_rules[contract.depth],
+        (
+            "Start with a brief, complete spoken answer, usually 2-4 sentences; expand when the request needs it."
+            if contract.delivery_mode is DeliveryMode.VOICE and contract.depth is ResponseDepth.STANDARD
+            else depth_rules[contract.depth]
+        ),
         "The interaction mode is authoritative. Do not silently change it into a different activity.",
     ]
     if contract.delivery_mode is DeliveryMode.VOICE:
         rules.extend([
             "This is a live spoken turn. Sound natural when read aloud.",
+            "Be warm, casually expressive, and attentive. Use contractions and everyday language; match the learner's tone and language.",
+            "Use natural sentence breaks and varied phrasing. A brief acknowledgment should respond to what was actually said, not introduce every answer.",
+            "Occasional light humor is welcome when it fits; avoid forced jokes, exaggerated praise, canned enthusiasm, and scripted fillers or laughter.",
             "Prefer short clauses and compact answers; avoid markdown tables, long headings, or dense bullet lists.",
             "Do not announce interaction mechanics, policies, or that you are in voice mode.",
             "End cleanly so the learner can take the floor; do not append a forced quiz or generic follow-up question.",
+            "When it genuinely helps the conversation, ask at most one thoughtful, specific follow-up grounded in what the learner just said. Answer their request first; a complete answer may simply end.",
         ])
     if contract.delivery_mode is DeliveryMode.VOICE and contract.voice_interrupted_previous_turn:
         rules.append("The learner interrupted the previous spoken answer. Follow the new request without restarting the old answer.")
