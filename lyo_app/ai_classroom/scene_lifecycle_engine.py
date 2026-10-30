@@ -215,6 +215,7 @@ class ContextSnapshot(BaseModel):
     user_id: str
     session_id: str
     current_scene_id: Optional[str] = None
+    learner_name: str = ""
 
     # Course / topic context
     topic: Optional[str] = None
@@ -322,6 +323,18 @@ class ContextAssembler:
         # Apply explicit launch identity before resolving content. A lesson URL
         # must open that authored lesson, rather than silently teaching index 0.
         action_data = trigger.action_data or {}
+        if "learner_name" not in progress and trigger.user_id.isdecimal():
+            from lyo_app.auth.models import User
+            # Read only the authenticated learner's profile; a client-supplied
+            # greeting name is never used to choose a different user's record.
+            try:
+                async with self.db.begin_nested():
+                    user = await self.db.get(User, int(trigger.user_id))
+                    name = (user.first_name or user.username or "") if user else ""
+                    progress["learner_name"] = name[:100] if isinstance(name, str) else ""
+            except Exception as exc:
+                logger.warning("Classroom greeting profile unavailable: %s", type(exc).__name__)
+        context.learner_name = progress.get("learner_name", "")
         # A failed first plan has no GuidedState yet. Keep the requested
         # filing scope across Retry and worker restarts so a transient model
         # error does not silently turn a free-topic pathway into a topic card.
@@ -1531,10 +1544,23 @@ class SceneLifecycleEngine:
                 semantic_judge=model_semantic_judge if judge_enabled() else None,
             )
             self.adaptive_teacher = adaptive_teacher
+        elif isinstance(getattr(adaptive_teacher, "package_cache", None), DatabaseUnitPackageCache):
+            # learner_session owns a fresh PostgreSQL connection on each turn.
+            # Retain warm authored content, never the previous turn's closed DB.
+            adaptive_teacher.package_cache = DatabaseUnitPackageCache(self.db)
+
+        async def send_feedback(component_id, verdict, feedback, language):
+            if self.websocket_manager:
+                await self.websocket_manager.send_answer_feedback(
+                    trigger.session_id, trigger.user_id, component_id,
+                    verdict, feedback, language,
+                )
+
         runner = AdaptiveSession(
             adaptive_teacher,
             skill_resolver=(resolve_skills if not hasattr(self, "skill_resolver")
                             else self.skill_resolver),
+            feedback_sender=send_feedback,
         )
         from lyo_app.teaching_runtime.model_usage import (
             bind_model_usage,

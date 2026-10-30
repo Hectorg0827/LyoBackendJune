@@ -629,6 +629,22 @@ class WebSocketManager:
             for connection in active_connections:
                 await self.send_to_connection(connection.connection_id, payload)
 
+    async def send_answer_feedback(self, session_id: str, user_id: str, component_id: str,
+                                   verdict: str, feedback: str, language: str):
+        """An early result for the answered question, scoped to its owner."""
+        room = self.rooms.get(session_id)
+        if room is None:
+            return
+        payload = WebSocketPayload(
+            event_type=WebSocketEventType.ANSWER_FEEDBACK,
+            session_id=session_id, user_id=user_id,
+            data=dict(component_id=component_id, verdict=verdict,
+                      feedback=feedback, language_code=language),
+        )
+        for connection in room.get_active_connections():
+            if str(connection.user_id) == str(user_id):
+                await self.send_to_connection(connection.connection_id, payload)
+
     async def send_to_user(self, user_id: str, payload: WebSocketPayload):
         """Send message to all connections for a user"""
         user_connections = [

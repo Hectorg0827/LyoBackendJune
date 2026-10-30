@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class AdaptiveSession:
-    def __init__(self, teacher: AdaptiveTeacher, skill_resolver=None):
+    def __init__(self, teacher: AdaptiveTeacher, skill_resolver=None, feedback_sender=None):
         self.teacher = teacher
         self.skill_resolver = skill_resolver
+        self.feedback_sender = feedback_sender
 
     @staticmethod
     def teaching_intervention_for_phase(phase: str) -> dict[str, str]:
@@ -341,6 +342,18 @@ class AdaptiveSession:
                 move = self.after_diagnostic(context, state, pending, result, response,
                                              response_time_ms=data.get("response_time_ms"),
                                              option=option if choice else None)
+                # Grading a tap needs no model call. Let the learner hear the
+                # result while the next teaching move is being authored.
+                if self.feedback_sender is not None:
+                    try:
+                        await self.feedback_sender(
+                            pending.id, "declined" if choice and option.abstains else result.verdict,
+                            state.last_feedback, context.language_code,
+                        )
+                    except Exception as exc:
+                        # The final scene still carries this feedback if the
+                        # optional early delivery fails.
+                        logger.warning("Early classroom feedback unavailable: %s", type(exc).__name__)
             elif pending.phase in ("transfer", "interleave") and result.verdict != "clarify":
                 # Neither a transfer nor a revisit is a pass-or-repeat gate.
                 # A partial answer is useful feedback, but proves neither rung.
@@ -776,6 +789,20 @@ class AdaptiveSession:
             ceiling, entry = None, "orient"
 
         state.diagnostic_ceiling = ceiling
+        if not declined:
+            verdict = self.copy(context, {
+                "correct": "That's correct.", "incorrect": "Not quite — that answer is incorrect.",
+                "partial": "That's partly right.", "clarify": "Let's clarify your answer.",
+            }.get(result.verdict, "Let's look at your answer."), {
+                "correct": "Correcto.", "incorrect": "No del todo: esa respuesta es incorrecta.",
+                "partial": "Eso es parcialmente correcto.", "clarify": "Aclaremos tu respuesta.",
+            }.get(result.verdict, "Veamos tu respuesta."))
+            transition = state.last_feedback if state.last_feedback != result.feedback else self.copy(
+                context, "We'll start with this idea and work through an example.",
+                "Empezaremos con esta idea y resolveremos un ejemplo.")
+            # Preserve the option-specific explanation: a generic placement
+            # sentence alone never tells the learner why they were right/wrong.
+            state.last_feedback = " ".join(dict.fromkeys([verdict, result.feedback, transition]))
         state.ceiling_prediction = ceiling
         state.ceiling_source = "open" if pending.task.response_format != "choice" else "tap"
         state.diagnostic_misconception = "" if declined else (result.misconception or "")
@@ -1408,6 +1435,19 @@ class AdaptiveSession:
         pending, task = state.pending, state.pending.task
         follow_up = follow_up or bool(pending.follow_up)
         speech = pending.feedback if follow_up else " ".join(p for p in (state.last_feedback, pending.speech) if p)
+        if pending.phase == "diagnose" and not follow_up:
+            name = (getattr(context, "learner_name", "") or "").strip()
+            subject = context.lesson_title or context.topic or state.unit.title
+            if state.unit_index == 0:
+                speech = self.copy(context,
+                    f"Hello{', ' + name if name else ''}! Today we're going to start with {subject}. "
+                    "Let's gauge where we should begin. Answer this question — it's okay if you're not sure yet.",
+                    f"¡Hola{', ' + name if name else ''}! Hoy vamos a empezar con {subject}. "
+                    "Veamos por dónde comenzar. Responde esta pregunta; está bien si todavía no lo sabes.")
+            else:
+                speech = self.copy(context,
+                    f"Next, let's explore {state.unit.title}. Answer this question so I can choose where we start.",
+                    f"Ahora veamos {state.unit.title}. Responde esta pregunta para elegir por dónde empezar.")
         components = self.surface(context, state, speech, pending.board_title, pending.board_content,
                                   pending.visual, pending.id)
         if follow_up and pending.answers:
