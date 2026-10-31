@@ -794,45 +794,6 @@ async def set_model_mode(
 
 # ==================== COURSE RETRIEVAL ENDPOINTS ====================
 
-@router.get(
-    "/{job_id_or_course_id}",
-    response_model=LyoCourse,
-    summary="Get Generated Course",
-    description="Get the full details of a generated course."
-)
-async def get_course(job_id_or_course_id: str):
-    """
-    Get full details of a generated course, converted to LyoCourse format.
-    """
-    try:
-        # 1. Check job store for completed job
-        job = _job_store.get(job_id_or_course_id)
-        if job:
-            if job.get("status") == "completed" and "result" in job:
-                return convert_to_lyo_course(job["result"])
-            elif job.get("status") == "failed":
-                raise HTTPException(status_code=400, detail=f"Job failed: {job.get('error')}")
-            else:
-                # Still processing - return 202 Accepted
-                raise HTTPException(status_code=202, detail="Job still processing")
-
-        # 2. Fallback: Demo data if specifically requested
-        if "demo" in job_id_or_course_id.lower():
-            from lyo_app.api.v2.course_generator_routes import get_spanish_101_demo
-            return await get_spanish_101_demo()
-
-        raise HTTPException(
-            status_code=404,
-            detail=f"Course/Job {job_id_or_course_id} not found"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get course {job_id_or_course_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post(
     "/regenerate",
     response_model=Dict[str, Any],
@@ -1015,3 +976,43 @@ async def get_config():
         "save_intermediate_results": config.save_intermediate_results,
         "enable_auto_fix": config.enable_auto_fix
     }
+
+
+# Dynamic course IDs must follow fixed paths such as /jobs, /health and /config.
+@router.get(
+    "/{job_id_or_course_id}",
+    response_model=LyoCourse,
+    summary="Get Generated Course",
+    description="Get the full details of a generated course."
+)
+async def get_course(job_id_or_course_id: str):
+    """
+    Get full details of a generated course, converted to LyoCourse format.
+    """
+    try:
+        # 1. Check job store for completed job
+        job = _job_store.get(job_id_or_course_id)
+        if job:
+            if job.get("status") == "completed" and "result" in job:
+                return convert_to_lyo_course(job["result"])
+            elif job.get("status") == "failed":
+                raise HTTPException(status_code=400, detail=f"Job failed: {job.get('error')}")
+            else:
+                # Still processing - return 202 Accepted
+                raise HTTPException(status_code=202, detail="Job still processing")
+
+        # 2. Fallback: Demo data if specifically requested
+        if "demo" in job_id_or_course_id.lower():
+            from lyo_app.api.v2.course_generator_routes import get_spanish_101_demo
+            return await get_spanish_101_demo()
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Course/Job {job_id_or_course_id} not found"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get course {job_id_or_course_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
