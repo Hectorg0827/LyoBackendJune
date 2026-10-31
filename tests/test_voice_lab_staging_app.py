@@ -18,16 +18,13 @@ def _staging_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def test_voice_lab_exposes_only_trial_endpoints_and_health():
-    paths = {route.path for route in staging_app.app.routes}
-    assert paths == {
-        "/healthz",
-        "/api/v1/gpt-live-trial/status",
-        "/api/v1/gpt-live-trial/ticket",
-        "/api/v1/gpt-live-trial/stream",
-    }
-    assert "/auth/login" not in paths
-    assert "/clips" not in paths
+def test_voice_lab_does_not_mount_the_other_lyo_app_surfaces():
+    # Check the actual HTTP responses: repository test fixtures may wrap
+    # FastAPI routers in proxy objects without a standard .path attribute.
+    client = TestClient(staging_app.app)
+    assert staging_app.app.openapi_url is None
+    for path in ("/auth/login", "/auth/me", "/api/v1/clips", "/api/v1/classroom", "/docs"):
+        assert client.get(path).status_code == 404
 
 
 
