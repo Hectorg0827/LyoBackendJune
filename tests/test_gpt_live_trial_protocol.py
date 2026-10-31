@@ -36,16 +36,19 @@ class FakeProvider:
         self.messages.append(json.loads(value))
 
     async def __aiter__(self):
-        yield {"type": "session.started", "session": {"id": "fake_1"}}
-        yield {"type": "session.input_transcript.delta", "delta": "Explain fractions"}
-        yield {
-            "type": "session.delegation.created",
-            "delegation": {"id": "fake_delegate", "target": "client"},
-        }
-        yield {"type": "session.output_audio.delta", "delta": "AAABAA=="}
-        yield {"type": "session.output_transcript.delta", "delta": "Sure, let's try!"}
-        yield {"type": "session.closed", "usage": {"seconds": 12}}
-
+        events = [
+            {"type": "session.started", "session": {"id": "fake_1"}},
+            {"type": "session.input_transcript.delta", "delta": "Explain fractions"},
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "fake_delegate", "target": "client"},
+            },
+            {"type": "session.output_audio.delta", "delta": "AAABAA=="},
+            {"type": "session.output_transcript.delta", "delta": "Sure, let's try!"},
+            {"type": "session.closed", "usage": {"seconds": 12}},
+        ]
+        for event in events:
+            yield json.dumps(event)
 
 @pytest.mark.asyncio
 async def test_fake_provider_receives_no_paid_backend_delegation(monkeypatch):
