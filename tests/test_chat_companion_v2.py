@@ -251,6 +251,26 @@ def test_voice_prompt_is_spoken_friendly_without_changing_mode():
     assert "Do not announce" in prompt
 
 
+def test_voice_personality_is_spoken_and_not_forced_on_text_chat():
+    from lyo_app.teaching_runtime.interaction_contract import contract_prompt
+
+    voice = contract_prompt(interaction_contract_for_request(
+        text="Why do plants need sunlight?", voice_mode=True,
+    ))
+    typed = contract_prompt(interaction_contract_for_request(
+        text="Why do plants need sunlight?",
+    ))
+
+    assert "natural breathing pause" in voice
+    assert "Mmm-hmm" in voice
+    assert "Never insert filler by quota" in voice
+    assert "never tease the learner" in voice.lower()
+    assert "no stage directions" in voice.lower()
+    assert "Mmm-hmm" not in typed
+    assert "Mode: explain" in voice
+    assert "Delivery: voice" in voice
+
+
 def test_structured_voice_lesson_plain_text_is_spoken_friendly():
     raw = """## Fractions
 
