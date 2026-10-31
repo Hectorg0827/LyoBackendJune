@@ -288,6 +288,17 @@ def test_the_compressed_opening_asks_for_one_beat_without_contradicting_itself()
     assert "Supply 2–3 demonstration beats" in teaching_prompt("orient")
 
 
+def test_teacher_voice_is_natural_but_never_performs_scripted_filler():
+    for move in ALL_MOVES:
+        prompt = composed(move)
+        assert "spoken aloud" in prompt
+        assert "varied rhythm" in prompt
+        assert "Occasional gentle wit" in prompt
+        assert "never force filler" in prompt
+        assert "fake uncertainty" in prompt
+        assert "write stage directions" in prompt
+
+
 def test_every_move_the_schema_knows_about_has_instructions_of_its_own():
     for move in ("diagnose", "orient", "reteach", "prerequisite", "guided", "faded",
                  "independent", "transfer", "interleave", "explain", "closing_win",
