@@ -26,7 +26,7 @@ pid = os.getpid()
 print(f">>> [PID {pid}] BOOTSTRAP STARTING (enhanced_main.py)...", flush=True)
 
 print(f">>> [PID {pid}] BOOTSTRAP: Loading FastAPI...", flush=True)
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 print(f">>> [PID {pid}] BOOTSTRAP: FastAPI loaded", flush=True)
@@ -861,7 +861,12 @@ def create_app() -> FastAPI:
             health_status["services"]["vertex_ai"] = f"error: {e}"
         return health_status
 
-    @app.post("/admin/reset-circuit-breakers")
+    from lyo_app.auth.admin_dependencies import require_superuser_for_circuit_reset
+
+    @app.post(
+        "/admin/reset-circuit-breakers",
+        dependencies=[Depends(require_superuser_for_circuit_reset)],
+    )
     async def reset_circuit_breakers():
         """Reset all AI circuit breakers to CLOSED state."""
         try:
