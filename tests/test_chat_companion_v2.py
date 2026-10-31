@@ -255,10 +255,10 @@ def test_voice_personality_is_spoken_and_not_forced_on_text_chat():
     from lyo_app.teaching_runtime.interaction_contract import contract_prompt
 
     voice = contract_prompt(interaction_contract_for_request(
-        text="Why do plants need sunlight?", voice_mode=True,
+        text="Explain why plants need sunlight", voice_mode=True,
     ))
     typed = contract_prompt(interaction_contract_for_request(
-        text="Why do plants need sunlight?",
+        text="Explain why plants need sunlight",
     ))
 
     assert "natural breathing pause" in voice
