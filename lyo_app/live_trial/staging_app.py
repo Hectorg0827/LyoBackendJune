@@ -14,7 +14,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from lyo_app.core.database import engine
+from lyo_app.auth.dependencies import get_current_user
 from .budget import initialize_schema
+from .staging_auth import get_staging_trial_user
 from .routes import router as live_trial_router
 
 _PROJECT_ID = "8eb44c4c-d8df-46f2-b535-e75675823469"
@@ -71,6 +73,9 @@ app = FastAPI(
     openapi_url=None,
 )
 app.include_router(live_trial_router)
+# Ticket/status dependencies must resolve via the existing LYO staging API,
+# never the Voice Lab's separate ledger-only database.
+app.dependency_overrides[get_current_user] = get_staging_trial_user
 
 
 @app.middleware("http")

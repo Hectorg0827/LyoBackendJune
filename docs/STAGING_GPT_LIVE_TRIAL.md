@@ -31,6 +31,17 @@ with continuously streamed GPT-Live audio (natural interruptions; no beeps).
   spend limit are strongly recommended before real spend. Other activity on
   a shared OpenAI account is **not** included in this application cap.
 
+## Existing LYO sign-in (staging only)
+
+Voice Lab uses its *own* PostgreSQL database only for the capped spending ledger.
+To validate a learner's bearer token, its FastAPI app checks the existing LYO
+staging service's fixed `https://lyojourneystagingbackend-staging.up.railway.app/auth/me`
+endpoint, with a short timeout and no redirect following. Identity failures
+fail closed. The existing LYO staging service is read-only from this trial:
+no changes to its code, database, or Railway configuration are required.
+Token contents are never stored or logged by the Voice Lab. This isolation
+must be tested before any real paid voice session is approved.
+
 ## Required staging configuration
 
 Leave **`LYO_GPT_LIVE_TRIAL_ENABLED=false`** until CI, offline
