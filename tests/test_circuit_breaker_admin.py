@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from lyo_app.auth.admin_dependencies import require_superuser_for_circuit_reset
@@ -33,7 +33,7 @@ def test_production_reset_route_has_superuser_dependency():
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "reset_circuit_breakers"
     ]
     assert len(endpoints) == 1
-    decorators = ast.unparse(endpoints[0].decorator_list)
+    decorators = " ".join(ast.unparse(item) for item in endpoints[0].decorator_list)
     assert "Depends(require_superuser_for_circuit_reset)" in decorators
 
 
@@ -76,7 +76,7 @@ def test_authenticated_database_superuser_can_reset():
 @pytest.mark.asyncio
 async def test_inactive_superuser_is_denied_before_database_check():
     db = SimpleNamespace(scalar=AsyncMock(return_value=True))
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(HTTPException) as exc_info:
         await require_superuser_for_circuit_reset(
             current_user=SimpleNamespace(id=7, is_active=False), db=db
         )
