@@ -95,3 +95,34 @@ def test_no_external_paid_delegation_is_possible_from_trial():
     assert "fraction" in routes._local_trial_answer("fractions").lower()
     assert "cell" in routes._local_trial_answer("cells").lower()
     assert "not connected" in routes._local_trial_answer("Tell me quantum theory")
+
+
+@pytest.mark.asyncio
+async def test_trial_budget_survives_application_restart(tmp_path):
+    url = f"sqlite+aiosqlite:///{tmp_path}/persistent_trial.db"
+    first = create_async_engine(url)
+    await budget.initialize_schema(first)
+    ticket = await budget.issue_ticket(first, 92)
+    await first.dispose()
+
+    # A fresh process/worker must see earlier reservations and used tickets.
+    second = create_async_engine(url)
+    try:
+        await budget.initialize_schema(second)
+        assert (await budget.get_status(second)).reserved_micro_usd == 150_000
+        assert await budget.claim_ticket(second, ticket) is True
+        assert await budget.claim_ticket(second, ticket) is False
+    finally:
+        await second.dispose()
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_reserve_a_paid_voice_ticket(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/trial.db")
+    try:
+        await budget.initialize_schema(engine)
+        with pytest.raises(ValueError, match="Authenticated"):
+            await budget.issue_ticket(engine, 0)
+        assert (await budget.get_status(engine)).reserved_micro_usd == 0
+    finally:
+        await engine.dispose()
