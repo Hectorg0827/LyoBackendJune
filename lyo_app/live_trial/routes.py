@@ -158,6 +158,12 @@ async def _send_json(websocket: WebSocket, data: dict) -> None:
     await websocket.send_text(json.dumps(data, separators=(",", ":")))
 
 
+async def _with_wall_deadline(operation, seconds: float = SESSION_MAX_WALL_SECONDS):
+    """Cancellation propagates into the provider socket even if no audio arrives."""
+    async with asyncio.timeout(seconds):
+        return await operation
+
+
 async def _relay(websocket: WebSocket, api_key: str) -> int | None:
     """Run one provider connection. The caller imposes a hard total timeout."""
     import websockets
@@ -311,11 +317,9 @@ async def trial_stream(websocket: WebSocket):
     try:
         # Includes upstream connection, startup, speech and finalization.
         # No task survives this deadline to continue generating billable audio.
-        async with asyncio.timeout(SESSION_MAX_WALL_SECONDS):
-            seconds = await _relay(
-                websocket,
-                os.environ["LYO_GPT_LIVE_STAGING_OPENAI_API_KEY"],
-            )
+        seconds = await _with_wall_deadline(
+            _relay(websocket, os.environ["LYO_GPT_LIVE_STAGING_OPENAI_API_KEY"])
+        )
     except TimeoutError:
         logger.info("GPT-Live staging trial reached hard session deadline")
         try:
