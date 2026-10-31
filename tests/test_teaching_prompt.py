@@ -19,7 +19,7 @@ import pytest
 
 from lyo_app.ai_classroom.adaptive_teaching import turn_schema
 from lyo_app.ai_classroom.teaching_prompt import (
-    ASKING_MOVES, CORE, MOVES, TAUGHT_ONLY_MOVES, teaching_prompt)
+    ASKING_MOVES, CORE, MOVES, TAUGHT_ONLY_MOVES, teaching_prompt, unit_package_prompt)
 
 #: The single prompt every move used to receive, as it was before the split.
 ORIGINAL = (
@@ -288,9 +288,13 @@ def test_the_compressed_opening_asks_for_one_beat_without_contradicting_itself()
     assert "Supply 2–3 demonstration beats" in teaching_prompt("orient")
 
 
-def test_teacher_voice_is_natural_but_never_performs_scripted_filler():
+def test_teacher_voice_is_natural_without_bloating_diagnostic_probe():
+    assert "spoken aloud" in unit_package_prompt()
     for move in ALL_MOVES:
         prompt = composed(move)
+        if move == "diagnose":
+            assert "spoken aloud" not in prompt
+            continue
         assert "spoken aloud" in prompt
         assert "varied rhythm" in prompt
         assert "Occasional gentle wit" in prompt
