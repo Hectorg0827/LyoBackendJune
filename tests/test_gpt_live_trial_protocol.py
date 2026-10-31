@@ -47,8 +47,12 @@ class FakeProvider:
             {"type": "session.output_transcript.delta", "delta": "Sure, let's try!"},
             {"type": "session.closed", "usage": {"seconds": 12}},
         ]
-        for event in events:
+        for index, event in enumerate(events):
             yield json.dumps(event)
+            if index == 0:
+                # Let the phone send a prohibited command while the session
+                # is active, instead of ending the fake session immediately.
+                await asyncio.sleep(0.02)
 
 @pytest.mark.asyncio
 async def test_fake_provider_receives_no_paid_backend_delegation(monkeypatch):
