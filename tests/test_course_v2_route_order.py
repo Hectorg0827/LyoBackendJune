@@ -30,3 +30,17 @@ def test_static_routes_precede_dynamic_course_id():
     assert len(routes) == 5
     for literal in ("/jobs", "/health", "/config", "/regenerate"):
         assert routes[literal] < routes["/{job_id_or_course_id}"]
+
+
+def test_health_request_reaches_health_handler_instead_of_course_lookup():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from lyo_app.ai_agents.multi_agent_v2.routes import router
+
+    app = FastAPI()
+    app.include_router(router)
+    response = TestClient(app).get("/api/v2/courses/health")
+
+    assert response.status_code == 200
+    assert response.json()["service"] == "course-generation-v2"
