@@ -88,7 +88,7 @@ KOKORO_VOICES = {
     "pt": "pf_dora",
 }
 
-# Distinct native Kokoro English characters; the shared locale voice remains
+# Distinct native Kokoro English characters, including Lyo; the shared locale voice remains
 # the safe fallback where a provider has fewer verified character voices.
 # Do not switch to a paid provider simply to make an unsupported voice work.
 KOKORO_ENGLISH_CAST = {
@@ -100,6 +100,7 @@ KOKORO_ENGLISH_CAST = {
     "student_sam": "am_echo",
     "student_rio": "af_nicole",
     "student_zack": "am_puck",
+    "lyo": "am_liam",
 }
 
 GOOGLE_CHIRP_VOICES = {
