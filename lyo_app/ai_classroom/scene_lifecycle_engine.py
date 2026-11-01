@@ -1081,15 +1081,13 @@ class ContextAssembler:
         return frustration
 
     async def _get_peer_states(self, session_id: str) -> List[PeerState]:
-        """Get state of AI peer students in this session.
-        AI peers are synthetic — no DB table. We keep a static configuration."""
-        return [
-            PeerState(
-                peer_name="Sam",
-                personality_trait="curious",
-                total_interventions=0
-            )
-        ]
+        """No seated peers until the classroom has real speaking events.
+
+        A static Sam was previously returned despite having no turn history.
+        Optional AI classmates now author explicit StudentPrompt components;
+        those turns, not a fabricated active roster, drive the client UI.
+        """
+        return []
 
     async def _get_session_duration(self, session_id: str) -> int:
         """Calculate session duration in minutes from ClassroomSession"""
@@ -1575,6 +1573,8 @@ class SceneLifecycleEngine:
             )
         ):
             scene = await runner.run(context, progress, trigger)
+            from lyo_app.ai_classroom.classroom_cast import add_classmate_turn
+            scene = await add_classmate_turn(scene, context, progress)
         # Keep intervention telemetry separate from learner evidence. This
         # pending record is committed atomically with the same classroom turn.
         progress["_pending_teaching_intervention"] = {

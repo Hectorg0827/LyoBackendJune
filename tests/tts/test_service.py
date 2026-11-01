@@ -37,6 +37,21 @@ def test_spanish_resolves_to_a_spanish_teacher_voice(tmp_path):
     assert detected.provider_voice == "ef_dora"
 
 
+def test_english_classroom_characters_have_distinct_provider_voices(tmp_path):
+    service = TTSService(_config(tmp_path))
+    cast_ids = [
+        "teacher_1", "teacher_2", "teacher_3", "teacher_4",
+        "student_maya", "student_sam", "student_rio", "student_zack",
+    ]
+    voices = [service.resolve_voice("Let's understand this.", language="en-US", speaker_id=speaker).provider_voice
+              for speaker in cast_ids]
+    assert len(set(voices)) == len(cast_ids)
+    # Unsupported localized cast voices must stay on the configured locale,
+    # not silently switch to an English or a paid provider.
+    spanish = service.resolve_voice("Vamos a aprender.", language="es-US", speaker_id="teacher_2")
+    assert spanish.provider_voice == "ef_dora"
+
+
 def test_language_names_from_course_metadata_are_normalized(tmp_path):
     service = TTSService(_config(tmp_path))
 

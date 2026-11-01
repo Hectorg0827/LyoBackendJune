@@ -71,6 +71,10 @@ VOICE_PROFILES = {
 }
 
 Voice = Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+SpeakerId = Literal[
+    "teacher_1", "teacher_2", "teacher_3", "teacher_4",
+    "student_maya", "student_sam", "student_rio", "student_zack", "lyo",
+]
 AudioFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]
 Model = Literal["tts-1", "tts-1-hd"]
 TTSProvider = Literal["kokoro", "google", "openai"]
@@ -82,6 +86,20 @@ KOKORO_VOICES = {
     "fr": "ff_siwis",
     "it": "if_sara",
     "pt": "pf_dora",
+}
+
+# Distinct native Kokoro English characters; the shared locale voice remains
+# the safe fallback where a provider has fewer verified character voices.
+# Do not switch to a paid provider simply to make an unsupported voice work.
+KOKORO_ENGLISH_CAST = {
+    "teacher_1": "af_heart",
+    "teacher_2": "am_michael",
+    "teacher_3": "af_sky",
+    "teacher_4": "am_adam",
+    "student_maya": "af_bella",
+    "student_sam": "am_echo",
+    "student_rio": "af_nicole",
+    "student_zack": "am_puck",
 }
 
 GOOGLE_CHIRP_VOICES = {
@@ -319,6 +337,7 @@ class TTSService:
         voice: Optional[Voice] = None,
         language: Optional[str] = None,
         content_type: Optional[str] = None,
+        speaker_id: Optional[SpeakerId] = None,
     ) -> ResolvedVoice:
         requested_voice = (
             voice
@@ -339,6 +358,8 @@ class TTSService:
                 raise TTSUnavailableError(
                     f"Kokoro does not have a configured teacher voice for {language_code}"
                 )
+            if family == "en" and speaker_id in KOKORO_ENGLISH_CAST:
+                provider_voice = KOKORO_ENGLISH_CAST[speaker_id]
             provider_model = "kokoro"
         elif self.config.provider == "google":
             google_voice = GOOGLE_CHIRP_VOICES.get(family)
@@ -431,6 +452,7 @@ class TTSService:
         speed: float = 1.0,
         content_type: Optional[str] = None,
         language: Optional[str] = None,
+        speaker_id: Optional[SpeakerId] = None,
     ) -> bytes:
         if not self._initialized:
             await self.initialize()
@@ -455,6 +477,7 @@ class TTSService:
             voice=voice,
             language=language,
             content_type=content_type,
+            speaker_id=speaker_id,
         )
         cache_key = self._get_cache_key(
             normalized_text, resolved, audio_format, speed
@@ -594,6 +617,7 @@ class TTSService:
         language: Optional[str] = None,
         chunk_size: int = 8192,
         content_type: Optional[str] = None,
+        speaker_id: Optional[SpeakerId] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Deliver provider bytes immediately; cache only complete recordings.
 
@@ -610,9 +634,10 @@ class TTSService:
             raise ValueError("Invalid speech text length")
         if not 0.75 <= speed <= 1.25 or chunk_size <= 0:
             raise ValueError("Invalid speech speed or chunk size")
-        resolved = self.resolve_voice(text, voice, language, content_type)
+        resolved = self.resolve_voice(text, voice, language, content_type, speaker_id)
         if resolved.provider == "google":
-            data = await self.synthesize(text, voice, model, format, speed, content_type, language)
+            data = await self.synthesize(text, voice, model, format, speed, content_type, language,
+                                         speaker_id=speaker_id)
             for offset in range(0, len(data), chunk_size):
                 yield data[offset:offset + chunk_size]
             return

@@ -14,6 +14,7 @@ from lyo_app.auth.schemas import UserRead
 from .service import (
     get_tts_service,
     Voice,
+    SpeakerId,
     AudioFormat,
     Model,
     TTSUnavailableError,
@@ -30,6 +31,7 @@ class SynthesizeRequest(BaseModel):
     """Request to synthesize speech"""
     text: str = Field(..., min_length=1, max_length=1200, description="One short teaching turn")
     voice: Optional[Voice] = Field(default=None, description="Voice to use")
+    speaker_id: Optional[SpeakerId] = Field(default=None, description="Stable LYO cast identity")
     model: Optional[Model] = Field(default="tts-1-hd", description="TTS model")
     format: Optional[AudioFormat] = Field(default="mp3", description="Output format")
     speed: float = Field(default=0.98, ge=0.75, le=1.25, description="Classroom speech speed")
@@ -171,6 +173,7 @@ async def synthesize_speech(
             voice=request.voice,
             language=request.language,
             content_type=request.content_type,
+            speaker_id=request.speaker_id,
         )
         audio_data = await service.synthesize(
             text=request.text,
@@ -180,6 +183,7 @@ async def synthesize_speech(
             speed=request.speed,
             content_type=request.content_type,
             language=request.language,
+            speaker_id=request.speaker_id,
         )
         
         # Estimate duration (rough: ~150 words per minute at speed 1.0)
@@ -220,6 +224,7 @@ async def synthesize_stream(
             text=request.text, voice=request.voice, model=request.model,
             format=request.format or "mp3", speed=request.speed,
             content_type=request.content_type, language=request.language,
+            speaker_id=request.speaker_id,
         )
         # Prime before sending headers: initial provider/configuration failures
         # still produce an actionable HTTP error. Later failures close the
