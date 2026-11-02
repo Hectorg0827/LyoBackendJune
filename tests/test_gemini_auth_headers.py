@@ -32,6 +32,19 @@ class CapturingSession:
         return None
 
 
+class AnsweringSession(CapturingSession):
+    def __init__(self, payload):
+        super().__init__()
+        self.payload = payload
+        self.status = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def json(self):
+        return self.payload
+
+
 def config():
     return AIModelConfig(
         name="Google Gemini 3.8 Flash",
@@ -62,6 +75,45 @@ async def test_gemini_generate_content_uses_header_not_query():
         )
     assert len(manager.session.calls) == 1
     check_call(*manager.session.calls[0])
+
+
+@pytest.mark.asyncio
+async def test_gemini_does_not_treat_max_tokens_as_successful_classroom_json():
+    manager = AIResilienceManager()
+    manager.session = AnsweringSession({
+        "candidates": [{
+            "finishReason": "MAX_TOKENS",
+            "content": {"parts": [{"text": '{"speech":"incomplete"'}]},
+        }],
+    })
+    with pytest.raises(RuntimeError, match="MAX_TOKENS"):
+        await manager._make_api_call_with_messages(
+            "gemini-3.8-flash", config(),
+            [{"role": "user", "content": "Teach fractions"}],
+            temperature=0.2, max_tokens=300,
+        )
+
+
+@pytest.mark.asyncio
+async def test_gemini_returns_visible_parts_after_any_hidden_thinking():
+    manager = AIResilienceManager()
+    manager.session = AnsweringSession({
+        "candidates": [{
+            "finishReason": "STOP",
+            "content": {"parts": [
+                {"thought": True, "text": "private reasoning"},
+                {"text": '{"speech":'}, {"text": '"Hello"}'},
+            ]},
+        }],
+        "usageMetadata": {"totalTokenCount": 90},
+    })
+    result = await manager._make_api_call_with_messages(
+        "gemini-3.8-flash", config(),
+        [{"role": "user", "content": "Teach fractions"}],
+        temperature=0.2, max_tokens=300,
+    )
+    assert result["content"] == '{"speech":"Hello"}'
+    assert result["tokens_used"] == 90
 
 
 @pytest.mark.asyncio

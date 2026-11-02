@@ -104,6 +104,29 @@ async def test_a_failed_step_is_retried_on_the_escalated_model_first(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_malformed_step_repairs_on_a_stronger_model_before_pausing(monkeypatch):
+    """One malformed model answer should not require a learner-facing Retry."""
+    monkeypatch.delenv("CLASSROOM_STRICT_SCHEMA", raising=False)
+    orders = []
+
+    async def chat_completion(**kwargs):
+        orders.append(kwargs["provider_order"])
+        return {"is_fallback": True, "error": "provider unavailable"}
+
+    import lyo_app.core.ai_resilience as resilience
+    monkeypatch.setattr(resilience.ai_resilience_manager, "chat_completion", chat_completion)
+    with pytest.raises(adaptive_teaching.TeachingUnavailable):
+        await adaptive_teaching.model_json("system", {"repair": "speech: missing"}, PracticeTurn)
+    assert orders[0][0] == ESCALATION_PROVIDER
+
+    with pytest.raises(adaptive_teaching.TeachingUnavailable):
+        await adaptive_teaching.model_json(
+            "system", {"repair": "json_invalid"}, adaptive_teaching.UnitPackage,
+        )
+    assert orders[1][0] != ESCALATION_PROVIDER
+
+
+@pytest.mark.asyncio
 async def test_nothing_internal_reaches_the_model(monkeypatch):
     """`_escalate` is routing, like `_rejected_provider`. A learner's teaching
     context must never carry this server's own retry bookkeeping into a prompt."""
