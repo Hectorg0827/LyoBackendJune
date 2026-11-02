@@ -7,6 +7,8 @@ are bounded here, and an unavailable/uncertain evaluator records no failure.
 """
 
 import asyncio
+from collections import OrderedDict
+import hashlib
 import json
 import logging
 import os
@@ -26,6 +28,13 @@ from lyo_app.ai_classroom.strict_schema import (
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual, complete_fraction_visuals, hydrate_turn_visuals, visual_from_numbered_steps
 
 logger = logging.getLogger(__name__)
+
+# Successful plans are safe to reuse for an identical learner and lesson
+# request. A fresh classroom still authors its own questions and evidence.
+# Bound memory and lifetime: no prompts, user IDs, or answers are written to disk.
+_FAST_PLAN_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+_FAST_PLAN_CACHE_LIMIT = 64
+_FAST_PLAN_CACHE_SECONDS = 1800
 
 # Provider calls dominate the wait between a learner answering and the next
 # teaching move. These labels have bounded values and contain no learner text.
@@ -1220,6 +1229,21 @@ class AdaptiveTeacher:
                                   if k.total_attempts > 0][:20],
             "target_minutes": context.target_duration_minutes, "unit_count": count,
         }
+        cache_key = None
+        if self.fast_start:
+            # Include the learner identity and the full personalized request.
+            # This must never reuse another student's plan or stale evidence.
+            cache_key = hashlib.sha256(json.dumps(
+                {"learner_id": str(context.user_id), "request": payload},
+                sort_keys=True, ensure_ascii=False, default=str,
+            ).encode("utf-8")).hexdigest()
+            cached = _FAST_PLAN_CACHE.get(cache_key)
+            if cached is not None:
+                expires_at, validated_data = cached
+                if perf_counter() < expires_at:
+                    _FAST_PLAN_CACHE.move_to_end(cache_key)
+                    return LearningPlan.model_validate(validated_data)
+                _FAST_PLAN_CACHE.pop(cache_key, None)
         for attempt in range(2):
             try:
                 plan = await self.generate(
@@ -1243,6 +1267,14 @@ class AdaptiveTeacher:
                 )
                 if len(plan.units) != count:
                     raise ValueError("Plan did not match instructional budget")
+                if cache_key is not None:
+                    _FAST_PLAN_CACHE[cache_key] = (
+                        perf_counter() + _FAST_PLAN_CACHE_SECONDS,
+                        plan.model_dump(mode="json"),
+                    )
+                    _FAST_PLAN_CACHE.move_to_end(cache_key)
+                    while len(_FAST_PLAN_CACHE) > _FAST_PLAN_CACHE_LIMIT:
+                        _FAST_PLAN_CACHE.popitem(last=False)
                 return plan
             except Exception as exc:
                 logger.warning("Classroom plan rejected (%s)", type(exc).__name__)
