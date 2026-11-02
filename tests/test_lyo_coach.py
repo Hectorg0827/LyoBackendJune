@@ -3,6 +3,9 @@
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from unittest.mock import AsyncMock
+
+import lyo_app.coach.service as coach_service
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from lyo_app.coach.models import GoalSkill, LearningGoal
@@ -65,6 +68,20 @@ def _record(best, state, misconception=None, last_seen=None):
         misconception=misconception,
         last_seen=last_seen,
     )
+
+
+
+@pytest.mark.asyncio
+async def test_today_view_without_goals_has_valid_zero_minute_contract(monkeypatch):
+    """A brand-new learner can open /me/coach/today without a 500."""
+    monkeypatch.setattr(coach_service, "active_goals", AsyncMock(return_value=[]))
+
+    result = await coach_service.build_today_view(db=None, user_id=7)
+
+    assert result.total_minutes == 0
+    assert result.active_goals == []
+    assert result.mission == []
+    assert "No active learning goal" in result.coach_note
 
 
 def test_no_evidence_starts_with_a_diagnostic_not_a_beginner_lecture():
