@@ -41,6 +41,12 @@ def test_the_registry_is_readable_at_all():
     assert len(registry()) >= 2
 
 
+def test_classroom_fallback_is_registered_and_distinct_from_the_escalation_model():
+    """An unknown fallback name would be silently dropped during routing."""
+    assert "gemini-3.5-flash-lite" in registry()
+    assert "gemini-3.5-flash-lite" != ESCALATION_PROVIDER
+
+
 def test_the_escalation_target_is_a_model_the_registry_actually_carries():
     assert ESCALATION_PROVIDER in registry(), (
         f"{ESCALATION_PROVIDER} is not configured in ai_resilience, so escalating to it "
@@ -55,7 +61,7 @@ def test_the_escalation_target_is_not_one_of_the_models_that_just_failed():
     escalation only after every attempt under that pair has failed, so the
     target has to be something those attempts did not already use.
     """
-    ordinary = {"gpt-4o-mini", "gemini-3.6-flash"}
+    ordinary = {"gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"}
     assert ESCALATION_PROVIDER not in ordinary
 
 
@@ -86,6 +92,7 @@ async def test_a_failed_step_is_retried_on_the_escalated_model_first(monkeypatch
 
     await adaptive_teaching.model_json("system", {"a": 1}, PracticeTurn)
     assert orders[-1][0] != ESCALATION_PROVIDER, "an ordinary step must not pay for the big model"
+    assert orders[-1][-1] == "gemini-3.5-flash-lite"
 
     await adaptive_teaching.model_json("system", {"a": 1, "_escalate": True}, PracticeTurn)
     assert orders[-1][0] == ESCALATION_PROVIDER

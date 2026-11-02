@@ -833,11 +833,15 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 "the schema itself. Nested definitions belong only inside their named fields.\n")
     # A malformed evaluation must be repaired by a different, capable model
     # before the learner is told that their saved answer cannot be graded.
-    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash"]
+    # Classroom runs on the Developer API. Keep a currently supported,
+    # low-latency Google model at the end so exhausted OpenAI credits or a
+    # 3.6 Flash free-tier quota do not immediately pause a student's lesson.
+    # It uses the existing Gemini key and the same strict schema validation.
+    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
                             if issubclass(schema, DiagnosticTurn) else
-                            ["gpt-4o-mini", "gpt-4o", "gemini-3.6-flash"]
+                            ["gpt-4o-mini", "gpt-4o", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
                             if schema is Evaluation else
-                            ["gpt-4o-mini", "gemini-3.6-flash"])
+                            ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"])
     # A step the learner has already watched fail is worth a more capable
     # model. The ordinary order leads with the small, fast one because most
     # turns do not need more than that; a turn that has now failed every
