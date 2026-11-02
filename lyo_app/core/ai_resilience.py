@@ -258,6 +258,14 @@ class AIResilienceManager:
                     priority=1,
                     capabilities=["chat", "fast", "multimodal"],
                 ),
+                "gemini-3.5-flash-lite": AIModelConfig(
+                    name="Google Gemini 3.5 Flash-Lite",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+                    api_key=gemini_key,
+                    max_tokens=8000,
+                    priority=1,
+                    capabilities=["chat", "fast", "multimodal"],
+                ),
                 "gpt-4o-mini": AIModelConfig(
                     name="OpenAI GPT-4o mini",
                     endpoint="openai", # Flag to use openai_client
