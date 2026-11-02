@@ -45,7 +45,10 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
     assert completion.await_count == 2
     initial, repair = [call.kwargs for call in completion.await_args_list]
     assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
-    assert repair["provider_order"] == ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gpt-4o-mini"]
+    assert repair["provider_order"] == [
+        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+        "gemini-3.5-flash-lite", "gpt-4o-mini",
+    ]
     assert initial["max_tokens"] == repair["max_tokens"] == 4500
     contract = json.loads(initial["messages"][0]["content"].split("Return only JSON matching this schema:\n")[1])
     assert set(contract["properties"]) == {"speech", "board_title", "board_content", "visual", "task", "demonstration"}
@@ -79,7 +82,10 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     assert all(beat.visual is not None for beat in turn.demonstration)
     initial, repair = [call.kwargs for call in completion.await_args_list]
     assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
-    assert repair["provider_order"] == ["gpt-4o-mini", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
+    assert repair["provider_order"] == [
+        "gemini-3.8-flash", "gemini-3.7-flash", "gpt-4o-mini",
+        "gemini-3.5-flash-lite", "gemini-3.6-flash",
+    ]
     sent = json.loads(repair["messages"][1]["content"])
     assert "_rejected_provider" not in sent
 
@@ -107,7 +113,7 @@ async def test_rejected_evaluation_tries_stronger_model_before_pausing_class(mon
     assert result.verdict == "partial"
     assert completion.await_count == 2
     assert completion.await_args_list[0].kwargs["provider_order"][0] == "gpt-4o-mini"
-    assert completion.await_args_list[1].kwargs["provider_order"][0] == "gpt-4o"
+    assert completion.await_args_list[1].kwargs["provider_order"][0] == "gemini-3.8-flash"
 
 
 @pytest.mark.asyncio

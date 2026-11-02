@@ -856,7 +856,11 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     #
     # The fallback providers remain in their original relative order; never
     # silently assert the escalation succeeded when a fallback answered.
-    if payload.get("_escalate") and not issubclass(schema, UnitPackage):
+    # A malformed answer on the first attempt is evidence that repeating the
+    # same small provider is unlikely to help. Escalate the *repair* attempt
+    # for immediate learner moves, while leaving speculative packages on the
+    # inexpensive path. This happens before asking the learner to tap Retry.
+    if (payload.get("_escalate") or payload.get("repair")) and not issubclass(schema, UnitPackage):
         # Retry another validated Google model if 3.8 Flash is overloaded.
         # No additional provider credentials or mastery concessions.
         recovery_models = [ESCALATION_PROVIDER, "gemini-3.7-flash", "gemini-3.6-flash"]
@@ -1117,6 +1121,16 @@ class AdaptiveTeacher:
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
+        # A full package can include dozens of detailed turns and large visual
+        # schemas. In production it repeatedly hit model output limits and
+        # returned invalid JSON, spending limited provider quota while the
+        # learner was waiting for a small, live move. Keep package caching for
+        # previously validated units, but make expensive speculative authoring
+        # explicitly opt-in until its provider contract is proven reliable.
+        if os.getenv("CLASSROOM_UNIT_PACKAGE_PREFETCH", "").strip().lower() not in {
+            "1", "true", "yes", "on",
+        }:
+            return
         if not self.fast_start or self.package_cache is None:
             return
         from lyo_app.ai_classroom.unit_package_cache import package_key
@@ -1145,6 +1159,10 @@ class AdaptiveTeacher:
         never creates a generation fan-out. If the learner answers before it
         finishes, the existing evaluation path may cancel it and live work wins.
         """
+        if os.getenv("CLASSROOM_UNIT_PACKAGE_PREFETCH", "").strip().lower() not in {
+            "1", "true", "yes", "on",
+        }:
+            return
         if (
             not self.fast_start
             or self.package_cache is None

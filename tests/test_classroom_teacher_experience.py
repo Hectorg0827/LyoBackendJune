@@ -164,7 +164,8 @@ async def test_answer_question_generation_receives_the_exact_open_question_and_t
 
 
 @pytest.mark.asyncio
-async def test_fast_start_warms_the_validated_unit_only_after_the_immediate_move():
+async def test_fast_start_warms_the_validated_unit_only_after_the_immediate_move(monkeypatch):
+    monkeypatch.setenv("CLASSROOM_UNIT_PACKAGE_PREFETCH", "1")
     ctx = context()
     state = state_for_class()
     state.skill_ids = [str(uuid4()), str(uuid4())]
@@ -188,7 +189,8 @@ async def test_fast_start_warms_the_validated_unit_only_after_the_immediate_move
 
 
 @pytest.mark.asyncio
-async def test_late_stage_practice_warms_exactly_one_next_unit():
+async def test_late_stage_practice_warms_exactly_one_next_unit(monkeypatch):
+    monkeypatch.setenv("CLASSROOM_UNIT_PACKAGE_PREFETCH", "1")
     ctx = context()
     state = state_for_class()
     state.skill_ids = [str(uuid4()), str(uuid4())]
@@ -220,6 +222,26 @@ async def test_early_practice_does_not_spend_next_unit_generation():
     teacher.build_package = AsyncMock()
 
     teacher.schedule_next_unit_prefetch(ctx, state, "guided")
+    await __import__("asyncio").sleep(0)
+
+    teacher.build_package.assert_not_awaited()
+    assert teacher._package_prefetch_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_production_default_does_not_spend_quota_on_speculative_full_packages(monkeypatch):
+    monkeypatch.delenv("CLASSROOM_UNIT_PACKAGE_PREFETCH", raising=False)
+    ctx = context()
+    state = state_for_class()
+    state.skill_ids = [str(uuid4()), str(uuid4())]
+    state.identity_required = True
+    teacher = AdaptiveTeacher(package_cache=object(), fast_start=True)
+    teacher.build_package = AsyncMock()
+    key = package_key(ctx, state.unit, state.skill_ids[0])
+    teacher._fast_cache_misses.add(key.cache_key)
+
+    teacher.schedule_package_prefetch(ctx, state, state.unit)
+    teacher.schedule_next_unit_prefetch(ctx, state, "independent")
     await __import__("asyncio").sleep(0)
 
     teacher.build_package.assert_not_awaited()

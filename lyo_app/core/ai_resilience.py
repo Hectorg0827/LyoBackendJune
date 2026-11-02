@@ -950,7 +950,22 @@ class AIResilienceManager:
                     raise Exception(f"API returned {response.status}: {text}")
                 
                 data = await response.json()
-                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                candidate = data["candidates"][0]
+                finish_reason = candidate.get("finishReason")
+                # A 200 response can still be an incomplete generation. This
+                # happened with Classroom's large JSON unit packages: the
+                # truncated object was recorded as a successful provider call
+                # and retried only after failing schema validation. Let the
+                # resilience layer try another provider instead.
+                if finish_reason and finish_reason != "STOP":
+                    raise RuntimeError(f"Gemini generation did not complete ({finish_reason})")
+                content = "".join(
+                    str(part.get("text") or "")
+                    for part in (candidate.get("content") or {}).get("parts", [])
+                    if isinstance(part, dict) and not part.get("thought")
+                )
+                if not content.strip():
+                    raise RuntimeError("Gemini generation contained no visible response")
                 tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
                 print(f">>> [PID {os.getpid()}] {model_name} SUCCESS in {duration:.2f}s (Tokens: {tokens_used})", flush=True)
                 
