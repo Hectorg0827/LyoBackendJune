@@ -196,6 +196,13 @@ def decide_freshness(
         r"^(?:please\s+)?(?:(?:just|simply|only)\s+)?(?:answer|calculate|compute)\s*:\s*",
         "", normalized, flags=re.I,
     )
+    # A harmless formatting request after a numeric question does not make
+    # arithmetic time-sensitive or justify a web lookup.
+    arithmetic_text = re.sub(
+        r"\??\s*(?:answer\s+(?:in\s+(?:one|a)\s+sentence|briefly)|"
+        r"give\s+only\s+the\s+answer)\.?\s*$",
+        "", arithmetic_text, flags=re.I,
+    )
     if re.fullmatch(r"(?:what is\s+)?[\d\s()+*/.%-]+(?:\s*[+=×÷-]\s*[\d\s()+*/.%-]+)+\??", arithmetic_text, re.I):
         return FreshnessDecision(FreshnessMode.NONE, "arithmetic")
 
