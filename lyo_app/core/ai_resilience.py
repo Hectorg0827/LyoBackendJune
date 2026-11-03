@@ -596,13 +596,22 @@ class AIResilienceManager:
         generation_config: Dict[str, Any] = {
             "maxOutputTokens": max_tokens,
             "temperature": temperature,
-            "topP": 0.8,
-            "topK": 40,
         }
-        if thinking_budget is not None:
-            generation_config["thinkingConfig"] = {
-                "thinkingBudget": int(thinking_budget)
-            }
+        if model_key.startswith("gemini-3."):
+            # Gemini 3 streaming uses thinkingLevel rather than the Gemini 2
+            # thinkingBudget field. A mismatched field can reject every
+            # streaming request while non-streaming classroom lessons work.
+            if thinking_budget is not None:
+                level = "minimal" if model_key == "gemini-3.5-flash-lite" else (
+                    "high" if thinking_budget < 0 or thinking_budget > 256 else "low"
+                )
+                generation_config["thinkingConfig"] = {"thinkingLevel": level}
+        else:
+            generation_config.update({"topP": 0.8, "topK": 40})
+            if thinking_budget is not None:
+                generation_config["thinkingConfig"] = {
+                    "thinkingBudget": int(thinking_budget)
+                }
 
         payload: Dict[str, Any] = {
             "contents": contents,
