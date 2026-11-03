@@ -51,11 +51,11 @@ def test_the_escalation_target_is_a_model_the_registry_actually_carries():
 def test_the_escalation_target_is_not_one_of_the_models_that_just_failed():
     """Escalating to a model already in the ordinary order buys nothing.
 
-    The ordinary teaching order is the small, fast pair. A step reaches the
+    The ordinary teaching order is the small, fast fallback set. A step reaches the
     escalation only after every attempt under that pair has failed, so the
     target has to be something those attempts did not already use.
     """
-    ordinary = {"gpt-4o-mini", "gemini-3.6-flash"}
+    ordinary = {"gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"}
     assert ESCALATION_PROVIDER not in ordinary
 
 
@@ -86,6 +86,8 @@ async def test_a_failed_step_is_retried_on_the_escalated_model_first(monkeypatch
 
     await adaptive_teaching.model_json("system", {"a": 1}, PracticeTurn)
     assert orders[-1][0] != ESCALATION_PROVIDER, "an ordinary step must not pay for the big model"
+    assert "gemini-3.5-flash-lite" in orders[-1]
+    assert "gemini-3.5-flash-lite" in registry()
 
     await adaptive_teaching.model_json("system", {"a": 1, "_escalate": True}, PracticeTurn)
     assert orders[-1][0] == ESCALATION_PROVIDER
