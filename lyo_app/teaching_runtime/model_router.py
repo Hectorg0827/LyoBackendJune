@@ -23,32 +23,21 @@ def provider_order_for_tier(
     while Gemini can still consume the original bytes. No attachment should
     make the whole product depend on a single provider.
     """
+    # Gemini credentials are configured in LYO staging; OpenAI may be absent.
+    # Prefer the verified Gemini 3 models so both chat and teaching have a
+    # genuine first-choice model plus an independent fallback.
     if has_media:
-        return ["gpt-4o-mini", "gemini-2.5-flash", "gpt-4o"]
+        return ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gpt-4o-mini", "gpt-4o"]
 
     normalized = (tier or "teaching").strip().lower()
 
-    # Live voice uses the same model prompt, memory and teaching contract as
-    # text Chat. Only provider ordering changes: start with the lowest-latency
-    # configured provider so spoken turn-taking does not pay an avoidable
-    # failed/slow first attempt. Deliberation still starts with the stronger
-    # OpenAI model rather than silently downgrading reasoning quality.
-    if prefer_low_latency:
-        if normalized == "deliberation":
-            return ["gpt-4o", "gpt-4o-mini", "gemini-2.5-pro", "gemini-2.5-flash"]
-        return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-flash"]
+    if prefer_low_latency or normalized == "reflex":
+        return ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gpt-4o-mini", "gpt-4o"]
 
     if normalized == "deliberation":
-        return [
-            "gemini-2.5-pro",
-            "gpt-4o",
-            "gemini-2.5-flash",
-            "gpt-4o-mini",
-        ]
-    if normalized == "reflex":
-        return ["gpt-4o-mini", "gemini-2.5-flash"]
+        return ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gpt-4o", "gpt-4o-mini"]
 
-    return ["gemini-2.5-flash", "gpt-4o-mini"]
+    return ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gpt-4o-mini", "gpt-4o"]
 
 
 def thinking_budget_for_tier(tier: str) -> int:
