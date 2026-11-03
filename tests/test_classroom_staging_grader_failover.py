@@ -33,7 +33,7 @@ async def test_written_evaluation_offers_healthy_gemini_alternatives(monkeypatch
     order = completion.await_args.kwargs["provider_order"]
     assert order == [
         "gpt-4o-mini", "gpt-4o", "gemini-3.8-flash",
-        "gemini-3.7-flash", "gemini-3.6-flash",
+        "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
     ]
     # The provider can change, but never invent a grade or omit the rubric.
     assert "Evaluate the meaning" in completion.await_args.kwargs["messages"][0]["content"]
