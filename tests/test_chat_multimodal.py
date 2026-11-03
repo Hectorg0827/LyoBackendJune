@@ -203,6 +203,6 @@ def test_openai_adapter_preserves_images_and_uses_extracted_document_text() -> N
 def test_multimodal_teaching_has_more_than_one_provider() -> None:
     order = provider_order_for_tier("teaching", has_media=True)
 
-    assert order[0] == "gpt-4o-mini"
-    assert "gemini-2.5-flash" in order
+    assert order[0] == "gemini-3.6-flash"
+    assert "gemini-3.5-flash-lite" in order
     assert len(order) >= 2
