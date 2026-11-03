@@ -89,3 +89,50 @@ async def test_gemini_prewarm_uses_header_not_query():
     await manager._prewarm_connections()
     assert len(manager.session.calls) == 1
     check_call(*manager.session.calls[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_name,expected_level",
+    [("gemini-3.6-flash", "low"), ("gemini-3.5-flash-lite", "minimal")],
+)
+async def test_structured_classroom_generation_uses_low_latency_thinking(
+    model_name, expected_level,
+):
+    """No external API: first scene must not wait for default medium reasoning."""
+    manager = AIResilienceManager()
+    manager.session = CapturingSession()
+    model = AIModelConfig(
+        name=model_name,
+        endpoint=f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+        api_key="test-secret-never-print",
+        max_tokens=8000,
+        priority=1,
+        capabilities=["chat"],
+    )
+    with pytest.raises(StopRequest):
+        await manager._make_api_call_with_messages(
+            model_name, model,
+            [{"role": "user", "content": "Teach fractions"}],
+            temperature=0.2, max_tokens=2000,
+            response_format={"type": "json_object"},
+        )
+    assert len(manager.session.calls) == 1
+    method, url, options = manager.session.calls[0]
+    check_call(method, url, options)
+    assert options["json"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingLevel": expected_level,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unstructured_gemini_36_keeps_existing_thinking_policy():
+    manager = AIResilienceManager()
+    manager.session = CapturingSession()
+    with pytest.raises(StopRequest):
+        await manager._make_api_call_with_messages(
+            "gemini-3.6-flash", config(),
+            [{"role": "user", "content": "A casual conversation"}],
+            temperature=0.2, max_tokens=300,
+        )
+    assert "thinkingConfig" not in manager.session.calls[0][2]["json"]["generationConfig"]
