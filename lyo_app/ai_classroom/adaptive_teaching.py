@@ -840,8 +840,8 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     # result still passes exactly the same strict pedagogical contract.
     configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
                             if issubclass(schema, DiagnosticTurn) else
-                            ["gpt-4o-mini", "gpt-4o", "gemini-3.6-flash", "gemini-3.5-flash-lite",
-                             "gemini-3.8-flash", "gemini-3.7-flash"]
+                            ["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash", "gemini-3.7-flash",
+                             "gemini-3.6-flash", "gemini-3.5-flash-lite"]
                             if schema is Evaluation else
                             ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"])
     # A step the learner has already watched fail is worth a more capable
