@@ -1,30 +1,32 @@
 from lyo_app.teaching_runtime.model_router import provider_order_for_tier, thinking_budget_for_tier
 
 
-def test_reflex_prefers_fast_models():
+def test_reflex_prefers_configured_gemini_fast_models():
     order = provider_order_for_tier("reflex")
-    assert order[0] == "gpt-4o-mini"
-    assert "gpt-4o" not in order
-    assert "gemini-2.5-pro" not in order
+    assert order[:2] == ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
+    assert "gemini-2.5-flash" not in order
 
 
-def test_teaching_uses_normal_low_latency_fallbacks():
+def test_teaching_uses_reliable_gemini_fallbacks():
     assert provider_order_for_tier("teaching") == [
-        "gemini-2.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
         "gpt-4o-mini",
+        "gpt-4o",
     ]
 
 
-def test_deliberation_spends_stronger_model_before_fast_fallback():
+def test_deliberation_prefers_verified_stronger_model():
     order = provider_order_for_tier("deliberation")
-    assert order[:2] == ["gemini-2.5-pro", "gpt-4o"]
-    assert order[-2:] == ["gemini-2.5-flash", "gpt-4o-mini"]
+    assert order[:2] == ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    assert order[-2:] == ["gpt-4o", "gpt-4o-mini"]
 
 
 def test_media_has_redundant_multimodal_provider_fallbacks():
     assert provider_order_for_tier("deliberation", has_media=True) == [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
         "gpt-4o-mini",
-        "gemini-2.5-flash",
         "gpt-4o",
     ]
 
@@ -41,13 +43,13 @@ def test_thinking_budget_matches_latency_tier():
 
 def test_voice_prefers_low_latency_provider_without_changing_contract_tier():
     assert provider_order_for_tier("teaching", prefer_low_latency=True) == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
         "gpt-4o-mini",
         "gpt-4o",
-        "gemini-2.5-flash",
     ]
 
 
-def test_voice_deliberation_keeps_strong_model_first():
+def test_voice_deliberation_uses_low_latency_gemini_fallbacks():
     order = provider_order_for_tier("deliberation", prefer_low_latency=True)
-    assert order[0] == "gpt-4o"
-    assert "gemini-2.5-pro" in order
+    assert order[:2] == ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
