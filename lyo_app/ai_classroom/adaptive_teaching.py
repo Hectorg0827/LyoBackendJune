@@ -834,12 +834,16 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     # A malformed evaluation must be repaired by a different, capable model
     # before the learner is told that their saved answer cannot be graded.
     # Gemini-only staging must not depend on one older circuit-open model.
-    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash"]
+    # Staging has a Gemini key but no OpenAI key. Preserve the ordinary
+    # lightweight/strong order while providing a *real* second provider on
+    # first-lesson planning, teaching and package authoring. The Flash-Lite
+    # result still passes exactly the same strict pedagogical contract.
+    configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
                             if issubclass(schema, DiagnosticTurn) else
-                            ["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash", "gemini-3.7-flash",
-                             "gemini-3.6-flash"]
+                            ["gpt-4o-mini", "gpt-4o", "gemini-3.6-flash", "gemini-3.5-flash-lite",
+                             "gemini-3.8-flash", "gemini-3.7-flash"]
                             if schema is Evaluation else
-                            ["gpt-4o-mini", "gemini-3.6-flash"])
+                            ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"])
     # A step the learner has already watched fail is worth a more capable
     # model. The ordinary order leads with the small, fast one because most
     # turns do not need more than that; a turn that has now failed every
