@@ -81,6 +81,28 @@ def _openai_compatible_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
     return normalized
 
 
+def _gemini_visible_text(data: dict) -> str:
+    """Read only genuine generated text. Empty/thought-only responses cannot be graded.
+
+    Google may respond 200 with no content.parts when MAX_TOKENS or safety
+    filtering prevents an answer. Treat those as provider failures so the
+    resilience layer can attempt another configured provider.
+    """
+    candidates = data.get("candidates") or []
+    if not candidates or not isinstance(candidates[0], dict):
+        raise RuntimeError("Gemini response has no candidates")
+    candidate = candidates[0]
+    parts = (candidate.get("content") or {}).get("parts") or []
+    text = "".join(
+        str(item.get("text", "")) for item in parts
+        if isinstance(item, dict) and not item.get("thought")
+    ).strip()
+    if not text:
+        reason = str(candidate.get("finishReason") or "unspecified")[:35]
+        raise RuntimeError(f"Gemini response has no text; finish_reason={reason}")
+    return text
+
+
 class StreamingIncompleteError(RuntimeError):
     """A visible canonical answer ended before its provider completed."""
 
@@ -812,7 +834,7 @@ class AIResilienceManager:
                 last_exception = e
                 continue
         
-        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED for '{message_str}'. Returning fallback.", flush=True)
+        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED. Returning fallback.", flush=True)
         return self._get_fallback_response(message_str, str(last_exception), response_format=response_format)
 
     async def _call_model_with_messages(
@@ -895,14 +917,25 @@ class AIResilienceManager:
                 else:
                     contents.append({"role": role, "parts": message_parts})
                     
+        generation_config = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.8,
+            "topK": 40,
+        }
+        if model_name.startswith(("gemini-3.8-", "gemini-3.7-")):
+            # In the GenerateContent API, newer Gemini 3 Flash models support
+            # thinkingConfig.thinkingLevel='low'. Staging's written grading
+            # was exhausting response time on medium thinking and returning
+            # candidates without any user-visible parts. Never manufacture
+            # a verdict in that case; give the model room to return JSON.
+            generation_config = {
+                "maxOutputTokens": max_tokens,
+                "thinkingConfig": {"thinkingLevel": "low"},
+            }
         payload = {
             "contents": contents,
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-                "topP": 0.8,
-                "topK": 40,
-            },
+            "generationConfig": generation_config,
         }
         
         self.apply_structured_output(payload["generationConfig"], response_format)
@@ -930,7 +963,7 @@ class AIResilienceManager:
                     raise Exception(f"API returned {response.status}: {text}")
                 
                 data = await response.json()
-                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                content = _gemini_visible_text(data)
                 tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
                 print(f">>> [PID {os.getpid()}] {model_name} SUCCESS in {duration:.2f}s (Tokens: {tokens_used})", flush=True)
                 
