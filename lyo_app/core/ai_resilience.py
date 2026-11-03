@@ -280,6 +280,14 @@ class AIResilienceManager:
                     priority=1,
                     capabilities=["chat", "fast", "multimodal"],
                 ),
+                "gemini-3.5-flash-lite": AIModelConfig(
+                    name="Google Gemini 3.5 Flash-Lite",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+                    api_key=gemini_key,
+                    max_tokens=8000,
+                    priority=1,
+                    capabilities=["chat", "fast", "multimodal"],
+                ),
                 "gpt-4o-mini": AIModelConfig(
                     name="OpenAI GPT-4o mini",
                     endpoint="openai", # Flag to use openai_client
@@ -923,12 +931,19 @@ class AIResilienceManager:
             "topP": 0.8,
             "topK": 40,
         }
-        if model_name.startswith(("gemini-3.8-", "gemini-3.7-")):
-            # In the GenerateContent API, newer Gemini 3 Flash models support
-            # thinkingConfig.thinkingLevel='low'. Staging's written grading
-            # was exhausting response time on medium thinking and returning
-            # candidates without any user-visible parts. Never manufacture
-            # a verdict in that case; give the model room to return JSON.
+        if model_name == "gemini-3.5-flash-lite" and response_format:
+            # This low-latency model is an independent Gemini-only recovery
+            # path when the first structured classroom generation times out.
+            generation_config = {
+                "maxOutputTokens": max_tokens,
+                "thinkingConfig": {"thinkingLevel": "minimal"},
+            }
+        elif model_name.startswith(("gemini-3.8-", "gemini-3.7-")) or (
+            model_name == "gemini-3.6-flash" and response_format
+        ):
+            # Low thinking is supported on Gemini 3.6/3.7/3.8 Flash. A
+            # structured classroom scene must arrive before the mobile
+            # learner's loading watchdog, without weakening JSON validation.
             generation_config = {
                 "maxOutputTokens": max_tokens,
                 "thinkingConfig": {"thinkingLevel": "low"},
