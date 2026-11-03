@@ -1024,7 +1024,8 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-2.5-flash"]  # Default
+            return [name for name in ("gemini-3.5-flash-lite", "gemini-3.6-flash")
+                    if name in self.models and self.models[name].api_key]
         
         def _text_content(message: Dict[str, Any]) -> str:
             content = message.get("content", "")
@@ -1055,15 +1056,26 @@ class AIResilienceManager:
         ]
         is_complex = any(p in last_message.lower() for p in complex_patterns)
         
-        # Route through the currently reliable provider first. Gemini Flash has
-        # repeatedly circuit-opened in production when its key is rejected, so
-        # leading with it makes otherwise healthy chat/classroom requests pay a
-        # failure before falling through to OpenAI. Keep Gemini as a later
-        # fallback for the day its key is restored.
-        if is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-pro", "gemini-2.5-flash"]
-        else:
-            return ["gpt-4o-mini", "gemini-2.5-flash"]
+        # Choose providers that are actually configured in this environment.
+        # Staging may have Gemini credentials without an OpenAI key. The
+        # classroom already uses these two Gemini models successfully.
+        gemini_order = (
+            ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+            if is_complex or total_chars > 2000 or max_tokens > 1500
+            else ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
+        )
+        openai_order = ["gpt-4o-mini", "gpt-4o"]
+        available_gemini = [
+            name for name in gemini_order
+            if name in self.models and bool(self.models[name].api_key)
+        ]
+        available_openai = (
+            [name for name in openai_order if name in self.models]
+            if self.openai_client is not None else []
+        )
+        # Keep a genuine secondary provider when available, but never route
+        # to a known missing key or to retired Gemini 2.5 endpoints.
+        return available_gemini + available_openai
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:
