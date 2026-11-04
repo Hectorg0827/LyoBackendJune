@@ -38,6 +38,7 @@ def test_creative_and_workflow_requests_do_not_pay_search_cost():
     "Please just answer: what is 2 + 2?", "Calculate: 5 * 10",
     "What is 2 + 2? Answer in one sentence.",
     "What is 7 * 6? Answer briefly.",
+    "What is 12 / 4? Answer briefly.", "Calculate: 3 * (2 + 1)",
 ])
 def test_direct_arithmetic_does_not_retrieve_irrelevant_web_sources(prompt):
     assert decide_freshness(prompt).mode is FreshnessMode.NONE
