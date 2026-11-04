@@ -16,12 +16,17 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 
 
 def fraction_task(expected, *, question="What fraction of the shape is shaded?",
-                  criteria=None, example=None):
+                  criteria=None, example=None, scenario=None):
+    numerator, denominator = expected.split("/")
+    statement = (
+        f"A geometric shape is divided into {denominator} equal parts, "
+        f"and {numerator} of those parts are shaded."
+    )
     return LearningTask(
         kind="apply",
         response_format="short_answer",
         target_index=0,
-        scenario="A geometric shape is divided into equal parts, with some parts shaded.",
+        scenario=scenario or statement,
         question=question,
         response_hint="Write the fraction, for example 7/10.",
         criteria=criteria or ["Identify the correct fraction of shaded parts."],
@@ -132,3 +137,24 @@ async def test_spanish_fraction_feedback_is_in_spanish():
     assert result.verdict == "correct"
     assert "¡Correcto!" in result.feedback
     model.assert_not_awaited()
+
+
+def test_wrong_teacher_reference_is_rejected_before_the_student_sees_it():
+    with pytest.raises(ValueError, match="answer key contradicts"):
+        fraction_task("7/10", example="7/7")
+
+
+@pytest.mark.asyncio
+async def test_no_explicit_counts_means_teacher_does_not_guess_math():
+    model = AsyncMock(return_value=Evaluation(
+        verdict="unavailable", confidence=0, question_clear=True,
+        feedback="The teacher could not grade this yet.",
+    ))
+    lesson = pending(
+        "7/10", scenario="A picture contains some equal shaded and unshaded parts."
+    )
+    result = await AdaptiveTeacher(model).evaluate(
+        SimpleNamespace(language_code="en-US"), lesson, "7/10"
+    )
+    assert result.verdict == "unavailable"
+    model.assert_awaited_once()
