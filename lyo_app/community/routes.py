@@ -1447,7 +1447,7 @@ async def list_posts(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=50),
     post_type: Optional[PostType] = Query(None),
-    sort_by: str = Query("recent", pattern="^(recent|popular|trending)$"),
+    sort_by: str = Query("recent", pattern="^(recent|popular|trending|following)$"),
     tag: Optional[str] = Query(None),
     author_id: Optional[int] = Query(None),
     current_user: User = Depends(get_current_user),
