@@ -284,3 +284,60 @@ def test_a_fraction_visual_cannot_draw_the_answer_to_an_open_question():
     turn.visual = visuals()[0].model_copy(update={"parts": 10, "value": 7})
     with pytest.raises(TeachingContractError, match="visual reveals the answer"):
         validate_semantic_content(turn)
+
+def test_graded_checkpoint_hides_authored_answer_and_remembered_visual():
+    """A worked board from the previous step must not assist a fresh check."""
+    from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+    from lyo_app.ai_classroom.adaptive_teaching import PendingTask
+
+    ctx = context()
+    model = GuidedState(owner="42", plan=plan(1), phase="independent")
+    model.board_memory = [{
+        "title": "Worked solution",
+        "content": "The correct answer is one half; divide into fewer pieces.",
+        "visual": None,
+    }]
+    model.pending = PendingTask(
+        task=task(), phase="independent",
+        speech="You have mastered this!",
+        board_title="Answer: one half",
+        board_content="Here is the complete solution to the current question.",
+        assisted=False,
+    )
+    scene = AdaptiveSession(ScriptedTeacher()).checkpoint(ctx, model)
+    shown = " ".join(
+        str(getattr(component, "text", "") or "")
+        + " " + str(getattr(component, "title", "") or "")
+        + " " + str(getattr(component, "content", "") or "")
+        for component in scene.components
+    ).lower()
+    assert "answer: one half" not in shown
+    assert "worked solution" not in shown
+    assert "you have mastered" not in shown
+    assert "which single piece is larger" in shown
+
+
+def test_independent_success_on_one_target_does_not_erase_another_misconception():
+    from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+    from lyo_app.ai_classroom.adaptive_teaching import LearningPlan, LearningUnit, PendingTask
+
+    unit = LearningUnit(
+        title="Compare and convert fractions",
+        objective="Use equivalent fractions to compare two given ratios.",
+        material="Compare equal fractions first, then convert values using common denominators.",
+        practice_targets=["Compare fraction sizes", "Convert to an equivalent fraction"],
+    )
+    model = GuidedState(owner="42", plan=LearningPlan(units=[unit]),
+                        phase="independent", target_index=0,
+                        faded_targets=[0, 1],
+                        guided_targets=[0, 1],
+                        unresolved_misconceptions=["target 2: adds denominators"])
+    pending = PendingTask(
+        task=task().model_copy(update={"target_index": 0}),
+        speech="Try it", board_title="Compare", board_content="Work through this.",
+        phase="independent", assisted=False,
+    )
+    assert AdaptiveSession.after_success(model, pending) is False
+    assert not model.independent_application
+    assert model.completed == []
+    assert model.target_index == 1
