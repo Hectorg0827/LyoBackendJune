@@ -109,7 +109,11 @@ async def test_valid_authored_guided_question_always_reaches_the_learner(boundar
         assert examples[0].title.startswith("Hagámoslo juntos" if language.startswith("es") else "Let's do it together")
     else:
         content = "\n".join(c.content for c in scene.components if isinstance(c, ExampleBlock))
-        assert authored[0].board_content in content and authored[0].visual.description in content
+        # The authored teaching visuals remain available in instructional
+        # scenes, but a graded checkpoint must show the unseen question alone.
+        assert authored[0].board_content not in content
+        assert authored[0].visual.description not in content
+        assert authored[0].task.question in content
 
 
 @pytest.mark.asyncio
