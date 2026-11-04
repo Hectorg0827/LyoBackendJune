@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
-from lyo_app.ai_classroom.fraction_grading import assess_objective_fraction
+from lyo_app.ai_classroom.fraction_grading import assess_objective_fraction, fraction_reference_consistent
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
 from lyo_app.ai_classroom.strict_schema import (
     SchemaNotStrictable, looks_like_schema_rejection, strict_json_schema,
@@ -256,6 +256,8 @@ class LearningTask(StrictModel):
                         "not repeat the option")
         elif self.options:
             raise ValueError("Open tasks cannot carry choice options")
+        if not fraction_reference_consistent(self):
+            raise ValueError("The fraction answer key contradicts the stated shaded/total counts")
         return self
 
 
