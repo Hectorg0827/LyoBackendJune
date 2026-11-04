@@ -262,3 +262,25 @@ def test_unresolved_misconceptions_are_saved_in_guided_state():
     state = GuidedState(owner="42", plan=plan(1), unresolved_misconceptions=["Mixed up the numerator"])
     restored = GuidedState.model_validate_json(state.model_dump_json())
     assert restored.unresolved_misconceptions == ["Mixed up the numerator"]
+
+
+@pytest.mark.parametrize("location", ["title", "entry"])
+def test_a_visual_title_or_label_cannot_reveal_a_short_answer(location):
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    visual = visuals()[1]
+    if location == "title":
+        visual.title = "Correct answer: 7/10"
+    else:
+        visual.entries[0].label = "Solution 7/10"
+    turn.visual = visual
+    with pytest.raises(TeachingContractError, match="short answer|reveals the answer"):
+        validate_semantic_content(turn)
+
+
+def test_a_fraction_visual_cannot_draw_the_answer_to_an_open_question():
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    turn.visual = visuals()[0].model_copy(update={"parts": 10, "value": 7})
+    with pytest.raises(TeachingContractError, match="visual reveals the answer"):
+        validate_semantic_content(turn)
