@@ -924,7 +924,8 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
-                  4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
+                  4500 if issubclass(schema, (LearningPlan, LearningTurn)) else
+                  900 if schema is Evaluation else 2000)
     timeout = (100 if issubclass(schema, UnitPackage) else
                30 if schema is Evaluation else 45)
 
@@ -1598,7 +1599,10 @@ class AdaptiveTeacher:
         payload = {
             "language": context.language_code, "task": pending.task.model_dump(),
             "taught": [] if pending.phase == "diagnose" else (
-                pending.taught_steps or [pending.speech + "\n" + pending.board_content]
+                # Only the nearest teaching beats can clarify the active
+                # rubric. Shipping an entire 16-beat transcript on every
+                # answer adds model latency without helping this question.
+                pending.taught_steps[-3:] or [pending.speech + "\n" + pending.board_content]
             ),
             "previous_answers": pending.answers[-4:], "new_answer": response[:2000],
             "follow_up_asked": pending.follow_up,
