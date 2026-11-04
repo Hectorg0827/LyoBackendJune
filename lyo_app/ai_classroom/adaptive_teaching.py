@@ -1418,6 +1418,19 @@ class AdaptiveTeacher:
                     payload, turn_schema(move, focused),
                 )
                 turn = turn_schema(move, focused).model_validate(turn.model_dump())
+                if turn.task is not None:
+                    # Graded turns are questions, not mini-lessons. Providers
+                    # sometimes put the correct answer into the teacher's
+                    # narration, board title or visual even when the actual
+                    # task is sound. Keep the authored task and private rubric,
+                    # but replace every extra public teaching field with a
+                    # neutral introduction before validating or displaying it.
+                    # This avoids a needless provider retry and prevents
+                    # audible as well as visual answer leakage.
+                    turn.speech = "Try this question in your own words."
+                    turn.board_title = "Your question"
+                    turn.board_content = turn.task.scenario
+                    turn.visual = None
                 validate_semantic_content(turn)
                 if self.semantic_judge is not None and not await self.semantic_judge(move, unit, turn):
                     raise TeachingContractError("Independent semantic review rejected this teaching turn")

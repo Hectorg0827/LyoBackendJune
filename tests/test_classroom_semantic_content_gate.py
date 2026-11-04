@@ -28,7 +28,7 @@ def test_two_distractors_cannot_claim_the_same_misconception_under_different_pun
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("location", ["board_content", "question", "speech"])
+@pytest.mark.parametrize("location", ["question"])
 async def test_visible_answer_is_repaired_before_the_probe_is_shown(location):
     ctx, state = context(), GuidedState(owner="42", plan=plan(1))
     valid = ScriptedTeacher()._turn(ctx, state, "diagnose")
@@ -360,3 +360,24 @@ async def test_grader_sends_relevant_recent_teaching_only():
     await teacher.evaluate(context(), pending, "The half is larger.")
     payload = fake.await_args.args[1]
     assert payload["taught"] == ["Teaching beat 12", "Teaching beat 13", "Teaching beat 14"]
+
+
+@pytest.mark.asyncio
+async def test_graded_teacher_introduction_is_neutral_even_when_model_leaks_solution():
+    """Answer-bearing narration must not require another expensive authoring call."""
+    ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    candidate = ScriptedTeacher()._turn(ctx, state, "guided")
+    answer = next(option.label for option in candidate.task.options if option.correct)
+    candidate.speech = f"The answer is {answer}; listen carefully."
+    candidate.board_title = f"Solution: {answer}"
+    candidate.board_content = f"The correct answer is {answer}."
+    candidate.visual = visuals()[1]
+    generate = AsyncMock(return_value=candidate)
+
+    result = await AdaptiveTeacher(generate).turn(ctx, state, "guided")
+
+    assert generate.await_count == 1
+    assert result.speech == "Try this question in your own words."
+    assert result.board_title == "Your question"
+    assert result.board_content == result.task.scenario
+    assert result.visual is None
