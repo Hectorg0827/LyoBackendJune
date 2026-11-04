@@ -50,8 +50,8 @@ jobs:
           python -m pip install pytest pytest-asyncio flake8
       - name: Syntax and imports
         run: |
-          python -m compileall -q lyo_app/ai_classroom/adaptive_teaching.py lyo_app/core/ai_resilience.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py
-          python -m flake8 lyo_app/ai_classroom/adaptive_teaching.py lyo_app/core/ai_resilience.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py --select=E9,F63,F7,F82 --show-source --statistics
+          python -m compileall -q lyo_app/ai_classroom/adaptive_teaching.py lyo_app/core/ai_resilience.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py tests/test_community_following_posts.py
+          python -m flake8 lyo_app/ai_classroom/adaptive_teaching.py lyo_app/core/ai_resilience.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py tests/test_community_following_posts.py --select=E9,F63,F7,F82 --show-source --statistics
       - name: Grading and recovery regression tests
         run: |
           python -m pytest -q \
@@ -59,7 +59,8 @@ jobs:
             tests/test_classroom_generation_contract.py \
             tests/test_classroom_recovery.py \
             tests/test_model_escalation.py \
-            tests/test_gemini_auth_headers.py
+            tests/test_gemini_auth_headers.py \
+            tests/test_community_following_posts.py
       - name: Classroom lesson state machine tests
         run: |
           python -m pytest -q tests/test_adaptive_classroom.py tests/test_ai_classroom_teaching_loop.py
