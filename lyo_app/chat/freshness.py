@@ -203,7 +203,7 @@ def decide_freshness(
         r"give\s+only\s+the\s+answer)\.?\s*$",
         "", arithmetic_text, flags=re.I,
     )
-    if re.fullmatch(r"(?:what is\s+)?[\d\s()+*/.%-]+(?:\s*[+=×÷-]\s*[\d\s()+*/.%-]+)+\??", arithmetic_text, re.I):
+    if re.fullmatch(r"(?:what is\s+)?[\d\s()+*/.%-]+(?:\s*[+=×÷*/-]\s*[\d\s()+*/.%-]+)+\??", arithmetic_text, re.I):
         return FreshnessDecision(FreshnessMode.NONE, "arithmetic")
 
     if re.fullmatch(
