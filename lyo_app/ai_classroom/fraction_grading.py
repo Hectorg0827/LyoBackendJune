@@ -1,8 +1,8 @@
 """Exact, narrow grading for unambiguous classroom fraction checkpoints.
 
 The model remains responsible for explanations, multi-part rubrics and ambiguous
-questions. This module only intervenes when a single numerical fraction is
-explicitly requested and the authored reference has one mathematical value.
+questions. A numeric answer is graded here only when the teacher's reference
+matches independently checkable counts stated in the actual task.
 """
 
 from dataclasses import dataclass
@@ -30,40 +30,91 @@ _REQUIRES_REASONING = re.compile(
     re.IGNORECASE,
 )
 
+_PARTS = r"(?:parts|pieces|slices|sections|segments|blocks|cells)"
+_TOTAL = re.compile(rf"\b(\d{{1,7}})\s+equal\s+{_PARTS}\b", re.IGNORECASE)
+_SELECTED = (
+    re.compile(
+        rf"\b(\d{{1,7}})\s+(?:of\s+(?:those|these|the)\s+{_PARTS}\s+)?"
+        r"(?:are|were|is)\s+(?:shaded|colou?red|filled|selected|planted)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b(\d{{1,7}})\s+(?:shaded|colou?red|filled|selected|planted)\s+{_PARTS}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:shades?|colou?rs?|fills?|selects?|plants?)\s+(\d{1,7})\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _simple_fraction_task(task: Any) -> bool:
+    return (
+        task.response_format == "short_answer"
+        and task.kind in {"predict", "apply"}
+        and len(task.criteria) == 1
+        and _ASKS_FOR_FRACTION.search(task.question) is not None
+        and _REQUIRES_REASONING.search(task.question + " " + task.criteria[0]) is None
+    )
+
+
+def _reference_value(task: Any) -> Fraction | None:
+    values: set[Fraction] = set()
+    for numerator, denominator in _TOKEN.findall(task.example_answer):
+        if int(denominator) == 0:
+            return None
+        values.add(Fraction(int(numerator), int(denominator)))
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _stated_counts(task: Any) -> Fraction | None:
+    """Read only explicit selected/total shape counts; never guess from a diagram."""
+    words = task.scenario + " " + task.question
+    totals = {int(m.group(1)) for m in _TOTAL.finditer(words)}
+    selected = {
+        int(m.group(1))
+        for pattern in _SELECTED
+        for m in pattern.finditer(words)
+    }
+    if len(totals) != 1 or len(selected) != 1:
+        return None
+    total = next(iter(totals))
+    shaded = next(iter(selected))
+    if total == 0 or shaded > total:
+        return None
+    return Fraction(shaded, total)
+
+
+def fraction_reference_consistent(task: Any) -> bool:
+    """Reject checkable wrong model answer keys before asking the student."""
+    if not _simple_fraction_task(task):
+        return True
+    expected = _reference_value(task)
+    stated = _stated_counts(task)
+    return expected is None or stated is None or expected == stated
+
 
 def assess_objective_fraction(task: Any, answer: str) -> FractionAssessment | None:
-    """Grade only a pure fraction answer to a single-criterion fraction task.
+    """Grade a pure fraction only when the question's independent counts agree.
 
-    Return None for anything ambiguous so the existing semantic teacher can
-    consider context and equivalent explanations. A zero denominator is an
-    invalid learner answer, never an exception or a model-correct answer.
+    Return None whenever the question, its reference or the student's response
+    is ambiguous. The semantic grader remains the safe fallback.
     """
-    if task.response_format != "short_answer" or task.kind not in {"predict", "apply"}:
+    if not _simple_fraction_task(task):
         return None
-    if len(task.criteria) != 1 or not _ASKS_FOR_FRACTION.search(task.question):
+    expected = _reference_value(task)
+    stated = _stated_counts(task)
+    if expected is None or stated is None or expected != stated:
         return None
-    if _REQUIRES_REASONING.search(task.question + " " + task.criteria[0]):
-        return None
-
-    reference_matches = _TOKEN.findall(task.example_answer)
-    if not reference_matches:
-        return None
-
-    references: set[Fraction] = set()
-    for numerator, denominator in reference_matches:
-        if int(denominator) == 0:
-            return None  # Invalid reference; do not trust it to grade.
-        references.add(Fraction(int(numerator), int(denominator)))
-    if len(references) != 1:
-        return None  # The reference contains multiple distinct mathematical values.
 
     match = _FULL.fullmatch(answer)
     if match is None:
-        return None  # Explanations, decimals, units and follow-ups need semantic grading.
+        return None
 
     numerator, denominator = (int(part) for part in match.groups())
     if denominator == 0:
         return FractionAssessment(correct=False)
     return FractionAssessment(
-        correct=Fraction(numerator, denominator) == next(iter(references))
+        correct=Fraction(numerator, denominator) == stated
     )
