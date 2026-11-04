@@ -1,6 +1,7 @@
 """One server-owned teaching sequence for audio, silent, web and native clients."""
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -320,6 +321,31 @@ class AdaptiveSession:
                 result = await self.teacher.evaluate(context, pending, response)
             pending.retry_response = None
             state.last_feedback = result.feedback
+            # A misconception is open until the learner solves a *new* open
+            # independent application without a hint. Guided corrections and
+            # warm feedback must not silently turn it into mastery.
+            if result.verdict in ("incorrect", "partial"):
+                unresolved = (result.misconception or
+                              f"{pending.phase}: further independent practice needed").strip()[:250]
+                state.unresolved_misconceptions = [
+                    *[item for item in state.unresolved_misconceptions if item != unresolved],
+                    unresolved,
+                ][-12:]
+            elif (result.verdict == "correct" and pending.phase == "independent"
+                  and pending.task.kind == "apply"
+                  and pending.task.response_format != "choice"
+                  and not pending.assisted and not pending.extra_help_used
+                  and not pending.hints_used):
+                state.unresolved_misconceptions = []
+            if state.unresolved_misconceptions and re.search(
+                r"\b(?:mastered|mastery|fully mastered|dominas|dominado)\b",
+                state.last_feedback, re.IGNORECASE,
+            ):
+                state.last_feedback = self.copy(
+                    context,
+                    "Good effort. We still need a fresh, unassisted check before calling this mastered.",
+                    "Buen esfuerzo. Aún falta una prueba nueva y sin ayuda antes de darlo por dominado.",
+                )
             self.signal(state, f"answer:{result.verdict}:{pending.phase}")
             if result.misconception:
                 self.remember_misconception(state, result.misconception)
@@ -1146,6 +1172,7 @@ class AdaptiveSession:
         state.ceiling_assessed = False
         state.unit_outcome_recorded = False
         state.diagnostic_misconception = ""
+        state.unresolved_misconceptions = []
         state.explained = False
         state.closing_win_asked = False
         state.unit_done = False
@@ -1475,6 +1502,12 @@ class AdaptiveSession:
     def summary(self, context, state):
         title = self.copy(context, "What you practised", "Lo que practicaste")
         text = state.last_feedback or self.copy(context, "Let's bring the steps together.", "Vamos a reunir los pasos.")
+        if state.unresolved_misconceptions:
+            text += self.copy(
+                context,
+                " This skill still needs practice: a misconception has not yet been resolved by a fresh, unassisted application.",
+                " Esta habilidad necesita más práctica: todavía no se ha resuelto un error con una aplicación nueva y sin ayuda.",
+            )
         recap = state.unit.takeaway or state.unit.material
         if state.path_done:
             text += self.copy(context, " Try a fresh example in a later session to see what sticks.",

@@ -12,6 +12,13 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, task
 
 
+@pytest.fixture(autouse=True)
+def simulated_openai_provider(monkeypatch):
+    # These mocked provider-routing tests exercise the dual-provider contract.
+    # Gemini-only staging is tested separately without paid-provider credentials.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-provider-key")
+
+
 def assert_teaching_content_preserved(actual, authored):
     # The server may supplement a missing visual after repairing the provider
     # response. It must still preserve every authored word, task and beat.

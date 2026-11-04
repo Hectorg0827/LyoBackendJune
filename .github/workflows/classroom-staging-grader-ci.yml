@@ -5,6 +5,7 @@ on:
     branches:
       - fix/staging-classroom-written-grading-20261103
       - fix/staging-classroom-start-provider-fallback-20261103
+      - fix/staging-teacher-quality-20261104
   workflow_dispatch:
 
 permissions:
@@ -50,12 +51,13 @@ jobs:
           python -m pip install pytest pytest-asyncio flake8
       - name: Syntax and imports
         run: |
-          python -m compileall -q lyo_app/ai_classroom/adaptive_teaching.py lyo_app/ai_classroom/fraction_grading.py lyo_app/core/ai_resilience.py tests/test_classroom_fraction_grading.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py tests/test_community_following_posts.py
+          python -m compileall -q lyo_app/ai_classroom/adaptive_teaching.py lyo_app/ai_classroom/adaptive_session.py lyo_app/ai_classroom/teaching_prompt.py tests/test_classroom_semantic_content_gate.py lyo_app/ai_classroom/fraction_grading.py lyo_app/core/ai_resilience.py tests/test_classroom_fraction_grading.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py tests/test_community_following_posts.py
           python -m flake8 lyo_app/ai_classroom/adaptive_teaching.py lyo_app/ai_classroom/fraction_grading.py lyo_app/core/ai_resilience.py tests/test_classroom_fraction_grading.py tests/test_classroom_staging_grader_failover.py tests/test_gemini_auth_headers.py tests/test_community_following_posts.py --select=E9,F63,F7,F82 --show-source --statistics
       - name: Grading and recovery regression tests
         run: |
           python -m pytest -q \
             tests/test_classroom_fraction_grading.py \
+            tests/test_classroom_semantic_content_gate.py \
             tests/test_staging_teacher_quality_workflow.py \
             tests/test_staging_teacher_quality_gate.py \
             tests/test_classroom_staging_grader_failover.py \
