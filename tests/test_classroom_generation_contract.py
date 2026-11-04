@@ -39,7 +39,17 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
     ])
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
     actual = await AdaptiveTeacher().turn(ctx, state, move)
-    assert_teaching_content_preserved(actual, expected)
+    if move == "guided":
+        # A graded turn must retain the repaired task and private rubric,
+        # while neutralizing authored narration/boards that might give away
+        # an answer before the learner responds.
+        assert actual.task == expected.task
+        assert actual.speech == "Try this question in your own words."
+        assert actual.board_title == "Your question"
+        assert actual.board_content == expected.task.scenario
+        assert actual.visual is None
+    else:
+        assert_teaching_content_preserved(actual, expected)
     if move != "guided":
         assert all(beat.visual is not None for beat in actual.demonstration)
     assert completion.await_count == 2
