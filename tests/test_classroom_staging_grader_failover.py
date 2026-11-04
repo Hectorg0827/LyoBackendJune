@@ -9,6 +9,13 @@ from lyo_app.ai_classroom.adaptive_teaching import Evaluation
 from lyo_app.core.ai_resilience import _gemini_visible_text
 
 
+@pytest.fixture(autouse=True)
+def simulated_openai_provider(monkeypatch):
+    # Provider-order contract tests mock all network calls: simulate configured
+    # OpenAI access explicitly, while staging itself remains Gemini-only.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-provider-key")
+
+
 @pytest.mark.asyncio
 async def test_written_evaluation_offers_healthy_gemini_alternatives(monkeypatch):
     expected = Evaluation(
