@@ -1973,6 +1973,7 @@ class CommunityService:
     ) -> Dict[str, Any]:
         """Get posts with filtering and pagination."""
         from lyo_app.community.models import CommunityPost, PostLike, PostBookmark, UserBlock
+        from lyo_app.feeds.models import UserFollow
         
         # Get blocked user IDs
         blocked_result = await db.execute(
@@ -2000,6 +2001,14 @@ class CommunityService:
         if author_id:
             query = query.where(CommunityPost.author_id == author_id)
         
+        # The Focus "people you follow" rail is scoped to authors the learner
+        # explicitly follows. Do not silently substitute public strangers.
+        if sort_by == "following":
+            followed_author_ids = select(UserFollow.following_id).where(
+                UserFollow.follower_id == user_id
+            )
+            query = query.where(CommunityPost.author_id.in_(followed_author_ids))
+
         # Apply sorting
         if sort_by == "popular":
             query = query.order_by(desc(CommunityPost.like_count))
