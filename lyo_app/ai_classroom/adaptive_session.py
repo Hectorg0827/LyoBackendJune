@@ -321,6 +321,38 @@ class AdaptiveSession:
                 result = await self.teacher.evaluate(context, pending, response)
             pending.retry_response = None
             state.last_feedback = result.feedback
+            # A misconception is open until the learner solves a *new* open
+            # independent application without a hint. Guided corrections and
+            # warm feedback must not silently turn it into mastery.
+            # Misconceptions belong to a specific component skill. Solving
+            # one fresh question must not erase a different skill's open gap.
+            gap_prefix = f"target {pending.task.target_index + 1}: "
+            if result.verdict in ("incorrect", "partial"):
+                unresolved = gap_prefix + (result.misconception or
+                              f"{pending.phase}: further independent practice needed").strip()[:220]
+                state.unresolved_misconceptions = [
+                    *[item for item in state.unresolved_misconceptions
+                      if not item.startswith(gap_prefix)],
+                    unresolved,
+                ][-12:]
+            elif (result.verdict == "correct" and pending.phase == "independent"
+                  and pending.task.kind == "apply"
+                  and pending.task.response_format != "choice"
+                  and not pending.assisted and not pending.extra_help_used
+                  and not pending.hints_used):
+                state.unresolved_misconceptions = [
+                    item for item in state.unresolved_misconceptions
+                    if not item.startswith(gap_prefix)
+                ]
+            if (not state.independent_application or state.unresolved_misconceptions) and re.search(
+                r"\b(?:mastered|mastery|fully mastered|dominas|dominado)\b",
+                state.last_feedback, re.IGNORECASE,
+            ):
+                state.last_feedback = self.copy(
+                    context,
+                    "Good effort. We still need a fresh, unassisted check before calling this mastered.",
+                    "Buen esfuerzo. Aún falta una prueba nueva y sin ayuda antes de darlo por dominado.",
+                )
             self.signal(state, f"answer:{result.verdict}:{pending.phase}")
             if result.misconception:
                 self.remember_misconception(state, result.misconception)
@@ -1150,7 +1182,9 @@ class AdaptiveSession:
         elif pending.phase == "independent":
             ready = all(i in state.faded_targets for i in range(len(state.unit.targets)))
             if ((ready or state.challenge_requested) and pending.task.kind == "apply"
-                    and not pending.assisted and pending.task.response_format != "choice"):
+                    and not pending.assisted and not pending.extra_help_used
+                    and not pending.hints_used and pending.task.response_format != "choice"
+                    and not state.unresolved_misconceptions):
                 state.independent_application = True
                 state.completed = sorted(set([*state.completed, state.unit_index]))
                 state.skipped = [i for i in state.skipped if i != state.unit_index]
@@ -1162,7 +1196,18 @@ class AdaptiveSession:
                     return True
                 state.phase = "transfer"
                 return False
-            state.phase = "faded" if target in state.guided_targets else "guided"
+            # A correct response on one target does not close open gaps on
+            # other targets. Return to the earliest unresolved target with
+            # scaffolding, then require a new unassisted application.
+            if state.unresolved_misconceptions:
+                for gap in state.unresolved_misconceptions:
+                    match = re.match(r"target (\d+): ", gap)
+                    if match and 0 <= int(match.group(1)) - 1 < len(state.unit.targets):
+                        state.target_index = int(match.group(1)) - 1
+                        break
+                state.faded_targets = [i for i in state.faded_targets
+                                       if i != state.target_index]
+            state.phase = "faded" if state.target_index in state.guided_targets else "guided"
         return False
 
     @staticmethod
@@ -1321,7 +1366,8 @@ class AdaptiveSession:
             "transfer": "Úsalo en otro contexto", "interleave": "Repasa una idea anterior",
         }[state.phase])
 
-    def surface(self, context, state, speech, title, content, visual=None, activity_id=None):
+    def surface(self, context, state, speech, title, content, visual=None, activity_id=None,
+                allow_references=True):
         raw_title = title.strip()
         title = self.stage(context, state) + " · " + raw_title
         if len(title) > 100:
@@ -1348,11 +1394,11 @@ class AdaptiveSession:
             "content": content.strip(),
             "visual": visual.model_dump(mode="json") if visual else None,
         }
-        prior_anchors = [
+        prior_anchors = ([
             item for item in state.board_memory
             if item.get("title") != current_anchor["title"]
             or item.get("content") != current_anchor["content"]
-        ][-1:]
+        ][-1:] if allow_references else [])
         # The active teaching group comes before remembered context. Current
         # explanation + current visual are one pedagogical object and must remain
         # ahead of board memory even on clients that sort by component priority.
@@ -1434,22 +1480,26 @@ class AdaptiveSession:
     def checkpoint(self, context, state, follow_up=False):
         pending, task = state.pending, state.pending.task
         follow_up = follow_up or bool(pending.follow_up)
-        speech = pending.feedback if follow_up else " ".join(p for p in (state.last_feedback, pending.speech) if p)
-        if pending.phase == "diagnose" and not follow_up:
-            name = (getattr(context, "learner_name", "") or "").strip()
-            subject = context.lesson_title or context.topic or state.unit.title
-            if state.unit_index == 0:
-                speech = self.copy(context,
-                    f"Hello{', ' + name if name else ''}! Today we're going to start with {subject}. "
-                    "Let's gauge where we should begin. Answer this question — it's okay if you're not sure yet.",
-                    f"¡Hola{', ' + name if name else ''}! Hoy vamos a empezar con {subject}. "
-                    "Veamos por dónde comenzar. Responde esta pregunta; está bien si todavía no lo sabes.")
-            else:
-                speech = self.copy(context,
-                    f"Next, let's explore {state.unit.title}. Answer this question so I can choose where we start.",
-                    f"Ahora veamos {state.unit.title}. Responde esta pregunta para elegir por dónde empezar.")
-        components = self.surface(context, state, speech, pending.board_title, pending.board_content,
-                                  pending.visual, pending.id)
+        if follow_up:
+            # A learner-requested follow-up is assisted, and may display the
+            # worked example and prior answer as part of the reteaching.
+            speech = pending.feedback
+            components = self.surface(context, state, speech, pending.board_title, pending.board_content,
+                                      pending.visual, pending.id)
+        else:
+            # Every graded checkpoint uses a clean problem-only board. An
+            # authored title, example, visual, or remembered worked method may
+            # accidentally reveal the result (or how to compute it). Keep
+            # those rich visuals in teaching scenes; never alongside the
+            # unanswered assessment, including diagnose/guided/faded/transfer.
+            speech = self.copy(context, "Try this question in your own words.",
+                               "Intenta responder esta pregunta con tus propias palabras.")
+            components = self.surface(
+                context, state, speech,
+                self.copy(context, "Your question", "Tu pregunta"),
+                task.scenario + "\n\n" + task.question,
+                None, pending.id, allow_references=False,
+            )
         if follow_up and pending.answers:
             components.append(ExampleBlock(title=self.copy(context, "Your reasoning so far", "Tu razonamiento hasta ahora"),
                                             content="\n\n".join(pending.answers)[-1400:], language_code=context.language_code, priority=3))
@@ -1515,6 +1565,18 @@ class AdaptiveSession:
     def summary(self, context, state):
         title = self.copy(context, "What you practised", "Lo que practicaste")
         text = state.last_feedback or self.copy(context, "Let's bring the steps together.", "Vamos a reunir los pasos.")
+        if (not state.independent_application or state.unresolved_misconceptions) and re.search(
+            r"\b(?:mastered|mastery|fully mastered|dominas|dominado)\b",
+            text, re.IGNORECASE,
+        ):
+            text = self.copy(context, "Good work today. Let's keep practising.",
+                             "Buen trabajo hoy. Sigamos practicando.")
+        if state.unresolved_misconceptions:
+            text += self.copy(
+                context,
+                " This skill still needs practice: a misconception has not yet been resolved by a fresh, unassisted application.",
+                " Esta habilidad necesita más práctica: todavía no se ha resuelto un error con una aplicación nueva y sin ayuda.",
+            )
         recap = state.unit.takeaway or state.unit.material
         if state.path_done:
             text += self.copy(context, " Try a fresh example in a later session to see what sticks.",

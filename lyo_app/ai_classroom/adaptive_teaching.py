@@ -720,6 +720,7 @@ class GuidedState(StrictModel):
     active_strategy: str = "direct_explanation"
     strategy_history: list[str] = Field(default_factory=list, max_length=12)
     misconceptions: list[str] = Field(default_factory=list, max_length=12)
+    unresolved_misconceptions: list[str] = Field(default_factory=list, max_length=12)
     learner_signals: list[str] = Field(default_factory=list, max_length=12)
     board_memory: list[dict[str, Any]] = Field(default_factory=list, max_length=6)
     open_question: str = Field(default="", max_length=2000)
@@ -892,8 +893,10 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
-                  4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
-    timeout = 100 if issubclass(schema, UnitPackage) else 45
+                  4500 if issubclass(schema, (LearningPlan, LearningTurn)) else
+                  900 if schema is Evaluation else 2000)
+    timeout = (100 if issubclass(schema, UnitPackage) else
+               30 if schema is Evaluation else 45)
 
     async def call(response_format):
         return await asyncio.wait_for(
@@ -1409,6 +1412,19 @@ class AdaptiveTeacher:
                     payload, turn_schema(move, focused),
                 )
                 turn = turn_schema(move, focused).model_validate(turn.model_dump())
+                if turn.task is not None:
+                    # Graded turns are questions, not mini-lessons. Providers
+                    # sometimes put the correct answer into the teacher's
+                    # narration, board title or visual even when the actual
+                    # task is sound. Keep the authored task and private rubric,
+                    # but replace every extra public teaching field with a
+                    # neutral introduction before validating or displaying it.
+                    # This avoids a needless provider retry and prevents
+                    # audible as well as visual answer leakage.
+                    turn.speech = "Try this question in your own words."
+                    turn.board_title = "Your question"
+                    turn.board_content = turn.task.scenario
+                    turn.visual = None
                 validate_semantic_content(turn)
                 if self.semantic_judge is not None and not await self.semantic_judge(move, unit, turn):
                     raise TeachingContractError("Independent semantic review rejected this teaching turn")
@@ -1559,7 +1575,10 @@ class AdaptiveTeacher:
         payload = {
             "language": context.language_code, "task": pending.task.model_dump(),
             "taught": [] if pending.phase == "diagnose" else (
-                pending.taught_steps or [pending.speech + "\n" + pending.board_content]
+                # Only the nearest teaching beats can clarify the active
+                # rubric. Shipping an entire 16-beat transcript on every
+                # answer adds model latency without helping this question.
+                pending.taught_steps[-3:] or [pending.speech + "\n" + pending.board_content]
             ),
             "previous_answers": pending.answers[-4:], "new_answer": response[:2000],
             "follow_up_asked": pending.follow_up,
