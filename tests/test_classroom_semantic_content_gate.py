@@ -341,3 +341,22 @@ def test_independent_success_on_one_target_does_not_erase_another_misconception(
     assert not model.independent_application
     assert model.completed == []
     assert model.target_index == 1
+
+@pytest.mark.asyncio
+async def test_grader_sends_relevant_recent_teaching_only():
+    """Large prior transcripts must not slow an otherwise short grading call."""
+    from lyo_app.ai_classroom.adaptive_teaching import PendingTask, Evaluation
+
+    fake = AsyncMock(return_value=Evaluation(
+        verdict="clarify", confidence=1, question_clear=False,
+        feedback="The wording needs a clearer question.",
+    ))
+    teacher = AdaptiveTeacher(fake)
+    pending = PendingTask(
+        task=task(), phase="independent", speech="Try it",
+        board_title="Compare", board_content="Make your comparison.",
+        taught_steps=[f"Teaching beat {index}" for index in range(15)],
+    )
+    await teacher.evaluate(context(), pending, "The half is larger.")
+    payload = fake.await_args.args[1]
+    assert payload["taught"] == ["Teaching beat 12", "Teaching beat 13", "Teaching beat 14"]
