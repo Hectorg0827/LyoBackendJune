@@ -235,3 +235,30 @@ async def test_a_semantically_rejected_opening_probe_escalates_before_second_aut
     assert "distractors credible" in inputs[1]["repair"]
     assert judge.await_count == 2
     assert state.completed == [] and state.outbox == []
+
+
+@pytest.mark.parametrize("question", [
+    "Write the shaded fraction (e.g., 7/10).",
+    "Escribe la fracción sombreada, por ejemplo 7/10.",
+    "The correct answer is 7/10. What fraction is shaded?",
+])
+def test_a_short_answer_example_in_a_graded_question_is_never_shown(question):
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    turn.task.question = question
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(turn)
+
+
+def test_a_fraction_in_problem_data_is_not_in_itself_answer_leakage():
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    turn.task.scenario = "A recipe lists 7/10 cup of liquid as an ingredient."
+    turn.task.question = "What fraction of the amount remains after using half?"
+    validate_semantic_content(turn)
+
+
+def test_unresolved_misconceptions_are_saved_in_guided_state():
+    state = GuidedState(owner="42", plan=plan(1), unresolved_misconceptions=["Mixed up the numerator"])
+    restored = GuidedState.model_validate_json(state.model_dump_json())
+    assert restored.unresolved_misconceptions == ["Mixed up the numerator"]
