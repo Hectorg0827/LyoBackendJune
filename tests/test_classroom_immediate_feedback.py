@@ -15,13 +15,14 @@ from tests.adaptive_fixtures import ScriptedTeacher, action, context
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("language, greeting", [("en-US", "Hello, Ana!"), ("es-ES", "¡Hola, Ana!")])
-async def test_opening_greets_the_learner_and_names_the_subject(language, greeting):
+async def test_opening_protects_the_graded_question_and_is_replayable(language, greeting):
     ctx = context(learner_name="Ana", language_code=language)
     runner, progress = AdaptiveSession(ScriptedTeacher()), {}
     scene = await runner.run(ctx, progress, action(welcome=True))
     speech = next(c.text for c in scene.components if isinstance(c, TeacherMessage))
-    assert speech.startswith(greeting)
-    assert "Fractions" in speech
+    # The app's separate opening card handles the personalized introduction.
+    # The graded scene uses neutral narration so a topic/title never leaks an answer.
+    assert speech and greeting not in speech
     assert "question" in speech or "pregunta" in speech
     # A reconnect replays the same opening, without creating another probe.
     assert (await runner.run(ctx, progress, action(welcome=True))).scene_id == scene.scene_id
@@ -75,7 +76,10 @@ async def test_early_feedback_failure_does_not_block_the_next_lesson():
     pending = GuidedState.model_validate(progress["guided_state"]).pending
     scene = await runner.run(ctx, progress, action(ActionIntent.SUBMIT_ANSWER, pending.id,
                                                   answer_data={"selected_option_id": "a"}))
-    assert pending.task.options[0].feedback in scene.model_dump_json()
+    # If the immediate feedback transport fails, the new graded question is
+    # still safe and the session progresses without publishing its answer.
+    assert pending.task.options[0].feedback not in scene.model_dump_json()
+    assert scene.components
     assert GuidedState.model_validate(progress["guided_state"]).phase == "guided"
 
 
