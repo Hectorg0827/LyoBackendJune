@@ -407,7 +407,15 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     visible = [turn.speech, turn.board_title, turn.board_content,
                task.scenario, task.question, task.response_hint]
     if turn.visual:
-        visible.extend([turn.visual.caption, turn.visual.description])
+        visible.extend([
+            turn.visual.title, turn.visual.caption, turn.visual.description,
+            turn.visual.expression, turn.visual.unit,
+            *[piece for item in turn.visual.entries for piece in (item.label, item.detail)],
+        ])
+        if (task.response_format != "choice"
+                and turn.visual.kind in ("fraction_bar", "fraction_pie")
+                and comparable_text(f"{turn.visual.value}/{turn.visual.parts}") == normalized):
+            raise TeachingContractError("The visible visual reveals the answer")
 
     # Short numeric/fraction answers are common *inputs* in a scenario, so the
     # old gate skipped them entirely. The live teacher-quality run exposed the
@@ -418,7 +426,11 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     if len(normalized) < 7 or len(normalized.split()) < 2:
         teaching_visible = [turn.speech, turn.board_title, turn.board_content]
         if turn.visual:
-            teaching_visible.extend([turn.visual.caption, turn.visual.description])
+            teaching_visible.extend([
+                turn.visual.title, turn.visual.caption, turn.visual.description,
+                turn.visual.expression,
+                *[piece for item in turn.visual.entries for piece in (item.label, item.detail)],
+            ])
         scenario_text = comparable_text(task.scenario)
         question_text = comparable_text(task.question)
         for item in teaching_visible:
@@ -1343,11 +1355,18 @@ class AdaptiveTeacher:
         state.strategy_history = [*state.strategy_history, strategy][-12:]
         packaged = await self.cached_turn(context, state, move, unit, target_index)
         if packaged is not None:
-            if move in {"orient", "reteach", "prerequisite", "guided"}:
-                complete_fraction_visuals(packaged, unit.title, context.language_code)
-            hydrated = await hydrate_turn_visuals(packaged)
-            self.schedule_next_unit_prefetch(context, state, move)
-            return hydrated
+            try:
+                if move in {"orient", "reteach", "prerequisite", "guided"}:
+                    complete_fraction_visuals(packaged, unit.title, context.language_code)
+                hydrated = await hydrate_turn_visuals(packaged)
+                # Derived visuals must pass the same answer-leak gate as authored ones.
+                validate_semantic_content(hydrated)
+                self.schedule_next_unit_prefetch(context, state, move)
+                return hydrated
+            except TeachingContractError:
+                # A formerly cached question must never reach the learner when
+                # a newly hydrated illustration discloses its answer.
+                logger.warning("Discarding cached classroom turn with a visible answer")
         payload = {
             "language": context.language_code, "mode": state.mode,
             "unit": unit.model_dump(), "move": move,
@@ -1486,6 +1505,7 @@ class AdaptiveTeacher:
                 # validation. Failure to find media degrades to text; it never
                 # blocks the learner's next step.
                 turn = await hydrate_turn_visuals(turn)
+                validate_semantic_content(turn)
                 # Only now—after the exact move the learner is waiting for has
                 # passed validation—spend spare listening/answering time
                 # preparing the rest of the unit.
