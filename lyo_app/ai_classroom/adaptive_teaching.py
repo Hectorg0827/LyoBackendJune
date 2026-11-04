@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
+from lyo_app.ai_classroom.fraction_grading import assess_objective_fraction
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
 from lyo_app.ai_classroom.strict_schema import (
     SchemaNotStrictable, looks_like_schema_rejection, strict_json_schema,
@@ -1488,6 +1489,36 @@ class AdaptiveTeacher:
                 verdict="clarify", confidence=1, question_clear=True,
                 feedback="Vamos paso a paso." if is_es else "Let's work through a smaller step together.",
             )
+
+        # Exact arithmetic is not a matter of model opinion. For a narrowly
+        # scoped single-answer fraction checkpoint, grade the mathematical
+        # value independently of the language model. Keep follow-ups, written
+        # reasoning and any ambiguous rubric on the semantic grading path.
+        if not pending.answers and not pending.follow_up:
+            objective = assess_objective_fraction(pending.task, response)
+            if objective is not None:
+                if objective.correct:
+                    return Evaluation(
+                        verdict="correct", confidence=1, question_clear=True,
+                        feedback=(
+                            "¡Correcto! Tu numerador y denominador representan la fracción pedida."
+                            if is_es else
+                            "Correct! Your numerator and denominator represent the requested fraction."
+                        ),
+                        criteria=[CriterionResult(index=0, met=True, quote=response.strip())],
+                    )
+                return Evaluation(
+                    verdict="incorrect", confidence=1, question_clear=True,
+                    feedback=(
+                        "Revisa las partes seleccionadas (numerador) y las partes iguales "
+                        "en total (denominador). Después escribe seleccionadas/total."
+                        if is_es else
+                        "Check the selected parts (numerator) and all equal parts "
+                        "(denominator), then write selected/total."
+                    ),
+                    criteria=[CriterionResult(index=0, met=False, quote="")],
+                    misconception="The numeric fraction does not match the reference value.",
+                )
         prompt = (
             "Evaluate the learner's MEANING against only the active question's criteria. "
             "Accept synonyms, equivalent solutions, speech transcription errors, short "
