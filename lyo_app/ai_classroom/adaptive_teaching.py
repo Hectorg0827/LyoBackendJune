@@ -381,6 +381,28 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     answer = (next(option.label for option in task.options if option.correct)
               if task.response_format == "choice" else task.example_answer)
     normalized = comparable_text(answer)
+    # A short answer may be a legitimate operand in the story, but explicit
+    # examples and answer cues are never legitimate in a graded prompt. The
+    # previous short-answer exemption let "e.g., 7/10" reveal exactly 7/10.
+    # comparable_text deliberately tokenizes fractions as "7 10".
+    if task.response_format != "choice" and normalized:
+        answer_cue = re.compile(
+            r"(?:\be g\b|\bfor example\b|\bsuch as\b|\bpor ejemplo\b|"
+            r"\bp ej\b|\bexample answer\b|\bcorrect answer\b|"
+            r"\b(?:answer|solution|result|respuesta|resultado) is\b)"
+            + r"\s+(?:is\s+)?" + re.escape(normalized) + r"(?=\s|$)"
+        )
+        for field, visible_text in (
+            ("scenario", task.scenario),
+            ("question", task.question),
+            ("response_hint", task.response_hint),
+        ):
+            shown = comparable_text(visible_text)
+            contains_answer = f" {normalized} " in f" {shown} "
+            if contains_answer and (field == "response_hint" or answer_cue.search(shown)):
+                raise TeachingContractError(
+                    "The visible question or example reveals the answer"
+                )
     # response_hint is learner-visible as both guidance and input placeholder.
     visible = [turn.speech, turn.board_title, turn.board_content,
                task.scenario, task.question, task.response_hint]
@@ -714,6 +736,8 @@ class GuidedState(StrictModel):
     active_strategy: str = "direct_explanation"
     strategy_history: list[str] = Field(default_factory=list, max_length=12)
     misconceptions: list[str] = Field(default_factory=list, max_length=12)
+    # Unlike history, these must be cleared by an unseen independent success.
+    unresolved_misconceptions: list[str] = Field(default_factory=list, max_length=12)
     learner_signals: list[str] = Field(default_factory=list, max_length=12)
     board_memory: list[dict[str, Any]] = Field(default_factory=list, max_length=6)
     open_question: str = Field(default="", max_length=2000)
@@ -843,8 +867,8 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     # result still passes exactly the same strict pedagogical contract.
     configured_providers = (["gpt-4o", "gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
                             if issubclass(schema, DiagnosticTurn) else
-                            ["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash", "gemini-3.7-flash",
-                             "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+                            ["gpt-4o-mini", "gpt-4o", "gemini-3.6-flash", "gemini-3.8-flash",
+                             "gemini-3.7-flash", "gemini-3.5-flash-lite"]
                             if schema is Evaluation else
                             ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"])
     # A step the learner has already watched fail is worth a more capable
@@ -869,6 +893,10 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
             *recovery_models,
             *[p for p in configured_providers if p not in recovery_models],
         ]
+    # Avoid trying unconfigured paid providers in Gemini-only staging. Every
+    # failed provider adds latency before the teacher can grade an answer.
+    if not os.getenv("OPENAI_API_KEY"):
+        configured_providers = [p for p in configured_providers if not p.startswith("gpt-")]
     rejected_provider = payload.get("_rejected_provider")
     providers = [p for p in configured_providers if p != rejected_provider]
     if rejected_provider in configured_providers:
@@ -885,7 +913,8 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else 2000)
-    timeout = 100 if issubclass(schema, UnitPackage) else 45
+    timeout = (100 if issubclass(schema, UnitPackage) else
+               30 if schema is Evaluation else 45)
 
     async def call(response_format):
         return await asyncio.wait_for(
@@ -1122,7 +1151,9 @@ class AdaptiveTeacher:
 
     def schedule_package_prefetch(self, context, state: GuidedState, unit: LearningUnit) -> None:
         """Prepare a validated unit only after the learner's immediate move is ready."""
-        if not self.fast_start or self.package_cache is None:
+        if (not self.fast_start or self.package_cache is None
+                or os.getenv("CLASSROOM_PACKAGE_PREFETCH_ENABLED", "false").lower()
+                not in {"1", "true", "yes"}):
             return
         from lyo_app.ai_classroom.unit_package_cache import package_key
         key = package_key(context, unit, self.saved_skill(state, state.next_move))
@@ -1153,6 +1184,8 @@ class AdaptiveTeacher:
         if (
             not self.fast_start
             or self.package_cache is None
+            or os.getenv("CLASSROOM_PACKAGE_PREFETCH_ENABLED", "false").lower()
+            not in {"1", "true", "yes"}
             or move not in {"independent", "transfer"}
             or self._package_prefetch_tasks
         ):
@@ -1338,6 +1371,7 @@ class AdaptiveTeacher:
             "visual_policy": self.visual_policy_for(move, strategy),
             "strategy_history": state.strategy_history[-6:],
             "misconceptions": state.misconceptions[-6:],
+            "unresolved_misconceptions": state.unresolved_misconceptions[-6:],
             "learner_signals": state.learner_signals[-8:],
             "board_memory": [
                 {
