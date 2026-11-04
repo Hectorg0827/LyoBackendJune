@@ -81,6 +81,28 @@ def _openai_compatible_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
     return normalized
 
 
+def _gemini_visible_text(data: dict) -> str:
+    """Read only genuine generated text. Empty/thought-only responses cannot be graded.
+
+    Google may respond 200 with no content.parts when MAX_TOKENS or safety
+    filtering prevents an answer. Treat those as provider failures so the
+    resilience layer can attempt another configured provider.
+    """
+    candidates = data.get("candidates") or []
+    if not candidates or not isinstance(candidates[0], dict):
+        raise RuntimeError("Gemini response has no candidates")
+    candidate = candidates[0]
+    parts = (candidate.get("content") or {}).get("parts") or []
+    text = "".join(
+        str(item.get("text", "")) for item in parts
+        if isinstance(item, dict) and not item.get("thought")
+    ).strip()
+    if not text:
+        reason = str(candidate.get("finishReason") or "unspecified")[:35]
+        raise RuntimeError(f"Gemini response has no text; finish_reason={reason}")
+    return text
+
+
 class StreamingIncompleteError(RuntimeError):
     """A visible canonical answer ended before its provider completed."""
 
@@ -255,6 +277,14 @@ class AIResilienceManager:
                     endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
                     api_key=gemini_key,
                     max_tokens=4000,
+                    priority=1,
+                    capabilities=["chat", "fast", "multimodal"],
+                ),
+                "gemini-3.5-flash-lite": AIModelConfig(
+                    name="Google Gemini 3.5 Flash-Lite",
+                    endpoint="https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+                    api_key=gemini_key,
+                    max_tokens=8000,
                     priority=1,
                     capabilities=["chat", "fast", "multimodal"],
                 ),
@@ -566,13 +596,22 @@ class AIResilienceManager:
         generation_config: Dict[str, Any] = {
             "maxOutputTokens": max_tokens,
             "temperature": temperature,
-            "topP": 0.8,
-            "topK": 40,
         }
-        if thinking_budget is not None:
-            generation_config["thinkingConfig"] = {
-                "thinkingBudget": int(thinking_budget)
-            }
+        if model_key.startswith("gemini-3."):
+            # Gemini 3 streaming uses thinkingLevel rather than the Gemini 2
+            # thinkingBudget field. A mismatched field can reject every
+            # streaming request while non-streaming classroom lessons work.
+            if thinking_budget is not None:
+                level = "minimal" if model_key == "gemini-3.5-flash-lite" else (
+                    "high" if thinking_budget < 0 or thinking_budget > 256 else "low"
+                )
+                generation_config["thinkingConfig"] = {"thinkingLevel": level}
+        else:
+            generation_config.update({"topP": 0.8, "topK": 40})
+            if thinking_budget is not None:
+                generation_config["thinkingConfig"] = {
+                    "thinkingBudget": int(thinking_budget)
+                }
 
         payload: Dict[str, Any] = {
             "contents": contents,
@@ -812,7 +851,7 @@ class AIResilienceManager:
                 last_exception = e
                 continue
         
-        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED for '{message_str}'. Returning fallback.", flush=True)
+        print(f">>> [PID {os.getpid()}] ❌ ALL PROVIDERS FAILED. Returning fallback.", flush=True)
         return self._get_fallback_response(message_str, str(last_exception), response_format=response_format)
 
     async def _call_model_with_messages(
@@ -895,14 +934,32 @@ class AIResilienceManager:
                 else:
                     contents.append({"role": role, "parts": message_parts})
                     
+        generation_config = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.8,
+            "topK": 40,
+        }
+        if model_name == "gemini-3.5-flash-lite" and response_format:
+            # This low-latency model is an independent Gemini-only recovery
+            # path when the first structured classroom generation times out.
+            generation_config = {
+                "maxOutputTokens": max_tokens,
+                "thinkingConfig": {"thinkingLevel": "minimal"},
+            }
+        elif model_name.startswith(("gemini-3.8-", "gemini-3.7-")) or (
+            model_name == "gemini-3.6-flash" and response_format
+        ):
+            # Low thinking is supported on Gemini 3.6/3.7/3.8 Flash. A
+            # structured classroom scene must arrive before the mobile
+            # learner's loading watchdog, without weakening JSON validation.
+            generation_config = {
+                "maxOutputTokens": max_tokens,
+                "thinkingConfig": {"thinkingLevel": "low"},
+            }
         payload = {
             "contents": contents,
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-                "topP": 0.8,
-                "topK": 40,
-            },
+            "generationConfig": generation_config,
         }
         
         self.apply_structured_output(payload["generationConfig"], response_format)
@@ -930,7 +987,7 @@ class AIResilienceManager:
                     raise Exception(f"API returned {response.status}: {text}")
                 
                 data = await response.json()
-                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                content = _gemini_visible_text(data)
                 tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
                 print(f">>> [PID {os.getpid()}] {model_name} SUCCESS in {duration:.2f}s (Tokens: {tokens_used})", flush=True)
                 
@@ -976,7 +1033,8 @@ class AIResilienceManager:
         Routes complex queries to full flash models.
         """
         if not messages:
-            return ["gemini-2.5-flash"]  # Default
+            return [name for name in ("gemini-3.5-flash-lite", "gemini-3.6-flash")
+                    if name in self.models and self.models[name].api_key]
         
         def _text_content(message: Dict[str, Any]) -> str:
             content = message.get("content", "")
@@ -1007,15 +1065,26 @@ class AIResilienceManager:
         ]
         is_complex = any(p in last_message.lower() for p in complex_patterns)
         
-        # Route through the currently reliable provider first. Gemini Flash has
-        # repeatedly circuit-opened in production when its key is rejected, so
-        # leading with it makes otherwise healthy chat/classroom requests pay a
-        # failure before falling through to OpenAI. Keep Gemini as a later
-        # fallback for the day its key is restored.
-        if is_complex or total_chars > 2000 or max_tokens > 1500:
-            return ["gpt-4o-mini", "gpt-4o", "gemini-2.5-pro", "gemini-2.5-flash"]
-        else:
-            return ["gpt-4o-mini", "gemini-2.5-flash"]
+        # Choose providers that are actually configured in this environment.
+        # Staging may have Gemini credentials without an OpenAI key. The
+        # classroom already uses these two Gemini models successfully.
+        gemini_order = (
+            ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+            if is_complex or total_chars > 2000 or max_tokens > 1500
+            else ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
+        )
+        openai_order = ["gpt-4o-mini", "gpt-4o"]
+        available_gemini = [
+            name for name in gemini_order
+            if name in self.models and bool(self.models[name].api_key)
+        ]
+        available_openai = (
+            [name for name in openai_order if name in self.models]
+            if self.openai_client is not None else []
+        )
+        # Keep a genuine secondary provider when available, but never route
+        # to a known missing key or to retired Gemini 2.5 endpoints.
+        return available_gemini + available_openai
 
     def _is_over_cost_limit(self, model_name: str, model: AIModelConfig) -> bool:
         if time.time() - self.daily_usage_reset > 86400:

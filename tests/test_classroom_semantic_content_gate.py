@@ -28,7 +28,7 @@ def test_two_distractors_cannot_claim_the_same_misconception_under_different_pun
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("location", ["board_content", "question", "speech"])
+@pytest.mark.parametrize("location", ["question"])
 async def test_visible_answer_is_repaired_before_the_probe_is_shown(location):
     ctx, state = context(), GuidedState(owner="42", plan=plan(1))
     valid = ScriptedTeacher()._turn(ctx, state, "diagnose")
@@ -235,3 +235,149 @@ async def test_a_semantically_rejected_opening_probe_escalates_before_second_aut
     assert "distractors credible" in inputs[1]["repair"]
     assert judge.await_count == 2
     assert state.completed == [] and state.outbox == []
+
+
+@pytest.mark.parametrize("question", [
+    "Write the shaded fraction (e.g., 7/10).",
+    "Escribe la fracción sombreada, por ejemplo 7/10.",
+    "The correct answer is 7/10. What fraction is shaded?",
+])
+def test_a_short_answer_example_in_a_graded_question_is_never_shown(question):
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    turn.task.question = question
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(turn)
+
+
+def test_a_fraction_in_problem_data_is_not_in_itself_answer_leakage():
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    turn.task.scenario = "A recipe lists 7/10 cup of liquid as an ingredient."
+    turn.task.question = "What fraction of the amount remains after using half?"
+    validate_semantic_content(turn)
+
+
+def test_unresolved_misconceptions_are_saved_in_guided_state():
+    state = GuidedState(owner="42", plan=plan(1), unresolved_misconceptions=["Mixed up the numerator"])
+    restored = GuidedState.model_validate_json(state.model_dump_json())
+    assert restored.unresolved_misconceptions == ["Mixed up the numerator"]
+
+
+@pytest.mark.parametrize("location", ["title", "entry"])
+def test_a_visual_title_or_label_cannot_reveal_a_short_answer(location):
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    visual = visuals()[1]
+    if location == "title":
+        visual.title = "Correct answer: 7/10"
+    else:
+        visual.entries[0].label = "Solution 7/10"
+    turn.visual = visual
+    with pytest.raises(TeachingContractError, match="short answer|reveals the answer"):
+        validate_semantic_content(turn)
+
+
+def test_a_fraction_visual_cannot_draw_the_answer_to_an_open_question():
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "transfer")
+    turn.task.example_answer = "7/10"
+    turn.visual = visuals()[0].model_copy(update={"parts": 10, "value": 7})
+    with pytest.raises(TeachingContractError, match="visual reveals the answer"):
+        validate_semantic_content(turn)
+
+def test_graded_checkpoint_hides_authored_answer_and_remembered_visual():
+    """A worked board from the previous step must not assist a fresh check."""
+    from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+    from lyo_app.ai_classroom.adaptive_teaching import PendingTask
+
+    ctx = context()
+    model = GuidedState(owner="42", plan=plan(1), phase="independent")
+    model.board_memory = [{
+        "title": "Worked solution",
+        "content": "The correct answer is one half; divide into fewer pieces.",
+        "visual": None,
+    }]
+    model.pending = PendingTask(
+        task=task(), phase="independent",
+        speech="You have mastered this!",
+        board_title="Answer: one half",
+        board_content="Here is the complete solution to the current question.",
+        assisted=False,
+    )
+    scene = AdaptiveSession(ScriptedTeacher()).checkpoint(ctx, model)
+    shown = " ".join(
+        str(getattr(component, "text", "") or "")
+        + " " + str(getattr(component, "title", "") or "")
+        + " " + str(getattr(component, "content", "") or "")
+        for component in scene.components
+    ).lower()
+    assert "answer: one half" not in shown
+    assert "worked solution" not in shown
+    assert "you have mastered" not in shown
+    assert "which single piece is larger" in shown
+
+
+def test_independent_success_on_one_target_does_not_erase_another_misconception():
+    from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
+    from lyo_app.ai_classroom.adaptive_teaching import LearningPlan, LearningUnit, PendingTask
+
+    unit = LearningUnit(
+        title="Compare and convert fractions",
+        objective="Use equivalent fractions to compare two given ratios.",
+        material="Compare equal fractions first, then convert values using common denominators.",
+        practice_targets=["Compare fraction sizes", "Convert to an equivalent fraction"],
+    )
+    model = GuidedState(owner="42", plan=LearningPlan(units=[unit]),
+                        phase="independent", target_index=0,
+                        faded_targets=[0, 1],
+                        guided_targets=[0, 1],
+                        unresolved_misconceptions=["target 2: adds denominators"])
+    pending = PendingTask(
+        task=task().model_copy(update={"target_index": 0}),
+        speech="Try it", board_title="Compare", board_content="Work through this.",
+        phase="independent", assisted=False,
+    )
+    assert AdaptiveSession.after_success(model, pending) is False
+    assert not model.independent_application
+    assert model.completed == []
+    assert model.target_index == 1
+
+@pytest.mark.asyncio
+async def test_grader_sends_relevant_recent_teaching_only():
+    """Large prior transcripts must not slow an otherwise short grading call."""
+    from lyo_app.ai_classroom.adaptive_teaching import PendingTask, Evaluation
+
+    fake = AsyncMock(return_value=Evaluation(
+        verdict="clarify", confidence=1, question_clear=False,
+        feedback="The wording needs a clearer question.",
+    ))
+    teacher = AdaptiveTeacher(fake)
+    pending = PendingTask(
+        task=task(), phase="independent", speech="Try it",
+        board_title="Compare", board_content="Make your comparison.",
+        taught_steps=[f"Teaching beat {index}" for index in range(15)],
+    )
+    await teacher.evaluate(context(), pending, "The half is larger.")
+    payload = fake.await_args.args[1]
+    assert payload["taught"] == ["Teaching beat 12", "Teaching beat 13", "Teaching beat 14"]
+
+
+@pytest.mark.asyncio
+async def test_graded_teacher_introduction_is_neutral_even_when_model_leaks_solution():
+    """Answer-bearing narration must not require another expensive authoring call."""
+    ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    candidate = ScriptedTeacher()._turn(ctx, state, "guided")
+    answer = next(option.label for option in candidate.task.options if option.correct)
+    candidate.speech = f"The answer is {answer}; listen carefully."
+    candidate.board_title = f"Solution: {answer}"
+    candidate.board_content = f"The correct answer is {answer}."
+    candidate.visual = visuals()[1]
+    generate = AsyncMock(return_value=candidate)
+
+    result = await AdaptiveTeacher(generate).turn(ctx, state, "guided")
+
+    assert generate.await_count == 1
+    assert result.speech == "Try this question in your own words."
+    assert result.board_title == "Your question"
+    assert result.board_content == result.task.scenario
+    assert result.visual is None

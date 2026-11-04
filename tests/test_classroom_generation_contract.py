@@ -12,6 +12,13 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, task
 
 
+@pytest.fixture(autouse=True)
+def simulated_openai_provider(monkeypatch):
+    # These mocked provider-routing tests exercise the dual-provider contract.
+    # Gemini-only staging is tested separately without paid-provider credentials.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-provider-key")
+
+
 def assert_teaching_content_preserved(actual, authored):
     # The server may supplement a missing visual after repairing the provider
     # response. It must still preserve every authored word, task and beat.
@@ -44,8 +51,8 @@ async def test_wrong_root_object_repairs_with_exact_phase_contract_and_alternate
         assert all(beat.visual is not None for beat in actual.demonstration)
     assert completion.await_count == 2
     initial, repair = [call.kwargs for call in completion.await_args_list]
-    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash"]
-    assert repair["provider_order"] == ["gemini-3.6-flash", "gpt-4o-mini"]
+    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    assert repair["provider_order"] == ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gpt-4o-mini"]
     assert initial["max_tokens"] == repair["max_tokens"] == 4500
     contract = json.loads(initial["messages"][0]["content"].split("Return only JSON matching this schema:\n")[1])
     assert set(contract["properties"]) == {"speech", "board_title", "board_content", "visual", "task", "demonstration"}
@@ -78,8 +85,8 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     assert_teaching_content_preserved(turn, valid)
     assert all(beat.visual is not None for beat in turn.demonstration)
     initial, repair = [call.kwargs for call in completion.await_args_list]
-    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash"]
-    assert repair["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash"]
+    assert initial["provider_order"] == ["gpt-4o-mini", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    assert repair["provider_order"] == ["gpt-4o-mini", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
     sent = json.loads(repair["messages"][1]["content"])
     assert "_rejected_provider" not in sent
 
