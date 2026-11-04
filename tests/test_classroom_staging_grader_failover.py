@@ -46,6 +46,31 @@ async def test_written_evaluation_offers_healthy_gemini_alternatives(monkeypatch
     assert "Evaluate the meaning" in completion.await_args.kwargs["messages"][0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_gemini_only_staging_skips_unconfigured_openai_attempts(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    expected = Evaluation(
+        verdict="clarify", confidence=0.9, question_clear=False,
+        feedback="Please clarify your reasoning.",
+    )
+    completion = AsyncMock(return_value={
+        "content": expected.model_dump_json(), "model_used": "gemini-3.6-flash",
+    })
+    monkeypatch.setattr(
+        "lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion",
+        completion,
+    )
+    result = await adaptive_teaching.model_json(
+        "Evaluate this answer", {"new_answer": "I think the answer is a half."},
+        Evaluation,
+    )
+    assert result.verdict == "clarify"
+    assert all(
+        name.startswith("gemini-")
+        for name in completion.await_args.kwargs["provider_order"]
+    )
+
+
 def test_gemini_text_parser_accepts_real_generated_text_and_skips_thoughts():
     response = {
         "candidates": [{"content": {"parts": [
