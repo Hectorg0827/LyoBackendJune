@@ -736,6 +736,10 @@ class GuidedState(StrictModel):
     #: the model escalation and `AdaptiveSession.run` for the move it falls
     #: back to once asking the same way has demonstrably stopped working.
     recovery_attempts: int = 0
+    # A provider-independent, ungraded recap is currently on screen. Its
+    # Continue action must not ask the exhausted generator for the same turn
+    # again or count the recap as evidence of mastery.
+    offline_step: bool = False
     practice_events: list[dict[str, Any]] = Field(default_factory=list)
     task_kinds: list[str] = Field(default_factory=list)
     recent_questions: list[str] = Field(default_factory=list)

@@ -1434,6 +1434,47 @@ class SceneLifecycleEngine:
                 )
             return scene
 
+    async def resume_saved_scene(self, user_id: str, session_id: str) -> Scene | None:
+        """Replay a durable learner-owned scene after transport reconnect.
+
+        A reconnect is not a new learner action. In particular, it must not
+        re-author an active question, retry an exhausted provider, advance
+        the lesson, or duplicate grading. Use the same per-session lock as
+        normal turns so a response in flight finishes before its scene is
+        replayed. Only an authenticated matching owner may receive it.
+        """
+        from lyo_app.ai_classroom.adaptive_persistence import learner_session
+
+        key = session_progress_key(user_id, session_id)
+        lock = _TURN_LOCKS.setdefault(key, asyncio.Lock())
+        async with lock:
+            progress = _SESSION_PROGRESS.setdefault(key, {})
+            if not progress.get("_unsynced"):
+                trigger = Trigger(
+                    trigger_type=TriggerType.SYSTEM_TIMEOUT,
+                    user_id=user_id, session_id=session_id,
+                    action_data={"resume": True},
+                )
+                async with learner_session(self.db, key) as db:
+                    original_db = self.context_assembler.db
+                    try:
+                        self.context_assembler.db = db
+                        saved = await self.context_assembler._load_persisted_session_progress(trigger)
+                    finally:
+                        self.context_assembler.db = original_db
+                if saved:
+                    progress.update(saved)
+            state = self._read_guided_state(progress, progress.get("guided_state"))
+            if not state or state.owner != str(user_id) or not state.scene:
+                return None
+            scene = Scene.model_validate(state.scene)
+            self.active_scenes[scene.scene_id] = scene
+            if self.websocket_manager:
+                await self.websocket_manager.stream_scene_to_session(
+                    session_id, scene, user_id=user_id,
+                )
+            return scene
+
     @staticmethod
     def _read_guided_state(progress: dict, raw):
         """Hydrate a saved session, or set it aside rather than fail the turn.

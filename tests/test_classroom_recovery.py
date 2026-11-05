@@ -1,6 +1,8 @@
 """Production authoring limits and recovery at the first guided checkpoint."""
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -8,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import GuidedState, LearningTurn, TeachingUnavailable
-from lyo_app.ai_classroom.scene_lifecycle_engine import ContextAssembler, SceneLifecycleEngine, _is_database_course_id
+from lyo_app.ai_classroom.scene_lifecycle_engine import (
+    ContextAssembler, SceneLifecycleEngine, _is_database_course_id,
+    _SESSION_PROGRESS, session_progress_key,
+)
 from lyo_app.ai_classroom.sdui_models import ActionIntent, CTAButton, ExampleBlock, QuizCard, Scene, TeacherMessage
 from lyo_app.ai_classroom.teaching_visuals import TeachingVisual
 from lyo_app.classroom.models import ClassroomInteraction, ClassroomSession
@@ -150,6 +155,154 @@ async def test_failed_guided_transition_survives_database_restart_and_retry():
     finally:
         await database.dispose()
 
+
+@pytest.mark.asyncio
+async def test_exhausted_providers_offer_an_ungraded_way_forward_without_retry_loop():
+    """A 429 plus invalid fallback JSON must not trap the learner on Retry."""
+    teacher = ScriptedTeacher()
+    teacher.plan.side_effect = None
+    teacher.plan.return_value = plan(2)
+    runner, progress, ctx, _ = await final_example(teacher)
+    teacher.turn.side_effect = TeachingUnavailable("rate limited or invalid task")
+
+    failed = await runner.run(ctx, progress, action(component_id=current(progress).step_id))
+    assert any(c.component_id == "classroom-recovery/notice" for c in failed.components)
+    assert current(progress).recovery_attempts == 1
+
+    recap = await runner.run(ctx, progress, retry(failed))
+    assert any(c.component_id == "classroom-recovery/offline" for c in recap.components)
+    assert current(progress).offline_step
+    assert not any(isinstance(c, QuizCard) for c in recap.components)
+    assert current(progress).completed == []
+    assert current(progress).outbox == []
+
+    # There is no third model call for the same failed guided task. The
+    # learner advances only by pressing this recap's actual Continue ID.
+    assert teacher.turn.await_count == 2
+    recap_step_id = current(progress).step_id
+    summary = await runner.run(ctx, progress, action(ActionIntent.CONTINUE, recap_step_id))
+    assert current(progress).skipped == [0]
+    assert current(progress).completed == []
+    assert current(progress).unit_done and not current(progress).offline_step
+    assert teacher.turn.await_count == 2
+    assert not any(c.component_id == "classroom-recovery/notice" for c in summary.components)
+
+    # Double taps and delayed actions cannot silently move another unit.
+    assert await runner.run(ctx, progress, action(ActionIntent.CONTINUE, recap_step_id)) == summary
+    assert current(progress).skipped == [0]
+
+    # Once authoring recovers, the summary's explicit Continue opens the
+    # NEXT unit's diagnostic. The previously ungraded unit stays scheduled
+    # for practice and cannot be silently counted complete.
+    teacher.turn.side_effect = teacher._turn
+    next_scene = await runner.run(ctx, progress, action(ActionIntent.CONTINUE, current(progress).step_id))
+    assert current(progress).unit_index == 1
+    assert current(progress).pending.phase == "diagnose"
+    assert current(progress).recovery_attempts == 0
+    assert current(progress).skipped == [0] and current(progress).completed == []
+    assert any(isinstance(c, QuizCard) for c in next_scene.components)
+
+
+@pytest.mark.asyncio
+async def test_offline_recap_after_answer_preserves_evidence_and_no_mastery():
+    teacher = ScriptedTeacher()
+    runner, progress, ctx, _ = await final_example(teacher)
+    await advance_to_task(runner, progress, ctx)
+    question = current(progress).pending
+    teacher.turn.side_effect = TeachingUnavailable("all configured providers exhausted")
+
+    failed = await runner.run(ctx, progress, action(
+        ActionIntent.SUBMIT_ANSWER, question.id,
+        answer_data={"selected_option_id": "a"},
+    ))
+    assert current(progress).recovery_attempts == 1
+    assert [item["event_id"] for item in current(progress).outbox] == [question.id]
+
+    recap = await runner.run(ctx, progress, retry(failed))
+    assert any(c.component_id == "classroom-recovery/offline" for c in recap.components)
+    assert current(progress).pending is None
+    await runner.run(ctx, progress, action(ActionIntent.CONTINUE, current(progress).step_id))
+    assert current(progress).completed == []
+    assert current(progress).skipped == [0]
+    assert [item["event_id"] for item in current(progress).outbox] == [question.id]
+
+
+@pytest.mark.asyncio
+async def test_websocket_resume_replays_same_saved_question_without_new_turn():
+    teacher = ScriptedTeacher()
+    runner, progress, ctx, _ = await final_example(teacher)
+    await advance_to_task(runner, progress, ctx)
+    question = Scene.model_validate(current(progress).scene)
+    seen_before = teacher.turn.await_count
+
+    engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+    engine.db = None
+    engine.active_scenes = {}
+    engine.websocket_manager = SimpleNamespace(stream_scene_to_session=AsyncMock())
+    key = session_progress_key(ctx.user_id, ctx.session_id)
+    previous = _SESSION_PROGRESS.get(key)
+    _SESSION_PROGRESS[key] = {**progress, "_unsynced": True}
+    try:
+        replay = await engine.resume_saved_scene(ctx.user_id, ctx.session_id)
+        assert replay == Scene.model_validate(current(progress).scene)
+        assert teacher.turn.await_count == seen_before
+        assert replay.scene_id == question.scene_id
+        engine.websocket_manager.stream_scene_to_session.assert_awaited_once_with(
+            ctx.session_id, replay, user_id=ctx.user_id,
+        )
+        # A different user cannot adopt the question merely by guessing the
+        # session ID, even if a misplaced memory entry points to this state.
+        wrong_key = session_progress_key("other-user", ctx.session_id)
+        old_wrong = _SESSION_PROGRESS.get(wrong_key)
+        _SESSION_PROGRESS[wrong_key] = {**progress, "_unsynced": True}
+        try:
+            assert await engine.resume_saved_scene("other-user", ctx.session_id) is None
+        finally:
+            if old_wrong is None:
+                _SESSION_PROGRESS.pop(wrong_key, None)
+            else:
+                _SESSION_PROGRESS[wrong_key] = old_wrong
+    finally:
+        if previous is None:
+            _SESSION_PROGRESS.pop(key, None)
+        else:
+            _SESSION_PROGRESS[key] = previous
+
+
+@pytest.mark.asyncio
+async def test_websocket_resume_restores_scene_from_database_after_worker_restart():
+    teacher = ScriptedTeacher()
+    runner, progress, ctx, _ = await final_example(teacher)
+    await advance_to_task(runner, progress, ctx)
+    expected = Scene.model_validate(current(progress).scene)
+
+    database = create_async_engine("sqlite+aiosqlite://")
+    key = session_progress_key(ctx.user_id, ctx.session_id)
+    previous = _SESSION_PROGRESS.pop(key, None)
+    try:
+        async with database.begin() as connection:
+            await connection.run_sync(ClassroomSession.__table__.create)
+            await connection.run_sync(ClassroomInteraction.__table__.create)
+        async with AsyncSession(database) as db:
+            persistence = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+            persistence.db = db
+            assert await persistence._persist_session_progress(
+                action(welcome=True), ctx, progress, record_interaction=False,
+            )
+            manager = SimpleNamespace(stream_scene_to_session=AsyncMock())
+            engine = SceneLifecycleEngine(db, manager)
+            replay = await engine.resume_saved_scene(ctx.user_id, ctx.session_id)
+            assert replay == expected
+            manager.stream_scene_to_session.assert_awaited_once_with(
+                ctx.session_id, expected, user_id=ctx.user_id,
+            )
+            assert _SESSION_PROGRESS[key]["guided_state"]["pending"]["id"] == current(progress).pending.id
+    finally:
+        if previous is None:
+            _SESSION_PROGRESS.pop(key, None)
+        else:
+            _SESSION_PROGRESS[key] = previous
+        await database.dispose()
 
 @pytest.mark.asyncio
 async def test_scene_validation_failure_keeps_accepted_evidence_and_retries_the_next_move(monkeypatch):
@@ -367,23 +520,24 @@ async def test_a_step_that_keeps_failing_teaches_instead_of_repeating_the_same_r
     assert current(progress).recovery_attempts == 1
 
     # The first Retry is still the real step: a provider blip is common, and
-    # this attempt carries a stronger model behind it.
+    # this attempt carries a stronger model behind it. If this fails too,
+    # return trusted teaching material immediately rather than require a
+    # third failing provider request and another UI retry.
     again = await runner.run(ctx, progress, retry(failed))
     assert teacher.turn.await_args.args[2] == "guided"
     assert current(progress).recovery_attempts == 2
-
-    # The second is not. Asking this way has now demonstrably stopped working,
-    # so the class teaches rather than repeating a request that cannot land.
-    teacher.turn.side_effect = teacher._turn
-    scene = await runner.run(ctx, progress, retry(again))
-    assert teacher.turn.await_args.args[2] == "reteach"
-    assert any(isinstance(c, TeacherMessage) for c in scene.components)
-    # A real teaching beat, not the paused board wearing one: the recovery
-    # notice is gone and there is no Retry left to press.
+    assert any(c.component_id == "classroom-recovery/offline" for c in again.components)
+    assert any(isinstance(c, TeacherMessage) for c in again.components)
+    # Already-authorized lesson material, not a Retry button masquerading as
+    # a recovery. The recap is explicitly ungraded.
     assert not any(isinstance(c, CTAButton) and c.action_intent == ActionIntent.RETRY
-                   for c in scene.components)
+                   for c in again.components)
     # Nothing was awarded for getting unstuck.
     assert not current(progress).completed
-    # And a step that lands clears the count, so the next failure gets its own
-    # full retry rather than inheriting this one's.
+    await runner.run(ctx, progress, action(ActionIntent.CONTINUE, current(progress).step_id))
+    assert current(progress).skipped == [0]
+    # And the next unit's failure gets its own full retry budget rather than
+    # inheriting this one's exhausted counter.
+    if not current(progress).path_done:
+        await runner.run(ctx, progress, action(ActionIntent.CONTINUE, current(progress).step_id))
     assert current(progress).recovery_attempts == 0

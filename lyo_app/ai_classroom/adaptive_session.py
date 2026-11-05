@@ -212,6 +212,36 @@ class AdaptiveSession:
             self.reset_unit(state)
             self.open_unit(context, state)
 
+        # A bounded authoring outage may have left a recap from the *saved*
+        # learning plan. It is not a graded checkpoint. Continue either
+        # returns to an outstanding question or moves to the next unit with
+        # this one explicitly recorded as needing further practice. Asking
+        # the same exhausted providers here made "Continue" a permanent loop.
+        if state.offline_step:
+            if intent != ActionIntent.CONTINUE or not self.current_continue(state, trigger):
+                return self.current_or_retry(context, state)
+            self.handled(state, state.step_id)
+            state.offline_step = False
+            state.recovery_attempts = 0
+            state.presentation = None
+            if state.return_to_checkpoint and state.pending and state.pending.id not in state.handled:
+                state.return_to_checkpoint = False
+                state.phase = state.pending.phase
+                return self.save(progress, state, self.checkpoint(context, state))
+            state.pending = None
+            if state.unit_index not in state.completed and state.unit_index not in state.skipped:
+                state.skipped.append(state.unit_index)
+            self.schedule_review(context, state, passed=False)
+            self.event(state, "practise_later", phase=state.phase,
+                       reason="provider_unavailable_ungraded")
+            state.last_feedback = self.copy(
+                context,
+                "We've reviewed the main idea. Practice for this part is saved for later; let's keep moving.",
+                "Repasamos la idea principal. Guardamos la práctica de esta parte para después; sigamos aprendiendo.",
+            )
+            self.finish_unit(state)
+            return self.save(progress, state, self.summary(context, state))
+
         # Demonstrations are paced by explicit, identifiable Continue events.
         # Asking a question may interrupt them without throwing the example away.
         closing = False
@@ -639,7 +669,72 @@ class AdaptiveSession:
             # Counted on the state that is actually saved, so the next Retry
             # can see that this one already failed.
             before_generation.recovery_attempts = min(before_generation.recovery_attempts + 1, 99)
+            # The first failure keeps the historical Retry contract: a
+            # different model can still recover an authored question. Once a
+            # second request has failed, an ungraded recap from the already
+            # validated lesson plan is the honest offline continuation. This
+            # never marks a concept completed and never invents an answer key.
+            if before_generation.recovery_attempts >= 2:
+                return self.save(progress, before_generation,
+                                 self.offline_recap(context, before_generation))
             return self.save(progress, before_generation, self.unavailable(context, before_generation))
+
+    def offline_recap(self, context, state):
+        """A deterministic, schema-valid continuation when all LLMs are down.
+
+        A generated question or rubric cannot safely be fabricated from a
+        title. Use only previously validated teaching material, then offer a
+        learner-controlled transition explicitly without mastery credit.
+        """
+        takeaway = state.unit.takeaway.strip()
+        material = (takeaway if len(takeaway) >= 10 else state.unit.material).strip()
+        turn = LearningTurn(
+            speech=self.copy(
+                context,
+                "Let's hold onto the key idea before moving forward.",
+                "Recordemos la idea principal antes de continuar.",
+            ),
+            board_title=state.unit.title[:100],
+            board_content=material[:1000],
+        )
+        self.event(state, "offline_teaching", phase=state.phase,
+                   original_move=state.next_move)
+        state.offline_step = True
+        state.presentation = turn
+        state.beat_index = -1
+        state.step_id = str(uuid4())
+        # A handled question is completed evidence, but it must not remain
+        # active on the recap. An unhandled question stays available after
+        # this recap instead of being quietly dropped.
+        if state.pending and state.pending.id not in state.handled:
+            state.return_to_checkpoint = True
+        else:
+            state.pending = None
+            state.return_to_checkpoint = False
+        state.phase = "model"
+        state.next_move = "reteach"
+        scene = self.presentation_scene(context, state)
+        for component in scene.components:
+            if isinstance(component, CTAButton) and component.component_id == state.step_id:
+                component.label = self.copy(
+                    context,
+                    "Return to my question" if state.return_to_checkpoint else "Continue — practise this later",
+                    "Volver a mi pregunta" if state.return_to_checkpoint else "Continuar — practicar más tarde",
+                )
+                break
+        scene.components.insert(0, ExampleBlock(
+            component_id="classroom-recovery/offline",
+            presentation_role="recovery",
+            title=self.copy(context, "Practice is temporarily unavailable", "La práctica está temporalmente no disponible"),
+            content=self.copy(
+                context,
+                "Your work is saved. This review does not count as a passed question; "
+                "continue to the next topic or return to your unanswered question.",
+                "Tu trabajo está guardado. Este repaso no cuenta como una respuesta aprobada; "
+                "continúa al siguiente tema o vuelve a tu pregunta pendiente.",
+            ), language_code=context.language_code,
+        ))
+        return scene
 
     def accept_turn(self, context, progress, state, turn, move):
         state.generation_input = ""
@@ -1228,6 +1323,8 @@ class AdaptiveSession:
         state.pending = state.presentation = state.paused_presentation = None
         state.last_feedback = ""
         state.generation_input = ""
+        state.recovery_attempts = 0
+        state.offline_step = False
         state.open_question = ""
         state.phase = state.next_move = "diagnose"
         state.guided_targets = []
