@@ -81,10 +81,38 @@ async def recovery_probe(two_failures=False):
             progress = await ContextAssembler(db)._load_persisted_session_progress(action(welcome=True))
         runner = AdaptiveSession(teacher)
         if two_failures:
-            failed = await runner.run(ctx, progress, retry(failed))
+            # The second exhausted authoring request now intentionally
+            # presents an ungraded recap. Do not probe a third provider call
+            # or label an offline step as successful model recovery.
+            calls_before = teacher.turn.await_count
+            offline = await runner.run(ctx, progress, retry(failed))
             state = GuidedState.model_validate(progress["guided_state"])
-            require(state.recovery_attempts == 2 and state.next_move == original_move,
-                    "First Retry did not preserve the requested move")
+            require(state.recovery_attempts == 2 and state.offline_step,
+                    "Second authoring failure did not offer an offline recap")
+            require(state.outbox == evidence and not state.completed,
+                    "Offline recap altered learner evidence or completion")
+            require(any(c.component_id == "classroom-recovery/offline" for c in offline.components),
+                    "Offline recap was not displayed")
+            require(teacher.turn.await_count == calls_before + 1,
+                    "Offline recap made unexpected extra authoring calls")
+            require(await runner.run(ctx, progress, submission) == offline,
+                    "Duplicate answer changed the offline scene")
+            continue_button = next(c for c in offline.components if isinstance(c, CTAButton)
+                                   and c.action_intent == ActionIntent.CONTINUE)
+            summary = await runner.run(ctx, progress,
+                                       action(ActionIntent.CONTINUE, continue_button.component_id))
+            state = GuidedState.model_validate(progress["guided_state"])
+            require(state.unit_done and not state.offline_step and state.skipped == [0]
+                    and not state.completed and state.outbox == evidence,
+                    "Ungraded recap did not safely preserve practice for later")
+            require(teacher.turn.await_count == calls_before + 1,
+                    "Continuing the offline recap called an exhausted provider")
+            Scene.model_validate_json(summary.model_dump_json())
+            return {"case": "provider_exhaustion_offline", "passed": True,
+                    "original_move": original_move, "recovered_move": "offline_recap",
+                    "evidence_preserved": True, "database_reload": True,
+                    "duplicate_answer_ignored": True, "provider_verified": False,
+                    "calls": [], "scene": offline.model_dump(mode="json")}
 
         calls = []
         original_completion = ai_resilience_manager.chat_completion
@@ -188,7 +216,7 @@ async def run(output, contracts=True):
         try:
             REPORT["recovery"].append(await recovery_probe(two))
         except Exception as exc:
-            REPORT["recovery"].append({"case": "second_retry_reteaches" if two else "first_retry_escalates",
+            REPORT["recovery"].append({"case": "provider_exhaustion_offline" if two else "first_retry_escalates",
                                        "passed": False, "error": safe_error(exc)})
         Path(output).write_text(json.dumps(REPORT, indent=2))
         print("CLASSROOM_VALIDATION " + json.dumps({"recovery": REPORT["recovery"][-1] | {"scene": None}}), flush=True)
