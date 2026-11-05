@@ -863,6 +863,69 @@ LOOSE_JSON = {"type": "json_object"}
 ESCALATION_PROVIDER = "gemini-3.8-flash"
 
 
+def parse_model_json_object(raw: str) -> dict[str, Any]:
+    """Decode a single provider JSON object without inventing missing content.
+
+    Loose JSON providers occasionally prepend a code fence, append commentary,
+    leave a trailing comma, or emit an unescaped LaTeX backslash. These are
+    syntactic problems, not reasons to spend another model call or strand a
+    learner. The schema still validates every recovered field afterward.
+    Truncated objects and non-object envelopes always remain errors.
+    """
+    start = raw.find("{")
+    if start < 0:
+        raise ValueError("Missing JSON object")
+    decoder = json.JSONDecoder()
+    try:
+        parsed, _ = decoder.raw_decode(raw[start:])
+    except json.JSONDecodeError:
+        source = raw[start:]
+        chars: list[str] = []
+        quoted = False
+        index = 0
+        latex = ("frac", "sqrt", "times", "theta", "left", "right",
+                 "begin", "end", "alpha", "beta", "pi", "sum", "cdot",
+                 "over", "mathrm", "text")
+        while index < len(source):
+            char = source[index]
+            if char == '"':
+                # An escaped quote is already consumed as a two-character
+                # escape in the branch below.
+                quoted = not quoted
+                chars.append(char)
+                index += 1
+                continue
+            if quoted and char == "\\" and index + 1 < len(source):
+                following = source[index + 1]
+                is_latex = following in "()[],%_" or any(source.startswith(name, index + 1) for name in latex)
+                if is_latex or following not in '\\"/bfnrtu':
+                    chars.append("\\\\")
+                    index += 1
+                    continue
+                chars.append(source[index:index + 2])
+                index += 2
+                continue
+            if quoted and char in "\r\n":
+                chars.append("\\n")
+                if char == "\r" and source[index + 1:index + 2] == "\n":
+                    index += 1
+                index += 1
+                continue
+            if not quoted and char == ",":
+                next_index = index + 1
+                while next_index < len(source) and source[next_index].isspace():
+                    next_index += 1
+                if next_index < len(source) and source[next_index] in "}]":
+                    index += 1
+                    continue
+            chars.append(char)
+            index += 1
+        parsed, _ = decoder.raw_decode("".join(chars))
+    if not isinstance(parsed, dict):
+        raise ValueError("Provider response must be a JSON object")
+    return parsed
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -930,7 +993,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else
                   900 if schema is Evaluation else 2000)
     timeout = (100 if issubclass(schema, UnitPackage) else
-               30 if schema is Evaluation else 45)
+               30 if schema is Evaluation else 35)
 
     async def call(response_format):
         return await asyncio.wait_for(
@@ -981,10 +1044,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
             # resilience layer skipped/fell through earlier providers.
             payload["_rejected_provider"] = responding_provider
         raw = (result.get("content") or "").strip()
-        first, last = raw.find("{"), raw.rfind("}")
-        if first < 0 or last <= first:
-            raise TeachingUnavailable("Missing structured response")
-        response = schema.model_validate_json(raw[first:last + 1])
+        response = schema.model_validate(parse_model_json_object(raw))
         outcome = "success"
         return response
     except ValidationError:

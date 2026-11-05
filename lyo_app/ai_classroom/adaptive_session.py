@@ -1473,7 +1473,14 @@ class AdaptiveSession:
         example_content = content + "\n\n" + visual.description if visual else content
         separate_description = len(example_content) > 1500
         components = [
-            ProgressBar(current=len(state.completed), total=len(state.plan.units), label=self.stage(context, state), priority=0),
+            ProgressBar(
+                current=len(state.completed), total=len(state.plan.units),
+                label=(f"{self.copy(context, 'Skill', 'Habilidad')} "
+                       f"{(state.active_review_index if state.active_review_index is not None else state.unit_index) + 1} "
+                       f"{self.copy(context, 'of', 'de')} {len(state.plan.units)} · "
+                       f"{self.stage(context, state)}"),
+                priority=0,
+            ),
             TeacherMessage(text=speech, language_code=context.language_code,
                            presentation_role="narration",
                             concept_tags=[state.plan.units[state.active_review_index].title
