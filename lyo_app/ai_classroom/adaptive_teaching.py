@@ -941,6 +941,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 temperature=0.1 if schema is Evaluation else 0.6,
                 response_format=response_format,
                 use_cache=False,
+                classroom_trial_budget=True,
             ),
             timeout=timeout,
         )

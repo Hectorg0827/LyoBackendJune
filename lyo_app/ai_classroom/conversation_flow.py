@@ -497,6 +497,7 @@ class ConversationManager:
                 messages=messages,
                 temperature=0.7,
                 max_tokens=1500,
+                classroom_trial_budget=True,
                 provider_order=["gpt-4o-mini", "gpt-4o", "gemini-3.8-flash", "gemini-3.8-flash"]
             )
             
@@ -992,7 +993,8 @@ async def _ai_chat_handler(message: str, context: List[Dict], user_context: str 
         response = await ai_resilience_manager.chat_completion(
             messages=messages,
             temperature=0.7,
-            max_tokens=1500
+            max_tokens=1500,
+            classroom_trial_budget=True,
         )
         
         # Support both 'content' and 'response' keys for fallback compatibility

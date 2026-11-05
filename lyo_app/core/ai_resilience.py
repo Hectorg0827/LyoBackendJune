@@ -710,6 +710,10 @@ class AIResilienceManager:
         **kwargs
     ) -> Dict[str, Any]:
         """Get chat completion with fallback across providers."""
+        # Only Classroom opt-ins are subject to the separate, staging-only
+        # trial. Ordinary chat, streaming voice and all existing callers retain
+        # their normal provider behaviour.
+        classroom_trial = kwargs.pop("classroom_trial_budget", False) is True
         # Lazy initialization if lifespan failed
         if not self._initialized:
             print(f">>> [PID {os.getpid()}] AI Resilience: Triggering Lazy Init", flush=True)
@@ -773,7 +777,14 @@ class AIResilienceManager:
             if not cb.is_closed:
                 print(f">>> [PID {os.getpid()}]   ⏸️ Circuit breaker OPEN for {model_name}, skipping", flush=True)
                 continue
+            if classroom_trial and (not model.api_key or (model.endpoint == "openai" and not self.openai_client)):
+                # No provider network request will be sent: do not waste trial
+                # dollars on a key or client that is demonstrably absent.
+                continue
             try:
+                if classroom_trial:
+                    from lyo_app.ai_classroom.trial_budget import reserve_classroom_attempt
+                    await reserve_classroom_attempt(model_name, messages, max_tokens, response_format)
                 provider_started = time.time()
                 print(f">>> [PID {os.getpid()}]   🔄 Attempting {model_name}...", flush=True)
                 if model.endpoint == "openai":
@@ -827,6 +838,11 @@ class AIResilienceManager:
                     pass
                 return result
             except Exception as e:
+                from lyo_app.ai_classroom.trial_budget import ClassroomTrialBudgetExceeded
+                if isinstance(e, ClassroomTrialBudgetExceeded):
+                    # This is an approval boundary, not an unhealthy provider.
+                    # Never try a second provider after the $10 guard denies.
+                    raise
                 print(f">>> [PID {os.getpid()}]   ❌ Error calling {model_name}: {type(e).__name__}: {str(e)[:100]}", flush=True)
                 logger.error(f"Error calling {model_name}: {e}")
                 last_exception = e

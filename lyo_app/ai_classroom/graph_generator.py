@@ -911,6 +911,7 @@ Generate only the transition script.
             response = await self.ai_manager.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,
+                classroom_trial_budget=True,
                 temperature=0.7
             )
             
@@ -935,6 +936,7 @@ Generate only the transition script.
             response = await self.ai_manager.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
+                classroom_trial_budget=True,
                 temperature=0.8
             )
             
