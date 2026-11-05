@@ -22,7 +22,7 @@ from lyo_app.learning.schemas import (
 from lyo_app.learning.service import LearningService
 from lyo_app.learning.proofs import ProofEngine
 from lyo_app.core.database import get_db
-from lyo_app.auth.dependencies import get_current_user
+from lyo_app.auth.dependencies import get_current_user, get_current_user_or_guest
 from lyo_app.models.enhanced import User
 
 logger = logging.getLogger(__name__)
@@ -74,97 +74,99 @@ async def get_my_proofs(
 @router.post("/courses", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_course(
     course_data: _IosCourseCreate,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Dict[str, Any]:
-    """
-    Create a new course — accepts the iOS app flexible payload.
-    Tries a DB insert but catches errors gracefully so iOS always gets a 201.
-    """
-    try:
-        course_id = str(course_data.id or uuid.uuid4())
-        topic = course_data.topic or course_data.subject or course_data.title or "Course"
-        title = course_data.title or f"Introduction to {topic}"
-        difficulty = (
-            course_data.difficulty_level or course_data.difficulty or
-            course_data.level or "beginner"
-        )
-        now = datetime.now(timezone.utc).isoformat()
+    """Persist the course and every supplied lesson in one database transaction.
 
-        modules = []
-        for mod in (course_data.modules or []):
-            lessons = []
-            for les in (mod.lessons or []):
-                lessons.append({
-                    "id": les.id or str(uuid.uuid4()),
-                    "title": les.title or "Lesson",
-                    "duration": les.duration or "10 min",
-                    "duration_minutes": les.duration_minutes or 10,
-                    "content": les.content or ""
-                })
-            modules.append({
+    A failed commit must not return 201 or an invented local/UUID course ID.
+    The authenticated principal, not the client's instructor_id, owns it.
+    """
+    import math
+    from sqlalchemy.exc import SQLAlchemyError
+    from lyo_app.learning.models import Course, Lesson
+
+    topic = course_data.topic or course_data.subject or course_data.title or "Course"
+    title = course_data.title or f"Introduction to {topic}"
+    difficulty = (
+        course_data.difficulty_level or course_data.difficulty or
+        course_data.level or "beginner"
+    ).lower()
+    if difficulty not in {"beginner", "intermediate", "advanced"}:
+        raise HTTPException(status_code=422, detail="Unsupported course difficulty")
+    description = course_data.description or f"A structured course on {topic}"
+
+    # Keep lessons in course order and save module boundaries alongside them.
+    # UUIDs supplied by offline clients are not database identities.
+    modules = []
+    try:
+        course = Course(
+            title=title, description=description, topic=topic,
+            difficulty_level=difficulty, instructor_id=current_user.id,
+            status="draft", is_published=False,
+            estimated_duration_hours=max(1, math.ceil(course_data.estimated_hours or 1)),
+        )
+        db.add(course)
+        await db.flush()
+        order = 0
+        for mod in course_data.modules or []:
+            module = {
                 "id": mod.id or str(uuid.uuid4()),
                 "title": mod.title or "Module",
                 "description": mod.description or "",
-                "lessons": lessons
-            })
+                "lessons": [],
+            }
+            for les in mod.lessons or []:
+                order += 1
+                lesson = Lesson(
+                    title=les.title or "Lesson",
+                    content=les.content or "",
+                    content_type="text", course_id=course.id,
+                    order_index=order,
+                    duration_minutes=les.duration_minutes or 10,
+                    is_published=False,
+                )
+                db.add(lesson)
+                await db.flush()
+                module["lessons"].append({
+                    "id": str(lesson.id),
+                    "title": lesson.title,
+                    "duration": les.duration or f"{lesson.duration_minutes} min",
+                    "duration_minutes": lesson.duration_minutes,
+                    "content": lesson.content or "",
+                })
+            modules.append(module)
+        course.generation_metadata = {"modules": modules}
+        # All generated IDs and timestamps exist after flush. Do not issue a
+        # fallible read after a successful commit and then claim nothing saved.
+        saved_id = course.id
+        created_at = course.created_at.isoformat()
+        updated_at = course.updated_at.isoformat()
+        saved_hours = course.estimated_duration_hours
+        await db.commit()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        logger.error("Course persistence failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Course was not saved. Please retry; no course was created.",
+        ) from exc
 
-        # Normalise instructor_id — iOS sends a UUID string, DB expects int
-        raw_iid = course_data.instructor_id
-        instructor_id_db: Optional[int] = None
-        if raw_iid is not None:
-            try:
-                instructor_id_db = int(raw_iid)
-            except (ValueError, TypeError):
-                instructor_id_db = None  # leave null — non-fatal
-
-        # Try Cloud SQL; skip on error
-        try:
-            legacy_schema = CourseCreate(
-                title=title,
-                description=course_data.description or f"A structured course on {topic}",
-                subject=topic,
-                difficulty_level=difficulty,
-                instructor_id=instructor_id_db if instructor_id_db is not None else 0
-            )
-            db_course = await learning_service.create_course(db, legacy_schema)
-            course_id = str(db_course.id)
-            logger.info(f"✅ Course saved to Cloud SQL: {course_id}")
-        except Exception as db_err:
-            logger.warning(f"⚠️  Cloud SQL insert skipped (non-fatal): {db_err}")
-            await db.rollback()
-
-        record = {
-            "id": course_id,
-            "title": title,
-            "topic": topic,
-            "description": course_data.description or f"A structured course on {topic}",
-            "difficulty": difficulty,
-            "difficulty_level": difficulty,
-            "modules": modules or None,
-            "instructor_id": str(course_data.instructor_id) if course_data.instructor_id else None,
-            "is_published": False,
-            "created_at": now,
-            "updated_at": now,
-            "learning_objectives": [
-                f"Understand the fundamentals of {topic}",
-                f"Apply {topic} concepts in practice",
-            ],
-            "estimated_hours": course_data.estimated_hours or max(len(modules) * 0.5, 1),
-        }
-        logger.info(f"📚 Course persisted: '{title}'")
-        return record
-
-    except Exception as e:
-        logger.error(f"create_course error: {e}", exc_info=True)
-        return {
-            "id": str(course_data.id or uuid.uuid4()),
-            "title": course_data.title or "Generated Course",
-            "topic": course_data.topic or "Course",
-            "status": "saved_locally",
-            "message": "Course saved (cloud sync pending)",
-        }
-
-
+    logger.info("Persisted course %s with %s lessons for user %s", saved_id, order, current_user.id)
+    return {
+        "id": str(saved_id), "title": title, "topic": topic,
+        "description": description, "difficulty": difficulty,
+        "difficulty_level": difficulty, "modules": modules or None,
+        "instructor_id": str(current_user.id), "is_published": False,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "learning_objectives": [
+            f"Understand the fundamentals of {topic}",
+            f"Apply {topic} concepts in practice",
+        ],
+        "estimated_hours": saved_hours,
+        "lesson_count": order,
+    }
 
 
 @router.get("/courses", response_model=List[CourseRead])
@@ -188,10 +190,36 @@ async def get_published_courses(
     return [CourseRead.model_validate(course) for course in courses]
 
 
+@router.get("/courses/mine", response_model=List[CourseRead])
+async def get_my_courses(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> List[CourseRead]:
+    """Show a learner's saved drafts, including generated lessons."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from lyo_app.learning.models import Course
+
+    result = await db.execute(
+        select(Course)
+        .where(Course.instructor_id == current_user.id)
+        .options(selectinload(Course.lessons))
+        .order_by(Course.created_at.desc())
+        .limit(100)
+    )
+    return [
+        CourseRead.model_validate(course).model_copy(
+            update={"lesson_count": len(course.lessons)}
+        )
+        for course in result.scalars().all()
+    ]
+
+
 @router.get("/courses/{course_id}", response_model=CourseRead)
 async def get_course(
     course_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user_or_guest)],
 ) -> CourseRead:
     """
     Get course by ID.
@@ -212,13 +240,22 @@ async def get_course(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Course not found"
         )
-    return CourseRead.model_validate(course)
+    # Unpublished learner work must not be readable by guessing integer IDs.
+    if not course.is_published and course.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return CourseRead.model_validate(course).model_copy(
+        update={
+            "lesson_count": len(course.lessons),
+            "modules": (course.generation_metadata or {}).get("modules"),
+        }
+    )
 
 
 @router.post("/courses/{course_id}/publish", response_model=CourseRead)
 async def publish_course(
     course_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> CourseRead:
     """
     Publish a course (make it available for enrollment).
@@ -233,6 +270,9 @@ async def publish_course(
     Raises:
         HTTPException: If course not found
     """
+    existing = await learning_service.get_course_by_id(db, course_id)
+    if existing is None or existing.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Course not found")
     try:
         course = await learning_service.publish_course(db, course_id)
         return CourseRead.model_validate(course)
@@ -246,7 +286,8 @@ async def publish_course(
 @router.get("/instructors/{instructor_id}/courses", response_model=List[CourseRead])
 async def get_instructor_courses(
     instructor_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user_or_guest)],
 ) -> List[CourseRead]:
     """
     Get all courses by instructor ID.
@@ -259,13 +300,16 @@ async def get_instructor_courses(
         List of courses by the instructor
     """
     courses = await learning_service.get_courses_by_instructor(db, instructor_id)
+    if current_user.id != instructor_id:
+        courses = [course for course in courses if course.is_published]
     return [CourseRead.model_validate(course) for course in courses]
 
 
 @router.post("/lessons", response_model=LessonRead, status_code=status.HTTP_201_CREATED)
 async def create_lesson(
     lesson_data: LessonCreate,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> LessonRead:
     """
     Create a new lesson.
@@ -280,6 +324,9 @@ async def create_lesson(
     Raises:
         HTTPException: If creation fails
     """
+    course = await learning_service.get_course_by_id(db, lesson_data.course_id)
+    if course is None or course.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Course not found")
     try:
         lesson = await learning_service.create_lesson(db, lesson_data)
         return LessonRead.model_validate(lesson)
@@ -293,7 +340,8 @@ async def create_lesson(
 @router.get("/courses/{course_id}/lessons", response_model=List[LessonRead])
 async def get_course_lessons(
     course_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user_or_guest)],
 ) -> List[LessonRead]:
     """
     Get all lessons for a course.
@@ -305,6 +353,9 @@ async def get_course_lessons(
     Returns:
         List of lessons ordered by order_index
     """
+    course = await learning_service.get_course_by_id(db, course_id)
+    if course is None or (not course.is_published and course.instructor_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Course not found")
     lessons = await learning_service.get_lessons_by_course(db, course_id)
     return [LessonRead.model_validate(lesson) for lesson in lessons]
 
@@ -312,7 +363,8 @@ async def get_course_lessons(
 @router.post("/lessons/{lesson_id}/publish", response_model=LessonRead)
 async def publish_lesson(
     lesson_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> LessonRead:
     """
     Publish a lesson (make it available for students).
@@ -327,6 +379,14 @@ async def publish_lesson(
     Raises:
         HTTPException: If lesson not found
     """
+    from sqlalchemy import select
+    from lyo_app.learning.models import Lesson
+    existing = (await db.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    course = await learning_service.get_course_by_id(db, existing.course_id)
+    if course is None or course.instructor_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Lesson not found")
     try:
         lesson = await learning_service.publish_lesson(db, lesson_id)
         return LessonRead.model_validate(lesson)

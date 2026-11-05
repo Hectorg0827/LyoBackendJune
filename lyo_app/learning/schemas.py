@@ -74,6 +74,7 @@ class CourseRead(CourseBase):
     created_at: datetime = Field(..., description="Course creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     lesson_count: Optional[int] = Field(None, description="Number of lessons in course")
+    modules: Optional[List[dict]] = Field(None, description="Generated syllabus with saved lesson IDs")
     enrollment_count: Optional[int] = Field(None, description="Number of enrolled students")
 
 

@@ -113,97 +113,21 @@ class IosCourseCreateRequest(BaseModel):
 async def create_course(
     request: IosCourseCreateRequest,
     current_user: User = Depends(require_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
+    """Legacy /courses alias for the atomic /learning/courses writer.
+
+    Both public entrypoints must return one persisted integer course identity,
+    never a locally invented ID or a success response after a failed commit.
     """
-    Create/persist a generated course from the iOS app.
+    from lyo_app.learning.routes import _IosCourseCreate, create_course as persist_course
 
-    Accepts the flexible iOS payload (id, title, topic, modules, level,
-    difficulty_level, instructor_id).  Tries to persist to Cloud SQL but
-    catches database errors gracefully and always returns 200 so the
-    classroom can launch.
-    """
-    try:
-        course_id = request.id or f"gen_{uuid.uuid4()}"
-        topic = request.topic or request.subject or request.title or "Course"
-        title = request.title or f"Introduction to {topic}"
-        difficulty = request.difficulty_level or request.difficulty or request.level or "beginner"
-        now = datetime.now(timezone.utc).isoformat()
-
-        modules = []
-        for mod in (request.modules or []):
-            lessons = []
-            for les in (mod.lessons or []):
-                lessons.append({
-                    "id": les.id or str(uuid.uuid4()),
-                    "title": les.title or "Lesson",
-                    "duration": les.duration or "10 min",
-                    "duration_minutes": les.duration_minutes or 10,
-                    "content": les.content or ""
-                })
-            modules.append({
-                "id": mod.id or str(uuid.uuid4()),
-                "title": mod.title or "Module",
-                "description": mod.description or "",
-                "lessons": lessons
-            })
-
-        course_record: Dict[str, Any] = {
-            "id": course_id,
-            "title": title,
-            "topic": topic,
-            "description": request.description or f"A structured course to learn {topic}",
-            "difficulty": difficulty,
-            "difficulty_level": difficulty,
-            "modules": modules or None,
-            "user_id": str(current_user.id),
-            "instructor_id": request.instructor_id or str(current_user.id),
-            "is_published": False,
-            "created_at": now,
-            "updated_at": now,
-            "learning_objectives": [
-                f"Understand the fundamentals of {topic}",
-                f"Apply {topic} concepts in practice",
-            ],
-            "prerequisites": None,
-            "estimated_hours": request.estimated_hours or max(len(modules) * 0.5, 1),
-        }
-
-        # Try Cloud SQL — non-fatal if the DB schema is incompatible
-        try:
-            db_course = Course(
-                title=title,
-                description=course_record["description"],
-                subject=topic,
-                difficulty_level=difficulty,
-                estimated_duration_hours=int(course_record["estimated_hours"]),
-                creator_id=current_user.id,
-                learning_objectives=course_record["learning_objectives"],
-                prerequisites=[],
-            )
-            db.add(db_course)
-            await db.commit()
-            await db.refresh(db_course)
-            course_record["id"] = str(db_course.id)
-            logger.info(f"✅ Course persisted to Cloud SQL: {course_record['id']}")
-        except Exception as db_err:
-            logger.warning(f"⚠️  Cloud SQL persist skipped (non-fatal): {db_err}")
-            await db.rollback()
-            # Still return 200 — iOS will use the in-memory record
-
-        logger.info(f"📚 Course upserted: '{title}' for user {current_user.id}")
-        return course_record
-
-    except Exception as e:
-        logger.error(f"Course create error: {e}", exc_info=True)
-        # Last-resort fallback: return minimal 200 so iOS isn't blocked
-        return {
-            "id": request.id or f"local_{uuid.uuid4().hex[:8]}",
-            "title": request.title or "Generated Course",
-            "topic": request.topic or "Course",
-            "status": "saved_locally",
-            "message": "Course saved (cloud sync pending)",
-        }
+    saved = await persist_course(
+        _IosCourseCreate.model_validate(request.model_dump()),
+        db=db,
+        current_user=current_user,
+    )
+    return {**saved, "user_id": str(current_user.id), "prerequisites": []}
 
 
 @router.post("/generate", response_model=CourseGenerationResponse)
