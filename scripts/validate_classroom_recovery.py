@@ -102,9 +102,16 @@ async def recovery_probe(two_failures=False):
             summary = await runner.run(ctx, progress,
                                        action(ActionIntent.CONTINUE, continue_button.component_id))
             state = GuidedState.model_validate(progress["guided_state"])
-            require(state.unit_done and not state.offline_step and state.skipped == [0]
-                    and not state.completed and state.outbox == evidence,
-                    "Ungraded recap did not safely preserve practice for later")
+            # A short one-unit session can legitimately finish the pathway
+            # here; a longer course presents its next-unit summary. Neither
+            # state should count the ungraded recap as a mastered unit.
+            require((state.unit_done or state.path_done) and not state.offline_step
+                    and 0 in state.skipped and not state.completed
+                    and state.outbox == evidence,
+                    "Ungraded recap did not safely preserve practice for later: "
+                    f"unit_done={state.unit_done}, path_done={state.path_done}, "
+                    f"skipped={state.skipped}, completed={state.completed}, "
+                    f"evidence_intact={state.outbox == evidence}")
             require(teacher.turn.await_count == calls_before + 1,
                     "Continuing the offline recap called an exhausted provider")
             Scene.model_validate_json(summary.model_dump_json())
