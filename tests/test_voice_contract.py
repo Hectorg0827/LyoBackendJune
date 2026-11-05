@@ -138,6 +138,38 @@ async def test_typed_voice_replay_emits_readiness(harness):
 
 
 @pytest.mark.asyncio
+async def test_segment_delivery_reports_turn_identity_and_server_voice_latency(harness):
+    harness.finish.set()
+    response = await harness.response(
+        state_summary={},
+        voice_session={
+            "active": True,
+            "delivery": "segments",
+            "turn_id": "voice-observability-turn",
+        },
+    )
+    events = [event_payload(c) async for c in response.body_iterator]
+    segments = [e for e in events if e["type"] == "voice_text_segment"]
+
+    assert len(segments) >= 2
+    assert [segment["sequence"] for segment in segments] == list(
+        range(1, len(segments) + 1)
+    )
+    assert all(
+        segment["turn_id"] == "voice-observability-turn"
+        for segment in segments
+    )
+    assert all(
+        isinstance(segment["server_elapsed_ms"], int)
+        and segment["server_elapsed_ms"] >= 0
+        for segment in segments
+    )
+    assert [
+        segment["server_elapsed_ms"] for segment in segments
+    ] == sorted(segment["server_elapsed_ms"] for segment in segments)
+
+
+@pytest.mark.asyncio
 async def test_both_routes_pass_typed_voice_through_existing_delivery_contract(harness, monkeypatch):
     captured = []
 
