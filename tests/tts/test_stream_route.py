@@ -1,11 +1,13 @@
 from unittest.mock import AsyncMock
+import logging
 import pytest
 from fastapi import HTTPException
 from lyo_app.tts import routes
 from lyo_app.tts.service import TTSUnavailableError
 
 @pytest.mark.asyncio
-async def test_route_primes_only_first_chunk_and_preserves_locale(monkeypatch):
+async def test_route_primes_only_first_chunk_and_preserves_locale(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger='lyo_app.tts.routes')
     events = []
     class Service:
         async def synthesize_streaming(self, **kwargs):
@@ -23,6 +25,8 @@ async def test_route_primes_only_first_chunk_and_preserves_locale(monkeypatch):
     assert response.headers['x-accel-buffering'] == 'no'
     assert b''.join([part async for part in response.body_iterator]) == b'firstlast'
     assert events == ['first', 'last', 'closed']
+    assert 'Classroom TTS first audio bytes' in caplog.text
+    assert 'Classroom TTS stream completed' in caplog.text
 
 @pytest.mark.asyncio
 async def test_provider_error_before_first_byte_keeps_http_error_status(monkeypatch):
@@ -36,7 +40,8 @@ async def test_provider_error_before_first_byte_keeps_http_error_status(monkeypa
     assert error.value.status_code == 503
 
 @pytest.mark.asyncio
-async def test_closed_response_releases_provider_stream(monkeypatch):
+async def test_closed_response_releases_provider_stream(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger='lyo_app.tts.routes')
     closed = []
     class Service:
         async def synthesize_streaming(self, **kwargs):
@@ -50,3 +55,4 @@ async def test_closed_response_releases_provider_stream(monkeypatch):
     assert await anext(response.body_iterator) == b'first'
     await response.body_iterator.aclose()
     assert closed == [True]
+    assert 'Classroom TTS stream interrupted' in caplog.text

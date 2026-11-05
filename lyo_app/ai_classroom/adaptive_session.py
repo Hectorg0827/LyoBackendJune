@@ -1452,6 +1452,19 @@ class AdaptiveSession:
         return scene
 
     def stage(self, context, state):
+        # A multi-target unit used to show the exact same "Finish this step"
+        # heading for every component. The learner could correctly finish
+        # several different parts yet reasonably think the lesson had looped.
+        # Expose *practice* position without misreporting unit mastery; the
+        # canonical ProgressBar still advances only on independent evidence.
+        if state.phase == "faded" and len(state.unit.targets) > 1:
+            step = min(state.target_index + 1, len(state.unit.targets))
+            total = len(state.unit.targets)
+            return self.copy(
+                context,
+                f"Finish part {step} of {total}",
+                f"Completa la parte {step} de {total}",
+            )
         return self.copy(context, {
             "diagnose": "Where you're starting",
             "orient": "Our goal", "model": "Watch me", "guided": "Let's do it together",

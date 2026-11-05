@@ -17,6 +17,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -665,17 +666,35 @@ class TTSService:
                     payload["stream"] = True
                 if not self._session:
                     raise TTSUnavailableError("TTS HTTP session is not initialized")
+                upstream_started_at = time.monotonic()
                 async with self._session.post(url, json=payload, headers=headers) as response:
                     if response.status != 200:
                         raise RuntimeError(f"TTS provider returned {response.status}")
+                    logger.info(
+                        "TTS upstream headers in %.0fms provider=%s",
+                        (time.monotonic() - upstream_started_at) * 1000,
+                        resolved.provider,
+                    )
                     chunks = []
                     async for chunk in response.content.iter_chunked(chunk_size):
                         if chunk:
+                            if not chunks:
+                                logger.info(
+                                    "TTS upstream first bytes in %.0fms provider=%s",
+                                    (time.monotonic() - upstream_started_at) * 1000,
+                                    resolved.provider,
+                                )
                             chunks.append(chunk)
                             yield chunk
                     if not chunks:
                         raise RuntimeError("TTS provider returned empty audio")
                     self._cache_audio(key, format, b"".join(chunks))
+                    logger.info(
+                        "TTS upstream complete in %.0fms provider=%s bytes=%s",
+                        (time.monotonic() - upstream_started_at) * 1000,
+                        resolved.provider,
+                        sum(map(len, chunks)),
+                    )
         # Serving existing bytes is not rendering. Release the lock before
         # yielding so a slow downloader cannot block other cached clients.
         if cached is not None:

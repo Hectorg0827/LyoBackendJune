@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import time
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
@@ -218,6 +219,7 @@ async def synthesize_stream(
 ):
     """Return the first provider audio bytes without waiting for the recording."""
     stream = None
+    started_at = time.monotonic()
     try:
         service = await get_tts_service()
         stream = service.synthesize_streaming(
@@ -230,6 +232,11 @@ async def synthesize_stream(
         # still produce an actionable HTTP error. Later failures close the
         # stream and never cache a partial recording.
         first = await anext(stream)
+        logger.info(
+            "Classroom TTS first audio bytes in %.0fms (%s bytes)",
+            (time.monotonic() - started_at) * 1000,
+            len(first),
+        )
     except asyncio.CancelledError:
         if stream is not None:
             await stream.aclose()
@@ -245,12 +252,23 @@ async def synthesize_stream(
         raise HTTPException(status_code=502, detail="Speech provider failed")
 
     async def audio_chunks():
+        total_bytes = 0
+        completed = False
         try:
+            total_bytes += len(first)
             yield first
             async for chunk in stream:
+                total_bytes += len(chunk)
                 yield chunk
+            completed = True
         finally:
             await stream.aclose()
+            logger.info(
+                "Classroom TTS stream %s after %.0fms (%s bytes)",
+                "completed" if completed else "interrupted",
+                (time.monotonic() - started_at) * 1000,
+                total_bytes,
+            )
 
     media_type = {
         "mp3": "audio/mpeg", "opus": "audio/opus", "aac": "audio/aac",

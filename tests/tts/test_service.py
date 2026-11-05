@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+import logging
 
 import pytest
 
@@ -116,7 +117,8 @@ async def test_cache_separates_languages(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_first_audio_precedes_provider_completion_and_native_reuses_cache(tmp_path):
+async def test_first_audio_precedes_provider_completion_and_native_reuses_cache(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger='lyo_app.tts.service')
     import asyncio
     from aiohttp import web
     finish = asyncio.Event()
@@ -152,6 +154,8 @@ async def test_first_audio_precedes_provider_completion_and_native_reuses_cache(
         assert calls[0]['voice'] == 'ef_dora'
         assert calls[0]['stream'] is True
         assert not service._key_locks
+        assert 'TTS upstream first bytes' in caplog.text
+        assert 'TTS upstream complete' in caplog.text
     finally:
         finish.set()
         await stream.aclose()
