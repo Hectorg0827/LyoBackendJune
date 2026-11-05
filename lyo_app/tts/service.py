@@ -658,6 +658,11 @@ class TTSService:
                     "voice": resolved.provider_voice, "response_format": format,
                     "speed": speed,
                 }
+                if resolved.provider == "kokoro":
+                    # Kokoro-FastAPI supports native sentence-chunked output.
+                    # Explicitly opt in so the proxy never waits for a complete
+                    # recording if an image version changes its default.
+                    payload["stream"] = True
                 if not self._session:
                     raise TTSUnavailableError("TTS HTTP session is not initialized")
                 async with self._session.post(url, json=payload, headers=headers) as response:

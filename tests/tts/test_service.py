@@ -150,6 +150,7 @@ async def test_first_audio_precedes_provider_completion_and_native_reuses_cache(
         assert await native == b'firstlast'
         assert len(calls) == 1
         assert calls[0]['voice'] == 'ef_dora'
+        assert calls[0]['stream'] is True
         assert not service._key_locks
     finally:
         finish.set()
