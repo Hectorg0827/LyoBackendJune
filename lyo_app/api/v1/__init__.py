@@ -151,20 +151,10 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ WebSocket router not loaded: {e}")
 
-try:
-    from .feeds import router as feeds_router
-    api_router.include_router(feeds_router, prefix="/feeds", tags=["Feeds"])
-    logger.info("✅ Feeds router loaded")
-except Exception as e:
-    logger.warning(f"⚠️ Feeds router not loaded: {e}")
-
-try:
-    from .gamification import router as gamification_router
-    api_router.include_router(gamification_router, prefix="/gamification", tags=["Gamification"])
-    logger.info("✅ Gamification router loaded")
-except Exception as e:
-    logger.warning(f"⚠️ Gamification router not loaded: {e}")
-
+# Feed and gamification are mounted by enhanced_main from their current
+# routers. Do not probe the retired api/v1 wrappers here: those wrappers still
+# depend on deleted Celery task modules and only produce misleading boot
+# warnings. Keeping a single mount also avoids route-order ambiguity.
 try:
     from .push import router as push_router
     api_router.include_router(push_router, prefix="/push", tags=["Push Notifications"])
