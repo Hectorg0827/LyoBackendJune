@@ -8,10 +8,16 @@ import sys
 from typing import Any, Dict
 
 from .config import settings
+from .log_redaction import install_log_redaction
+
+
+# Install at import time, before application startup logs or WS handshakes.
+install_log_redaction()
 
 
 def setup_logging() -> None:
     """Configure structured logging for the application."""
+    install_log_redaction()
     
     # Configure the root logger
     logging.basicConfig(
