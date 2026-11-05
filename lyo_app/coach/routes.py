@@ -143,3 +143,8 @@ async def today(
     view = await _require_evidence(build_today_view(db, current_user.id))
     await db.commit()
     return view
+
+
+# Journey continuity is an additive navigation API, not a second tutor.
+from .journeys import router as journey_router  # noqa: E402
+router.include_router(journey_router, prefix="/journeys")
