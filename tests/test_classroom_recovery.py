@@ -163,6 +163,7 @@ async def test_exhausted_providers_offer_an_ungraded_way_forward_without_retry_l
     teacher.plan.side_effect = None
     teacher.plan.return_value = plan(2)
     runner, progress, ctx, _ = await final_example(teacher)
+    initial_turns = teacher.turn.await_count
     teacher.turn.side_effect = TeachingUnavailable("rate limited or invalid task")
 
     failed = await runner.run(ctx, progress, action(component_id=current(progress).step_id))
@@ -178,13 +179,13 @@ async def test_exhausted_providers_offer_an_ungraded_way_forward_without_retry_l
 
     # There is no third model call for the same failed guided task. The
     # learner advances only by pressing this recap's actual Continue ID.
-    assert teacher.turn.await_count == 2
+    assert teacher.turn.await_count == initial_turns + 2
     recap_step_id = current(progress).step_id
     summary = await runner.run(ctx, progress, action(ActionIntent.CONTINUE, recap_step_id))
     assert current(progress).skipped == [0]
     assert current(progress).completed == []
     assert current(progress).unit_done and not current(progress).offline_step
-    assert teacher.turn.await_count == 2
+    assert teacher.turn.await_count == initial_turns + 2
     assert not any(c.component_id == "classroom-recovery/notice" for c in summary.components)
 
     # Double taps and delayed actions cannot silently move another unit.
