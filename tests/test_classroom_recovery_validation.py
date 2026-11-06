@@ -33,7 +33,9 @@ async def test_recovery_probe_drives_real_persistence_and_retry_code(monkeypatch
     monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", simulated_completion)
     result = await recovery_probe(two_failures)
     assert result["passed"] and result["database_reload"] and result["evidence_preserved"]
-    assert result["recovered_move"] == ("reteach" if two_failures else "explain")
+    assert result["recovered_move"] == ("offline_recap" if two_failures else "explain")
+    if two_failures:
+        assert result["provider_verified"] is False
 
 
 @pytest.mark.asyncio

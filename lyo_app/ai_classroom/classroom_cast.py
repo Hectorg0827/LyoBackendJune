@@ -109,7 +109,10 @@ async def add_classmate_turn(scene: Scene, context, progress: dict) -> Scene:
             {"classmate": peer.name, "personality": peer.trait,
              "teacher_said": teacher.text[:400], "board": board},
             PeerLine,
-        ), timeout=12)
+        # Peers are optional enrichment, not the next teaching move. A model
+        # that needs a long generation window must not add 10+ seconds to
+        # answer-to-board latency; the teacher and learner take priority.
+        ), timeout=3)
     except Exception as exc:
         logger.info("Optional AI classmate unavailable: %s", type(exc).__name__)
         return scene

@@ -387,6 +387,21 @@ async def _send_welcome_scene(
         return
 
     try:
+        # Transport reconnects reuse the *persisted* scene. Replaying the
+        # ordinary welcome trigger retries model authoring and can replace an
+        # unanswered checkpoint or reset the student's apparent position.
+        # The frontend uses the same session_id and adds `resume=1` only for
+        # automatic WebSocket recovery, never when starting a new lesson.
+        if (connection.websocket.query_params.get("resume") or "").lower() in (
+            "1", "true", "yes",
+        ):
+            resumed = await lifecycle_engine.resume_saved_scene(
+                connection.user_id, connection.session_id,
+            )
+            if resumed is not None:
+                logger.info("♻️ Resumed saved classroom scene %s", resumed.scene_id)
+                return
+
         # Explicit course context comes from the generated course card. Keep it
         # attached to the session so instruction is driven by a goal, not only
         # a display title.

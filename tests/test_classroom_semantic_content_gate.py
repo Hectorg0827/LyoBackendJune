@@ -141,6 +141,23 @@ def test_a_hint_that_only_says_how_to_answer_is_still_fine():
         update={"task": LearningTask.model_validate(open_task)}))
 
 
+def test_oversized_hint_is_shortened_without_reauthoring_question_or_answer_key():
+    original = task("apply").model_dump()
+    original["response_hint"] = (
+        "Explain which pizza slice is larger and describe your comparison "
+        "using one complete sentence with clear reasoning and a simple example "
+        "that shows how equal portions of the same whole change in size."
+    )
+    parsed = LearningTask.model_validate(original)
+    assert 5 <= len(parsed.response_hint) <= 100
+    assert parsed.response_hint.endswith("sentence")
+    assert parsed.question == original["question"]
+    assert parsed.criteria == original["criteria"]
+    assert parsed.example_answer == original["example_answer"]
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "guided")
+    validate_semantic_content(turn.model_copy(update={"task": parsed}))
+
+
 # ─── Filler options ─────────────────────────────────────────────────────────
 
 def test_two_options_cannot_share_one_piece_of_feedback():

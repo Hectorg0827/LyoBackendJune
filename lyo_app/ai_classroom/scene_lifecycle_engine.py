@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any, Callable
@@ -1403,7 +1404,34 @@ class SceneLifecycleEngine:
 
         key = session_progress_key(trigger.user_id, trigger.session_id)
         lock = _TURN_LOCKS.setdefault(key, asyncio.Lock())
+        received_at = time.perf_counter()
         async with lock:
+            lock_acquired_at = time.perf_counter()
+            stream_task = None
+            persisted_scene = None
+            should_stream = bool(self.websocket_manager and (
+                (trigger.action_data or {}).get("action_intent") != ActionIntent.UPDATE_ACTIVITY
+                or _SESSION_PROGRESS.get(key, {}).get("_unsynced")
+            ))
+
+            def stream_after_save(scene: Scene) -> None:
+                """Make a committed scene visible while best-effort evidence drains.
+
+                Scene streaming owns no database connection. The durability
+                checkpoint must complete first, but the learner need not wait
+                for spaced-review and analytics writes after that checkpoint.
+                """
+                nonlocal stream_task, persisted_scene
+                if not should_stream:
+                    return
+                persisted_scene = scene
+                self.active_scenes[scene.scene_id] = scene
+                stream_task = asyncio.create_task(
+                    self.websocket_manager.stream_scene_to_session(
+                        trigger.session_id, scene, user_id=trigger.user_id,
+                    )
+                )
+
             original_db = self.db
             original_assembler_db = self.context_assembler.db
             try:
@@ -1414,23 +1442,81 @@ class SceneLifecycleEngine:
                     # accepted an answer since this worker last saw the session.
                     if not progress.get("_unsynced"):
                         progress["_hydrated"] = False
-                    scene = await self._process_adaptive_trigger(trigger, key)
+                    scene = await self._process_adaptive_trigger(
+                        trigger, key, on_persisted_scene=stream_after_save,
+                    )
             except Exception as exc:
                 logger.exception("Guided classroom turn unavailable: %s", type(exc).__name__)
-                context = self.session_contexts.get(key) or ContextSnapshot(
-                    user_id=trigger.user_id, session_id=trigger.session_id
-                )
-                scene = AdaptiveSession(None).unavailable(context, None)
+                if persisted_scene is not None:
+                    # A later analytics write must not replace the already
+                    # committed teaching step with a second error scene.
+                    scene = persisted_scene
+                else:
+                    context = self.session_contexts.get(key) or ContextSnapshot(
+                        user_id=trigger.user_id, session_id=trigger.session_id
+                    )
+                    scene = AdaptiveSession(None).unavailable(context, None)
             finally:
                 self.db = original_db
                 self.context_assembler.db = original_assembler_db
             self.active_scenes[scene.scene_id] = scene
-            if self.websocket_manager and (
+            if stream_task is not None:
+                try:
+                    await stream_task
+                except Exception as exc:
+                    logger.warning("Classroom committed scene delivery failed: %s", type(exc).__name__)
+            elif self.websocket_manager and (
                 (trigger.action_data or {}).get("action_intent") != ActionIntent.UPDATE_ACTIVITY
                 or _SESSION_PROGRESS.get(key, {}).get("_unsynced")
             ):
                 await self.websocket_manager.stream_scene_to_session(
                     trigger.session_id, scene, user_id=trigger.user_id
+                )
+            total_ms = (time.perf_counter() - received_at) * 1000
+            logger.info(
+                "Classroom turn complete total_ms=%.0f lock_wait_ms=%.0f",
+                total_ms, (lock_acquired_at - received_at) * 1000,
+            )
+            return scene
+
+    async def resume_saved_scene(self, user_id: str, session_id: str) -> Scene | None:
+        """Replay a durable learner-owned scene after transport reconnect.
+
+        A reconnect is not a new learner action. In particular, it must not
+        re-author an active question, retry an exhausted provider, advance
+        the lesson, or duplicate grading. Use the same per-session lock as
+        normal turns so a response in flight finishes before its scene is
+        replayed. Only an authenticated matching owner may receive it.
+        """
+        from lyo_app.ai_classroom.adaptive_persistence import learner_session
+
+        key = session_progress_key(user_id, session_id)
+        lock = _TURN_LOCKS.setdefault(key, asyncio.Lock())
+        async with lock:
+            progress = _SESSION_PROGRESS.setdefault(key, {})
+            if not progress.get("_unsynced"):
+                trigger = Trigger(
+                    trigger_type=TriggerType.SYSTEM_TIMEOUT,
+                    user_id=user_id, session_id=session_id,
+                    action_data={"resume": True},
+                )
+                async with learner_session(self.db, key) as db:
+                    original_db = self.context_assembler.db
+                    try:
+                        self.context_assembler.db = db
+                        saved = await self.context_assembler._load_persisted_session_progress(trigger)
+                    finally:
+                        self.context_assembler.db = original_db
+                if saved:
+                    progress.update(saved)
+            state = self._read_guided_state(progress, progress.get("guided_state"))
+            if not state or state.owner != str(user_id) or not state.scene:
+                return None
+            scene = Scene.model_validate(state.scene)
+            self.active_scenes[scene.scene_id] = scene
+            if self.websocket_manager:
+                await self.websocket_manager.stream_scene_to_session(
+                    session_id, scene, user_id=user_id,
                 )
             return scene
 
@@ -1472,11 +1558,16 @@ class SceneLifecycleEngine:
             progress.pop("guided_state", None)
             return None
 
-    async def _process_adaptive_trigger(self, trigger: Trigger, key: str) -> Scene:
+    async def _process_adaptive_trigger(
+        self, trigger: Trigger, key: str,
+        on_persisted_scene: Optional[Callable[[Scene], None]] = None,
+    ) -> Scene:
         from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
         from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 
+        phase_start = time.perf_counter()
         context = await self.context_assembler.assemble_context(trigger)
+        logger.info("Classroom turn context_ms=%.0f", (time.perf_counter() - phase_start) * 1000)
         progress = _SESSION_PROGRESS.setdefault(key, {})
         data = trigger.action_data or {}
         intent = data.get("action_intent")
@@ -1564,6 +1655,7 @@ class SceneLifecycleEngine:
             bind_model_usage,
             learning_event_usage_recorder,
         )
+        phase_start = time.perf_counter()
         with bind_model_usage(
             learning_event_usage_recorder(
                 user_id=trigger.user_id,
@@ -1573,8 +1665,13 @@ class SceneLifecycleEngine:
             )
         ):
             scene = await runner.run(context, progress, trigger)
+            teacher_ms = (time.perf_counter() - phase_start) * 1000
             from lyo_app.ai_classroom.classroom_cast import add_classmate_turn
             scene = await add_classmate_turn(scene, context, progress)
+        logger.info(
+            "Classroom turn teacher_ms=%.0f peer_ms=%.0f",
+            teacher_ms, (time.perf_counter() - phase_start) * 1000 - teacher_ms,
+        )
         # Keep intervention telemetry separate from learner evidence. This
         # pending record is committed atomically with the same classroom turn.
         progress["_pending_teaching_intervention"] = {
@@ -1602,9 +1699,11 @@ class SceneLifecycleEngine:
         progress["course_complete"] = context.course_complete
         progress["current_lesson_index"] = context.lesson_index
         self.session_contexts[key] = context
+        phase_start = time.perf_counter()
         saved = await self._persist_session_progress(
             trigger, context, progress, record_interaction=record_interaction
         )
+        logger.info("Classroom turn checkpoint_ms=%.0f", (time.perf_counter() - phase_start) * 1000)
         progress["_unsynced"] = not saved
         scene.metadata.course_complete = bool(context.course_complete and saved)
         if not saved:
@@ -1629,6 +1728,8 @@ class SceneLifecycleEngine:
                     action_intent=ActionIntent.RETRY, language_code=context.language_code,
                 ))
             return scene
+        if on_persisted_scene is not None:
+            on_persisted_scene(scene)
         # A durable outbox closes the crash window between consuming a question
         # and recording evidence. Replaying it is safe by checkpoint event ID.
         snapshots = [s for s in [state_data, *progress.get("guided_history", [])] if s]
@@ -1637,6 +1738,7 @@ class SceneLifecycleEngine:
         # under one persist so a crash cannot lose one and keep the other.
         review_states = [s for s in snapshots if s.get("review_outbox")]
         if outbox_states or review_states:
+            phase_start = time.perf_counter()
             for snapshot in outbox_states:
                 remaining = []
                 for evidence in snapshot["outbox"]:
@@ -1650,6 +1752,7 @@ class SceneLifecycleEngine:
                         remaining.append(review)
                 snapshot["review_outbox"] = remaining
             await self._persist_session_progress(trigger, context, progress, record_interaction=False)
+            logger.info("Classroom turn evidence_flush_ms=%.0f", (time.perf_counter() - phase_start) * 1000)
         return scene
 
     async def _schedule_adaptive_review(self, *, user_id, concept_id, passed,

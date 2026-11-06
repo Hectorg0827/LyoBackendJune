@@ -17,7 +17,7 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
@@ -212,6 +212,30 @@ class LearningTask(StrictModel):
     criteria: list[str] = Field(min_length=1, max_length=3)
     example_answer: str = Field(min_length=1, max_length=500)
     options: list[TaskOption] = Field(default_factory=list, max_length=4)
+
+    @field_validator("response_hint", mode="before")
+    @classmethod
+    def compact_response_hint(cls, value):
+        """Trim an overlong input *placeholder* without reauthoring the task.
+
+        On a live turn an otherwise valid question was discarded because the
+        model wrote a 100+ character instruction for this small UI hint. That
+        caused a second full model request. Do not alter the question, rubric,
+        options, or example answer; the usual semantic answer-leak gate still
+        validates this learner-visible field after parsing.
+        """
+        if not isinstance(value, str):
+            return value
+        compact = " ".join(value.split())
+        if len(compact) <= 100:
+            return compact
+        whole_words = compact[:101].rpartition(" ")[0].strip()
+        # Avoid a placeholder that trails off on a conjunction or preposition.
+        dangling = {"and", "or", "with", "the", "a", "to", "for", "of", "in", "on", "at", "by",
+                    "y", "o", "con", "de", "del", "en", "el", "la", "los", "las"}
+        while whole_words.split() and whole_words.split()[-1].lower() in dangling:
+            whole_words = whole_words.rpartition(" ")[0]
+        return whole_words if len(whole_words) >= 5 else compact[:100]
 
     @model_validator(mode="before")
     @classmethod
@@ -736,6 +760,10 @@ class GuidedState(StrictModel):
     #: the model escalation and `AdaptiveSession.run` for the move it falls
     #: back to once asking the same way has demonstrably stopped working.
     recovery_attempts: int = 0
+    # A provider-independent, ungraded recap is currently on screen. Its
+    # Continue action must not ask the exhausted generator for the same turn
+    # again or count the recap as evidence of mastery.
+    offline_step: bool = False
     practice_events: list[dict[str, Any]] = Field(default_factory=list)
     task_kinds: list[str] = Field(default_factory=list)
     recent_questions: list[str] = Field(default_factory=list)
@@ -859,6 +887,69 @@ LOOSE_JSON = {"type": "json_object"}
 ESCALATION_PROVIDER = "gemini-3.8-flash"
 
 
+def parse_model_json_object(raw: str) -> dict[str, Any]:
+    """Decode a single provider JSON object without inventing missing content.
+
+    Loose JSON providers occasionally prepend a code fence, append commentary,
+    leave a trailing comma, or emit an unescaped LaTeX backslash. These are
+    syntactic problems, not reasons to spend another model call or strand a
+    learner. The schema still validates every recovered field afterward.
+    Truncated objects and non-object envelopes always remain errors.
+    """
+    start = raw.find("{")
+    if start < 0:
+        raise ValueError("Missing JSON object")
+    decoder = json.JSONDecoder()
+    try:
+        parsed, _ = decoder.raw_decode(raw[start:])
+    except json.JSONDecodeError:
+        source = raw[start:]
+        chars: list[str] = []
+        quoted = False
+        index = 0
+        latex = ("frac", "sqrt", "times", "theta", "left", "right",
+                 "begin", "end", "alpha", "beta", "pi", "sum", "cdot",
+                 "over", "mathrm", "text")
+        while index < len(source):
+            char = source[index]
+            if char == '"':
+                # An escaped quote is already consumed as a two-character
+                # escape in the branch below.
+                quoted = not quoted
+                chars.append(char)
+                index += 1
+                continue
+            if quoted and char == "\\" and index + 1 < len(source):
+                following = source[index + 1]
+                is_latex = following in "()[],%_" or any(source.startswith(name, index + 1) for name in latex)
+                if is_latex or following not in '\\"/bfnrtu':
+                    chars.append("\\\\")
+                    index += 1
+                    continue
+                chars.append(source[index:index + 2])
+                index += 2
+                continue
+            if quoted and char in "\r\n":
+                chars.append("\\n")
+                if char == "\r" and source[index + 1:index + 2] == "\n":
+                    index += 1
+                index += 1
+                continue
+            if not quoted and char == ",":
+                next_index = index + 1
+                while next_index < len(source) and source[next_index].isspace():
+                    next_index += 1
+                if next_index < len(source) and source[next_index] in "}]":
+                    index += 1
+                    continue
+            chars.append(char)
+            index += 1
+        parsed, _ = decoder.raw_decode("".join(chars))
+    if not isinstance(parsed, dict):
+        raise ValueError("Provider response must be a JSON object")
+    return parsed
+
+
 async def model_json(system: str, payload: dict[str, Any], schema: type[StrictModel]) -> StrictModel:
     """Use the configured shared providers; no new credentials or AI clients."""
     from lyo_app.core.ai_resilience import ai_resilience_manager
@@ -926,7 +1017,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else
                   900 if schema is Evaluation else 2000)
     timeout = (100 if issubclass(schema, UnitPackage) else
-               30 if schema is Evaluation else 45)
+               30 if schema is Evaluation else 35)
 
     async def call(response_format):
         return await asyncio.wait_for(
@@ -937,6 +1028,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
                 temperature=0.1 if schema is Evaluation else 0.6,
                 response_format=response_format,
                 use_cache=False,
+                classroom_trial_budget=True,
             ),
             timeout=timeout,
         )
@@ -976,10 +1068,7 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
             # resilience layer skipped/fell through earlier providers.
             payload["_rejected_provider"] = responding_provider
         raw = (result.get("content") or "").strip()
-        first, last = raw.find("{"), raw.rfind("}")
-        if first < 0 or last <= first:
-            raise TeachingUnavailable("Missing structured response")
-        response = schema.model_validate_json(raw[first:last + 1])
+        response = schema.model_validate(parse_model_json_object(raw))
         outcome = "success"
         return response
     except ValidationError:
