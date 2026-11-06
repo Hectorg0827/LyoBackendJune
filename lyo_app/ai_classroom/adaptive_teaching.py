@@ -17,7 +17,7 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
@@ -212,6 +212,30 @@ class LearningTask(StrictModel):
     criteria: list[str] = Field(min_length=1, max_length=3)
     example_answer: str = Field(min_length=1, max_length=500)
     options: list[TaskOption] = Field(default_factory=list, max_length=4)
+
+    @field_validator("response_hint", mode="before")
+    @classmethod
+    def compact_response_hint(cls, value):
+        """Trim an overlong input *placeholder* without reauthoring the task.
+
+        On a live turn an otherwise valid question was discarded because the
+        model wrote a 100+ character instruction for this small UI hint. That
+        caused a second full model request. Do not alter the question, rubric,
+        options, or example answer; the usual semantic answer-leak gate still
+        validates this learner-visible field after parsing.
+        """
+        if not isinstance(value, str):
+            return value
+        compact = " ".join(value.split())
+        if len(compact) <= 100:
+            return compact
+        whole_words = compact[:101].rpartition(" ")[0].strip()
+        # Avoid a placeholder that trails off on a conjunction or preposition.
+        dangling = {"and", "or", "with", "the", "a", "to", "for", "of", "in", "on", "at", "by",
+                    "y", "o", "con", "de", "del", "en", "el", "la", "los", "las"}
+        while whole_words.split() and whole_words.split()[-1].lower() in dangling:
+            whole_words = whole_words.rpartition(" ")[0]
+        return whole_words if len(whole_words) >= 5 else compact[:100]
 
     @model_validator(mode="before")
     @classmethod
