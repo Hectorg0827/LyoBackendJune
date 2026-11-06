@@ -8,10 +8,16 @@ import sys
 from typing import Any, Dict
 
 from .config import settings
+from .url_log_sanitizer import (
+    install_request_url_query_filter,
+    strip_request_url_queries,
+)
 
 
 def setup_logging() -> None:
     """Configure structured logging for the application."""
+
+    install_request_url_query_filter()
     
     # Configure the root logger
     logging.basicConfig(
@@ -56,7 +62,7 @@ class StructuredMessage:
 
 def log_request(logger: logging.Logger, method: str, url: str, **kwargs: Any) -> None:
     """Log an HTTP request with structured data."""
-    logger.info(StructuredMessage(f"{method} {url}", **kwargs))
+    logger.info(StructuredMessage(f"{method} {strip_request_url_queries(url)}", **kwargs))
 
 
 def log_error(logger: logging.Logger, error: Exception, **kwargs: Any) -> None:

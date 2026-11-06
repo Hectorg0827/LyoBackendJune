@@ -1,4 +1,6 @@
 """Drive the live pathway into the shared event stream, with AI and DB services stubbed."""
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -122,6 +124,52 @@ async def test_logging_failure_keeps_the_next_turn_and_outbox_for_retry(capture)
     log.side_effect = None
     await instance.process_trigger(action(welcome=True))
     assert progress["guided_state"]["outbox"] == []
+
+
+@pytest.mark.asyncio
+async def test_committed_scene_streams_while_evidence_is_still_being_written():
+    """Slow mastery/event writes must not keep a saved lesson off screen."""
+    instance, ctx = engine(), context()
+    component_id = seed(instance, ctx)
+    delivered = asyncio.Event()
+    finish_evidence = asyncio.Event()
+
+    async def write_evidence(**kwargs):
+        await finish_evidence.wait()
+        return True
+
+    async def stream(session_id, scene, *, user_id):
+        delivered.set()
+
+    instance._record_adaptive_evidence = AsyncMock(side_effect=write_evidence)
+    instance.websocket_manager = SimpleNamespace(stream_scene_to_session=AsyncMock(side_effect=stream))
+    turn = asyncio.create_task(instance.handle_quiz_submission(
+        "42", "fractions", component_id, "a", 4000,
+    ))
+    try:
+        await asyncio.wait_for(delivered.wait(), timeout=1)
+        assert not turn.done(), "Evidence writer is intentionally still blocked"
+        assert instance._persist_session_progress.await_count == 1
+        assert instance.websocket_manager.stream_scene_to_session.await_count == 1
+    finally:
+        finish_evidence.set()
+    await asyncio.wait_for(turn, timeout=1)
+    assert instance._record_adaptive_evidence.await_count == 1
+    instance.websocket_manager.stream_scene_to_session.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_checkpoint_never_triggers_early_delivery():
+    instance, ctx = engine(), context()
+    component_id = seed(instance, ctx)
+    instance._persist_session_progress.return_value = False
+    instance.websocket_manager = SimpleNamespace(stream_scene_to_session=AsyncMock())
+    scene = await instance.handle_quiz_submission("42", "fractions", component_id, "a")
+    assert any("has not synced" in getattr(c, "content", "") for c in scene.components)
+    # The board warning is sent through the ordinary, failure-aware path.
+    instance.websocket_manager.stream_scene_to_session.assert_awaited_once_with(
+        "fractions", scene, user_id="42",
+    )
 
 
 @pytest.mark.asyncio

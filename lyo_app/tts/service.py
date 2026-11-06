@@ -456,6 +456,7 @@ class TTSService:
         language: Optional[str] = None,
         speaker_id: Optional[SpeakerId] = None,
     ) -> bytes:
+        started_at = time.monotonic()
         if not self._initialized:
             await self.initialize()
         if not self.provider_available:
@@ -486,11 +487,21 @@ class TTSService:
         )
         cached = self._get_cached_audio(cache_key, audio_format)
         if cached is not None:
+            logger.info(
+                "TTS cache hit provider=%s bytes=%s elapsed_ms=%.0f",
+                resolved.provider, len(cached), (time.monotonic() - started_at) * 1000,
+            )
             return cached
 
+        lock_started_at = time.monotonic()
         async with self._render_lock(cache_key):
+            lock_wait_ms = (time.monotonic() - lock_started_at) * 1000
             cached = self._get_cached_audio(cache_key, audio_format)
             if cached is not None:
+                logger.info(
+                    "TTS shared render cache hit provider=%s queue_ms=%.0f",
+                    resolved.provider, lock_wait_ms,
+                )
                 return cached
             audio_data = await self._synthesize_uncached(
                 normalized_text,
@@ -503,11 +514,13 @@ class TTSService:
                 raise RuntimeError("TTS provider returned empty audio")
             self._cache_audio(cache_key, audio_format, audio_data)
             logger.info(
-                "TTS rendered %s bytes provider=%s locale=%s voice=%s",
+                "TTS rendered %s bytes provider=%s locale=%s voice=%s queue_ms=%.0f total_ms=%.0f",
                 len(audio_data),
                 resolved.provider,
                 resolved.language_code,
                 resolved.provider_voice,
+                lock_wait_ms,
+                (time.monotonic() - started_at) * 1000,
             )
             return audio_data
 
@@ -644,7 +657,9 @@ class TTSService:
                 yield data[offset:offset + chunk_size]
             return
         key = self._get_cache_key(text, resolved, format, speed)
+        lock_started_at = time.monotonic()
         async with self._render_lock(key):
+            queue_ms = (time.monotonic() - lock_started_at) * 1000
             cached = self._get_cached_audio(key, format)
             if cached is None:
                 headers = None
@@ -671,9 +686,10 @@ class TTSService:
                     if response.status != 200:
                         raise RuntimeError(f"TTS provider returned {response.status}")
                     logger.info(
-                        "TTS upstream headers in %.0fms provider=%s",
+                        "TTS upstream headers in %.0fms provider=%s queue_ms=%.0f",
                         (time.monotonic() - upstream_started_at) * 1000,
                         resolved.provider,
+                        queue_ms,
                     )
                     chunks = []
                     async for chunk in response.content.iter_chunked(chunk_size):
@@ -698,6 +714,10 @@ class TTSService:
         # Serving existing bytes is not rendering. Release the lock before
         # yielding so a slow downloader cannot block other cached clients.
         if cached is not None:
+            logger.info(
+                "TTS streaming cache hit provider=%s bytes=%s queue_ms=%.0f",
+                resolved.provider, len(cached), queue_ms,
+            )
             for offset in range(0, len(cached), chunk_size):
                 yield cached[offset:offset + chunk_size]
 

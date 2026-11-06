@@ -38,6 +38,12 @@ except ImportError:  # Fallback
 
 from lyo_app.core.database import close_db, init_db
 from lyo_app.core.logging import setup_logging, logger
+from lyo_app.core.url_log_sanitizer import install_request_url_query_filter
+
+# Uvicorn emits WebSocket handshake logs on uvicorn.error, before a request
+# reaches ASGI middleware. Strip query strings at import time so auth tokens
+# can never be written by the server's access/error log formatters.
+install_request_url_query_filter()
 from lyo_app.core.exceptions import setup_error_handlers
 from lyo_app.core.enhanced_monitoring import (
     enhanced_error_handler,
