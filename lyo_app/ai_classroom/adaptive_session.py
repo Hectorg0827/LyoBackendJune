@@ -398,6 +398,20 @@ class AdaptiveSession:
                        verdict=result.verdict, extra_help=pending.extra_help_used,
                        response_format=pending.task.response_format, response=response,
                        feedback=result.feedback, misconception=result.misconception)
+            if choice and pending.phase != "diagnose" and self.feedback_sender is not None:
+                # A tapped checkpoint already has a server-validated verdict.
+                # Deliver it while the *next* AI teaching move is being authored;
+                # otherwise the learner waits for a second model round-trip
+                # just to see whether the submitted choice was right. Never
+                # send a result for an unanswered or replayed checkpoint.
+                try:
+                    await self.feedback_sender(
+                        pending.id, result.verdict, state.last_feedback, context.language_code,
+                    )
+                except Exception as exc:
+                    # The committed scene carries the same feedback. An
+                    # optional fast-path socket failure must not lose work.
+                    logger.warning("Early classroom feedback unavailable: %s", type(exc).__name__)
             if state.closing_win_asked and pending.phase != "diagnose":
                 return self.save(progress, state,
                                  self.close_on_a_success(context, state, pending, result, data))

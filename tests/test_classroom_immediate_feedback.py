@@ -10,7 +10,7 @@ from lyo_app.ai_classroom.adaptive_session import AdaptiveSession
 from lyo_app.ai_classroom.adaptive_teaching import GuidedState, TeachingUnavailable
 from lyo_app.ai_classroom.sdui_models import ActionIntent, TeacherMessage
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager
-from tests.adaptive_fixtures import ScriptedTeacher, action, context
+from tests.adaptive_fixtures import ScriptedTeacher, action, context, tap_probe, advance_to_task
 
 
 @pytest.mark.asyncio
@@ -81,6 +81,46 @@ async def test_early_feedback_failure_does_not_block_the_next_lesson():
     assert pending.task.options[0].feedback not in scene.model_dump_json()
     assert scene.components
     assert GuidedState.model_validate(progress["guided_state"]).phase == "guided"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option_id, verdict", [("a", "correct"), ("b", "incorrect")])
+async def test_supported_practice_feedback_precedes_next_generation(option_id, verdict):
+    teacher, sender = ScriptedTeacher(), AsyncMock()
+    runner, progress, ctx = AdaptiveSession(teacher, feedback_sender=sender), {}, context()
+    await runner.run(ctx, progress, action(welcome=True))
+    await tap_probe(runner, progress, ctx, option="a")
+    await advance_to_task(runner, progress, ctx)
+    pending = GuidedState.model_validate(progress["guided_state"]).pending
+    assert pending.phase == "guided"
+    assert pending.task.response_format == "choice"
+    sender.reset_mock()  # Ignore the diagnostic event; assert only this answer.
+
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_turn(*args):
+        started.set()
+        await release.wait()
+        raise TeachingUnavailable("Simulated second-turn provider delay")
+
+    teacher.turn.side_effect = slow_turn
+    trigger = action(ActionIntent.SUBMIT_ANSWER, pending.id,
+                     answer_data={"selected_option_id": option_id})
+    request = asyncio.create_task(runner.run(ctx, progress, trigger))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert not request.done()
+        sender.assert_awaited_once()
+        component, received_verdict, message, language = sender.await_args.args
+        assert (component, received_verdict, language) == (pending.id, verdict, "en-US")
+        assert message
+        release.set()
+        await request
+        await runner.run(ctx, progress, trigger)
+        sender.assert_awaited_once()  # Retransmission must not announce twice.
+    finally:
+        release.set()
+        await request
 
 
 @pytest.mark.asyncio
