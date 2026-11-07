@@ -86,6 +86,7 @@ google-cloud-aiplatform==1.142.0
 google-genai==1.68.0
 firebase-admin==6.5.0
 google-cloud-texttospeech>=2.16.0
+google-auth>=2.0.0
 runwayml==5.13.0
 deepgram-sdk==3.11.0
 tavily-python>=0.3.0
