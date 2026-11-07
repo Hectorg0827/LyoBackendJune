@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,14 @@ RESERVE_MICRO_USD_PER_UTF8_BYTE = 40
 
 # A disk failure or non-AOF Redis configuration must block a paid request.
 AOF_WAIT_TIMEOUT_MS = 5_000
+
+
+@lru_cache(maxsize=1)
+def _client_for_url(url: str):
+    """Separate connection pool: classroom sessions retain their own Redis."""
+    from redis.asyncio import from_url
+
+    return from_url(url, encoding="utf-8", decode_responses=False)
 
 _RESERVE_LUA = """
 local existing = tonumber(redis.call('GET', KEYS[1]) or '0')
@@ -74,12 +83,13 @@ async def reserve_chirp_attempt(text: str) -> int:
     if not charge or charge > ceiling:
         raise TTSTrialBudgetExceeded("TTS pilot request exceeds the allowance")
 
-    from lyo_app.core.redis_client import redis_client
-
-    client = redis_client.client
-    if client is None:
-        raise TTSTrialBudgetExceeded("TTS pilot Redis ledger unavailable")
+    # Never fall back to the application's shared sessions/cache Redis. Its
+    # snapshot-only persistence cannot safely enforce an irreversible budget.
+    ledger_url = os.getenv("TTS_CHIRP_LEDGER_REDIS_URL", "").strip()
+    if not ledger_url:
+        raise TTSTrialBudgetExceeded("TTS pilot dedicated Redis ledger unavailable")
     try:
+        client = _client_for_url(ledger_url)
         # WAITAOF acknowledges writes from *this same connection*. A normal
         # client.eval() followed by client.execute_command() may use different
         # pooled connections. A non-transactional pipeline pins both commands

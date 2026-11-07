@@ -19,16 +19,15 @@ production, SecretaryAI, the separate VoiceLab or any shared production key.
    identity federation where Railway identity support permits it. A manually
    created service-account key is a fallback only with explicit approval and
    secret storage. Do not create a key or start billable calls by default.
-4. Verify staging Redis is connected, has a persistent volume, uses an
-   appropriate non-evicting policy, and has **append-only file (AOF)
-   persistence enabled**. Every successful reservation now requires the Redis
+4. Provision a **dedicated staging-only Redis service** for the spending ledger,
+   not either Redis instance used by LYO sessions or caches. It must have a
+   persistent volume, `maxmemory-policy noeviction`, and **append-only file
+   (AOF) persistence enabled**. Every successful reservation requires the Redis
    `WAITAOF 1 0 5000` command to acknowledge a local fsync on the *same
    connection*. The existing staging Redis services were observed with RDB
    snapshots (`--save 60 1`) but without AOF. **This precondition is not yet
    met**; requests will fail closed even if the Google provider flag is on.
-   Do not change the shared Redis persistence settings or erase any ledger
-   without assessing the impact on other staging services. A dedicated,
-   persistent AOF-enabled trial Redis is the safer alternative if practical.
+   Do not change the shared Redis persistence settings or erase any ledger.
 5. In **LyoJourneyStagingBackend** only, store the dedicated service-account
    JSON in sealed `GOOGLE_TTS_SERVICE_ACCOUNT_JSON` or configure
    `GOOGLE_APPLICATION_CREDENTIALS` to point to a credentials file provided
@@ -43,8 +42,14 @@ Set only in the staging environment:
 ENVIRONMENT=staging
 TTS_CHIRP_TRIAL_ENABLED=true
 TTS_CHIRP_TRIAL_LIMIT_USD=15.00
+TTS_CHIRP_LEDGER_REDIS_URL=${{Redis-_rdT.REDIS_URL}}
 TTS_PROVIDER=google
 ```
+
+`TTS_CHIRP_LEDGER_REDIS_URL` must use an internal Railway reference to the
+**dedicated** service, not the general `REDIS_URL`. The trial never falls back
+to shared Redis. Keep the provider disabled until the Redis AOF configuration,
+credential seal, ledger persistence, and combined $25 actual spend are checked.
 
 The pilot code charges a separate, no-TTL Redis ledger before *each* uncached
 request, reserving **$40 per million UTF-8 bytes**, above the currently

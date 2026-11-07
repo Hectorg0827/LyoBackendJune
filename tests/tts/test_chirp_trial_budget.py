@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from lyo_app.tts import trial_budget
 from lyo_app.tts.service import TTSConfig, TTSService, TTSUnavailableError
 from lyo_app.tts.trial_budget import (
     TTSTrialBudgetExceeded,
@@ -63,15 +64,18 @@ def guarded(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "staging")
     monkeypatch.setenv("TTS_CHIRP_TRIAL_ENABLED", "true")
     monkeypatch.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "0.001")
+    monkeypatch.setenv("TTS_CHIRP_LEDGER_REDIS_URL", "redis://trial-ledger.invalid:6379")
     return monkeypatch
+
+
+def use_ledger(monkeypatch, ledger):
+    monkeypatch.setattr(trial_budget, "_client_for_url", lambda url: ledger)
 
 
 @pytest.mark.asyncio
 async def test_atomic_reservation_never_exceeds_ceiling(guarded):
-    from lyo_app.core.redis_client import redis_client
-
     ledger = AtomicLedger()
-    guarded.setattr(redis_client, "client", ledger)
+    use_ledger(guarded, ledger)
     phrase = "A short phrase"
     results = await asyncio.gather(
         *(reserve_chirp_attempt(phrase) for _ in range(20)),
@@ -104,12 +108,16 @@ async def test_disabled_non_staging_and_oversized_limits_fail_closed(guarded):
 async def test_missing_or_failed_redis_blocks_provider_calls(guarded):
     from lyo_app.core.redis_client import redis_client
 
-    guarded.setattr(redis_client, "client", None)
+    shared_redis = AtomicLedger()
+    guarded.setattr(redis_client, "client", shared_redis)
+    guarded.delenv("TTS_CHIRP_LEDGER_REDIS_URL")
     with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
         await reserve_chirp_attempt("test")
+    assert shared_redis.calls == 0  # Must never fall back to shared Redis.
+    guarded.setenv("TTS_CHIRP_LEDGER_REDIS_URL", "redis://trial-ledger.invalid:6379")
     ledger = AtomicLedger()
     ledger.failure = ConnectionError("offline")
-    guarded.setattr(redis_client, "client", ledger)
+    use_ledger(guarded, ledger)
     with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
         await reserve_chirp_attempt("test")
 
@@ -117,11 +125,9 @@ async def test_missing_or_failed_redis_blocks_provider_calls(guarded):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ack", [[0, 0], [], ["bad", 0]])
 async def test_unconfirmed_aof_fsync_fails_closed(guarded, ack):
-    from lyo_app.core.redis_client import redis_client
-
     ledger = AtomicLedger()
     ledger.aof_ack = ack
-    guarded.setattr(redis_client, "client", ledger)
+    use_ledger(guarded, ledger)
     with pytest.raises(TTSTrialBudgetExceeded, match="durable"):
         await reserve_chirp_attempt("test")
     # A reservation can be charged even when durability times out. Never
@@ -131,12 +137,10 @@ async def test_unconfirmed_aof_fsync_fails_closed(guarded, ack):
 
 @pytest.mark.asyncio
 async def test_redis_without_aof_fails_closed_before_provider(tmp_path, guarded):
-    from lyo_app.core.redis_client import redis_client
-
     guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "1")
     ledger = AtomicLedger()
     ledger.failure = RuntimeError("WAITAOF cannot run without appendonly enabled")
-    guarded.setattr(redis_client, "client", ledger)
+    use_ledger(guarded, ledger)
     service = TTSService(TTSConfig(
         provider="google", google_service_account_json='{"test": "only"}',
         cache_dir=str(tmp_path),
@@ -151,9 +155,7 @@ async def test_redis_without_aof_fails_closed_before_provider(tmp_path, guarded)
 
 @pytest.mark.asyncio
 async def test_no_provider_http_request_if_budget_cannot_reserve(tmp_path, guarded):
-    from lyo_app.core.redis_client import redis_client
-
-    guarded.setattr(redis_client, "client", None)
+    guarded.delenv("TTS_CHIRP_LEDGER_REDIS_URL")
     guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "1")
     service = TTSService(TTSConfig(
         provider="google", google_service_account_json='{"test": "only"}',
@@ -169,11 +171,9 @@ async def test_no_provider_http_request_if_budget_cannot_reserve(tmp_path, guard
 
 @pytest.mark.asyncio
 async def test_google_request_uses_oauth_bearer_and_cache_bypasses_second_charge(tmp_path, guarded):
-    from lyo_app.core.redis_client import redis_client
-
     guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "1")
     ledger = AtomicLedger()
-    guarded.setattr(redis_client, "client", ledger)
+    use_ledger(guarded, ledger)
     service = TTSService(TTSConfig(
         provider="google", google_service_account_json='{"test": "only"}',
         cache_dir=str(tmp_path),
@@ -255,10 +255,8 @@ async def test_bad_google_service_account_never_exposes_secret(tmp_path, guarded
 
 @pytest.mark.asyncio
 async def test_no_google_network_or_budget_reservation_without_oauth(tmp_path, guarded):
-    from lyo_app.core.redis_client import redis_client
-
     ledger = AtomicLedger()
-    guarded.setattr(redis_client, "client", ledger)
+    use_ledger(guarded, ledger)
     guarded.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     service = TTSService(TTSConfig(provider="google", cache_dir=str(tmp_path)))
     service._session = MagicMock()
