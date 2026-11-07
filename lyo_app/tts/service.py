@@ -232,7 +232,15 @@ class TTSService:
         if self.config.provider == "kokoro":
             return bool(self.config.kokoro_base_url)
         if self.config.provider == "google":
-            return bool(self.config.google_api_key)
+            if not self.config.google_api_key:
+                return False
+            from lyo_app.tts.trial_budget import TTSTrialBudgetExceeded, _trial_limit_micro_usd
+
+            try:
+                _trial_limit_micro_usd()
+            except TTSTrialBudgetExceeded:
+                return False
+            return True
         return bool(self.config.allow_openai_tts and self.config.openai_api_key)
 
     def select_voice_for_content(
@@ -564,6 +572,11 @@ class TTSService:
             )
 
         if resolved.provider == "google":
+            # Reserve *before* the paid network request. This pilot is disabled
+            # outside staging or when its durable allowance is unavailable.
+            from lyo_app.tts.trial_budget import reserve_chirp_attempt
+
+            await reserve_chirp_attempt(text)
             payload = {
                 "input": {"text": text},
                 "voice": {
@@ -575,11 +588,10 @@ class TTSService:
                     "speakingRate": speed,
                 },
             }
-            url = (
-                "https://texttospeech.googleapis.com/v1/text:synthesize"
-                f"?key={self.config.google_api_key}"
-            )
-            async with self._session.post(url, json=payload) as response:
+            # Never place a secret in the URL, where network logs may capture it.
+            url = "https://texttospeech.googleapis.com/v1/text:synthesize"
+            headers = {"x-goog-api-key": self.config.google_api_key}
+            async with self._session.post(url, json=payload, headers=headers) as response:
                 if response.status != 200:
                     detail = (await response.text())[:500]
                     raise RuntimeError(

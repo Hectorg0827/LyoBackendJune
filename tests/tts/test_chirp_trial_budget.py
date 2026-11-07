@@ -1,0 +1,143 @@
+"""The paid voice pilot must reserve before calling Google, or fail closed."""
+
+import asyncio
+import base64
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from lyo_app.tts.service import TTSConfig, TTSService
+from lyo_app.tts.trial_budget import (
+    TTSTrialBudgetExceeded,
+    RESERVE_MICRO_USD_PER_UTF8_BYTE,
+    reserve_chirp_attempt,
+)
+
+
+class AtomicLedger:
+    def __init__(self):
+        self.total = 0
+        self.lock = asyncio.Lock()
+        self.calls = 0
+
+    async def eval(self, script, keys, ledger_key, requested, limit):
+        assert "INCRBY" in script and keys == 1
+        assert ledger_key.startswith("lyo:tts:chirp:trial:")
+        async with self.lock:
+            self.calls += 1
+            if self.total + int(requested) > int(limit):
+                return -1
+            self.total += int(requested)
+            return self.total
+
+
+@pytest.fixture
+def guarded(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("TTS_CHIRP_TRIAL_ENABLED", "true")
+    monkeypatch.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "0.001")
+    return monkeypatch
+
+
+@pytest.mark.asyncio
+async def test_atomic_reservation_never_exceeds_ceiling(guarded):
+    from lyo_app.core.redis_client import redis_client
+
+    ledger = AtomicLedger()
+    guarded.setattr(redis_client, "client", ledger)
+    phrase = "A short phrase"
+    results = await asyncio.gather(
+        *(reserve_chirp_attempt(phrase) for _ in range(20)),
+        return_exceptions=True,
+    )
+    accepted = sum(isinstance(result, int) for result in results)
+    denied = sum(isinstance(result, TTSTrialBudgetExceeded) for result in results)
+    assert accepted > 0 and denied > 0
+    assert accepted + denied == len(results)
+    assert ledger.total == accepted * len(phrase.encode("utf-8")) * RESERVE_MICRO_USD_PER_UTF8_BYTE
+    assert ledger.total <= 1_000
+
+
+@pytest.mark.asyncio
+async def test_disabled_non_staging_and_oversized_limits_fail_closed(guarded):
+    guarded.setenv("ENVIRONMENT", "production")
+    with pytest.raises(TTSTrialBudgetExceeded, match="staging only"):
+        await reserve_chirp_attempt("test")
+    guarded.setenv("ENVIRONMENT", "staging")
+    guarded.setenv("TTS_CHIRP_TRIAL_ENABLED", "false")
+    with pytest.raises(TTSTrialBudgetExceeded, match="not enabled"):
+        await reserve_chirp_attempt("test")
+    guarded.setenv("TTS_CHIRP_TRIAL_ENABLED", "true")
+    guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "25")
+    with pytest.raises(TTSTrialBudgetExceeded, match="at most"):
+        await reserve_chirp_attempt("test")
+
+
+@pytest.mark.asyncio
+async def test_missing_or_failed_redis_blocks_provider_calls(guarded):
+    from lyo_app.core.redis_client import redis_client
+
+    guarded.setattr(redis_client, "client", None)
+    with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
+        await reserve_chirp_attempt("test")
+    ledger = AtomicLedger()
+    ledger.eval = AsyncMock(side_effect=ConnectionError("offline"))
+    guarded.setattr(redis_client, "client", ledger)
+    with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
+        await reserve_chirp_attempt("test")
+
+
+@pytest.mark.asyncio
+async def test_no_provider_http_request_if_budget_cannot_reserve(tmp_path, guarded):
+    from lyo_app.core.redis_client import redis_client
+
+    guarded.setattr(redis_client, "client", None)
+    guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "1")
+    service = TTSService(TTSConfig(
+        provider="google", google_api_key="test-only",
+        cache_dir=str(tmp_path),
+    ))
+    service._session = MagicMock()
+    service._initialized = True
+    with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
+        await service.synthesize("This should never reach Google.", language="en-US")
+    service._session.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_google_request_uses_secret_header_and_cache_bypasses_second_charge(tmp_path, guarded):
+    from lyo_app.core.redis_client import redis_client
+
+    guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "1")
+    ledger = AtomicLedger()
+    guarded.setattr(redis_client, "client", ledger)
+    service = TTSService(TTSConfig(
+        provider="google", google_api_key="not-to-appear-in-url",
+        cache_dir=str(tmp_path),
+    ))
+    response = MagicMock(status=200)
+    response.json = AsyncMock(return_value={"audioContent": base64.b64encode(b"voice").decode()})
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=response)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    session = MagicMock()
+    session.post.return_value = ctx
+    service._session = session
+    service._initialized = True
+
+    first = await service.synthesize("One quarter is smaller than one third.", language="en-US")
+    second = await service.synthesize("One quarter is smaller than one third.", language="en-US")
+    assert first == second == b"voice"
+    assert ledger.calls == 1
+    assert session.post.call_count == 1
+    args, kwargs = session.post.call_args
+    assert args[0] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    assert kwargs["headers"]["x-goog-api-key"] == "not-to-appear-in-url"
+    assert "not-to-appear-in-url" not in args[0]
+
+
+def test_provider_health_reflects_paid_trial_flag(tmp_path, guarded):
+    service = TTSService(TTSConfig(provider="google", google_api_key="configured", cache_dir=str(tmp_path)))
+    assert service.provider_available
+    guarded.setenv("TTS_CHIRP_TRIAL_ENABLED", "false")
+    assert not service.provider_available
