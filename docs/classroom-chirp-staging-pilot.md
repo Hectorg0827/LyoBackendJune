@@ -19,8 +19,16 @@ production, SecretaryAI, the separate VoiceLab or any shared production key.
    identity federation where Railway identity support permits it. A manually
    created service-account key is a fallback only with explicit approval and
    secret storage. Do not create a key or start billable calls by default.
-4. Verify staging Redis is connected, persists the trial ledger, and uses an
-   appropriate non-evicting policy. If Redis fails, requests fail closed.
+4. Verify staging Redis is connected, has a persistent volume, uses an
+   appropriate non-evicting policy, and has **append-only file (AOF)
+   persistence enabled**. Every successful reservation now requires the Redis
+   `WAITAOF 1 0 5000` command to acknowledge a local fsync on the *same
+   connection*. The existing staging Redis services were observed with RDB
+   snapshots (`--save 60 1`) but without AOF. **This precondition is not yet
+   met**; requests will fail closed even if the Google provider flag is on.
+   Do not change the shared Redis persistence settings or erase any ledger
+   without assessing the impact on other staging services. A dedicated,
+   persistent AOF-enabled trial Redis is the safer alternative if practical.
 5. In **LyoJourneyStagingBackend** only, store the dedicated service-account
    JSON in sealed `GOOGLE_TTS_SERVICE_ACCOUNT_JSON` or configure
    `GOOGLE_APPLICATION_CREDENTIALS` to point to a credentials file provided
@@ -42,7 +50,9 @@ The pilot code charges a separate, no-TTL Redis ledger before *each* uncached
 request, reserving **$40 per million UTF-8 bytes**, above the currently
 published Chirp 3 HD **$30 per million characters**. Timeouts are never
 refunded. It refuses to run outside staging, with a missing/oversized limit,
-or without Redis. Cache hits do not incur another provider request.
+or without a durable Redis fsync acknowledgment. Cache hits do not incur
+another provider request. AOF acknowledgement narrows the crash-loss window
+but is not a guarantee of strong consistency under all Redis failure modes.
 
 The Redis reservation bounds *this service's estimated voice request usage*,
 not the external Google Cloud invoice, taxes, billing delays, or other project

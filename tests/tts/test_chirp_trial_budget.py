@@ -19,16 +19,43 @@ class AtomicLedger:
         self.total = 0
         self.lock = asyncio.Lock()
         self.calls = 0
+        self.aof_ack = [1, 0]
+        self.failure = None
 
-    async def eval(self, script, keys, ledger_key, requested, limit):
-        assert "INCRBY" in script and keys == 1
-        assert ledger_key.startswith("lyo:tts:chirp:trial:")
-        async with self.lock:
-            self.calls += 1
-            if self.total + int(requested) > int(limit):
-                return -1
-            self.total += int(requested)
-            return self.total
+    def pipeline(self, *, transaction):
+        # The same connection must execute the reserve and WAITAOF commands.
+        assert transaction is False
+        ledger = self
+
+        class Pipeline:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return None
+
+            def eval(self, script, keys, ledger_key, requested, limit):
+                assert "INCRBY" in script and keys == 1
+                assert ledger_key.startswith("lyo:tts:chirp:trial:")
+                self.requested = int(requested)
+                self.limit = int(limit)
+                return self
+
+            def execute_command(self, command, local, replicas, timeout):
+                assert (command, local, replicas, timeout) == ("WAITAOF", 1, 0, 5000)
+                return self
+
+            async def execute(self):
+                if ledger.failure:
+                    raise ledger.failure
+                async with ledger.lock:
+                    ledger.calls += 1
+                    if ledger.total + self.requested > self.limit:
+                        return [-1, ledger.aof_ack]
+                    ledger.total += self.requested
+                    return [ledger.total, ledger.aof_ack]
+
+        return Pipeline()
 
 
 @pytest.fixture
@@ -81,10 +108,45 @@ async def test_missing_or_failed_redis_blocks_provider_calls(guarded):
     with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
         await reserve_chirp_attempt("test")
     ledger = AtomicLedger()
-    ledger.eval = AsyncMock(side_effect=ConnectionError("offline"))
+    ledger.failure = ConnectionError("offline")
     guarded.setattr(redis_client, "client", ledger)
     with pytest.raises(TTSTrialBudgetExceeded, match="unavailable"):
         await reserve_chirp_attempt("test")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ack", [[0, 0], [], ["bad", 0]])
+async def test_unconfirmed_aof_fsync_fails_closed(guarded, ack):
+    from lyo_app.core.redis_client import redis_client
+
+    ledger = AtomicLedger()
+    ledger.aof_ack = ack
+    guarded.setattr(redis_client, "client", ledger)
+    with pytest.raises(TTSTrialBudgetExceeded, match="durable"):
+        await reserve_chirp_attempt("test")
+    # A reservation can be charged even when durability times out. Never
+    # refund it: a retry may otherwise exceed the budget.
+    assert ledger.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_without_aof_fails_closed_before_provider(tmp_path, guarded):
+    from lyo_app.core.redis_client import redis_client
+
+    guarded.setenv("TTS_CHIRP_TRIAL_LIMIT_USD", "1")
+    ledger = AtomicLedger()
+    ledger.failure = RuntimeError("WAITAOF cannot run without appendonly enabled")
+    guarded.setattr(redis_client, "client", ledger)
+    service = TTSService(TTSConfig(
+        provider="google", google_service_account_json='{"test": "only"}',
+        cache_dir=str(tmp_path),
+    ))
+    service._google_access_token = AsyncMock(return_value="temporary-test-token")
+    service._session = MagicMock()
+    service._initialized = True
+    with pytest.raises(TTSTrialBudgetExceeded, match="durable"):
+        await service.synthesize("Never send this to Google.", language="en-US")
+    service._session.post.assert_not_called()
 
 
 @pytest.mark.asyncio
