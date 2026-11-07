@@ -8,18 +8,24 @@ production, SecretaryAI, the separate VoiceLab or any shared production key.
 1. Confirm the earlier temporary CPU experiment's actual Railway usage against
    the user's **$25 total cap**. This pilot permits no more than **$15** of
    additional estimated Google Chirp API requests; reduce it if less remains.
-2. Create a billing-enabled Google Cloud project restricted to this experiment,
-   enable Text-to-Speech API, and apply a Google-side budget alert, API quota,
-   and API-specific credential restriction. Alerts are not hard spending stops.
-   Do not reuse `GEMINI_API_KEY`, which serves another function.
-3. Confirm the selected Google Cloud credential supports REST
-   `POST /v1/text:synthesize`. Google's TTS documentation primarily describes
-   ADC/OAuth; an API key must be verified before enabling the classroom switch.
+2. In **Default Gemini Project (`gen-lang-client-0277145511`)**, which has
+   active billing, enable Text-to-Speech API, apply a Google-side budget alert
+   and low API quota. Google budget alerts are not hard spending stops, and
+   project-level Gemini usage is separate from this trial. Never reuse the
+   Gemini API key.
+3. Use a dedicated, least-privileged **service account** with OAuth/ADC for
+   the documented REST `POST /v1/text:synthesize`; the Gemini API key is not
+   suitable authentication for this endpoint. Prefer short-lived workload
+   identity federation where Railway identity support permits it. A manually
+   created service-account key is a fallback only with explicit approval and
+   secret storage. Do not create a key or start billable calls by default.
 4. Verify staging Redis is connected, persists the trial ledger, and uses an
    appropriate non-evicting policy. If Redis fails, requests fail closed.
-5. In **LyoJourneyStagingBackend** only, store a dedicated credential as a
-   sealed `GOOGLE_TTS_API_KEY` environment variable. Never place it in GitHub,
-   chat messages, logs or a URL.
+5. In **LyoJourneyStagingBackend** only, store the dedicated service-account
+   JSON in sealed `GOOGLE_TTS_SERVICE_ACCOUNT_JSON` or configure
+   `GOOGLE_APPLICATION_CREDENTIALS` to point to a credentials file provided
+   securely by the deployment system. Never place any credential in GitHub,
+   chat messages, logs or a URL. No ambient Gemini key fallback is permitted.
 
 ## Controlled activation (only after preconditions pass)
 

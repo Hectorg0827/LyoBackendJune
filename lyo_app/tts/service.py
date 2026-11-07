@@ -14,11 +14,12 @@ import asyncio
 import base64
 from contextlib import asynccontextmanager
 import hashlib
+import json
 import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Literal, Optional
@@ -133,7 +134,7 @@ class TTSConfig:
     provider: TTSProvider = "kokoro"
     kokoro_base_url: str = "http://kokoro-tts:8880"
     kokoro_api_key: str = ""
-    google_api_key: str = ""
+    google_service_account_json: str = field(default="", repr=False)
     openai_api_key: str = ""
     allow_openai_tts: bool = False
     default_voice: Voice = "nova"
@@ -164,8 +165,11 @@ class TTSConfig:
                 get_secret("KOKORO_TTS_API_KEY", os.getenv("KOKORO_TTS_API_KEY", ""))
                 or ""
             ).strip(),
-            google_api_key=(
-                get_secret("GOOGLE_TTS_API_KEY", os.getenv("GOOGLE_TTS_API_KEY", ""))
+            google_service_account_json=(
+                get_secret(
+                    "GOOGLE_TTS_SERVICE_ACCOUNT_JSON",
+                    os.getenv("GOOGLE_TTS_SERVICE_ACCOUNT_JSON", ""),
+                )
                 or ""
             ).strip(),
             openai_api_key=(
@@ -199,6 +203,8 @@ class TTSService:
         self._initialized = False
         self._key_locks: Dict[str, asyncio.Lock] = {}
         self._key_users: Dict[str, int] = {}
+        self._google_credentials: Any = None
+        self._google_credentials_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -232,7 +238,10 @@ class TTSService:
         if self.config.provider == "kokoro":
             return bool(self.config.kokoro_base_url)
         if self.config.provider == "google":
-            if not self.config.google_api_key:
+            if not (
+                self.config.google_service_account_json
+                or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            ):
                 return False
             from lyo_app.tts.trial_budget import TTSTrialBudgetExceeded, _trial_limit_micro_usd
 
@@ -242,6 +251,43 @@ class TTSService:
                 return False
             return True
         return bool(self.config.allow_openai_tts and self.config.openai_api_key)
+
+    async def _google_access_token(self) -> str:
+        """Use a dedicated service account or explicitly configured ADC.
+
+        The Cloud TTS REST endpoint documents OAuth, not Gemini API keys.
+        Never read ambient Gemini credentials or allow metadata-server ADC.
+        """
+        if not self.provider_available:
+            raise TTSUnavailableError("Google TTS trial credentials or safeguards are not configured")
+
+        async with self._google_credentials_lock:
+            try:
+                from google.auth import load_credentials_from_file
+                from google.auth.transport.requests import Request
+                from google.oauth2 import service_account
+
+                scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+                if self._google_credentials is None:
+                    if self.config.google_service_account_json:
+                        info = json.loads(self.config.google_service_account_json)
+                        self._google_credentials = service_account.Credentials.from_service_account_info(
+                            info, scopes=scopes
+                        )
+                    else:
+                        # Explicit file path only: do not fall back to instance metadata.
+                        self._google_credentials, _ = load_credentials_from_file(
+                            os.environ["GOOGLE_APPLICATION_CREDENTIALS"], scopes=scopes
+                        )
+                if not self._google_credentials.valid:
+                    await asyncio.to_thread(self._google_credentials.refresh, Request())
+                token = self._google_credentials.token
+                if not token:
+                    raise ValueError("OAuth token missing")
+                return token
+            except Exception:
+                # Never include a credential, token or provider response in logs/errors.
+                raise TTSUnavailableError("Google TTS authentication unavailable") from None
 
     def select_voice_for_content(
         self, content_type: str, topic: Optional[str] = None
@@ -572,6 +618,7 @@ class TTSService:
             )
 
         if resolved.provider == "google":
+            token = await self._google_access_token()
             # Reserve *before* the paid network request. This pilot is disabled
             # outside staging or when its durable allowance is unavailable.
             from lyo_app.tts.trial_budget import reserve_chirp_attempt
@@ -590,12 +637,11 @@ class TTSService:
             }
             # Never place a secret in the URL, where network logs may capture it.
             url = "https://texttospeech.googleapis.com/v1/text:synthesize"
-            headers = {"x-goog-api-key": self.config.google_api_key}
+            headers = {"Authorization": f"Bearer {token}"}
             async with self._session.post(url, json=payload, headers=headers) as response:
                 if response.status != 200:
-                    detail = (await response.text())[:500]
                     raise RuntimeError(
-                        f"Google TTS request failed with status {response.status}: {detail}"
+                        f"Google TTS request failed with status {response.status}"
                     )
                 data = await response.json()
             encoded = data.get("audioContent")

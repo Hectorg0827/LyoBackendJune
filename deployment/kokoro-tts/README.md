@@ -18,6 +18,8 @@ and caches each short teaching turn once, then returns that identical audio to
 Web, iOS, and Android.
 
 To trial a managed voice instead, explicitly set `TTS_PROVIDER=google` and
-`GOOGLE_TTS_API_KEY`. This is never used as an automatic fallback. OpenAI TTS
+provide a dedicated OAuth credential via `GOOGLE_TTS_SERVICE_ACCOUNT_JSON` or
+`GOOGLE_APPLICATION_CREDENTIALS`, along with the staging-only trial budget flags.
+This is never used as an automatic fallback. OpenAI TTS
 also remains disabled unless both `TTS_PROVIDER=openai` and
 `ALLOW_OPENAI_TTS=true` are set.
