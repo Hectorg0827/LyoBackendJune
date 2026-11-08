@@ -23,7 +23,11 @@ from decimal import Decimal, InvalidOperation
 logger = logging.getLogger(__name__)
 
 LIMIT_MICRO_USD = 10_000_000
-LEDGER_KEY = "lyo:classroom:trial:20261105:reserved_microusd"
+# The 2026-11-05 ledger remains durable in Redis for audit and must not be
+# deleted or credited back. The user authorized a *separate* $10 staging-only
+# acceptance round on 2026-11-08. A new key gives that round its own fail-closed
+# ceiling without raising the per-round maximum or touching the old balance.
+LEDGER_KEY = "lyo:classroom:trial:20261108:reserved_microusd"
 
 # Deliberately conservative maxima in USD per million input/output tokens,
 # including model thinking/output tokens. These are safety ceilings, NOT live
@@ -34,9 +38,12 @@ MODEL_UPPER_USD_PER_MILLION: dict[str, tuple[int, int]] = {
     "gpt-4o-mini": (1, 3),
     "gpt-4o": (5, 20),
     "gemini-3.5-flash-lite": (4, 20),
-    "gemini-3.6-flash": (2, 8),
-    "gemini-3.7-flash": (2, 8),
-    "gemini-3.8-flash": (2, 8),
+    # Include headroom above higher-priority pricing tiers, not merely the
+    # cheaper standard tier, so routing/tier changes cannot silently reduce
+    # the trial's conservative pre-request reservation.
+    "gemini-3.6-flash": (3, 17),
+    "gemini-3.7-flash": (3, 17),
+    "gemini-3.8-flash": (3, 17),
 }
 
 _RESERVE_LUA = """

@@ -7,6 +7,7 @@ import pytest
 
 from lyo_app.ai_classroom.trial_budget import (
     ClassroomTrialBudgetExceeded,
+    LEDGER_KEY,
     reserve_classroom_attempt,
     reserve_micro_usd,
 )
@@ -30,6 +31,12 @@ class AtomicRedisLedger:
                 return -1
             self.total += int(requested)
             return self.total
+
+
+def test_new_acceptance_round_uses_separate_durable_ledger():
+    # The previously reserved budget must remain untouched in its old key.
+    assert LEDGER_KEY == "lyo:classroom:trial:20261108:reserved_microusd"
+    assert LEDGER_KEY != "lyo:classroom:trial:20261105:reserved_microusd"
 
 
 @pytest.fixture
