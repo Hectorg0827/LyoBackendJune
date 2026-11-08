@@ -80,6 +80,7 @@ SpeakerId = Literal[
 AudioFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]
 Model = Literal["tts-1", "tts-1-hd"]
 TTSProvider = Literal["kokoro", "google", "openai"]
+KokoroRuntime = Literal["fastapi", "fastkokoro"]
 
 
 KOKORO_VOICES = {
@@ -88,6 +89,16 @@ KOKORO_VOICES = {
     "fr": "ff_siwis",
     "it": "if_sara",
     "pt": "pf_dora",
+}
+
+# FastKokoro's ONNX API uses these synthesis language identifiers.  Keep this
+# adapter opt-in: the existing Kokoro-FastAPI server accepts the old payload.
+FASTKOKORO_LANGUAGES = {
+    "en": "en-us",
+    "es": "es-es",
+    "fr": "fr-fr",
+    "it": "it-it",
+    "pt": "pt-br",
 }
 
 # Distinct native Kokoro English characters, including Lyo; the shared locale voice remains
@@ -132,6 +143,7 @@ class TTSConfig:
     """Runtime configuration with cost-safe defaults."""
 
     provider: TTSProvider = "kokoro"
+    kokoro_runtime: KokoroRuntime = "fastapi"
     kokoro_base_url: str = "http://kokoro-tts:8880"
     kokoro_api_key: str = ""
     google_service_account_json: str = field(default="", repr=False)
@@ -155,8 +167,14 @@ class TTSConfig:
             logger.warning("Unknown TTS_PROVIDER=%r; using kokoro", raw_provider)
             raw_provider = "kokoro"
 
+        raw_runtime = (os.getenv("KOKORO_TTS_RUNTIME", "fastapi") or "fastapi").strip().lower()
+        if raw_runtime not in {"fastapi", "fastkokoro"}:
+            logger.warning("Unknown KOKORO_TTS_RUNTIME=%r; using fastapi", raw_runtime)
+            raw_runtime = "fastapi"
+
         return cls(
             provider=raw_provider,  # type: ignore[arg-type]
+            kokoro_runtime=raw_runtime,  # type: ignore[arg-type]
             kokoro_base_url=(
                 os.getenv("KOKORO_TTS_BASE_URL", "http://kokoro-tts:8880")
                 or "http://kokoro-tts:8880"
@@ -221,8 +239,9 @@ class TTSService:
         )
         self._initialized = True
         logger.info(
-            "TTS initialized: provider=%s default_language=%s cache_ttl=%sh",
+            "TTS initialized: provider=%s kokoro_runtime=%s default_language=%s cache_ttl=%sh",
             self.config.provider,
+            self.config.kokoro_runtime,
             self.config.default_language,
             self.config.cache_ttl_hours,
         )
@@ -449,18 +468,52 @@ class TTSService:
         audio_format: AudioFormat,
         speed: float,
     ) -> str:
-        content = "|".join(
-            [
-                resolved.provider,
-                resolved.provider_model,
-                resolved.provider_voice,
-                resolved.language_code,
-                audio_format,
-                f"{speed:.2f}",
-                text,
-            ]
-        )
+        parts = [
+            resolved.provider,
+            resolved.provider_model,
+            resolved.provider_voice,
+            resolved.language_code,
+            audio_format,
+            f"{speed:.2f}",
+            text,
+        ]
+        # Preserve existing cache keys for original Kokoro and paid providers.
+        # The new runtime must never reuse audio rendered by the old runtime.
+        if resolved.provider == "kokoro" and self.config.kokoro_runtime == "fastkokoro":
+            parts.insert(1, "fastkokoro")
+        content = "|".join(parts)
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _kokoro_request_payload(
+        self,
+        text: str,
+        resolved: ResolvedVoice,
+        audio_format: AudioFormat,
+        speed: float,
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        """Adapt the alternate ONNX runtime without changing the default API.
+
+        FastKokoro rejects the 0.98x classroom default with HTTP 422; its
+        supported speed floor is 1.0x. Preserve the user's requested rate in
+        the cache identity, but send a compatible value to that runtime only.
+        """
+        payload: Dict[str, Any] = {
+            "model": resolved.provider_model,
+            "input": text,
+            "voice": resolved.provider_voice,
+            "response_format": audio_format,
+            "speed": speed,
+        }
+        if stream:
+            payload["stream"] = True
+        if self.config.kokoro_runtime == "fastkokoro":
+            payload["speed"] = max(1.0, speed)
+            payload["lang"] = FASTKOKORO_LANGUAGES[resolved.language_family]
+            if speed < 1.0:
+                logger.debug("FastKokoro normalized requested speech speed %.2f to 1.0", speed)
+        return payload
 
     def _cache_path(self, cache_key: str, audio_format: AudioFormat) -> Path:
         return Path(self.config.cache_dir) / f"{cache_key}.{audio_format}"
@@ -606,13 +659,9 @@ class TTSService:
             raise TTSUnavailableError("TTS HTTP session is not initialized")
 
         if resolved.provider == "kokoro":
-            payload = {
-                "model": resolved.provider_model,
-                "input": text,
-                "voice": resolved.provider_voice,
-                "response_format": audio_format,
-                "speed": speed,
-            }
+            payload = self._kokoro_request_payload(
+                text, resolved, audio_format, speed, stream=False
+            )
             return await self._post_binary(
                 f"{self.config.kokoro_base_url}/v1/audio/speech", payload
             )
@@ -733,10 +782,12 @@ class TTSService:
                     "speed": speed,
                 }
                 if resolved.provider == "kokoro":
-                    # Kokoro-FastAPI supports native sentence-chunked output.
-                    # Explicitly opt in so the proxy never waits for a complete
-                    # recording if an image version changes its default.
-                    payload["stream"] = True
+                    # Both self-hosted runtimes expose the OpenAI-compatible
+                    # endpoint, but FastKokoro requires its own language code
+                    # and a minimum speed of 1.0x.
+                    payload = self._kokoro_request_payload(
+                        text, resolved, format, speed, stream=True
+                    )
                 if not self._session:
                     raise TTSUnavailableError("TTS HTTP session is not initialized")
                 upstream_started_at = time.monotonic()
