@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import os
 import time
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,6 +24,29 @@ from .service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _first_audio_budget_seconds() -> Optional[float]:
+    """Bound a classroom turn's initial silence before client-side fallback.
+
+    Preserve the original unwrapped provider path unless staging explicitly
+    opts into a deadline. A 15-second staging budget allows the observed
+    three-way ONNX pilot workload (~8.5 seconds to first bytes) while bounding
+    the classroom's silent wait and enabling device fallback.
+    """
+    raw = os.getenv("TTS_STREAM_FIRST_BYTE_TIMEOUT_SECONDS")
+    if raw is None:
+        return None
+    try:
+        budget = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid TTS stream first-audio budget; ignoring override")
+        return None
+    if not 1 <= budget <= 90:
+        logger.warning("Out-of-range TTS stream first-audio budget; ignoring override")
+        return None
+    return budget
+
 
 router = APIRouter(prefix="/api/v1/tts", tags=["Text-to-Speech"])
 
@@ -220,6 +244,7 @@ async def synthesize_stream(
     """Return the first provider audio bytes without waiting for the recording."""
     stream = None
     started_at = time.monotonic()
+    first_audio_budget = _first_audio_budget_seconds()
     try:
         service = await get_tts_service()
         stream = service.synthesize_streaming(
@@ -231,7 +256,12 @@ async def synthesize_stream(
         # Prime before sending headers: initial provider/configuration failures
         # still produce an actionable HTTP error. Later failures close the
         # stream and never cache a partial recording.
-        first = await anext(stream)
+        if first_audio_budget is None:
+            first = await anext(stream)
+        else:
+            first = await asyncio.wait_for(
+                anext(stream), timeout=first_audio_budget
+            )
         logger.info(
             "Classroom TTS first audio bytes in %.0fms (%s bytes)",
             (time.monotonic() - started_at) * 1000,
@@ -245,6 +275,15 @@ async def synthesize_stream(
         if stream is not None:
             await stream.aclose()
         raise HTTPException(status_code=503, detail=str(exc))
+    except TimeoutError:
+        if stream is not None:
+            await stream.aclose()
+        if first_audio_budget is None:
+            # Preserve original provider-timeout behavior when unconfigured.
+            logger.exception("TTS stream could not start")
+            raise HTTPException(status_code=502, detail="Speech provider failed")
+        logger.warning("Classroom TTS exceeded first-audio deadline")
+        raise HTTPException(status_code=504, detail="Speech provider timed out")
     except Exception:
         if stream is not None:
             await stream.aclose()

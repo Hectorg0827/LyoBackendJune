@@ -170,7 +170,9 @@ FADED = (
     "This move is faded: demonstration=[], supply a completion, choice or "
     "short_answer task with most of a related worked example already completed. "
     "Ask for ONE missing step or result; never a broad explanation. Only the "
-    "final step is removed. "
+    "final step is removed. Stop the worked example BEFORE computing that "
+    "missing result; do not write the solved step (e.g. 8 ÷ 2 = 4 or shade "
+    "4 slices before asking 1/2 = ?/8) into any learner-visible field. "
 )
 
 INDEPENDENT = (
@@ -180,7 +182,9 @@ INDEPENDENT = (
     "tapped answer cannot establish it. A transfer question follows, but does "
     "not gate unit completion. Ask one fresh problem closely aligned with "
     "practised work, with a concise response; avoid an essay. Do not provide its "
-    "solution. "
+    "solution. For numeric skills, change the actual quantities and missing "
+    "result relative to the immediately preceding worked/faded example; merely "
+    "moving half of eight slices to a birthday-party story is not a new problem. "
 )
 
 TRANSFER = (
