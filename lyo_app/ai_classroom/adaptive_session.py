@@ -1669,7 +1669,9 @@ class AdaptiveSession:
             ))
         else:
             components.append(InputField(
-                component_id=pending.id, question=prompt if follow_up else prompt,\n                placeholder=task.response_hint if follow_up else self.copy(\n                    context, "Write your reasoning here", "Escribe tu razonamiento aquí"),
+                component_id=pending.id, question=prompt,
+                placeholder=task.response_hint if follow_up else self.copy(
+                    context, "Write your reasoning here", "Escribe tu razonamiento aquí"),
                 concept_id=self.record_concept(context, state),
                 evidence_type="retrieval" if pending.phase == "interleave" and state.review_is_due
                 else "transfer" if pending.phase == "transfer"
