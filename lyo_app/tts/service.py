@@ -14,11 +14,12 @@ import asyncio
 import base64
 from contextlib import asynccontextmanager
 import hashlib
+import json
 import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Literal, Optional
@@ -79,6 +80,7 @@ SpeakerId = Literal[
 AudioFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]
 Model = Literal["tts-1", "tts-1-hd"]
 TTSProvider = Literal["kokoro", "google", "openai"]
+KokoroRuntime = Literal["fastapi", "fastkokoro"]
 
 
 KOKORO_VOICES = {
@@ -87,6 +89,16 @@ KOKORO_VOICES = {
     "fr": "ff_siwis",
     "it": "if_sara",
     "pt": "pf_dora",
+}
+
+# FastKokoro's ONNX API uses these synthesis language identifiers.  Keep this
+# adapter opt-in: the existing Kokoro-FastAPI server accepts the old payload.
+FASTKOKORO_LANGUAGES = {
+    "en": "en-us",
+    "es": "es-es",
+    "fr": "fr-fr",
+    "it": "it-it",
+    "pt": "pt-br",
 }
 
 # Distinct native Kokoro English characters, including Lyo; the shared locale voice remains
@@ -131,9 +143,10 @@ class TTSConfig:
     """Runtime configuration with cost-safe defaults."""
 
     provider: TTSProvider = "kokoro"
+    kokoro_runtime: KokoroRuntime = "fastapi"
     kokoro_base_url: str = "http://kokoro-tts:8880"
     kokoro_api_key: str = ""
-    google_api_key: str = ""
+    google_service_account_json: str = field(default="", repr=False)
     openai_api_key: str = ""
     allow_openai_tts: bool = False
     default_voice: Voice = "nova"
@@ -154,8 +167,14 @@ class TTSConfig:
             logger.warning("Unknown TTS_PROVIDER=%r; using kokoro", raw_provider)
             raw_provider = "kokoro"
 
+        raw_runtime = (os.getenv("KOKORO_TTS_RUNTIME", "fastapi") or "fastapi").strip().lower()
+        if raw_runtime not in {"fastapi", "fastkokoro"}:
+            logger.warning("Unknown KOKORO_TTS_RUNTIME=%r; using fastapi", raw_runtime)
+            raw_runtime = "fastapi"
+
         return cls(
             provider=raw_provider,  # type: ignore[arg-type]
+            kokoro_runtime=raw_runtime,  # type: ignore[arg-type]
             kokoro_base_url=(
                 os.getenv("KOKORO_TTS_BASE_URL", "http://kokoro-tts:8880")
                 or "http://kokoro-tts:8880"
@@ -164,8 +183,11 @@ class TTSConfig:
                 get_secret("KOKORO_TTS_API_KEY", os.getenv("KOKORO_TTS_API_KEY", ""))
                 or ""
             ).strip(),
-            google_api_key=(
-                get_secret("GOOGLE_TTS_API_KEY", os.getenv("GOOGLE_TTS_API_KEY", ""))
+            google_service_account_json=(
+                get_secret(
+                    "GOOGLE_TTS_SERVICE_ACCOUNT_JSON",
+                    os.getenv("GOOGLE_TTS_SERVICE_ACCOUNT_JSON", ""),
+                )
                 or ""
             ).strip(),
             openai_api_key=(
@@ -199,6 +221,8 @@ class TTSService:
         self._initialized = False
         self._key_locks: Dict[str, asyncio.Lock] = {}
         self._key_users: Dict[str, int] = {}
+        self._google_credentials: Any = None
+        self._google_credentials_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -215,8 +239,9 @@ class TTSService:
         )
         self._initialized = True
         logger.info(
-            "TTS initialized: provider=%s default_language=%s cache_ttl=%sh",
+            "TTS initialized: provider=%s kokoro_runtime=%s default_language=%s cache_ttl=%sh",
             self.config.provider,
+            self.config.kokoro_runtime,
             self.config.default_language,
             self.config.cache_ttl_hours,
         )
@@ -232,8 +257,56 @@ class TTSService:
         if self.config.provider == "kokoro":
             return bool(self.config.kokoro_base_url)
         if self.config.provider == "google":
-            return bool(self.config.google_api_key)
+            if not (
+                self.config.google_service_account_json
+                or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            ):
+                return False
+            from lyo_app.tts.trial_budget import TTSTrialBudgetExceeded, _trial_limit_micro_usd
+
+            try:
+                _trial_limit_micro_usd()
+            except TTSTrialBudgetExceeded:
+                return False
+            return True
         return bool(self.config.allow_openai_tts and self.config.openai_api_key)
+
+    async def _google_access_token(self) -> str:
+        """Use a dedicated service account or explicitly configured ADC.
+
+        The Cloud TTS REST endpoint documents OAuth, not Gemini API keys.
+        Never read ambient Gemini credentials or allow metadata-server ADC.
+        """
+        if not self.provider_available:
+            raise TTSUnavailableError("Google TTS trial credentials or safeguards are not configured")
+
+        async with self._google_credentials_lock:
+            try:
+                from google.auth import load_credentials_from_file
+                from google.auth.transport.requests import Request
+                from google.oauth2 import service_account
+
+                scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+                if self._google_credentials is None:
+                    if self.config.google_service_account_json:
+                        info = json.loads(self.config.google_service_account_json)
+                        self._google_credentials = service_account.Credentials.from_service_account_info(
+                            info, scopes=scopes
+                        )
+                    else:
+                        # Explicit file path only: do not fall back to instance metadata.
+                        self._google_credentials, _ = load_credentials_from_file(
+                            os.environ["GOOGLE_APPLICATION_CREDENTIALS"], scopes=scopes
+                        )
+                if not self._google_credentials.valid:
+                    await asyncio.to_thread(self._google_credentials.refresh, Request())
+                token = self._google_credentials.token
+                if not token:
+                    raise ValueError("OAuth token missing")
+                return token
+            except Exception:
+                # Never include a credential, token or provider response in logs/errors.
+                raise TTSUnavailableError("Google TTS authentication unavailable") from None
 
     def select_voice_for_content(
         self, content_type: str, topic: Optional[str] = None
@@ -395,18 +468,52 @@ class TTSService:
         audio_format: AudioFormat,
         speed: float,
     ) -> str:
-        content = "|".join(
-            [
-                resolved.provider,
-                resolved.provider_model,
-                resolved.provider_voice,
-                resolved.language_code,
-                audio_format,
-                f"{speed:.2f}",
-                text,
-            ]
-        )
+        parts = [
+            resolved.provider,
+            resolved.provider_model,
+            resolved.provider_voice,
+            resolved.language_code,
+            audio_format,
+            f"{speed:.2f}",
+            text,
+        ]
+        # Preserve existing cache keys for original Kokoro and paid providers.
+        # The new runtime must never reuse audio rendered by the old runtime.
+        if resolved.provider == "kokoro" and self.config.kokoro_runtime == "fastkokoro":
+            parts.insert(1, "fastkokoro")
+        content = "|".join(parts)
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _kokoro_request_payload(
+        self,
+        text: str,
+        resolved: ResolvedVoice,
+        audio_format: AudioFormat,
+        speed: float,
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        """Adapt the alternate ONNX runtime without changing the default API.
+
+        FastKokoro rejects the 0.98x classroom default with HTTP 422; its
+        supported speed floor is 1.0x. Preserve the user's requested rate in
+        the cache identity, but send a compatible value to that runtime only.
+        """
+        payload: Dict[str, Any] = {
+            "model": resolved.provider_model,
+            "input": text,
+            "voice": resolved.provider_voice,
+            "response_format": audio_format,
+            "speed": speed,
+        }
+        if stream:
+            payload["stream"] = True
+        if self.config.kokoro_runtime == "fastkokoro":
+            payload["speed"] = max(1.0, speed)
+            payload["lang"] = FASTKOKORO_LANGUAGES[resolved.language_family]
+            if speed < 1.0:
+                logger.debug("FastKokoro normalized requested speech speed %.2f to 1.0", speed)
+        return payload
 
     def _cache_path(self, cache_key: str, audio_format: AudioFormat) -> Path:
         return Path(self.config.cache_dir) / f"{cache_key}.{audio_format}"
@@ -552,18 +659,20 @@ class TTSService:
             raise TTSUnavailableError("TTS HTTP session is not initialized")
 
         if resolved.provider == "kokoro":
-            payload = {
-                "model": resolved.provider_model,
-                "input": text,
-                "voice": resolved.provider_voice,
-                "response_format": audio_format,
-                "speed": speed,
-            }
+            payload = self._kokoro_request_payload(
+                text, resolved, audio_format, speed, stream=False
+            )
             return await self._post_binary(
                 f"{self.config.kokoro_base_url}/v1/audio/speech", payload
             )
 
         if resolved.provider == "google":
+            token = await self._google_access_token()
+            # Reserve *before* the paid network request. This pilot is disabled
+            # outside staging or when its durable allowance is unavailable.
+            from lyo_app.tts.trial_budget import reserve_chirp_attempt
+
+            await reserve_chirp_attempt(text)
             payload = {
                 "input": {"text": text},
                 "voice": {
@@ -575,15 +684,13 @@ class TTSService:
                     "speakingRate": speed,
                 },
             }
-            url = (
-                "https://texttospeech.googleapis.com/v1/text:synthesize"
-                f"?key={self.config.google_api_key}"
-            )
-            async with self._session.post(url, json=payload) as response:
+            # Never place a secret in the URL, where network logs may capture it.
+            url = "https://texttospeech.googleapis.com/v1/text:synthesize"
+            headers = {"Authorization": f"Bearer {token}"}
+            async with self._session.post(url, json=payload, headers=headers) as response:
                 if response.status != 200:
-                    detail = (await response.text())[:500]
                     raise RuntimeError(
-                        f"Google TTS request failed with status {response.status}: {detail}"
+                        f"Google TTS request failed with status {response.status}"
                     )
                 data = await response.json()
             encoded = data.get("audioContent")
@@ -675,10 +782,12 @@ class TTSService:
                     "speed": speed,
                 }
                 if resolved.provider == "kokoro":
-                    # Kokoro-FastAPI supports native sentence-chunked output.
-                    # Explicitly opt in so the proxy never waits for a complete
-                    # recording if an image version changes its default.
-                    payload["stream"] = True
+                    # Both self-hosted runtimes expose the OpenAI-compatible
+                    # endpoint, but FastKokoro requires its own language code
+                    # and a minimum speed of 1.0x.
+                    payload = self._kokoro_request_payload(
+                        text, resolved, format, speed, stream=True
+                    )
                 if not self._session:
                     raise TTSUnavailableError("TTS HTTP session is not initialized")
                 upstream_started_at = time.monotonic()
