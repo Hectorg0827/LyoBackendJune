@@ -398,9 +398,9 @@ class AdaptiveSession:
                        verdict=result.verdict, extra_help=pending.extra_help_used,
                        response_format=pending.task.response_format, response=response,
                        feedback=result.feedback, misconception=result.misconception)
-            if choice and pending.phase != "diagnose" and self.feedback_sender is not None:
-                # A tapped checkpoint already has a server-validated verdict.
-                # Deliver it while the *next* AI teaching move is being authored;
+            if pending.phase != "diagnose" and self.feedback_sender is not None:
+                # A submitted checkpoint already has a server-validated verdict.
+                # Deliver written and selected-answer verdicts while the *next* AI teaching move is authored;
                 # otherwise the learner waits for a second model round-trip
                 # just to see whether the submitted choice was right. Never
                 # send a result for an unanswered or replayed checkpoint.
@@ -1669,7 +1669,7 @@ class AdaptiveSession:
             ))
         else:
             components.append(InputField(
-                component_id=pending.id, question=prompt + "\n\n" + task.response_hint, placeholder=task.response_hint,
+                component_id=pending.id, question=prompt if follow_up else prompt,\n                placeholder=task.response_hint if follow_up else self.copy(\n                    context, "Write your reasoning here", "Escribe tu razonamiento aquí"),
                 concept_id=self.record_concept(context, state),
                 evidence_type="retrieval" if pending.phase == "interleave" and state.review_is_due
                 else "transfer" if pending.phase == "transfer"
