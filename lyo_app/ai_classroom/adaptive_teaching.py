@@ -397,6 +397,84 @@ class TransferPracticeTurn(PracticeTurn):
         return self
 
 
+def _numeric_answer_targets(task: LearningTask, answer: str) -> set[str]:
+    """Identify an explicitly requested numeric result, not arbitrary operands.
+
+    A short answer like `4` can occur harmlessly as scenario data.  But the
+    same `4` on the right of `8 ÷ 2 = 4` is the *worked result* of the graded
+    question.  Fraction-completion rubrics may encode that target as `4/8`,
+    so read the numerator only when the public question actually leaves that
+    numerator blank.
+    """
+    numeric = r"\d+(?:\.\d+)?"
+    targets: set[str] = set()
+    exact = re.fullmatch(rf"\s*({numeric})\s*(?:slices?|pieces?|parts?)?\s*", answer, re.I)
+    if exact:
+        targets.add(exact.group(1))
+
+    missing_numerators = set(re.findall(r"(?:\?|_+|□)\s*/\s*(\d+)", task.question))
+    # Classroom maths is commonly generated as LaTeX rather than `?/8`.
+    # In particular, `\frac{\text{?}}{8}` is a numerator blank. Parse the
+    # constrained structure rather than treating the `?` as plain text next
+    # to a slash (which misses this entire live failure mode).
+    missing_numerators.update(re.findall(
+        r"\\frac\s*\{\s*(?:\\text\s*\{\s*)?"
+        r"(?:\?|_+|□|\\square)(?:\s*\})?\s*\}\s*\{\s*(\d+)\s*\}",
+        task.question,
+    ))
+    if missing_numerators:
+        fractions = re.findall(r"(\d+)\s*/\s*(\d+)", answer)
+        fractions.extend(re.findall(
+            r"\\frac\s*\{\s*(\d+)\s*\}\s*\{\s*(\d+)\s*\}", answer,
+        ))
+        for numerator, denominator in fractions:
+            if denominator in missing_numerators:
+                targets.add(numerator)
+    return targets
+
+
+def _visible_worked_result_matches(task: LearningTask, answer: str) -> bool:
+    """Catch answer-bearing computations/actions in graded question text.
+
+    We do not reject bare occurrences of a short numeric answer in scenario
+    data (e.g. a pizza *has* four slices).  Instead detect explicit results
+    and worked actions that solve the same requested quantity before the
+    learner answers.  This applies to both open and multiple-choice tasks.
+    """
+    targets = _numeric_answer_targets(task, answer)
+    if not targets:
+        return False
+    for visible in (task.scenario, task.question, task.response_hint):
+        # Completed calculations: `8 ÷ 2 = 4` or `half of 8 = 4`.
+        # Permit sentence-ending punctuation (`= 4.`), but not a partial
+        # match of a decimal (`= 4.5` must not be mistaken for answer `4`).
+        equalities = re.findall(r"(?<![=!<>])=\s*(\d+(?:\.\d+)?)(?!\d|\.\d)", visible)
+        if targets.intersection(equalities):
+            return True
+        # Worked outcome stated without an equals sign: `we shade 4 slices`.
+        worked_parts = re.findall(
+            r"\b(?:shade[ds]?|shading|cover(?:s|ed)?|take[s]?|took|"
+            r"select(?:s|ed)?|mark(?:s|ed)?|sombrea(?:n|mos)?|"
+            r"cubre[n]?|toma[n]?)\s+(?:exactly\s+)?"
+            r"(\d+(?:\.\d+)?)\s+(?:equal\s+)?"
+            r"(?:slices?|pieces?|parts?|rebanadas?|porciones?|partes?)\b",
+            visible, flags=re.I,
+        )
+        if targets.intersection(worked_parts):
+            return True
+        # Passive outcome, as in the live `Pizza B has 4 shaded slices` leak.
+        # A bare `has 4 slices` still remains valid problem data.
+        completed_parts = re.findall(
+            r"\b(\d+(?:\.\d+)?)\s+"
+            r"(?:shaded|covered|selected|marked|colou?red)\s+"
+            r"(?:equal\s+)?(?:slices?|pieces?|parts?|rebanadas?|porciones?|partes?)\b",
+            visible, flags=re.I,
+        )
+        if targets.intersection(completed_parts):
+            return True
+    return False
+
+
 def validate_semantic_content(turn: LearningTurn) -> None:
     """Reject mechanically detectable meaning failures before a learner sees them.
 
@@ -411,6 +489,8 @@ def validate_semantic_content(turn: LearningTurn) -> None:
     answer = (next(option.label for option in task.options if option.correct)
               if task.response_format == "choice" else task.example_answer)
     normalized = comparable_text(answer)
+    if _visible_worked_result_matches(task, answer):
+        raise TeachingContractError("The visible question or example reveals the answer")
     # An answer may legitimately appear as an operand in the problem data,
     # but an explicit example in a graded prompt must not reveal its result.
     if task.response_format != "choice" and normalized:

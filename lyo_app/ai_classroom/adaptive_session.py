@@ -1695,7 +1695,15 @@ class AdaptiveSession:
         return Scene.model_validate(state.scene)
 
     def summary(self, context, state):
-        title = self.copy(context, "What you practised", "Lo que practicaste")
+        # This scene is also shown between skills. A whole-path recap here
+        # makes skipping the first checkpoint look like the class has ended,
+        # even though Continue will open the next unit.
+        if state.path_done:
+            title = self.copy(context, "What you practised", "Lo que practicaste")
+        elif state.unit_index in state.skipped and state.unit_index not in state.completed:
+            title = self.copy(context, "Saved for later", "Guardado para después")
+        else:
+            title = self.copy(context, "Ready for the next skill", "Listo para la siguiente habilidad")
         text = state.last_feedback or self.copy(context, "Let's bring the steps together.", "Vamos a reunir los pasos.")
         if (not state.independent_application or state.unresolved_misconceptions) and re.search(
             r"\b(?:mastered|mastery|fully mastered|dominas|dominado)\b",
@@ -1731,12 +1739,20 @@ class AdaptiveSession:
                     content=key_ideas[:1500],
                     language_code=context.language_code,
                 ))
-        components.append(ExampleBlock(title=title, content="\n".join(
-            f"• {u.title} — " + self.copy(context, "practised" if i in state.completed else "still to practise",
-                "practicada" if i in state.completed else "pendiente de práctica") for i, u in enumerate(state.plan.units)
-        ), language_code=context.language_code))
+        if state.path_done:
+            components.append(ExampleBlock(title=title, content="\n".join(
+                f"• {u.title} — " + self.copy(context, "practised" if i in state.completed else "still to practise",
+                    "practicada" if i in state.completed else "pendiente de práctica") for i, u in enumerate(state.plan.units)
+            ), language_code=context.language_code))
+        elif state.remaining_units:
+            next_unit = state.plan.units[state.remaining_units[0]]
+            components.append(ExampleBlock(
+                title=self.copy(context, "Up next", "A continuación"),
+                content=next_unit.title,
+                language_code=context.language_code,
+            ))
         needs_revisit = [u.title for i, u in enumerate(state.plan.units) if i in state.skipped]
-        if needs_revisit:
+        if state.path_done and needs_revisit:
             components.append(ExampleBlock(
                 component_id="classroom-summary/next-class",
                 title=self.copy(context, "Next class", "Próxima clase"),
@@ -1748,7 +1764,11 @@ class AdaptiveSession:
                 language_code=context.language_code,
             ))
         if not state.path_done or context.lesson_index + 1 < context.total_lessons:
-            components.append(CTAButton(component_id=state.step_id, label=self.copy(context, "Continue learning", "Seguir aprendiendo"),
+            components.append(CTAButton(component_id=state.step_id, label=self.copy(
+                                            context,
+                                            "Continue learning" if state.path_done else "Continue to next skill",
+                                            "Seguir aprendiendo" if state.path_done else "Continuar a la siguiente habilidad",
+                                        ),
                                         action_intent=ActionIntent.CONTINUE, language_code=context.language_code))
         if state.path_done and context.lesson_index + 1 >= context.total_lessons:
             components.append(CTAButton(component_id=state.step_id, label=self.copy(context, "Try a fresh example", "Probar otro ejemplo"),

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lyo_app.ai_classroom.adaptive_teaching import (
-    AdaptiveTeacher, GuidedState, LearningTask, TeachingContractError,
+    AdaptiveTeacher, GuidedState, LearningTask, TaskOption, TeachingContractError,
     TeachingUnavailable, validate_semantic_content,
 )
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, probe, task
@@ -88,6 +88,132 @@ def test_a_short_numeric_answer_in_the_scenario_is_data_not_answer_leakage():
     turn.task.example_answer = "4"
     turn.board_content = "Four equal cuts in the first bar and eight in the second."
     validate_semantic_content(turn)
+
+
+@pytest.mark.parametrize("answer", ["4", "4/8", "4 slices"])
+@pytest.mark.parametrize("scenario", [
+    "Pizza D has 8 equal slices. Half of the 8 slices: 8 ÷ 2 = 4.",
+    "A pizza has 8 equal slices. To cover half the pizza, we shade 4 slices.",
+])
+def test_faded_half_of_eight_cannot_show_its_missing_numerator(answer, scenario):
+    """This exact leaked checkpoint reached the live classroom after retries."""
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "faded")
+    turn.task.example_answer = answer
+    turn.task.scenario = scenario
+    turn.task.question = "Complete 1/2 = ?/8."
+    turn.task.response_hint = "Type the missing numerator."
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(turn)
+
+
+@pytest.mark.parametrize(("scenario", "question"), [
+    (
+        "A pizza is cut into 8 equal slices. To cover half we shade 4 slices. "
+        "Step 1: total = 8. Step 2: half of 8 = 4.",
+        "Which number completes 1/2 = ?/8?",
+    ),
+    (
+        "Pizza B has 8 equal slices total. Pizza B has 4 shaded slices.",
+        r"Complete $\frac{2}{4} = \frac{\text{?}}{8}$.",
+    ),
+])
+def test_numeric_choice_is_not_exempt_from_worked_answer_leakage(scenario, question):
+    """Options 2, 4, 8 do not justify announcing 4 in the scenario."""
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "faded")
+    turn.task = LearningTask(
+        kind="choose", response_format="choice",
+        scenario=scenario,
+        question=question,
+        response_hint="Choose the missing numerator.",
+        criteria=["Chooses the number of eighths equal to one half"],
+        example_answer="4",
+        options=[
+            TaskOption(id="a", label="2", correct=False,
+                       feedback="Two eighths cover less than half.",
+                       misconception="uses the numerator of one half"),
+            TaskOption(id="b", label="4", correct=True,
+                       feedback="Four eighths are equivalent to one half."),
+            TaskOption(id="c", label="8", correct=False,
+                       feedback="Eight eighths would cover the whole pizza.",
+                       misconception="uses the total number of pieces"),
+        ],
+    )
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(turn)
+
+
+@pytest.mark.parametrize("answer", ["4/8", r"\frac{4}{8}"])
+def test_latex_numerator_blank_catches_precomputed_answer(answer):
+    """The actual classroom printed a LaTeX fraction, not ASCII `?/8`."""
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "faded")
+    turn.task.example_answer = answer
+    turn.task.scenario = "Pizza D has 8 equal slices. Half of eight: 8 ÷ 2 = 4."
+    turn.task.question = r"Complete $\frac{1}{2} = \frac{\text{?}}{8}$."
+    turn.task.response_hint = "Type the missing numerator."
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(turn)
+
+
+def test_latex_numerator_blank_rejects_passively_shaded_answer():
+    """`4 shaded slices` is a solved result when the answer is 4/8."""
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "faded")
+    turn.task.example_answer = "4/8"
+    turn.task.scenario = (
+        "Pizza B has 8 equal slices total. To match two of four on Pizza A, "
+        "Pizza B has 4 shaded slices."
+    )
+    turn.task.question = r"Complete $\frac{2}{4} = \frac{\text{?}}{8}$."
+    turn.task.response_hint = "Type the missing numerator."
+    with pytest.raises(TeachingContractError, match="reveals the answer"):
+        validate_semantic_content(turn)
+
+
+def test_latex_numerator_blank_allows_unsolved_numeric_setup():
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "faded")
+    turn.task.example_answer = "4/8"
+    turn.task.scenario = "Pizza A has 4 equal slices; Pizza B has 8 equal slices."
+    turn.task.question = r"Complete $\frac{2}{4} = \frac{\text{?}}{8}$."
+    turn.task.response_hint = "Type the missing numerator."
+    validate_semantic_content(turn)
+
+
+def test_given_numeric_operand_remains_allowed_when_no_result_is_worked_out():
+    """Do not ban the digit 4 itself: concrete problems require numeric data."""
+    turn = ScriptedTeacher()._turn(context(), GuidedState(owner="42", plan=plan()), "faded")
+    turn.task.example_answer = "4/8"
+    turn.task.scenario = (
+        "Pizza A has 4 slices, and Pizza D has 8 equal slices. "
+        "We want to represent one half of Pizza D."
+    )
+    turn.task.question = "Complete 1/2 = ?/8."
+    turn.task.response_hint = "Type the missing numerator."
+    validate_semantic_content(turn)
+
+
+def test_independent_prompt_requires_a_new_computation_not_a_new_story_wrapper():
+    from lyo_app.ai_classroom.teaching_prompt import teaching_prompt
+
+    prompt = teaching_prompt("independent")
+    assert "change the actual quantities and missing result" in prompt
+    assert "half of eight slices" in prompt
+
+
+@pytest.mark.asyncio
+async def test_leaked_faded_result_is_rejected_then_reauthored_before_display():
+    ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    valid = ScriptedTeacher()._turn(ctx, state, "faded")
+    leaked = valid.model_copy(deep=True)
+    leaked.task.example_answer = "4/8"
+    leaked.task.scenario = "Pizza D has 8 equal slices. Half of eight: 8 ÷ 2 = 4."
+    leaked.task.question = "Complete 1/2 = ?/8."
+    leaked.task.response_hint = "Type the missing numerator."
+    generate = AsyncMock(side_effect=[leaked, valid])
+
+    result = await AdaptiveTeacher(generate).turn(ctx, state, "faded")
+
+    assert generate.await_count == 2
+    assert result.task.scenario == valid.task.scenario
+    assert "reveals the answer" in generate.await_args.args[1]["repair"]
 
 
 def test_a_short_numeric_answer_may_not_be_stated_by_the_teacher_before_answering():

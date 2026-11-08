@@ -14,7 +14,10 @@ from lyo_app.ai_classroom.adaptive_teaching import (
     requests_help, unit_count, validate_evaluation,
 )
 from lyo_app.ai_classroom.scene_lifecycle_engine import _SESSION_PROGRESS, session_progress_key
-from lyo_app.ai_classroom.sdui_models import ActionIntent, InputField, QuizCard, Scene, TeacherMessage
+from lyo_app.ai_classroom.sdui_models import (
+    ActionIntent, CTAButton, ExampleBlock, InputField, ProgressBar,
+    QuizCard, Scene, TeacherMessage,
+)
 from tests.adaptive_fixtures import ScriptedTeacher, action, context, engine, evaluation, plan, task, advance_to_task, advance_engine, engine_past_the_probe, past_the_probe, tap_probe
 
 
@@ -172,6 +175,49 @@ async def test_help_and_skip_are_not_wrong_answers_and_skip_can_be_revisited():
     await answer(runner, progress, ctx)
     await answer(runner, progress, ctx)
     assert state(progress).skipped == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_skipping_first_of_four_skills_shows_interim_continue_not_final_recap():
+    teacher = ScriptedTeacher()
+    teacher.plan = AsyncMock(return_value=plan(4))
+    runner, progress, ctx = AdaptiveSession(teacher), {}, context()
+    await runner.run(ctx, progress, action(welcome=True))
+    await to_practice(runner, progress, ctx)
+
+    scene = await runner.run(ctx, progress, action(
+        ActionIntent.SKIP_QUESTION, state(progress).pending.id))
+    current = state(progress)
+    assert current.completed == [] and current.skipped == [0]
+    assert current.unit_index == 0 and current.remaining_units == [1, 2, 3]
+    assert current.unit_done and not current.path_done
+    assert any(isinstance(c, ProgressBar) and c.current == 0 and c.total == 4
+               for c in scene.components)
+    assert any(isinstance(c, ExampleBlock) and c.title == "Up next"
+               and c.content == "Fraction skill 2" for c in scene.components)
+    assert not any(isinstance(c, ExampleBlock) and
+                   (c.title == "What you practised" or "still to practise" in c.content)
+                   for c in scene.components)
+    next_button = next(c for c in scene.components if isinstance(c, CTAButton))
+    assert next_button.action_intent == ActionIntent.CONTINUE
+    assert next_button.component_id == current.step_id
+    assert next_button.label == "Continue to next skill"
+
+    await runner.run(ctx, progress, action(ActionIntent.CONTINUE, next_button.component_id))
+    assert state(progress).unit_index == 1 and not state(progress).path_done
+    assert teacher.turn.await_args.args[1].unit.title == "Fraction skill 2"
+
+    for unit_index in range(1, 4):
+        await to_practice(runner, progress, ctx)
+        scene = await runner.run(ctx, progress, action(
+            ActionIntent.SKIP_QUESTION, state(progress).pending.id))
+        if unit_index < 3:
+            next_button = next(c for c in scene.components if isinstance(c, CTAButton))
+            await runner.run(ctx, progress, action(ActionIntent.CONTINUE, next_button.component_id))
+
+    assert state(progress).path_done and state(progress).skipped == [0, 1, 2, 3]
+    assert any(isinstance(c, ExampleBlock) and c.title == "What you practised"
+               for c in scene.components)
 
 
 @pytest.mark.asyncio
