@@ -1,4 +1,4 @@
-"""The $10 classroom trial is a real, cross-worker pre-request guard."""
+"""The $20 classroom trial is a real, cross-worker pre-request guard."""
 
 import asyncio
 from unittest.mock import AsyncMock
@@ -8,6 +8,7 @@ import pytest
 from lyo_app.ai_classroom.trial_budget import (
     ClassroomTrialBudgetExceeded,
     LEDGER_KEY,
+    configured_ceiling_micro_usd,
     reserve_classroom_attempt,
     reserve_micro_usd,
 )
@@ -37,6 +38,14 @@ def test_new_acceptance_round_uses_separate_durable_ledger():
     # The previously reserved budget must remain untouched in its old key.
     assert LEDGER_KEY == "lyo:classroom:trial:20261108:reserved_microusd"
     assert LEDGER_KEY != "lyo:classroom:trial:20261105:reserved_microusd"
+
+
+def test_additional_ten_dollars_keeps_existing_reservations(monkeypatch):
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "20")
+    assert configured_ceiling_micro_usd() == 20_000_000
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "20.000001")
+    with pytest.raises(ClassroomTrialBudgetExceeded, match="at most \\$20"):
+        configured_ceiling_micro_usd()
 
 
 @pytest.fixture
