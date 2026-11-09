@@ -22,11 +22,12 @@ from decimal import Decimal, InvalidOperation
 
 logger = logging.getLogger(__name__)
 
-LIMIT_MICRO_USD = 10_000_000
+LIMIT_MICRO_USD = 20_000_000
 # The 2026-11-05 ledger remains durable in Redis for audit and must not be
 # deleted or credited back. The user authorized a *separate* $10 staging-only
-# acceptance round on 2026-11-08. A new key gives that round its own fail-closed
-# ceiling without raising the per-round maximum or touching the old balance.
+# acceptance round on 2026-11-08, then an additional $10 within that same
+# round on 2026-11-08. Retain its durable key and existing reservations while
+# allowing the cumulative ceiling to reach $20; never reset or refund it.
 LEDGER_KEY = "lyo:classroom:trial:20261108:reserved_microusd"
 
 # Deliberately conservative maxima in USD per million input/output tokens,
@@ -71,18 +72,18 @@ def trial_enabled() -> bool:
 
 
 def configured_ceiling_micro_usd() -> int:
-    """Never allow a configuration mistake to exceed the approved $10."""
+    """Never allow a configuration mistake to exceed the approved $20."""
     raw = os.getenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "")
     try:
         configured = Decimal(raw)
-        if not configured.is_finite() or configured <= 0 or configured > Decimal("10.00"):
-            raise ValueError("Classroom trial limit must be positive and at most $10")
+        if not configured.is_finite() or configured <= 0 or configured > Decimal("20.00"):
+            raise ValueError("Classroom trial limit must be positive and at most $20")
         micros = configured * 1_000_000
         if micros != micros.to_integral_exact():
             raise ValueError("Classroom trial limit has sub-microUSD precision")
         return int(micros)
     except (InvalidOperation, ValueError) as exc:
-        raise ClassroomTrialBudgetExceeded("Classroom trial limit must be explicitly set, at most $10") from exc
+        raise ClassroomTrialBudgetExceeded("Classroom trial limit must be explicitly set, at most $20") from exc
 
 
 def reserve_micro_usd(model: str, messages: list[dict], max_tokens: int,
@@ -133,14 +134,14 @@ async def reserve_classroom_attempt(model: str, messages: list[dict],
         raise ClassroomTrialBudgetExceeded("Classroom trial ledger is unavailable")
     try:
         # Eval is atomic, unlike GET followed by INCRBY; no worker can start a
-        # billable request by racing another worker past the total $10 limit.
+        # billable request by racing another worker past the total $20 limit.
         total = int(await client.eval(_RESERVE_LUA, 1, LEDGER_KEY,
                                       requested, ceiling))
     except Exception as exc:
         logger.warning("Classroom trial ledger rejected a reservation: %s", type(exc).__name__)
         raise ClassroomTrialBudgetExceeded("Classroom trial ledger is unavailable") from exc
     if total < 0:
-        raise ClassroomTrialBudgetExceeded("Classroom AI trial $10 budget exhausted")
+        raise ClassroomTrialBudgetExceeded("Classroom AI trial $20 budget exhausted")
     remaining = ceiling - total
     logger.info("Classroom trial provider=%s reserved_micro_usd=%d remaining_micro_usd=%d",
                 model, requested, remaining)
