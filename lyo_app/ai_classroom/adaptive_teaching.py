@@ -87,13 +87,48 @@ class TeachingContractError(ValueError):
     """A fixed, non-private explanation of a rejected pedagogical move."""
 
 
+# Only fixed server-authored validation messages can be returned to an authoring
+# model or operational logs. Pydantic's raw messages may include provider or
+# learner text, so unknown value errors keep their opaque type instead.
+SAFE_TASK_VALIDATION_REASONS = frozenset({
+    "Each criterion must be a short semantic requirement",
+    "Specify the actual situation and requested decision",
+    "Choice prompt exceeds the client contract",
+    "Choice tasks need 2–4 options",
+    "Choice tasks need exactly one correct option",
+    "Option identifiers must be unique",
+    "Choice options must have distinct visible answers",
+    "Distractors must diagnose distinct misconceptions",
+    "One option is enough for saying 'not sure yet'",
+    "Each option needs feedback about that option",
+    "A distractor's misconception must say what the learner did, not repeat the option",
+    "Open tasks cannot carry choice options",
+    "The correct option names no misconception and is not an abstention",
+    "Declining to guess is not a misconception",
+    "This checkpoint asks the learner to explain, not to choose or apply",
+    "An explanation is the learner's own words, not a selection",
+    "An explanation offers no options",
+    "Transfer requires an open application in a new setting",
+    "A diagnostic probes prior knowledge; it does not grade taught work",
+    "A diagnostic is one tap, before anything has been taught",
+    "Exactly one option must let the learner decline to guess",
+    "Frame the probe briefly, then hand the floor to the learner",
+})
+
+
 def validation_summary(error: Exception) -> str:
     """Useful diagnostics without logging learner answers or provider payloads."""
     if isinstance(error, ValidationError):
-        return "; ".join(
-            f"{'.'.join(map(str, item['loc']))}: {item['type']}"
-            for item in error.errors(include_input=False, include_context=False, include_url=False)[:5]
-        )
+        details = []
+        for item in error.errors(include_input=False, include_context=True, include_url=False)[:5]:
+            location = ".".join(map(str, item["loc"]))
+            detail = f"{location}: {item['type']}"
+            if item["type"] == "value_error":
+                reason = str(item.get("ctx", {}).get("error", ""))
+                if reason in SAFE_TASK_VALIDATION_REASONS:
+                    detail += f" ({reason})"
+            details.append(detail)
+        return "; ".join(details)
     if isinstance(error, TeachingContractError):
         return str(error)
     return type(error).__name__
@@ -1728,6 +1763,27 @@ class AdaptiveTeacher:
                 logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
                                move, attempt + 1, validation_summary(exc))
                 payload["repair"] = validation_summary(exc) + ". Return the complete root object and match the requested teaching move."
+                if isinstance(exc, ValidationError) and any(
+                    item["loc"] and item["loc"][0] == "task"
+                    for item in exc.errors(include_input=False, include_context=False)
+                ):
+                    # A generic "task: value_error" previously gave the
+                    # second model no clue why the question was discarded.
+                    # Keep the strict contract; offer a simpler valid format
+                    # for practice when credible distractors are difficult.
+                    payload["repair"] += (
+                        " Fix the task itself: write a specific, answerable question"
+                        " with criteria and a private example_answer. Choice"
+                        " requires 2-4 distinct options, exactly one correct"
+                        " option, unique short IDs, and distinct feedback and"
+                        " misconceptions. Open answers use no options."
+                    )
+                    if move in {"guided", "faded", "independent", "transfer", "interleave", "closing_win"}:
+                        payload["repair"] += (
+                            " If you cannot write credible choice options, use"
+                            " response_format=short_answer and options=[];"
+                            " keep the required teaching move and skill."
+                        )
                 if isinstance(exc, TeachingContractError) and "Independent semantic review rejected" in str(exc):
                     # This is a *content* rejection, not a provider outage. Do
                     # not ask the same model to repeat a similar invalid first

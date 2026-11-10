@@ -4,10 +4,11 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel, ValidationError, model_validator
 
 from lyo_app.ai_classroom.adaptive_teaching import (
     AdaptiveTeacher, CriterionResult, Evaluation, GuidedState, PendingTask,
-    TeachingUnavailable, turn_schema,
+    TeachingUnavailable, turn_schema, validation_summary,
 )
 from tests.adaptive_fixtures import ScriptedTeacher, context, plan, task
 
@@ -98,6 +99,46 @@ async def test_repair_uses_the_provider_that_did_not_return_the_malformed_conten
     ]
     sent = json.loads(repair["messages"][1]["content"])
     assert "_rejected_provider" not in sent
+
+
+@pytest.mark.asyncio
+async def test_invalid_choice_task_gets_specific_private_repair_and_can_recover(monkeypatch):
+    ctx = context(target_duration_minutes=8)
+    state = GuidedState(owner=ctx.user_id, plan=plan(1))
+    expected = ScriptedTeacher()._turn(ctx, state, "guided")
+    invalid = expected.model_dump()
+    invalid["task"]["options"][1]["correct"] = True
+    invalid["task"]["options"][1]["misconception"] = None
+    completion = AsyncMock(side_effect=[
+        {"content": json.dumps(invalid), "model_used": "gemini-3.6-flash"},
+        {"content": expected.model_dump_json(), "model_used": "gemini-3.8-flash"},
+    ])
+    monkeypatch.setattr("lyo_app.core.ai_resilience.ai_resilience_manager.chat_completion", completion)
+
+    recovered = await AdaptiveTeacher().turn(ctx, state, "guided")
+
+    assert recovered.task == expected.task
+    assert completion.await_count == 2
+    repair = json.loads(completion.await_args_list[1].kwargs["messages"][1]["content"])["repair"]
+    assert "Choice tasks need exactly one correct option" in repair
+    assert "response_format=short_answer and options=[]" in repair
+    assert expected.task.scenario not in repair
+    assert completion.await_args_list[1].kwargs["provider_order"][0] == "gemini-3.8-flash"
+
+
+def test_unknown_validation_errors_never_reflect_untrusted_provider_or_learner_text():
+    class UntrustedSchema(BaseModel):
+        value: str
+
+        @model_validator(mode="after")
+        def reject(self):
+            raise ValueError("Private learner response and provider content must stay private")
+
+    with pytest.raises(ValidationError) as error:
+        UntrustedSchema(value="anything")
+    summary = validation_summary(error.value)
+    assert summary == ": value_error"
+    assert "Private learner" not in summary
 
 
 @pytest.mark.asyncio
