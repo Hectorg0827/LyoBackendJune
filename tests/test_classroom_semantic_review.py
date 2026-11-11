@@ -92,6 +92,28 @@ async def test_the_judge_is_given_the_content_not_the_authors_verdict():
     assert payload["turn"]["speech"] and payload["move"] == "guided"
 
 
+@pytest.mark.asyncio
+async def test_curriculum_target_index_cannot_be_misread_as_correct_choice():
+    """A live reviewer mistook target_index=0 for option 0's answer key.
+
+    The reviewer should instead use each choice's explicit `correct` flag.
+    Removing the irrelevant curriculum index must not alter the actual turn.
+    """
+    turn = a_turn("guided")
+    turn.task.target_index = 0
+    assert turn.task.options[0].correct is True
+    turn.task.options[0].correct = False
+    turn.task.options[1].correct = True
+    target = AsyncMock(return_value=SemanticVerdict(sound=True))
+    with patch("lyo_app.ai_classroom.semantic_review.model_json", target):
+        assert await model_semantic_judge("guided", plan().units[0], turn)
+    reviewed = target.await_args.args[1]["turn"]["task"]
+    assert "target_index" not in reviewed
+    assert [option["correct"] for option in reviewed["options"]] == [False, True]
+    assert turn.task.target_index == 0  # The real grading and curriculum stay intact.
+    assert "Curriculum skill" in JUDGE_PROMPT
+
+
 def test_it_is_asked_only_about_what_the_schema_cannot_decide():
     for failure in ("implausible_distractor", "mislabelled_gap", "incorrect_teaching"):
         assert failure in JUDGE_PROMPT

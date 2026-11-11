@@ -83,6 +83,10 @@ re-check them and do not mention them:
 - no two options share a visible answer, a misconception, or feedback
 - no misconception merely restates its own option
 
+For a multiple-choice task, the correct answer is the option whose `correct`
+field is true. Option order and IDs are not answer keys. Curriculum skill
+indexes are unrelated to the position of the correct choice.
+
 Judge ONLY these three things, about the content itself. Read the teaching and
 the task and decide for yourself; the authoring model's own labels are claims
 to be checked, not facts.
@@ -120,12 +124,20 @@ async def model_semantic_judge(move: str, unit: LearningUnit, turn: LearningTurn
     Returns True on any failure to reach or read the judge — see the module
     docstring on why this fails open.
     """
+    # `target_index` selects the curriculum component being practised, NOT
+    # the index of the correct multiple-choice option. An earlier live judge
+    # confused the two and rejected mathematically correct fractions teaching.
+    # The reviewer needs the authored question, options and `correct` flags,
+    # but not this private routing field. Omit it to prevent false rejections.
+    reviewed_turn = turn.model_dump(mode="json")
+    if isinstance(reviewed_turn.get("task"), dict):
+        reviewed_turn["task"].pop("target_index", None)
     payload = {
         "move": move,
         "skill": unit.title,
         "objective": unit.objective,
         "material": unit.material,
-        "turn": turn.model_dump(mode="json"),
+        "turn": reviewed_turn,
     }
     try:
         verdict = await model_json(JUDGE_PROMPT, payload, SemanticVerdict)
