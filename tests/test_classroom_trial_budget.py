@@ -1,4 +1,4 @@
-"""The $20 classroom trial is a real, cross-worker pre-request guard."""
+"""The $60 classroom trial is a real, cross-worker pre-request guard."""
 
 import asyncio
 from unittest.mock import AsyncMock
@@ -40,12 +40,29 @@ def test_new_acceptance_round_uses_separate_durable_ledger():
     assert LEDGER_KEY != "lyo:classroom:trial:20261105:reserved_microusd"
 
 
-def test_additional_ten_dollars_keeps_existing_reservations(monkeypatch):
-    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "20")
-    assert configured_ceiling_micro_usd() == 20_000_000
-    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "20.000001")
-    with pytest.raises(ClassroomTrialBudgetExceeded, match="at most \\$20"):
+def test_approved_sixty_dollar_limit_rejects_any_higher_configuration(monkeypatch):
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60")
+    assert configured_ceiling_micro_usd() == 60_000_000
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60.000001")
+    with pytest.raises(ClassroomTrialBudgetExceeded, match="at most \\$60"):
         configured_ceiling_micro_usd()
+
+
+@pytest.mark.asyncio
+async def test_sixty_dollar_ceiling_preserves_existing_reservations(trial):
+    from lyo_app.core.redis_client import redis_client
+
+    ledger = AtomicRedisLedger()
+    ledger.total = 17_119_932  # Existing $20-round reservations are never refunded.
+    trial.setattr(redis_client, "client", ledger)
+    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60")
+
+    requested = reserve_micro_usd("gpt-4o-mini", [{"role": "user", "content": "Explain fractions"}], 100)
+    remaining = await reserve_classroom_attempt(
+        "gpt-4o-mini", [{"role": "user", "content": "Explain fractions"}], 100, None
+    )
+    assert ledger.total == 17_119_932 + requested
+    assert remaining == 60_000_000 - ledger.total
 
 
 @pytest.fixture
@@ -137,6 +154,6 @@ async def test_trial_requires_explicit_staging_configuration(trial):
     with pytest.raises(ClassroomTrialBudgetExceeded, match="staging only"):
         await reserve_classroom_attempt("gpt-4o-mini", [], 100, None)
     trial.setenv("ENVIRONMENT", "staging")
-    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "100.00")
+    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60.000001")
     with pytest.raises(ClassroomTrialBudgetExceeded, match="at most"):
         await reserve_classroom_attempt("gpt-4o-mini", [], 100, None)
