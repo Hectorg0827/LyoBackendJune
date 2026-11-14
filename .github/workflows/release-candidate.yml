@@ -1,0 +1,131 @@
+name: LYO backend release candidate
+
+# Checks the single backend release candidate before it may go to production.
+# It deploys nothing and reads no learner data.
+on:
+  push:
+    branches: [ccr-3bc562fc-kn237t]
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: Times each labelled answer is graded
+        required: true
+        type: number
+        default: 2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-release-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Backend regression suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: visual_test
+          POSTGRES_PASSWORD: visual_test
+          POSTGRES_DB: visual_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U visual_test -d visual_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TESTING: "true"
+      SECRET_KEY: test-secret-key-for-classroom-ci-at-least-32-characters
+      ENVIRONMENT: development
+      CHAT_VISUAL_POSTGRES_URL: postgresql+asyncpg://visual_test:visual_test@localhost:5432/visual_test
+      TEST_PREP_POSTGRES_URL: postgresql+asyncpg://visual_test:visual_test@localhost:5432/visual_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/requirements-rc.txt
+          python -m pip install --ignore-installed packaging -r /tmp/requirements-rc.txt
+          python -m pip install pytest pytest-asyncio
+      - name: Grading, XP security and tutor-integrity tests
+        run: |
+          python -m pytest -q \
+            tests/test_classroom_grading_acceptance_harness.py \
+            tests/test_xp_award_admin_gate.py \
+            tests/test_learning_event_xp_awards.py \
+            tests/test_live_tutor_integrity_harness.py \
+            tests/test_adaptive_classroom.py \
+            tests/test_classroom_recovery.py
+      - name: Full backend regression suite
+        run: python -m pytest tests/ -q --ignore=tests/test_load.py
+
+  grading-accuracy:
+    name: Teacher grading accuracy (real AI grader)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TESTING: "true"
+      SECRET_KEY: test-secret-key-for-classroom-ci-at-least-32-characters
+      ENVIRONMENT: development
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      REPEATS: ${{ inputs.repeats || 2 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that an AI provider key is available
+        id: key
+        shell: bash
+        run: |
+          if [ -n "$OPENAI_API_KEY" ] || [ -n "$GEMINI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Grading accuracy was NOT measured: add the OPENAI_API_KEY and/or GEMINI_API_KEY repository secrets, then re-run this workflow."
+            echo "### Grading accuracy: NOT RUN (no AI provider secret)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.key.outputs.present == 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend dependencies
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/requirements-rc.txt
+          python -m pip install --ignore-installed packaging -r /tmp/requirements-rc.txt
+      - name: Grade the labelled answer set with the real grader
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        run: |
+          set +e
+          python scripts/classroom_grading_acceptance.py --repeats "$REPEATS" \
+            --output artifacts/teacher-quality/grading-acceptance.json
+          code=$?
+          {
+            echo '### Teacher grading accuracy'
+            echo '```json'
+            python -c "import json;r=json.load(open('artifacts/teacher-quality/grading-acceptance.json'));print(json.dumps({'accepted':r['accepted'],'metrics':r['metrics'],'checks':r['checks'],'providers_configured':r['providers_configured']},indent=2))"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+      - name: Upload grading report
+        if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: grading-acceptance-${{ github.run_id }}
+          path: artifacts/teacher-quality/grading-acceptance.json
+          if-no-files-found: warn
+          retention-days: 30
