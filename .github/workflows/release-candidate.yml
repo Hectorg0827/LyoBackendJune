@@ -4,7 +4,7 @@ name: LYO backend release candidate
 # It deploys nothing and reads no learner data.
 on:
   push:
-    branches: [ccr-3bc562fc-kn237t]
+    branches: [ccr-3bc562fc-kn237t, qa/lyo-grading-failclosed-20261113]
   workflow_dispatch:
     inputs:
       repeats:
@@ -78,13 +78,13 @@ jobs:
         id: key
         shell: bash
         run: |
-          if [ -n "$OPENAI_API_KEY" ] || [ -n "$GEMINI_API_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Grading accuracy was NOT measured: add the OPENAI_API_KEY and/or GEMINI_API_KEY repository secrets, then re-run this workflow."
-            echo "### Grading accuracy: NOT RUN (no AI provider secret)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::RELEASE BLOCKED: teacher grading accuracy cannot be measured without an AI provider secret. Add OPENAI_API_KEY and/or GEMINI_API_KEY to Actions secrets; never print secrets."
+            echo "### Teacher grading: BLOCKED — no provider key, no real-model accuracy was measured" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         if: steps.key.outputs.present == 'true'
         with:
