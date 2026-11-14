@@ -953,13 +953,17 @@ def unit_count(minutes: int, authored_lessons: int = 0) -> int:
 def requests_help(text: str) -> bool:
     # Avoid misclassifying a substantive answer containing "I was confused".
     value = re.sub(r"[.!?¿¡]", "", text.casefold()).strip()
-    return value in {
+    phrases = {
         "idk", "i don't know", "i dont know", "not sure", "i'm not sure",
         "i am not sure", "i'm stuck", "help", "help me", "can you help",
         "can you help me", "i have no idea", "no idea", "i'm confused",
         "i don't understand", "no sé", "no se", "no lo sé", "no lo se",
         "no entiendo", "ayuda", "ayúdame", "no estoy seguro", "no estoy segura",
     }
+    # "I don't know, can you help me?" is still only a request for help. Every
+    # comma-separated part must itself be one, so reasoning is never discarded.
+    parts = [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+    return bool(parts) and all(part in phrases for part in parts)
 
 
 def normalize_text(text: str) -> str:

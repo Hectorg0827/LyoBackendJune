@@ -392,8 +392,10 @@ async def test_questions_keep_existing_client_types_and_allow_short_answers():
     assert "example_answer" not in wire and '"criteria"' not in wire
     field = next(c for c in scene.components if isinstance(c, InputField))
     assert field.min_words == 1 and field.expected_keywords == []
-    # Expectations remain visible while typing.
-    assert "in your own words" in field.question
+    # A first attempt shows the question and a neutral placeholder only: the
+    # authored response hint can give the answer away, so it is not displayed.
+    assert field.question.strip().endswith("?")
+    assert field.placeholder == "Write your reasoning here"
     assert Scene.model_validate_json(wire).scene_id == scene.scene_id
 
 
@@ -402,7 +404,7 @@ def test_time_budget_shapes_scope_not_forced_pacing(minutes, authored, expected)
     assert unit_count(minutes, authored) == expected
 
 
-@pytest.mark.parametrize("response", ["idk", "I don't know", "No sé", "Can you help me?"])
+@pytest.mark.parametrize("response", ["idk", "I don't know", "No sé", "Can you help me?", "I don't know, can you help me?", "No sé, ayuda"])
 @pytest.mark.asyncio
 async def test_uncertainty_is_a_request_for_teaching(response):
     generate = AsyncMock()
@@ -415,6 +417,8 @@ async def test_uncertainty_is_a_request_for_teaching(response):
 
 def test_substantive_reasoning_containing_uncertainty_is_not_discarded():
     assert not requests_help("I was confused but half is larger because there are fewer pieces.")
+    assert not requests_help("I don't know, maybe one half because there are fewer pieces")
+    assert not requests_help("")
 
 
 @pytest.mark.asyncio

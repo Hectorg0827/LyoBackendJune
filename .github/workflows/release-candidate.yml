@@ -58,15 +58,6 @@ jobs:
           grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/requirements-rc.txt
           python -m pip install --ignore-installed packaging -r /tmp/requirements-rc.txt
           python -m pip install pytest pytest-asyncio
-      - name: Grading, XP security and tutor-integrity tests
-        run: |
-          python -m pytest -q \
-            tests/test_classroom_grading_acceptance_harness.py \
-            tests/test_xp_award_admin_gate.py \
-            tests/test_learning_event_xp_awards.py \
-            tests/test_live_tutor_integrity_harness.py \
-            tests/test_adaptive_classroom.py \
-            tests/test_classroom_recovery.py
       - name: Full backend regression suite
         run: python -m pytest tests/ -q --ignore=tests/test_load.py
 
