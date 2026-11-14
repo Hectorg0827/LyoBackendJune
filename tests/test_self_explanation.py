@@ -56,7 +56,9 @@ async def test_a_first_success_earns_the_question_that_makes_the_skill_portable(
     assert current.pending.task.response_format == "short_answer"
     # Asked in their own words, on the board they were just working on.
     field = next(c for c in scene.components if isinstance(c, InputField))
-    assert "own words" in field.question
+    # The hint is no longer appended to the question (it can leak the answer).
+    assert field.question.strip().endswith("?")
+    assert field.placeholder == "Write your reasoning here"
     assert not current.pending.task.options
 
 
