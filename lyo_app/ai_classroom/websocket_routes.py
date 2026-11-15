@@ -13,7 +13,10 @@ import json
 import logging
 import os
 import secrets
+from time import perf_counter
 from typing import Optional, Dict, Any
+
+from prometheus_client import Histogram
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -31,6 +34,16 @@ from lyo_app.ai_classroom.sdui_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Time to the first server-generated scene, not the client's local warm-up.
+# Labels are fixed, low cardinality, and never include learner identity, topic,
+# credentials or lesson content. Instrumentation cannot claim a faster class.
+classroom_first_scene_seconds = Histogram(
+    "lyo_classroom_first_scene_seconds",
+    "Time to build and stream the first authoritative Classroom scene",
+    ["outcome"],
+    buckets=(0.5, 1, 2, 3, 5, 8, 12, 20, 30, 45, 60, 90, 120),
+)
 
 # Router setup
 router = APIRouter(prefix="/api/v1/classroom/ws", tags=["AI Classroom WebSocket"])
@@ -484,11 +497,22 @@ async def _send_welcome_scene(
         # starts immediately. process_trigger streams directly to the WebSocket
         # when it completes (LLM calls can take 30-60s, far above any safe timeout).
         async def _run_welcome():
+            started = perf_counter()
+            outcome = "failure"
             try:
                 scene = await lifecycle_engine.process_trigger(welcome_trigger)
+                outcome = "success"
                 logger.info(f"👋 Welcome scene streamed: {scene.scene_id}")
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                raise
             except Exception as exc:
                 logger.error(f"❌ Background welcome scene failed: {exc}", exc_info=True)
+            finally:
+                # Operational metric only: no topic, learner ID, or text.
+                classroom_first_scene_seconds.labels(outcome).observe(
+                    max(0.0, perf_counter() - started)
+                )
 
         asyncio.create_task(_run_welcome())
         logger.info(f"👋 Welcome scene generation started in background for {connection.session_id}")
