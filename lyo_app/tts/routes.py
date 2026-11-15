@@ -8,6 +8,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+from prometheus_client import Histogram
 import logging
 
 from lyo_app.auth.dependencies import get_current_user_or_guest
@@ -24,6 +25,22 @@ from .service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Observe the existing full-MP3 route Android uses separately from the stream.
+# These metrics have fixed labels and never contain text, learner IDs or audio.
+classroom_tts_full_synthesis_seconds = Histogram(
+    "lyo_classroom_tts_full_synthesis_seconds",
+    "Elapsed time until the complete classroom MP3 is available",
+    ["outcome"],
+    buckets=(0.25, 0.5, 1, 2, 4, 8, 12, 16, 24, 40, 60, 90),
+)
+
+classroom_tts_stream_first_byte_seconds = Histogram(
+    "lyo_classroom_tts_stream_first_byte_seconds",
+    "Elapsed time until provider streaming returns its first audio bytes",
+    ["outcome"],
+    buckets=(0.25, 0.5, 1, 2, 4, 8, 12, 16, 24, 40, 60, 90),
+)
 
 
 def _first_audio_budget_seconds() -> Optional[float]:
@@ -184,6 +201,8 @@ async def synthesize_speech(
     Returns base64-encoded audio for playback in iOS app.
     Automatically selects best voice if content_type is provided.
     """
+    started_at = time.monotonic()
+    outcome = "failure"
     try:
         service = await get_tts_service()
         
@@ -215,6 +234,7 @@ async def synthesize_speech(
         word_count = len(request.text.split())
         duration_estimate = (word_count / 150) * 60 / request.speed
         
+        outcome = "success"
         return SynthesizeResponse(
             audio_base64=base64.b64encode(audio_data).decode(),
             voice=request.voice or service.config.default_voice,
@@ -234,6 +254,10 @@ async def synthesize_speech(
     except Exception as e:
         logger.error("TTS synthesis error: %s", type(e).__name__)
         raise HTTPException(status_code=502, detail="Speech provider failed")
+    finally:
+        classroom_tts_full_synthesis_seconds.labels(outcome).observe(
+            max(0.0, time.monotonic() - started_at)
+        )
 
 
 @router.post("/synthesize/stream")
@@ -245,6 +269,7 @@ async def synthesize_stream(
     stream = None
     started_at = time.monotonic()
     first_audio_budget = _first_audio_budget_seconds()
+    first_byte_outcome = "failure"
     try:
         service = await get_tts_service()
         stream = service.synthesize_streaming(
@@ -262,12 +287,14 @@ async def synthesize_stream(
             first = await asyncio.wait_for(
                 anext(stream), timeout=first_audio_budget
             )
+        first_byte_outcome = "success"
         logger.info(
             "Classroom TTS first audio bytes in %.0fms (%s bytes)",
             (time.monotonic() - started_at) * 1000,
             len(first),
         )
     except asyncio.CancelledError:
+        first_byte_outcome = "cancelled"
         if stream is not None:
             await stream.aclose()
         raise
@@ -289,6 +316,10 @@ async def synthesize_stream(
             await stream.aclose()
         logger.exception("TTS stream could not start")
         raise HTTPException(status_code=502, detail="Speech provider failed")
+    finally:
+        classroom_tts_stream_first_byte_seconds.labels(first_byte_outcome).observe(
+            max(0.0, time.monotonic() - started_at)
+        )
 
     async def audio_chunks():
         total_bytes = 0
