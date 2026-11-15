@@ -6,6 +6,7 @@ on:
     paths:
       - "lyo_app/ai_classroom/**"
       - "tests/test_classroom_activity_first_prompt.py"
+      - "tests/test_classroom_first_scene_metric.py"
       - "tests/test_teaching_prompt.py"
       - ".github/workflows/classroom-ci.yml"
   pull_request:
@@ -90,7 +91,8 @@ jobs:
             tests/test_classroom_recovery.py \
             tests/test_classroom_unit_packages.py \
             tests/test_teaching_prompt.py \
-            tests/test_classroom_activity_first_prompt.py
+            tests/test_classroom_activity_first_prompt.py \
+            tests/test_classroom_first_scene_metric.py
 
       - name: Backend regression suite
         run: python -m pytest tests/ -q --ignore=tests/test_load.py
