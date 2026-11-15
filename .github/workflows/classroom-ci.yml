@@ -5,6 +5,8 @@ on:
     branches: [qa/classroom-activity-first-pacing-20261115]
     paths:
       - "lyo_app/ai_classroom/**"
+      - "lyo_app/tts/routes.py"
+      - "tests/test_classroom_tts_latency_metrics.py"
       - "tests/test_classroom_activity_first_prompt.py"
       - "tests/test_classroom_first_scene_metric.py"
       - "tests/test_teaching_prompt.py"
@@ -92,7 +94,8 @@ jobs:
             tests/test_classroom_unit_packages.py \
             tests/test_teaching_prompt.py \
             tests/test_classroom_activity_first_prompt.py \
-            tests/test_classroom_first_scene_metric.py
+            tests/test_classroom_first_scene_metric.py \
+            tests/test_classroom_tts_latency_metrics.py
 
       - name: Backend regression suite
         run: python -m pytest tests/ -q --ignore=tests/test_load.py
