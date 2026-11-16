@@ -4,7 +4,7 @@ name: LYO backend release candidate
 # It deploys nothing and reads no learner data.
 on:
   push:
-    branches: [ccr-3bc562fc-kn237t]
+    branches: [ccr-3bc562fc-kn237t, qa/lyo-gemini-only-grading-staging-20261116]
   workflow_dispatch:
     inputs:
       repeats:
@@ -69,17 +69,16 @@ jobs:
       TESTING: "true"
       SECRET_KEY: test-secret-key-for-classroom-ci-at-least-32-characters
       ENVIRONMENT: development
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       REPEATS: ${{ inputs.repeats || 2 }}
     steps:
       - uses: actions/checkout@v4
-      - name: Require both provider keys before claiming grading readiness
+      - name: Require Gemini staging provider key before claiming grading readiness
         id: key
         shell: bash
         run: |
-          if [ -z "$OPENAI_API_KEY" ] || [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error::Teacher grading accuracy was NOT measured. Configure both OPENAI_API_KEY and GEMINI_API_KEY as GitHub Actions repository secrets; then re-run this workflow."
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::Teacher grading accuracy was NOT measured. Configure GEMINI_API_KEY as a GitHub Actions repository secret; then re-run this workflow."
             echo "### Teacher grading accuracy: BLOCKED — required AI provider secret(s) missing" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
