@@ -36,4 +36,20 @@ jobs:
         run: |
           mkdir -p /tmp/lyo-bridge-contract-tests
           cp tests/test_classroom_continuous_teaching.py /tmp/lyo-bridge-contract-tests/test_bridge.py
-          python -m pytest -q -c /dev/null /tmp/lyo-bridge-contract-tests/test_bridge.py
+          # Import only the actual bridge and wire-schema modules, avoiding the
+          # parent Classroom package's unrelated SQL/cloud-service imports.
+          python - <<'PY'
+          import pathlib
+          import sys
+          import types
+          import pytest
+          import lyo_app
+
+          package = types.ModuleType("lyo_app.ai_classroom")
+          package.__path__ = [str(pathlib.Path.cwd() / "lyo_app" / "ai_classroom")]
+          sys.modules["lyo_app.ai_classroom"] = package
+          raise SystemExit(pytest.main([
+              "-q", "-c", "/dev/null",
+              "/tmp/lyo-bridge-contract-tests/test_bridge.py",
+          ]))
+          PY
