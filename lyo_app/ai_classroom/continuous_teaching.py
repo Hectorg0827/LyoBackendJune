@@ -110,6 +110,14 @@ async def lightweight_ai_reply(topic: str, language: str, answer: str) -> Option
              "Topic: " + short_topic(topic) + "\nLanguage: " + language[:12] +
              "\nLearner says: " + answer[:MAX_REPLY_CHARS]},
         ]
+        # Share the existing audited, durable $60 staging classroom ledger.
+        # Do not silently create a separate unbounded bridge spend path.
+        from lyo_app.ai_classroom.trial_budget import (
+            trial_enabled, reserve_classroom_attempt,
+        )
+        if not trial_enabled():
+            return None
+        await reserve_classroom_attempt("gemini-3.5-flash-lite", messages, 90, None)
         result = await asyncio.wait_for(
             manager._call_model_with_messages(
                 "gemini-3.5-flash-lite", model, messages,
