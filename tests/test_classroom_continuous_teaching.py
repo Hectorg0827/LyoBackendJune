@@ -3,7 +3,7 @@ import asyncio
 from types import SimpleNamespace
 
 from lyo_app.ai_classroom.continuous_teaching import (
-    MAX_REPLIES, ContinuousTeachingBridge, bridge_enabled, fallback_ack,
+    MAX_REPLIES, ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled, fallback_ack,
     initial_prompt, short_topic,
 )
 
@@ -115,4 +115,50 @@ def test_provider_outage_leads_to_local_ungraded_ack_without_progress():
         assert result["ungraded"] is True
         assert result["prompt"] is True
         assert "starting point" in result["text"]
+    asyncio.run(run())
+
+
+def test_transition_task_keeps_reply_channel_live_while_scene_is_generating():
+    """Repro for sequential socket receiver: answers must be processed before scene."""
+    async def run():
+        complete = asyncio.Event()
+        received = []
+        sink, bridge = teacher()
+
+        async def real_director(message):
+            received.append(message)
+            await complete.wait()
+
+        runner = SerializedTransitionRunner(bridge, real_director)
+        assert await runner.start('continue-1')
+        assert runner.busy
+        assert len(sink.messages) == 1
+        assert sink.messages[0][1].data["phase"] == "transition"
+        assert not await runner.start('duplicate-continue')
+        assert bridge.answer("I noticed a pattern", 1)
+        await bridge.task
+        assert sink.messages[-1][1].data["ungraded"]
+        assert len(received) == 1  # absolutely no duplicate lesson advance
+        complete.set()
+        await runner.task
+        assert not runner.busy
+        assert not bridge.answer("late feedback", 1)
+        await runner.shutdown()
+
+    asyncio.run(run())
+
+
+def test_transition_shutdown_cancels_authoritative_task_on_disconnect():
+    async def run():
+        sink, bridge = teacher()
+        started = asyncio.Event()
+        async def never_finish(message):
+            started.set()
+            await asyncio.Event().wait()
+        runner = SerializedTransitionRunner(bridge, never_finish)
+        assert await runner.start("continue")
+        await started.wait()
+        await runner.shutdown()
+        assert runner.task.done() and not runner.busy
+        assert not bridge.active
     asyncio.run(run())
