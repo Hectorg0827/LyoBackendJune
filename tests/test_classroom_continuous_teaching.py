@@ -181,3 +181,24 @@ def test_failed_authoritative_transition_is_reported_without_grade_side_effects(
         assert all(m.event_type == "bridge_message" for _, m in sink.messages)
         assert not bridge.answer("late", 1)
     asyncio.run(run())
+
+
+def test_bridge_delivery_failure_never_blocks_real_lesson_action():
+    class BrokenDelivery:
+        async def send_to_connection(self, *_args):
+            raise OSError("socket transport unavailable")
+
+    async def run():
+        connection = SimpleNamespace(
+            connection_id="c1", session_id="session-A", user_id="student-A"
+        )
+        bridge = ContinuousTeachingBridge(BrokenDelivery(), connection, "fractions", "en-US")
+        called = []
+        async def real_director(message):
+            called.append(message)
+        runner = SerializedTransitionRunner(bridge, real_director)
+        assert await runner.start("continue")
+        await runner.task
+        assert called == ["continue"]
+        assert bridge.active is False
+    asyncio.run(run())
