@@ -125,3 +125,34 @@ def test_harness_drives_the_real_grader_contract():
     # Help requests short-circuit to "clarify" without a model call.
     assert verdicts == {"incorrect", "clarify"}, verdicts
     assert all(row["verdict"] == "clarify" for row in graded if row["expected"] == "clarify")
+
+
+def test_start_pacer_enforces_minimum_spacing():
+    """The staging harness must pace API calls without modifying their results."""
+    import asyncio
+    import time
+
+    async def check():
+        pacer = harness.StartPacer(0.025)
+        starts = []
+
+        async def attempt():
+            await pacer.wait()
+            starts.append(time.monotonic())
+
+        await asyncio.gather(*(attempt() for _ in range(4)))
+        return starts
+
+    starts = asyncio.run(check())
+    assert len(starts) == 4
+    assert all(b - a >= 0.018 for a, b in zip(starts, starts[1:]))
+
+
+def test_zero_interval_has_no_pacing_requirement():
+    import asyncio
+
+    async def check():
+        pacer = harness.StartPacer(0)
+        await pacer.wait()
+
+    asyncio.run(check())
