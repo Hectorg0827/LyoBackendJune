@@ -162,3 +162,22 @@ def test_transition_shutdown_cancels_authoritative_task_on_disconnect():
         assert runner.task.done() and not runner.busy
         assert not bridge.active
     asyncio.run(run())
+
+
+def test_failed_authoritative_transition_is_reported_without_grade_side_effects():
+    async def run():
+        sink, bridge = teacher()
+        failures = []
+        async def fails(_message):
+            raise RuntimeError("the user's sensitive submitted answer")
+        async def signal_failure():
+            failures.append("lesson_transition_failed")
+        runner = SerializedTransitionRunner(bridge, fails, on_error=signal_failure)
+        assert await runner.start("continue")
+        await runner.task
+        assert failures == ["lesson_transition_failed"]
+        assert bridge.active is False
+        assert not runner.busy
+        assert all(m.event_type == "bridge_message" for _, m in sink.messages)
+        assert not bridge.answer("late", 1)
+    asyncio.run(run())
