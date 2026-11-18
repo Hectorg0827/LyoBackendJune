@@ -96,12 +96,15 @@ jobs:
           python -m pip install --upgrade pip
           grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/requirements-rc.txt
           python -m pip install --ignore-installed packaging -r /tmp/requirements-rc.txt
+      # At 5 seconds between starts, the fallback stays under 15 RPM on an idle free-tier project.
+      # These flags affect only this staging acceptance job, never the live Classroom.
       - name: Grade the labelled answer set with the real grader
         if: steps.key.outputs.present == 'true'
         shell: bash
         run: |
           set +e
           python scripts/classroom_grading_acceptance.py --repeats "$REPEATS" \
+            --concurrency 1 --min-start-interval 5 \
             --output artifacts/teacher-quality/grading-acceptance.json
           code=$?
           {
