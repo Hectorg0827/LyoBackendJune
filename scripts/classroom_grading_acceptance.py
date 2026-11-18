@@ -294,14 +294,35 @@ async def grade_once(teacher, case: Case, case_id: str) -> dict[str, Any]:
     }
 
 
-async def run(repeats: int, concurrency: int, only: str | None) -> list[dict[str, Any]]:
+class StartPacer:
+    """Limit the start rate of live provider calls; do not alter their verdicts."""
+
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self._lock = asyncio.Lock()
+        self._next_start = 0.0
+
+    async def wait(self) -> None:
+        if self.interval <= 0:
+            return
+        async with self._lock:
+            delay = self._next_start - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._next_start = time.monotonic() + self.interval
+
+
+async def run(repeats: int, concurrency: int, only: str | None,
+              min_start_interval: float = 0.0) -> list[dict[str, Any]]:
     from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
 
     gate = asyncio.Semaphore(concurrency)
+    pacer = StartPacer(min_start_interval)
     selected = [(i, c) for i, c in enumerate(CASES) if not only or c.task == only]
 
     async def one(index: int, case: Case):
         async with gate:
+            await pacer.wait()
             # A fresh teacher per attempt: no state may leak between learners.
             return await grade_once(AdaptiveTeacher(), case, f"{index:02d}:{case.task}:{case.label}")
 
@@ -313,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repeats", type=int, default=2, help="times each answer is graded (consistency)")
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--min-start-interval", type=float, default=0.0,
+                        help="minimum seconds between live grading starts (quota-safe CI pacing)")
     parser.add_argument("--task", default=None, choices=sorted(TASKS), help="run one subject only")
     parser.add_argument("--output", default="artifacts/teacher-quality/grading-acceptance.json")
     args = parser.parse_args(argv)
@@ -322,7 +345,10 @@ def main(argv: list[str] | None = None) -> int:
         print("No AI provider key is set (" + ", ".join(PROVIDER_KEYS) + "). Nothing was run.", file=sys.stderr)
         return 2
 
-    results = asyncio.run(run(max(1, args.repeats), max(1, args.concurrency), args.task))
+    if not 0.0 <= args.min_start_interval <= 3600.0:
+        parser.error("--min-start-interval must be between 0 and 3600 seconds")
+    results = asyncio.run(run(max(1, args.repeats), max(1, args.concurrency),
+                              args.task, args.min_start_interval))
     summary = summarize(results)
     report = {
         "report_version": REPORT_VERSION,
