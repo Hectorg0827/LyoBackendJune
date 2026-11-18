@@ -26,7 +26,7 @@ from lyo_app.core.database import get_async_session
 from lyo_app.ai_classroom.websocket_manager import WebSocketManager, get_websocket_manager, StreamingMode
 from lyo_app.ai_classroom.scene_lifecycle_engine import SceneLifecycleEngine, TriggerType, Trigger, ActionIntent
 from lyo_app.ai_classroom.sdui_models import (
-    WebSocketEventType, UserActionPayload, SystemStatePayload,
+    WebSocketEventType, WebSocketPayload, UserActionPayload, SystemStatePayload,
     Component, Scene, SceneType
 )
 
