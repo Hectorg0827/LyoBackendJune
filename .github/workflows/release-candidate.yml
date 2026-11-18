@@ -69,6 +69,7 @@ jobs:
       TESTING: "true"
       SECRET_KEY: test-secret-key-for-classroom-ci-at-least-32-characters
       ENVIRONMENT: development
+      PYTHONPATH: ${{ github.workspace }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       REPEATS: ${{ inputs.repeats || 2 }}
     steps:
@@ -106,7 +107,11 @@ jobs:
           {
             echo '### Teacher grading accuracy'
             echo '```json'
+            if [ -f artifacts/teacher-quality/grading-acceptance.json ]; then
             python -c "import json;r=json.load(open('artifacts/teacher-quality/grading-acceptance.json'));print(json.dumps({'accepted':r['accepted'],'metrics':r['metrics'],'checks':r['checks'],'providers_configured':r['providers_configured']},indent=2))"
+          else
+            echo "No grading report generated; test failed before evaluation."
+          fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit $code
