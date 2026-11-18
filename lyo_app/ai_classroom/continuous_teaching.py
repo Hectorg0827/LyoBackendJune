@@ -230,7 +230,12 @@ class ContinuousTeachingBridge:
         self.phase = phase
         self.active = True
         self.replies = 0
-        await self._emit(initial_prompt(self.topic, self.language, phase), prompt=True)
+        try:
+            await self._emit(initial_prompt(self.topic, self.language, phase), prompt=True)
+        except Exception:
+            # An optional bridge must never prevent the real lesson from
+            # starting, including when its delivery queue is unavailable.
+            self.close()
 
     def answer(self, text: str, generation: int) -> bool:
         answer = " ".join(text.split()) if isinstance(text, str) else ""
@@ -255,10 +260,13 @@ class ContinuousTeachingBridge:
             return
         more = self.replies < MAX_REPLIES
         self.pending = False
-        await self._emit(
-            reply or fallback_ack(self.language, keep_talking=more),
-            prompt=more, generated=bool(reply),
-        )
+        try:
+            await self._emit(
+                reply or fallback_ack(self.language, keep_talking=more),
+                prompt=more, generated=bool(reply),
+            )
+        except Exception:
+            self.close()
 
     def close(self) -> None:
         self.active = False
