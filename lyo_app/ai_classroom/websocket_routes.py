@@ -115,6 +115,7 @@ async def websocket_endpoint(
     connection = None
     lifecycle_engine = None
     heartbeat_task = None
+    bridge = None  # Optional per-socket ungraded teacher, never a scene owner
 
     try:
         # Extract authentication from query parameters
@@ -209,8 +210,25 @@ async def websocket_endpoint(
 
         logger.info(f"🎭 WebSocket connected: {connection.connection_id} (mode: {streaming_mode})")
 
-        # Send initial scene if this is a new session
-        await _send_welcome_scene(lifecycle_engine, connection, streaming_mode)
+        # A second teacher channel may speak while the authoritative scene is
+        # generated. Disabled by default and forbidden outside staging/test.
+        # This channel never enters the scene lifecycle or grading handler.
+        from lyo_app.ai_classroom.continuous_teaching import (
+            ContinuousTeachingBridge, bridge_enabled,
+        )
+        if bridge_enabled(websocket.query_params.get("continuous_teaching") or ""):
+            bridge = ContinuousTeachingBridge(
+                ws_manager, connection,
+                topic=websocket.query_params.get("topic") or "today's topic",
+                language=websocket.query_params.get("language") or "en-US",
+            )
+            if (websocket.query_params.get("resume") or "").lower() not in (
+                "1", "true", "yes",
+            ):
+                await bridge.begin("startup")
+
+        # Keep scene production authoritative; the bridge has its own event.
+        await _send_welcome_scene(lifecycle_engine, connection, streaming_mode, bridge=bridge)
 
         # Message handling loop
         while True:
@@ -218,8 +236,38 @@ async def websocket_endpoint(
                 # Receive message from client
                 raw_message = await websocket.receive_text()
 
-                # Handle the message
-                await ws_manager.handle_client_message(connection.connection_id, raw_message)
+                # Bridge replies are ungraded and must never be normalized to
+                # UserActionPayload (which could advance/grade the lesson).
+                try:
+                    incoming = json.loads(raw_message)
+                except (ValueError, TypeError):
+                    incoming = None
+                begin_transition = False
+                if isinstance(incoming, dict):
+                    kind = incoming.get("event_type")
+                    if kind in {"bridge_reply", "bridge_begin"}:
+                        if (bridge is not None and kind == "bridge_reply"
+                                and incoming.get("session_id") == connection.session_id):
+                            try:
+                                generation = int(incoming.get("generation", -1))
+                            except (ValueError, TypeError):
+                                generation = -1
+                            bridge.answer(incoming.get("text"), generation)
+                        # Never hand unknown bridge input to the grading path.
+                        continue
+                    begin_transition = bool(
+                        bridge is not None
+                        and kind in ("user_action", None)
+                        and incoming.get("action_intent") == "continue"
+                    )
+                if begin_transition:
+                    await bridge.begin("transition")
+                try:
+                    await ws_manager.handle_client_message(connection.connection_id, raw_message)
+                finally:
+                    # The director's next scene is now the only teaching owner.
+                    if begin_transition:
+                        bridge.close()
 
             except WebSocketDisconnect:
                 logger.info(f"🔌 WebSocket client disconnected: {connection.connection_id}")
@@ -242,6 +290,8 @@ async def websocket_endpoint(
             await websocket.close(code=4000, reason=f"Server error: {str(e)}")
 
     finally:
+        if bridge is not None:
+            bridge.close()
         if heartbeat_task:
             heartbeat_task.cancel()
             try:
@@ -343,7 +393,8 @@ async def _register_lifecycle_handlers(
 async def _send_welcome_scene(
     lifecycle_engine: Optional[SceneLifecycleEngine],
     connection,
-    streaming_mode: StreamingMode
+    streaming_mode: StreamingMode,
+    bridge=None,
 ):
     """Send initial welcome scene for new sessions"""
     if not lifecycle_engine:
@@ -489,6 +540,9 @@ async def _send_welcome_scene(
                 logger.info(f"👋 Welcome scene streamed: {scene.scene_id}")
             except Exception as exc:
                 logger.error(f"❌ Background welcome scene failed: {exc}", exc_info=True)
+            finally:
+                if bridge is not None:
+                    bridge.close()
 
         asyncio.create_task(_run_welcome())
         logger.info(f"👋 Welcome scene generation started in background for {connection.session_id}")
