@@ -116,6 +116,7 @@ async def websocket_endpoint(
     lifecycle_engine = None
     heartbeat_task = None
     bridge = None  # Optional per-socket ungraded teacher, never a scene owner
+    transition_runner = None  # Per-connection, single-authority async dispatcher
 
     try:
         # Extract authentication from query parameters
@@ -214,7 +215,7 @@ async def websocket_endpoint(
         # generated. Disabled by default and forbidden outside staging/test.
         # This channel never enters the scene lifecycle or grading handler.
         from lyo_app.ai_classroom.continuous_teaching import (
-            ContinuousTeachingBridge, bridge_enabled,
+            ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled,
         )
         if bridge_enabled(websocket.query_params.get("continuous_teaching") or ""):
             bridge = ContinuousTeachingBridge(
@@ -222,6 +223,10 @@ async def websocket_endpoint(
                 topic=websocket.query_params.get("topic") or "today's topic",
                 language=(websocket.query_params.get("bridge_language")
                           or websocket.query_params.get("language") or "en-US"),
+            )
+            transition_runner = SerializedTransitionRunner(
+                bridge,
+                lambda message: ws_manager.handle_client_message(connection.connection_id, message),
             )
             if (websocket.query_params.get("resume") or "").lower() not in (
                 "1", "true", "yes",
@@ -261,14 +266,25 @@ async def websocket_endpoint(
                         and kind in ("user_action", None)
                         and incoming.get("action_intent") == "continue"
                     )
-                if begin_transition:
-                    await bridge.begin("transition")
-                try:
-                    await ws_manager.handle_client_message(connection.connection_id, raw_message)
-                finally:
-                    # The director's next scene is now the only teaching owner.
-                    if begin_transition:
-                        bridge.close()
+                if begin_transition and transition_runner is not None:
+                    # Generate the authoritative scene concurrently with
+                    # incoming bridge replies, but never duplicate an action.
+                    await transition_runner.start(raw_message)
+                    continue
+                if (transition_runner is not None and transition_runner.busy
+                        and isinstance(incoming, dict)
+                        and incoming.get("event_type", "user_action") == "user_action"):
+                    await ws_manager.send_to_connection(
+                        connection.connection_id,
+                        WebSocketPayload(
+                            event_type=WebSocketEventType.ERROR,
+                            session_id=connection.session_id,
+                            user_id=connection.user_id,
+                            data={"error": "lesson_transition_busy"},
+                        ),
+                    )
+                    continue
+                await ws_manager.handle_client_message(connection.connection_id, raw_message)
 
             except WebSocketDisconnect:
                 logger.info(f"🔌 WebSocket client disconnected: {connection.connection_id}")
@@ -291,6 +307,8 @@ async def websocket_endpoint(
             await websocket.close(code=4000, reason=f"Server error: {str(e)}")
 
     finally:
+        if transition_runner is not None:
+            await transition_runner.shutdown()
         if bridge is not None:
             bridge.close()
         if heartbeat_task:
