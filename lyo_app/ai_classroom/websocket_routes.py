@@ -220,7 +220,8 @@ async def websocket_endpoint(
             bridge = ContinuousTeachingBridge(
                 ws_manager, connection,
                 topic=websocket.query_params.get("topic") or "today's topic",
-                language=websocket.query_params.get("language") or "en-US",
+                language=(websocket.query_params.get("bridge_language")
+                          or websocket.query_params.get("language") or "en-US"),
             )
             if (websocket.query_params.get("resume") or "").lower() not in (
                 "1", "true", "yes",
