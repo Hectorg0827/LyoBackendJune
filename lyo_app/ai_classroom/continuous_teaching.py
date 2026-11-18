@@ -137,6 +137,45 @@ async def lightweight_ai_reply(topic: str, language: str, answer: str) -> Option
         return None
 
 
+class SerializedTransitionRunner:
+    """Runs one real lesson transition without blocking bridge WebSocket replies.
+
+    A second authoritative action cannot race the pending director request.
+    Only the ungraded bridge channel is allowed to keep receiving messages.
+    """
+
+    def __init__(self, bridge, handler):
+        self.bridge = bridge
+        self.handler = handler
+        self.task = None
+
+    @property
+    def busy(self) -> bool:
+        return self.task is not None and not self.task.done()
+
+    async def start(self, message: str) -> bool:
+        if self.busy:
+            return False
+        await self.bridge.begin("transition")
+
+        async def produce_scene():
+            try:
+                await self.handler(message)
+            finally:
+                self.bridge.close()
+
+        self.task = asyncio.create_task(produce_scene())
+        return True
+
+    async def shutdown(self) -> None:
+        if self.busy:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+
 class ContinuousTeachingBridge:
     """Ephemeral, per-authenticated-WebSocket bridge; never persists learner data."""
 
