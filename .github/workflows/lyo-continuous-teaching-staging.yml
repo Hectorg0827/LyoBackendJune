@@ -31,4 +31,9 @@ jobs:
       - name: Compile all changed backend modules
         run: python -m py_compile lyo_app/ai_classroom/continuous_teaching.py lyo_app/ai_classroom/sdui_models.py lyo_app/ai_classroom/websocket_routes.py tests/test_classroom_continuous_teaching.py
       - name: Verify strict ungraded bridge contract without live AI spending
-        run: python -m pytest -q tests/test_classroom_continuous_teaching.py
+        # The repository-wide conftest boots a full SQL stack; use a temporary
+        # isolated test directory for these pure, network-free bridge checks.
+        run: |
+          mkdir -p /tmp/lyo-bridge-contract-tests
+          cp tests/test_classroom_continuous_teaching.py /tmp/lyo-bridge-contract-tests/test_bridge.py
+          python -m pytest -q -c /dev/null /tmp/lyo-bridge-contract-tests/test_bridge.py
