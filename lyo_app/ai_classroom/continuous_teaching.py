@@ -144,9 +144,10 @@ class SerializedTransitionRunner:
     Only the ungraded bridge channel is allowed to keep receiving messages.
     """
 
-    def __init__(self, bridge, handler):
+    def __init__(self, bridge, handler, on_error=None):
         self.bridge = bridge
         self.handler = handler
+        self.on_error = on_error
         self.task = None
 
     @property
@@ -161,6 +162,14 @@ class SerializedTransitionRunner:
         async def produce_scene():
             try:
                 await self.handler(message)
+            except Exception:
+                # The learner receives only a typed, non-sensitive failure.
+                # Never expose the submitted answer or upstream provider body.
+                if self.on_error is not None:
+                    try:
+                        await self.on_error()
+                    except Exception:
+                        pass
             finally:
                 self.bridge.close()
 
