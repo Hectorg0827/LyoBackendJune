@@ -230,3 +230,15 @@ def test_untrusted_socket_identity_cannot_redirect_continuous_or_graded_action()
         {"event_type": "bridge_reply", "user_id": "learner-B"},
         socket_session, socket_user
     )
+
+
+def test_disabled_trial_does_not_initialize_any_ai_provider(monkeypatch):
+    """Disabled optional chat must not create network clients or spend quota."""
+    import sys
+    from lyo_app.ai_classroom.continuous_teaching import lightweight_ai_reply
+
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_ENABLED", "0")
+    previously_loaded = sys.modules.get("lyo_app.core.ai_resilience")
+    result = asyncio.run(lightweight_ai_reply("fractions", "en", "I have an idea"))
+    assert result is None
+    assert sys.modules.get("lyo_app.core.ai_resilience") is previously_loaded
