@@ -201,5 +201,5 @@ if __name__ == "__main__":
     except Exception as exc:
         # Never print private token, email, or password; HTTP/WS error messages
         # above carry bounded status only.
-        report("result", status="failed", reason=type(exc).__name__, detail=str(exc)[:250])
+        report("result", status="failed", reason=type(exc).__name__)
         sys.exit(1)
