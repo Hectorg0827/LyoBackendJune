@@ -40,7 +40,10 @@ jobs:
       - name: Validate guard and retry semantics without connecting to staging
         env:
           PYTHONPATH: .
-        run: pytest -q tests/test_continuous_teaching_staging_enums.py
+        run: |
+          mkdir -p /tmp/lyo-enum-guard-tests
+          cp tests/test_continuous_teaching_staging_enums.py /tmp/lyo-enum-guard-tests/test_guard.py
+          python -m pytest -q -c /dev/null /tmp/lyo-enum-guard-tests/test_guard.py
       - name: Verify actual PostgreSQL enum type repair, repeat and write
         env:
           PYTHONPATH: .
