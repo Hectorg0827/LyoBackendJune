@@ -270,3 +270,96 @@ def test_slow_bridge_delivery_cannot_delay_authoritative_scene_start():
         assert bridge.active is False
 
     asyncio.run(run())
+
+
+def test_production_rollout_denies_all_unauthorized_clients():
+    policy = dict(environment="production", production_flag="1",
+                  production_user_ids="learner-A, learner-B")
+    assert not bridge_enabled("0", user_id="learner-A", **policy)
+    assert not bridge_enabled("1", user_id=None, **policy)
+    assert not bridge_enabled("1", user_id="learner-C", **policy)
+    assert not bridge_enabled("1", user_id="guest_session-A", **policy)
+    assert bridge_enabled("1", user_id="learner-A", **policy)
+    assert not bridge_enabled("1", user_id="learner-A",
+                              production_flag="0",
+                              production_user_ids="learner-A",
+                              environment="production")
+    assert not bridge_enabled("1", user_id="any",
+                              production_flag="1", production_user_ids="*",
+                              environment="production")
+    assert not bridge_enabled("1", user_id="any",
+                              production_flag="1", production_user_ids="",
+                              environment="production")
+
+
+def test_conflicting_environment_names_fail_closed(monkeypatch):
+    from lyo_app.ai_classroom.continuous_teaching import bridge_runtime_environment
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_STAGING", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_USER_IDS", "learner-A")
+    assert bridge_runtime_environment() == "mismatch"
+    assert not bridge_enabled("1", user_id="learner-A")
+
+
+def test_production_ai_spend_requires_three_independent_operator_approvals(monkeypatch):
+    from lyo_app.ai_classroom.continuous_teaching import bridge_ai_allowed
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", "1")
+    monkeypatch.delenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_AI_ENABLED", raising=False)
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED", "1")
+    assert not bridge_ai_allowed()
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_AI_ENABLED", "1")
+    monkeypatch.delenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED", raising=False)
+    assert not bridge_ai_allowed()
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED", "1")
+    assert bridge_ai_allowed()
+
+
+def test_production_spend_reservation_fails_closed_without_budget_or_redis(monkeypatch):
+    from lyo_app.ai_classroom.continuous_teaching import reserve_bridge_spend
+    import sys
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_AI_ENABLED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED", "1")
+    messages = [{"role": "user", "content": "A short test thought"}]
+    for budget in ("", "0", "-1", "51", "NaN", "Infinity", "1.0000001"):
+        monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_TOTAL_BUDGET_USD", budget)
+        assert asyncio.run(reserve_bridge_spend(messages)) is False
+
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_TOTAL_BUDGET_USD", "2.50")
+    fake = SimpleNamespace(client=None)
+    monkeypatch.setitem(sys.modules, "lyo_app.core.redis_client",
+                        SimpleNamespace(redis_client=fake))
+    assert asyncio.run(reserve_bridge_spend(messages)) is False
+
+
+def test_production_spend_uses_atomic_separate_durable_ledger(monkeypatch):
+    from lyo_app.ai_classroom.continuous_teaching import reserve_bridge_spend
+    import sys
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_AI_ENABLED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_TOTAL_BUDGET_USD", "2.50")
+    calls = []
+    class Redis:
+        async def eval(self, script, n, key, cost, ceiling):
+            calls.append((n, key, cost, ceiling))
+            return 1000
+    monkeypatch.setitem(sys.modules, "lyo_app.core.redis_client",
+                        SimpleNamespace(redis_client=SimpleNamespace(client=Redis())))
+    assert asyncio.run(reserve_bridge_spend(
+        [{"role": "user", "content": "A safe synthetic answer"}]
+    ))
+    assert len(calls) == 1
+    count, key, cost, ceiling = calls[0]
+    assert count == 1
+    assert key == "lyo:classroom:continuous_teaching:production:pilot_reserved_microusd"
+    assert "trial:20261108" not in key
+    assert 0 < cost < ceiling == 2500000
