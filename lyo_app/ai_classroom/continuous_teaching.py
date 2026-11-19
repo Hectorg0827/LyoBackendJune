@@ -37,6 +37,18 @@ def bridge_enabled(opt_in: str, *, environment: Optional[str] = None,
     return allowed and enabled == "1" and opt_in == "1"
 
 
+def message_is_session_scoped(message: object, session_id: str, user_id: str) -> bool:
+    """A client must not override the authenticated socket's identity.
+
+    The transport may omit either field; the manager injects the trusted
+    connection values. Explicit conflicting values are always rejected.
+    """
+    if not isinstance(message, dict):
+        return True
+    return (message.get("session_id", session_id) == session_id
+            and message.get("user_id", user_id) == user_id)
+
+
 def short_topic(value: str) -> str:
     value = re.sub(r"[\x00-\x1f\x7f]+", " ", value or "")
     value = " ".join(value.split())
