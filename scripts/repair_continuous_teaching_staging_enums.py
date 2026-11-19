@@ -43,7 +43,7 @@ async def repair(conn) -> tuple[str, ...]:
     """Check exact public.learning_events enum type, then add missing labels."""
     details = await conn.fetchrow(
         """
-        SELECT t.typname AS type_name, t.typtype AS type_kind, n.nspname AS schema_name
+        SELECT t.typname::text AS type_name, t.typtype::text AS type_kind, n.nspname::text AS schema_name
         FROM pg_attribute a
         JOIN pg_class c ON c.oid = a.attrelid
         JOIN pg_type t ON t.oid = a.atttypid
