@@ -262,6 +262,22 @@ async def websocket_endpoint(
                     incoming = json.loads(raw_message)
                 except (ValueError, TypeError):
                     incoming = None
+                # The connection's authenticated learner seat is the sole
+                # authority for every action. A caller-supplied session_id
+                # must never direct a continuation to another user's seat.
+                if (isinstance(incoming, dict)
+                        and incoming.get("session_id") is not None
+                        and incoming["session_id"] != connection.session_id):
+                    await ws_manager.send_to_connection(
+                        connection.connection_id,
+                        WebSocketPayload(
+                            event_type=WebSocketEventType.ERROR,
+                            session_id=connection.session_id,
+                            user_id=connection.user_id,
+                            data={"error": "session_mismatch"},
+                        ),
+                    )
+                    continue
                 begin_transition = False
                 if isinstance(incoming, dict):
                     kind = incoming.get("event_type")
