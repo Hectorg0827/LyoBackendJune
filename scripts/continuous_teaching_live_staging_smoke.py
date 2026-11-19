@@ -116,8 +116,8 @@ async def check_no_token() -> None:
                 return
             raise RuntimeError("unauthenticated WebSocket was allowed to receive data")
     except InvalidStatus as exc:
-        require(exc.response.status in (401, 403), f"unexpected auth HTTP status: {exc.response.status}")
-        report("websocket_auth_reject", status="passed", http_status=exc.response.status)
+        require(exc.response.status_code in (401, 403), f"unexpected auth HTTP status: {exc.response.status_code}")
+        report("websocket_auth_reject", status="passed", http_status=exc.response.status_code)
 
 
 async def exercise_socket(token: str, user_id: str, session_id: str) -> tuple[str, int]:
