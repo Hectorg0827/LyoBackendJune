@@ -68,6 +68,23 @@ content in deployment logs or artifacts.
    actual published prices, expected demand, spending ceiling and persistent
    Redis budget key. Do not set rate approval flag on unsupported estimates.
 
+## Official Gemini pricing reference (verified November 18, 2026)
+
+Google's official [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing)
+lists **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`) on the
+standard paid tier at **$0.30 / 1 million input tokens** and
+**$2.50 / 1 million output tokens** (including thinking tokens).
+
+The code's approved-model *reservation upper bounds* are **$4 / 1 million
+input** and **$20 / 1 million output**. These are deliberately more
+conservative than the listed standard rates, but are not a supplier invoice,
+an account-specific quota guarantee, or confirmation that a production
+billing account/provider key is authorized. Recheck at the actual production
+cutover, especially for priority, alternate routing, or future pricing.
+The production `LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED`
+flag must remain **0** until a separate human approval reviews this
+evidence and confirms the API account, exact model and spending cap.
+
 ## Safe activation sequence after all release gates pass
 
 1. Build/publish the validated release candidate with client build flags OFF.
