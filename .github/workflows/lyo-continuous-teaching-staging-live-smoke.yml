@@ -1,0 +1,34 @@
+name: LYO Continuous Teaching isolated staging live transport smoke
+
+on:
+  push:
+    branches:
+      - rc/lyo-continuous-teaching-focused-backend-20261119
+    paths:
+      - scripts/continuous_teaching_live_staging_smoke.py
+      - .github/workflows/lyo-continuous-teaching-staging-live-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lyo-ct-isolated-staging-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  isolated-staging-transport:
+    name: Authenticated staging transport (no production, no phone QA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded external probe dependencies
+        run: python -m pip install --disable-pip-version-check httpx==0.28.1 websockets==15.0.1
+      - name: Probe pinned staging health, JWT, socket isolation, scene, reconnect
+        env:
+          LYO_STAGING_SMOKE_URL: https://lyo-continuousteaching-preview-backend-staging.up.railway.app
+        run: python scripts/continuous_teaching_live_staging_smoke.py
