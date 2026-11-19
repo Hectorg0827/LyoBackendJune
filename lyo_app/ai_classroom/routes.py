@@ -613,7 +613,7 @@ async def create_session(
 
 
 @router.get("/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, current_user: User = Depends(get_current_user)):
     """
     Get session information
     
@@ -622,7 +622,7 @@ async def get_session(session_id: str):
     manager = get_conversation_manager()
     session = manager.get_session(session_id)
     
-    if not session:
+    if not session or str(session.user_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
     
     return {
@@ -638,13 +638,16 @@ async def get_session(session_id: str):
 
 
 @router.delete("/session/{session_id}")
-async def end_session(session_id: str):
+async def end_session(session_id: str, current_user: User = Depends(get_current_user)):
     """
     End a classroom session
     
     Cleans up session resources.
     """
     manager = get_conversation_manager()
+    session = manager.get_session(session_id)
+    if not session or str(session.user_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Session not found")
     success = manager.end_session(session_id)
     
     if not success:
@@ -1094,7 +1097,8 @@ async def analyze_intent(request: IntentAnalysisRequest):
 @router.get("/session/{session_id}/history")
 async def get_conversation_history(
     session_id: str,
-    limit: int = Query(default=50, ge=1, le=200)
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Get conversation history for a session
@@ -1104,7 +1108,7 @@ async def get_conversation_history(
     manager = get_conversation_manager()
     session = manager.get_session(session_id)
     
-    if not session:
+    if not session or str(session.user_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
     
     messages = [m.to_dict() for m in session.messages[-limit:]]
@@ -1117,7 +1121,7 @@ async def get_conversation_history(
 
 
 @router.post("/session/{session_id}/continue")
-async def continue_learning(session_id: str):
+async def continue_learning(session_id: str, current_user: User = Depends(get_current_user)):
     """
     Continue with next content in the session
     
@@ -1126,7 +1130,7 @@ async def continue_learning(session_id: str):
     manager = get_conversation_manager()
     session = manager.get_session(session_id)
     
-    if not session:
+    if not session or str(session.user_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
     
     # Process a "continue" message
