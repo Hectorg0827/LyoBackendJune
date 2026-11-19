@@ -15,12 +15,20 @@ from lyo_app.ai_classroom import websocket_routes as routes
 from lyo_app.ai_classroom.websocket_manager import ConnectionState, StreamingMode
 
 
+@pytest.mark.parametrize("environment", ["staging", "production"])
 @pytest.mark.asyncio
-async def test_parallel_bridge_socket_rejects_foreign_identity_and_never_grades_reply(monkeypatch):
+async def test_parallel_bridge_socket_rejects_foreign_identity_and_never_grades_reply(
+    monkeypatch, environment,
+):
     import lyo_app.auth.jwt_auth as jwt_auth
 
-    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "staging")
+    # The transport must pass in the ordinary staging mode and in a
+    # production canary whose JWT-authenticated user is explicitly allowlisted.
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", environment)
+    monkeypatch.setenv("ENVIRONMENT", environment)
     monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_STAGING", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", "1")
+    monkeypatch.setenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_USER_IDS", "learner-A")
     monkeypatch.setenv("CLASSROOM_AI_TRIAL_ENABLED", "0")
     monkeypatch.setattr(jwt_auth, "verify_token_async",
                         AsyncMock(return_value=SimpleNamespace(user_id="learner-A")))
