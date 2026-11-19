@@ -65,7 +65,9 @@ def bridge_enabled(
                  else os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_USER_IDS", ""))
     allowed_ids = {item.strip() for item in allowlist.split(",")
                    if item.strip() and item.strip() != "*"}
-    return enabled == "1" and bool(user_id) and user_id in allowed_ids
+    return (enabled == "1" and bool(user_id)
+            and not str(user_id).startswith("guest_")
+            and user_id in allowed_ids)
 
 
 def message_is_session_scoped(message: object, session_id: str, user_id: str) -> bool:
