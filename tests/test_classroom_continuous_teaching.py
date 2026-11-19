@@ -279,6 +279,10 @@ def test_production_rollout_denies_all_unauthorized_clients():
     assert not bridge_enabled("1", user_id=None, **policy)
     assert not bridge_enabled("1", user_id="learner-C", **policy)
     assert not bridge_enabled("1", user_id="guest_session-A", **policy)
+    assert not bridge_enabled("1", user_id="guest_session-A",
+                              production_flag="1",
+                              production_user_ids="guest_session-A",
+                              environment="production")
     assert bridge_enabled("1", user_id="learner-A", **policy)
     assert not bridge_enabled("1", user_id="learner-A",
                               production_flag="0",
