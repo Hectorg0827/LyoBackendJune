@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from lyo_app.ai_classroom.continuous_teaching import (
     MAX_REPLIES, ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled, fallback_ack,
-    initial_prompt, short_topic,
+    initial_prompt, short_topic, message_is_session_scoped,
 )
 
 
@@ -202,3 +202,31 @@ def test_bridge_delivery_failure_never_blocks_real_lesson_action():
         assert called == ["continue"]
         assert bridge.active is False
     asyncio.run(run())
+
+
+def test_untrusted_socket_identity_cannot_redirect_continuous_or_graded_action():
+    socket_session = "session-A"
+    socket_user = "learner-A"
+    assert message_is_session_scoped(
+        {"event_type": "bridge_reply"}, socket_session, socket_user
+    )  # omitted IDs are injected from the authenticated connection
+    assert message_is_session_scoped(
+        {"event_type": "user_action", "session_id": socket_session,
+         "user_id": socket_user}, socket_session, socket_user
+    )
+    assert not message_is_session_scoped(
+        {"event_type": "user_action", "session_id": "session-B",
+         "user_id": socket_user}, socket_session, socket_user
+    )
+    assert not message_is_session_scoped(
+        {"event_type": "user_action", "session_id": socket_session,
+         "user_id": "learner-B"}, socket_session, socket_user
+    )
+    assert not message_is_session_scoped(
+        {"event_type": "bridge_reply", "session_id": "session-B"},
+        socket_session, socket_user
+    )
+    assert not message_is_session_scoped(
+        {"event_type": "bridge_reply", "user_id": "learner-B"},
+        socket_session, socket_user
+    )
