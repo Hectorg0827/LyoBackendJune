@@ -36,6 +36,40 @@ the conversation uses the local ungraded acknowledgement; no paid AI call is mad
 Never expose learner IDs, credentials, tokens, signed socket URLs, or lesson
 content in deployment logs or artifacts.
 
+## Production hosting verified in Railway (observed November 18, 2026)
+
+This replaces the former assumption that LYO production infrastructure was
+not discoverable. The live hosts are **not** in the project named
+`LyoOne-Journey-Staging`:
+
+| Domain | Railway project / environment | Service | Observed live `main` SHA |
+| --- | --- | --- | --- |
+| `https://api.lyoai.app` | `caring-cat` / `Lyo` | `LyoBackendJune` | `57c632f01bb8` |
+| `https://lyoai.app` | `caring-cat` / `Lyo` | `LyoWeb` | `b8ee0bff5778` |
+| `https://www.lyoai.app` | `zonal-wisdom` / `production` | `Lyo_Da_One` | `b8ee0bff5778` |
+
+The first two services reported **online** with successful deployments and
+no active critical/warning notifications. The `www` service also reported
+online; however its environment had an **older staged Railway patch** not
+applied to the live instance. Reconcile that patch before modifying this
+environment. Other project environments with names `production` include
+failed/crashed backend copies with *no canonical domain* and must **not** be
+assumed to be the production release target.
+
+**Rollback baselines:** retain and verify the above live deployment IDs and
+SHAs immediately before any release. Do not assume these dated observations
+remain current. Protect all three canonical domains and coordinate Web
+deployment of both services with API compatibility. Set server feature
+`LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED=0` before or during every
+rollback; retain all Redis reservations. Do not auto-deploy any pending
+Railway environment patch.
+
+The source branches are still hundreds of commits ahead of production
+(`Lyo_Da_One` release branch 258+ commits and backend 78+ versus `main`).
+**No bulk merge or branch-to-production source switch is authorized by this
+discovery.** Either reconcile and independently approve the complete
+dependencies or create a focused, compatible cherry-picked release candidate.
+
 ## Release gate — do not merge or enable until ALL pass
 
 1. **Source review**: independent reviewer approves backend, Web and Android
@@ -59,11 +93,10 @@ content in deployment logs or artifacts.
    English and Spanish, stable teacher identity, audio not overlapping during
    the first real scene, session resumption and correct mic permissions.
    Check physical-device startup and transition p50/p95.
-6. **Production target & rollback**: independently identify the live Web/API
-   hosting service and authenticated deploy permissions, signed Android
-   release process, current SHA, current smoke baseline, rollback target and
-   accountable approver. Current connected Railway project contains staging
-   only; **do not invent a production service or domain**.
+6. **Production target & rollback**: canonical Railway services are identified
+   in the table above. Still confirm live SHAs, deployment authority, health,
+   unresolved `www` staged patch, rollback target and accountable approver
+   immediately before release. Verify signed Android publication separately.
 7. **Paid-provider approval**: confirm currently valid Gemini model ID,
    actual published prices, expected demand, spending ceiling and persistent
    Redis budget key. Do not set rate approval flag on unsupported estimates.
@@ -117,6 +150,6 @@ disabled. Keep the ledger key and all prior paid reservations intact.
 Isolated preview startup and transition text are measured at 129–214ms and
 65–99ms, respectively; Gemini follow-up and Web handoff were verified with
 synthetic accounts. The underlying first full scene took 21.5–24.75 seconds.
-**Physical-device voice QA, independent signoff, production target identification,
+**Physical-device voice QA, independent signoff, safe merge/deployment mapping,
 signed Android publication and production billing authorization remain open.**
 Production default OFF; no bulk merge, domain switchover, or Play publication.
