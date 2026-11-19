@@ -314,6 +314,12 @@ class ContextAssembler:
             if persisted:
                 progress.update(persisted)
             progress["_hydrated"] = True
+        # Reconnecting clients may omit the original topic query. The saved
+        # session's owner-scoped subject is authoritative whenever the only
+        # inferred topic is an opaque session ID, including after a restart.
+        saved_subject = progress.get("_saved_subject")
+        if saved_subject and (not context.topic or context.topic == trigger.session_id):
+            context.topic = str(saved_subject)
         if "current_lesson_index" in progress:
             context.lesson_index = int(progress["current_lesson_index"] or 0)
         context.course_id = str(progress.get("course_id") or context.course_id or "") or None
@@ -600,7 +606,12 @@ class ContextAssembler:
                 .limit(1)
             )
             session = result.scalars().first()
-            return dict(session.context or {}) if session else {}
+            if not session:
+                return {}
+            restored = dict(session.context or {})
+            if session.subject:
+                restored["_saved_subject"] = session.subject
+            return restored
         except (ValueError, TypeError):
             return {}
         except Exception as e:
