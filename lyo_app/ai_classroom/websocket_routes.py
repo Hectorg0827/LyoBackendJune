@@ -514,24 +514,36 @@ async def _send_welcome_scene(
         # Resolve topic from the ConversationManager session (if one exists)
         # Also ensure a ConversationSession exists for lesson tracking
         topic = None
+        requested_topic = (topic_from_query or "").strip()
         course_id = course_id_from_query
         try:
             from lyo_app.ai_classroom.conversation_flow import get_conversation_manager
             cm = get_conversation_manager()
             conv_session = cm.get_session(connection.session_id)
-            if conv_session:
+            if conv_session and str(conv_session.user_id) == str(connection.user_id):
+                # Subsequent WebSocket actions omit the launch query parameters.
+                # Without seeding current_topic the lesson silently switches to
+                # its opaque session ID after the very first diagnostic.
+                if not conv_session.current_topic and requested_topic:
+                    conv_session.current_topic = requested_topic
                 topic = conv_session.current_topic
                 course_id = course_id or conv_session.current_course_id
+            elif conv_session:
+                # One user must never inherit another user's conversation topic
+                # just because they supplied the same client-chosen session ID.
+                logger.warning("WebSocket conversation session already belongs to a different learner")
             else:
-                # iOS sends courseId as session_id — create a session for it
+                # iOS sends courseId as session_id — create a session for it.
                 from lyo_app.ai_classroom.conversation_flow import ConversationSession as ConvSession
                 conv_session = ConvSession(
                     session_id=connection.session_id,
                     user_id=connection.user_id,
+                    current_topic=requested_topic or None,
                     current_course_id=course_id_from_query or connection.session_id,
                     current_lesson_index=0,
                 )
                 cm._sessions[connection.session_id] = conv_session
+                topic = conv_session.current_topic
                 course_id = course_id_from_query or connection.session_id
                 logger.info(f"📚 Created ConversationSession for WS classroom: {connection.session_id}")
         except Exception as e:
@@ -542,7 +554,7 @@ async def _send_welcome_scene(
             course_id = connection.session_id
 
         # Resolve final topic: session > query param > session_id itself
-        resolved_topic = topic or topic_from_query or connection.session_id
+        resolved_topic = topic or requested_topic or connection.session_id
 
         # Create welcome trigger with topic context
         welcome_trigger = Trigger(
