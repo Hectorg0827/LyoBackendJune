@@ -1,0 +1,33 @@
+name: LYO isolated staging checkpoint recovery across restart
+
+on:
+  push:
+    branches: [rc/lyo-continuous-teaching-focused-backend-20261119]
+    paths:
+      - scripts/continuous_teaching_staging_restart_proof.py
+      - .github/workflows/lyo-continuous-teaching-staging-restart-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lyo-ct-staging-restart-proof
+  cancel-in-progress: false
+
+jobs:
+  live-checkpoint-restart:
+    name: External synthetic learner + operator-controlled staging restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned external-only dependencies
+        run: python -m pip install --disable-pip-version-check httpx==0.28.1 websockets==15.0.1
+      - name: Create a staging checkpoint and inspect after an isolated backend recycle
+        env:
+          LYO_STAGING_SMOKE_URL: https://lyo-continuousteaching-preview-backend-staging.up.railway.app
+        run: python -u scripts/continuous_teaching_staging_restart_proof.py
