@@ -33,14 +33,14 @@ async def test_parallel_bridge_socket_rejects_foreign_identity_and_never_grades_
         {"event_type": "user_action", "session_id": "session-A",
          "action_intent": "continue", "component_id": "continue-button"},
         {"event_type": "bridge_reply", "session_id": "other-seat",
-         "generation": 1, "text": "Should be ignored"},
+         "generation": 2, "text": "Should be ignored"},
         {"event_type": "bridge_reply", "session_id": "session-A",
-         "generation": 1, "text": "I see matching pieces"},
+         "generation": 2, "text": "I see matching pieces"},
     ]
 
     class FakeSocket:
         query_params = {
-            "token": "synthetic-test-token", "resume": "1",
+            "token": "synthetic-test-token",
             "continuous_teaching": "1", "topic": "fractions",
             "language": "en-US",
         }
@@ -61,10 +61,13 @@ async def test_parallel_bridge_socket_rejects_foreign_identity_and_never_grades_
         websocket=websocket, state=ConnectionState.ACTIVE,
     )
     deliveries = []
+    sequence = []
     real_actions = []
 
     async def deliver(connection_id, payload):
         deliveries.append((connection_id, payload))
+        if payload.event_type == "bridge_message":
+            sequence.append(payload.data["phase"])
 
     async def director_handler(connection_id, raw):
         real_actions.append((connection_id, json.loads(raw)))
@@ -78,6 +81,9 @@ async def test_parallel_bridge_socket_rejects_foreign_identity_and_never_grades_
     )
 
     async def fake_db():
+        # Simulate a slow pool/setup: the local teacher must speak FIRST.
+        await asyncio.sleep(0.06)
+        sequence.append("db_ready")
         yield object()
 
     async def keepalive(*_args):
@@ -108,6 +114,10 @@ async def test_parallel_bridge_socket_rejects_foreign_identity_and_never_grades_
     assert all(action["event_type"] != "bridge_reply" for _, action in real_actions)
     prompts = [payload for _, payload in deliveries
                if payload.event_type == "bridge_message"]
-    assert prompts and prompts[0].data["ungraded"] is True
+    assert len(prompts) >= 2
+    assert prompts[0].data["ungraded"] is True
     assert prompts[0].session_id == "session-A"
+    assert prompts[0].data["phase"] == "startup"
+    assert prompts[1].data["phase"] == "transition"
+    assert sequence.index("startup") < sequence.index("db_ready")
     manager.disconnect_client.assert_awaited_once_with("conn-A")
