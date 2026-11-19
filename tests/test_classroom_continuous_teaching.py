@@ -242,3 +242,31 @@ def test_disabled_trial_does_not_initialize_any_ai_provider(monkeypatch):
     result = asyncio.run(lightweight_ai_reply("fractions", "en", "I have an idea"))
     assert result is None
     assert sys.modules.get("lyo_app.core.ai_resilience") is previously_loaded
+
+
+def test_slow_bridge_delivery_cannot_delay_authoritative_scene_start():
+    """A blocked optional greeting cannot hold the real Classroom engine."""
+    import time
+
+    class BlockedSocket:
+        async def send_to_connection(self, *_args):
+            await asyncio.sleep(4.0)
+
+    async def run():
+        connection = SimpleNamespace(
+            connection_id="slow", session_id="session-1", user_id="learner-1"
+        )
+        bridge = ContinuousTeachingBridge(BlockedSocket(), connection, "fractions", "en")
+        real_actions = []
+        async def real_director(message):
+            real_actions.append(message)
+
+        runner = SerializedTransitionRunner(bridge, real_director)
+        started = time.monotonic()
+        assert await runner.start("continue")
+        assert time.monotonic() - started < 1.0
+        await asyncio.wait_for(runner.task, timeout=1.0)
+        assert real_actions == ["continue"]
+        assert bridge.active is False
+
+    asyncio.run(run())
