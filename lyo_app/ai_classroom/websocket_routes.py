@@ -166,6 +166,46 @@ async def websocket_endpoint(
         # works, without creating a fake lesson scene or learner action.
         heartbeat_task = asyncio.create_task(_classroom_heartbeat(ws_manager, connection))
 
+        # Start the ungraded voice/text bridge as soon as the authenticated
+        # socket is active, before DB pool acquisition or director setup.
+        # Learners should not wait for lesson-engine initialization to begin.
+        # A second teacher channel may speak while the authoritative scene is
+        # generated. Disabled by default and forbidden outside staging/test.
+        # This channel never enters the scene lifecycle or grading handler.
+        from lyo_app.ai_classroom.continuous_teaching import (
+            ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled,
+            message_is_session_scoped,
+        )
+        if bridge_enabled(websocket.query_params.get("continuous_teaching") or ""):
+            bridge = ContinuousTeachingBridge(
+                ws_manager, connection,
+                topic=websocket.query_params.get("topic") or "today's topic",
+                language=(websocket.query_params.get("bridge_language")
+                          or websocket.query_params.get("language") or "en-US"),
+            )
+            async def _transition_failure():
+                await ws_manager.send_to_connection(
+                    connection.connection_id,
+                    WebSocketPayload(
+                        event_type=WebSocketEventType.ERROR,
+                        session_id=connection.session_id,
+                        user_id=connection.user_id,
+                        data={"error": "lesson_transition_failed"},
+                    ),
+                )
+
+            transition_runner = SerializedTransitionRunner(
+                bridge,
+                lambda message: ws_manager.handle_client_message(
+                    connection.connection_id, message
+                ),
+                on_error=_transition_failure,
+            )
+            if (websocket.query_params.get("resume") or "").lower() not in (
+                "1", "true", "yes",
+            ):
+                await bridge.begin("startup")
+
         # Initialize Scene Lifecycle Engine for this connection
         lifecycle_engine = None
         try:
@@ -210,43 +250,6 @@ async def websocket_endpoint(
             await _register_lifecycle_handlers(ws_manager, lifecycle_engine)
 
         logger.info(f"🎭 WebSocket connected: {connection.connection_id} (mode: {streaming_mode})")
-
-        # A second teacher channel may speak while the authoritative scene is
-        # generated. Disabled by default and forbidden outside staging/test.
-        # This channel never enters the scene lifecycle or grading handler.
-        from lyo_app.ai_classroom.continuous_teaching import (
-            ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled,
-            message_is_session_scoped,
-        )
-        if bridge_enabled(websocket.query_params.get("continuous_teaching") or ""):
-            bridge = ContinuousTeachingBridge(
-                ws_manager, connection,
-                topic=websocket.query_params.get("topic") or "today's topic",
-                language=(websocket.query_params.get("bridge_language")
-                          or websocket.query_params.get("language") or "en-US"),
-            )
-            async def _transition_failure():
-                await ws_manager.send_to_connection(
-                    connection.connection_id,
-                    WebSocketPayload(
-                        event_type=WebSocketEventType.ERROR,
-                        session_id=connection.session_id,
-                        user_id=connection.user_id,
-                        data={"error": "lesson_transition_failed"},
-                    ),
-                )
-
-            transition_runner = SerializedTransitionRunner(
-                bridge,
-                lambda message: ws_manager.handle_client_message(
-                    connection.connection_id, message
-                ),
-                on_error=_transition_failure,
-            )
-            if (websocket.query_params.get("resume") or "").lower() not in (
-                "1", "true", "yes",
-            ):
-                await bridge.begin("startup")
 
         # Keep scene production authoritative; the bridge has its own event.
         await _send_welcome_scene(lifecycle_engine, connection, streaming_mode, bridge=bridge)
