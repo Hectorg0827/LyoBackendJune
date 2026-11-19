@@ -77,3 +77,34 @@ async def test_other_owner_cannot_inherit_or_overwrite_topic(monkeypatch):
     assert trigger.action_data["topic"] == "Public mathematics"
     assert cm.get_session("ct-test-session-42").user_id == "42"
     assert cm.get_session("ct-test-session-42").current_topic == "Owner's private lesson"
+
+
+@pytest.mark.asyncio
+async def test_restarted_worker_loads_owner_scoped_subject_from_database():
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from lyo_app.classroom.models import ClassroomSession
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(ClassroomSession.__table__.create)
+        async with AsyncSession(engine) as db:
+            db.add(ClassroomSession(
+                user_id=42,
+                title="ct-resume-subject",
+                subject="Comparing fractions",
+                session_type="guided_ai",
+                context={"scene": 5},
+            ))
+            await db.commit()
+        async with AsyncSession(engine) as db:
+            reader = ContextAssembler(db)
+            original = await reader._load_persisted_session_progress(
+                SimpleNamespace(user_id="42", session_id="ct-resume-subject"))
+            unrelated = await reader._load_persisted_session_progress(
+                SimpleNamespace(user_id="43", session_id="ct-resume-subject"))
+        assert original["scene"] == 5
+        assert original["_saved_subject"] == "Comparing fractions"
+        assert unrelated == {}, "Another learner cannot inherit this subject"
+    finally:
+        await engine.dispose()
