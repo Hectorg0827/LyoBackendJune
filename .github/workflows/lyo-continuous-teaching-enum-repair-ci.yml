@@ -1,0 +1,79 @@
+name: Continuous Teaching isolated PostgreSQL enum repair regression
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/repair_continuous_teaching_staging_enums.py'
+      - 'tests/test_continuous_teaching_staging_enums.py'
+      - '.github/workflows/lyo-continuous-teaching-enum-repair-ci.yml'
+  push:
+    branches: [rc/lyo-continuous-teaching-focused-backend-20261119]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair-contract:
+    name: Real disposable Postgres enum upgrade and AI_SESSION insertion
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: classroom_test
+          POSTGRES_PASSWORD: classroom_test
+          POSTGRES_DB: enum_contract
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U classroom_test -d enum_contract"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest pytest-asyncio asyncpg
+      - name: Validate guard and retry semantics without connecting to staging
+        env:
+          PYTHONPATH: .
+        run: pytest -q tests/test_continuous_teaching_staging_enums.py
+      - name: Verify actual PostgreSQL enum type repair, repeat and write
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+          from scripts.repair_continuous_teaching_staging_enums import REQUIRED_LABELS, repair
+
+          async def main():
+              conn = await asyncpg.connect(
+                  "postgresql://classroom_test:classroom_test@127.0.0.1:5432/enum_contract"
+              )
+              try:
+                  await conn.execute("CREATE TYPE public.eventtype AS ENUM ('QUIZ_ANSWER')")
+                  await conn.execute(
+                      "CREATE TABLE public.learning_events (id SERIAL PRIMARY KEY, "
+                      "event_type public.eventtype NOT NULL)"
+                  )
+                  missing = await repair(conn)
+                  assert "AI_SESSION" in missing
+                  assert set(REQUIRED_LABELS).issuperset(missing)
+                  assert await repair(conn) == ()
+                  await conn.execute(
+                      "INSERT INTO public.learning_events(event_type) VALUES ('AI_SESSION')"
+                  )
+                  assert await conn.fetchval(
+                      "SELECT count(*) FROM public.learning_events "
+                      "WHERE event_type = 'AI_SESSION'"
+                  ) == 1
+                  print("Real Postgres repair, idempotence and AI_SESSION insert PASS")
+              finally:
+                  await conn.close()
+
+          asyncio.run(main())
+          PY
