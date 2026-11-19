@@ -19,6 +19,7 @@ from lyo_app.ai_classroom.sdui_models import WebSocketEventType, WebSocketPayloa
 MAX_REPLY_CHARS = 300
 MAX_REPLIES = 2
 AI_DEADLINE_SECONDS = 2.5
+BRIDGE_DELIVERY_TIMEOUT_SECONDS = 0.5  # optional prompt must not gate real lesson
 MAX_AI_STARTS_PER_MINUTE = 6
 _MAX_TOPIC_CHARS = 100
 
@@ -243,7 +244,10 @@ class ContinuousTeachingBridge:
         self.active = True
         self.replies = 0
         try:
-            await self._emit(initial_prompt(self.topic, self.language, phase), prompt=True)
+            await asyncio.wait_for(
+                self._emit(initial_prompt(self.topic, self.language, phase), prompt=True),
+                timeout=BRIDGE_DELIVERY_TIMEOUT_SECONDS,
+            )
         except Exception:
             # An optional bridge must never prevent the real lesson from
             # starting, including when its delivery queue is unavailable.
