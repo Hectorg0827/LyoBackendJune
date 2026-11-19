@@ -28,14 +28,44 @@ _starts: deque[float] = deque()
 _starts_lock = asyncio.Lock()
 
 
-def bridge_enabled(opt_in: str, *, environment: Optional[str] = None,
-                   flag: Optional[str] = None) -> bool:
-    env = environment if environment is not None else (
-        os.getenv("RAILWAY_ENVIRONMENT_NAME") or os.getenv("ENVIRONMENT", "")
-    )
-    allowed = env.lower() in {"staging", "test", "testing", "development"}
-    enabled = flag if flag is not None else os.getenv("LYO_CONTINUOUS_TEACHING_STAGING", "")
-    return allowed and enabled == "1" and opt_in == "1"
+def bridge_runtime_environment() -> str:
+    """Fail closed when Railway and application environment disagree."""
+    railway = os.getenv("RAILWAY_ENVIRONMENT_NAME", "").strip().lower()
+    configured = os.getenv("ENVIRONMENT", "").strip().lower()
+    if railway and configured and railway != configured:
+        return "mismatch"
+    return railway or configured
+
+
+def bridge_enabled(
+    opt_in: str, *, environment: Optional[str] = None,
+    flag: Optional[str] = None, user_id: Optional[str] = None,
+    production_flag: Optional[str] = None,
+    production_user_ids: Optional[str] = None,
+) -> bool:
+    """Gate staging and production independently; no client-only override.
+
+    In production require both the explicit kill-switch and a trustworthy,
+    server-authenticated user id in a nonwildcard allowlist. Never honor an
+    identity supplied in query params or the untrusted WebSocket payload.
+    """
+    if opt_in != "1":
+        return False
+    env = (environment if environment is not None
+           else bridge_runtime_environment()).strip().lower()
+    if env in {"staging", "test", "testing", "development"}:
+        enabled = (flag if flag is not None
+                   else os.getenv("LYO_CONTINUOUS_TEACHING_STAGING", ""))
+        return enabled == "1"
+    if env != "production":
+        return False
+    enabled = (production_flag if production_flag is not None
+               else os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", ""))
+    allowlist = (production_user_ids if production_user_ids is not None
+                 else os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_USER_IDS", ""))
+    allowed_ids = {item.strip() for item in allowlist.split(",")
+                   if item.strip() and item.strip() != "*"}
+    return enabled == "1" and bool(user_id) and user_id in allowed_ids
 
 
 def message_is_session_scoped(message: object, session_id: str, user_id: str) -> bool:
