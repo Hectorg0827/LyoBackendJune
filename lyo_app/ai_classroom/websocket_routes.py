@@ -216,6 +216,7 @@ async def websocket_endpoint(
         # This channel never enters the scene lifecycle or grading handler.
         from lyo_app.ai_classroom.continuous_teaching import (
             ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled,
+            message_is_session_scoped,
         )
         if bridge_enabled(websocket.query_params.get("continuous_teaching") or ""):
             bridge = ContinuousTeachingBridge(
@@ -265,9 +266,9 @@ async def websocket_endpoint(
                 # The connection's authenticated learner seat is the sole
                 # authority for every action. A caller-supplied session_id
                 # must never direct a continuation to another user's seat.
-                if (isinstance(incoming, dict)
-                        and incoming.get("session_id") is not None
-                        and incoming["session_id"] != connection.session_id):
+                if not message_is_session_scoped(
+                    incoming, connection.session_id, connection.user_id
+                ):
                     await ws_manager.send_to_connection(
                         connection.connection_id,
                         WebSocketPayload(
