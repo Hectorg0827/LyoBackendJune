@@ -136,6 +136,7 @@ DIAGNOSE = (
     "the method, or the answer — and a visual whose description explains why the "
     "answer is the answer belongs in a later beat, not this one. Do not hint at "
     "the answer, do not preview the method, and do not promise a grade. "
+    "Never place correct choice in question wording. "
 )
 
 ORIENT = (

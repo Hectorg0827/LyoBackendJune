@@ -1,0 +1,33 @@
+name: LYO Continuous Teaching early bridge live staging probe
+
+on:
+  push:
+    branches: [rc/lyo-continuous-teaching-focused-backend-20261119]
+    paths:
+      - scripts/continuous_teaching_live_bridge_staging_smoke.py
+      - .github/workflows/lyo-ct-bridge-live-staging-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lyo-ct-staging-early-bridge
+  cancel-in-progress: false
+
+jobs:
+  live-bridge:
+    name: Staging JWT early ungraded bridge before authoritative Classroom scene
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --disable-pip-version-check httpx==0.28.1 websockets==15.0.1
+      - run: python -m py_compile scripts/continuous_teaching_live_bridge_staging_smoke.py
+      - name: Measure safe early text bridge before AI lesson (no Android playback)
+        env:
+          LYO_STAGING_SMOKE_URL: https://lyo-continuousteaching-preview-backend-staging.up.railway.app
+        run: python -u scripts/continuous_teaching_live_bridge_staging_smoke.py

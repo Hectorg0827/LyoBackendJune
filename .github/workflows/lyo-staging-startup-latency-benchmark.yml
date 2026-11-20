@@ -1,0 +1,35 @@
+name: LYO isolated staging classroom startup benchmark (no deploy)
+
+on:
+  push:
+    branches: [rc/lyo-continuous-teaching-focused-backend-20261119]
+    paths:
+      - scripts/continuous_teaching_latency_benchmark_staging.py
+      - .github/workflows/lyo-staging-startup-latency-benchmark.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lyo-isolated-startup-latency-benchmark
+  cancel-in-progress: false
+
+jobs:
+  authenticated-five-starts:
+    name: Benchmark 12 synthetic WebSocket lesson starts at pinned staging revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded external client
+        run: python -m pip install --disable-pip-version-check httpx==0.28.1 websockets==15.0.1
+      - name: Validate benchmark script syntax
+        run: python -m py_compile scripts/continuous_teaching_latency_benchmark_staging.py
+      - name: Exercise twelve sequential authenticated startup sessions
+        env:
+          LYO_STAGING_SMOKE_URL: https://lyo-continuousteaching-preview-backend-staging.up.railway.app
+        run: python -u scripts/continuous_teaching_latency_benchmark_staging.py

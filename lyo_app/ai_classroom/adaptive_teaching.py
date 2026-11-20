@@ -1460,9 +1460,11 @@ class AdaptiveTeacher:
                     turn.board_title = "Your question"
                     turn.board_content = turn.task.scenario
                     turn.visual = None
+                # The model-backed reviewer is the expensive final gate.
+                # First reject every move-specific error we can prove locally,
+                # so a malformed checkpoint does not spend another model call
+                # merely to be rejected a few lines later.
                 validate_semantic_content(turn)
-                if self.semantic_judge is not None and not await self.semantic_judge(move, unit, turn):
-                    raise TeachingContractError("Independent semantic review rejected this teaching turn")
                 if move == "diagnose":
                     if turn.task is None or turn.demonstration:
                         raise TeachingContractError("A diagnostic is one question, not a lesson")
@@ -1530,6 +1532,12 @@ class AdaptiveTeacher:
                             "Provide a complete example across at least two paced steps")
                     if move in ("reteach", "prerequisite") and not turn.demonstration:
                         raise TeachingContractError("Demonstrate the missing step before another attempt")
+                # Preserve the independent semantic quality gate for every
+                # structurally valid learner-facing turn. Keep it ahead of
+                # claim_question: failed review must not reserve a question
+                # that the learner never saw.
+                if self.semantic_judge is not None and not await self.semantic_judge(move, unit, turn):
+                    raise TeachingContractError("Independent semantic review rejected this teaching turn")
                 if turn.task is not None and not await self.claim_question(context, state, move, turn.task):
                     raise TeachingContractError("Previously seen checkpoint; ask a new question")
                 # Preferred visual beats should not become plain text when

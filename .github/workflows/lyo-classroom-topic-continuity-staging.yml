@@ -1,0 +1,33 @@
+name: LYO Classroom topic continuity on isolated staging
+
+on:
+  push:
+    branches: [rc/lyo-continuous-teaching-focused-backend-20261119]
+    paths:
+      - scripts/continuous_teaching_topic_staging_smoke.py
+      - .github/workflows/lyo-classroom-topic-continuity-staging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lyo-classroom-topic-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  topic-continuity:
+    name: Verify lesson startup and first authenticated learner action on preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check httpx==0.28.1 websockets==15.0.1
+      - run: python -m py_compile scripts/continuous_teaching_topic_staging_smoke.py
+      - name: Exercise pinned isolated staging release and log session marker
+        env:
+          LYO_STAGING_SMOKE_URL: https://lyo-continuousteaching-preview-backend-staging.up.railway.app
+        run: python -u scripts/continuous_teaching_topic_staging_smoke.py
