@@ -574,4 +574,5 @@ def test_diagnostic_prompt_explicitly_warns_against_pre_answer_leakage():
     from lyo_app.ai_classroom.teaching_prompt import teaching_prompt
 
     prompt = teaching_prompt("diagnose")
-    assert "Never place correct choice in question wording." in prompt
+    assert "Never reveal or calculate the correct option" in prompt
+    assert "visible scenario, question or hint" in prompt
