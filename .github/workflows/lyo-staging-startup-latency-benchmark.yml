@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   authenticated-five-starts:
-    name: Benchmark 5 synthetic WebSocket lesson starts at pinned staging revision
+    name: Benchmark 12 synthetic WebSocket lesson starts at pinned staging revision
     runs-on: ubuntu-latest
     timeout-minutes: 16
     steps:
@@ -29,7 +29,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check httpx==0.28.1 websockets==15.0.1
       - name: Validate benchmark script syntax
         run: python -m py_compile scripts/continuous_teaching_latency_benchmark_staging.py
-      - name: Exercise five sequential authenticated startup sessions
+      - name: Exercise twelve sequential authenticated startup sessions
         env:
           LYO_STAGING_SMOKE_URL: https://lyo-continuousteaching-preview-backend-staging.up.railway.app
         run: python -u scripts/continuous_teaching_latency_benchmark_staging.py
