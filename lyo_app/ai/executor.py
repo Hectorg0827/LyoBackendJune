@@ -947,22 +947,9 @@ Freshness rules:
     ) -> Optional[Dict[str, Any]]:
         """Use Gemini to generate structured course data from the user's request."""
         if not self._gemini:
-            # Return a minimal course structure
-            topic = step_params.get("title", original_request[:80])
-            return {
-                "title": f"Learn {topic}",
-                "topic": topic,
-                "description": f"A course about {topic}",
-                "difficulty": "Beginner",
-                "estimated_duration": "2-3 hours",
-                "objectives": [f"Understand {topic}", f"Apply {topic} concepts", f"Master {topic} foundations"],
-                "lessons": [
-                    {"title": "Introduction", "description": f"Getting started with {topic}", "type": "reading", "duration": "15 min"},
-                    {"title": "Core Concepts", "description": f"Key ideas in {topic}", "type": "reading", "duration": "20 min"},
-                    {"title": "Practice", "description": "Hands-on exercises", "type": "exercise", "duration": "30 min"},
-                ]
-            }
-        
+            logger.warning("Course generation provider unavailable; no synthetic course will be created")
+            return None
+
         source_context = ""
         media = context.get("media_attachments") or []
         if media:
@@ -1023,21 +1010,11 @@ Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
         except Exception as e:
             logger.error(f"Course data generation failed: {e}", exc_info=True)
         
-        # Fallback
-        topic = step_params.get("title", original_request[:80])
-        return {
-            "title": f"Learn {topic}",
-            "topic": topic,
-            "description": f"A comprehensive course about {topic}",
-            "difficulty": "Beginner",
-            "estimated_duration": "2 hours",
-            "objectives": [f"Understand {topic}", f"Apply {topic} concepts", f"Master {topic} foundations"],
-            "lessons": [
-                {"title": "Introduction", "description": f"Getting started with {topic}", "type": "reading", "duration": "15 min"},
-                {"title": "Key Concepts", "description": f"Understanding the fundamentals", "type": "reading", "duration": "20 min"},
-                {"title": "Practice Quiz", "description": "Test your knowledge", "type": "quiz", "duration": "10 min"},
-            ]
-        }
+        # A model error or invalid JSON is not a completed course. The
+        # streaming endpoint will return a recoverable failure instead of
+        # advertising an unverified, hard-coded Beginner syllabus.
+        logger.warning("Course generation did not produce validated JSON; retry is required")
+        return None
 
     async def _generate_lesson_content_data(
         self, lesson_title: str, course_title: str, level: str = "beginner"
