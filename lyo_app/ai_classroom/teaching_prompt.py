@@ -136,11 +136,7 @@ DIAGNOSE = (
     "the method, or the answer — and a visual whose description explains why the "
     "answer is the answer belongs in a later beat, not this one. Do not hint at "
     "the answer, do not preview the method, and do not promise a grade. "
-    "Do not repeat the correct answer choice as a stated result, solved example "
-    "or explanatory phrase in the scenario, question, response_hint, speech "
-    "or board; those fields are visible before the learner answers. State "
-    "only the problem data, never the solution. Numerical operands are "
-    "permitted when they are genuinely part of the problem, not its result. "
+    "Never place correct choice in question wording. "
 )
 
 ORIENT = (
