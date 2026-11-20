@@ -1124,23 +1124,13 @@ async def model_json(system: str, payload: dict[str, Any], schema: type[StrictMo
         providers.append(rejected_provider)
     # Internal routing metadata never becomes part of learner/model context.
     public_payload = {key: value for key, value in payload.items() if not key.startswith("_")}
-    if schema in (LearningPlan, DiagnosticTurn) and not public_payload.get("repair"):
-        # Cold-start planner and probe send many optional fields that are
-        # genuinely blank before a student interacts. Drop only empty top-level
-        # values; preserve False, zero, IDs, nonempty evidence and all nested
-        # instructional data. Never change a repair request's full context.
-        public_payload = {
-            key: value for key, value in public_payload.items()
-            if value is not None and value != "" and value != [] and value != {}
-        }
     started = perf_counter()
     result = None
     outcome = "error"
     messages = [
         {"role": "system", "content": envelope + system + "\nReturn only JSON matching this schema:\n"
-         + json.dumps(contract, ensure_ascii=False, separators=(",", ":"))},
-        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False,
-                                               separators=(",", ":"))},
+         + json.dumps(contract, ensure_ascii=False)},
+        {"role": "user", "content": json.dumps(public_payload, ensure_ascii=False)},
     ]
     max_tokens = (16000 if issubclass(schema, UnitPackage) else
                   4500 if issubclass(schema, (LearningPlan, LearningTurn)) else
