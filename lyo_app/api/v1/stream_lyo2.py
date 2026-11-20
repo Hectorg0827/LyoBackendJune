@@ -689,38 +689,34 @@ def _extract_course_level(user_text: str) -> Optional[str]:
 def _normalize_course_payload_for_stream(
     payload: Optional[Dict[str, Any]],
     topic: str,
-) -> Dict[str, Any]:
-    """Normalize executor course output to the same payload clients receive.
+) -> Optional[Dict[str, Any]]:
+    """Return only a real course containing generated lessons.
 
-    Executor implementations may return the course under a course key or
-    directly as the payload. Missing or unusable payloads are replaced with the
-    existing deterministic fallback before progress counts are calculated.
+    A failed model or truncated output must never fabricate a beginner
+    course with no lessons or emit a successful open_classroom action.
     """
-    if isinstance(payload, dict):
-        nested_course = payload.get("course")
-        if isinstance(nested_course, dict):
-            return payload
-        if payload and any(
-            key in payload
-            for key in ("id", "title", "topic", "lessons", "objectives")
-        ):
-            return {"course": payload}
-
-    return {
-        "course": {
-            "id": str(uuid.uuid4()),
-            "title": topic.title() if topic else "Your Course",
-            "topic": topic,
-            "level": "beginner",
-            "duration": "4 weeks",
-            "objectives": [
-                f"Understand the fundamentals of {topic}",
-                f"Apply key concepts of {topic} in practice",
-                f"Build confidence with {topic}",
-            ],
-            "lessons": [],
-        }
-    }
+    if not isinstance(payload, dict):
+        return None
+    nested = payload.get("course")
+    course = nested if isinstance(nested, dict) else payload
+    if not isinstance(course, dict):
+        return None
+    lessons = course.get("lessons")
+    valid = isinstance(lessons, list) and any(
+        isinstance(lesson, dict) and lesson.get("title") for lesson in lessons
+    )
+    if not valid:
+        modules = course.get("modules")
+        valid = isinstance(modules, list) and any(
+            isinstance(module, dict)
+            and isinstance(module.get("lessons"), list)
+            and any(isinstance(lesson, dict) and lesson.get("title")
+                    for lesson in module["lessons"])
+            for module in modules
+        )
+    if not valid:
+        return None
+    return payload if isinstance(nested, dict) else {"course": course}
 
 
 def _resolve_course_topic(
@@ -2966,50 +2962,64 @@ async def stream_lyo2_chat(
                 )
                 _raw_course_payload = execution_response.open_classroom_payload
                 _normalized_course_payload = _normalize_course_payload_for_stream(
-                    _raw_course_payload,
-                    topic_text,
+                    _raw_course_payload, topic_text,
                 )
-                if _normalized_course_payload is not _raw_course_payload:
-                    execution_response = execution_response.model_copy(
-                        update={"open_classroom_payload": _normalized_course_payload}
+                if _normalized_course_payload is None:
+                    logger.warning(
+                        "[STREAM][%s] COURSE generation did not produce real "
+                        "lessons; suppressing open_classroom handoff",
+                        trace_id,
                     )
-                    if not (
-                        isinstance(_raw_course_payload, dict)
-                        and _raw_course_payload
-                    ):
-                        logger.warning(
-                            f"⚠️ [STREAM][{trace_id}] COURSE intent but no usable "
-                            "open_classroom_payload — using synthesised fallback "
-                            f"for topic: '{topic_text[:60]}'"
+                    execution_response = execution_response.model_copy(
+                        update={"open_classroom_payload": None}
+                    )
+                    yield yield_safe_sse_event(
+                        "course_generation",
+                        {
+                            "type": "course_generation",
+                            "phase": "failed",
+                            "progress": 0,
+                            "message": "Course creation did not finish. Please retry.",
+                        },
+                    )
+                else:
+                    if _normalized_course_payload is not _raw_course_payload:
+                        execution_response = execution_response.model_copy(
+                            update={"open_classroom_payload": _normalized_course_payload}
                         )
+                    _generated_course = _normalized_course_payload["course"]
+                    _generated_lessons = _generated_course.get("lessons", [])
+                    if not isinstance(_generated_lessons, list):
+                        _generated_lessons = [
+                            lesson
+                            for module in _generated_course.get("modules", [])
+                            if isinstance(module, dict)
+                            for lesson in module.get("lessons", [])
+                            if isinstance(lesson, dict)
+                        ]
+                    _lesson_count = len(_generated_lessons)
+                    _outline = [
+                        {
+                            "title": str(lesson.get("title") or "Lesson"),
+                            "description": str(lesson.get("description") or ""),
+                        }
+                        for lesson in _generated_lessons
+                        if isinstance(lesson, dict)
+                    ]
+                    yield yield_safe_sse_event(
+                        "course_generation",
+                        {
+                            "type": "course_generation",
+                            "phase": "lessons",
+                            "progress": 82,
+                            "message": "Course outline created",
+                            "completed_lessons": _lesson_count,
+                            "total_lessons": _lesson_count,
+                            "outline": _outline,
+                        },
+                    )
 
-                _generated_course = _normalized_course_payload["course"]
-                _generated_lessons = _generated_course.get("lessons", [])
-                if not isinstance(_generated_lessons, list):
-                    _generated_lessons = []
-                _lesson_count = len(_generated_lessons)
-                _outline = []
-                for lesson in _generated_lessons:
-                    if not isinstance(lesson, dict):
-                        continue
-                    _outline.append({
-                        "title": str(lesson.get("title") or "Lesson"),
-                        "description": str(lesson.get("description") or ""),
-                    })
-                yield yield_safe_sse_event(
-                    "course_generation",
-                    {
-                        "type": "course_generation",
-                        "phase": "lessons",
-                        "progress": 82,
-                        "message": "Course outline created",
-                        "completed_lessons": _lesson_count,
-                        "total_lessons": _lesson_count,
-                        "outline": _outline,
-                    },
-                )
-            
-            # ── Emit plain-text answer event ─────────────────────────
+                        # ── Emit plain-text answer event ─────────────────────────
             raw_llm_text = execution_response.answer_block.content.get("text", "")
             voice_delivery = interaction_contract.delivery_mode == DeliveryMode.VOICE
 
@@ -3254,7 +3264,7 @@ async def stream_lyo2_chat(
             await finish_assistant_messages(pending_writes)
 
             # Completion signal
-            if decision.intent == Intent.COURSE:
+            if decision.intent == Intent.COURSE and execution_response.open_classroom_payload:
                 yield yield_safe_sse_event(
                     "course_generation",
                     {
