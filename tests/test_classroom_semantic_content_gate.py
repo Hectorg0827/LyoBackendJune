@@ -381,3 +381,56 @@ async def test_graded_teacher_introduction_is_neutral_even_when_model_leaks_solu
     assert result.board_title == "Your question"
     assert result.board_content == result.task.scenario
     assert result.visual is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_probe_does_not_call_expensive_semantic_judge():
+    """Move-specific deterministic rejection must precede model reviewer.
+
+    The first candidate has a valid shape but probes the wrong target. A
+    semantic reviewer cannot make that acceptable; paying for it only adds
+    latency before the inevitable repair request.
+    """
+    ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    good = ScriptedTeacher()._turn(ctx, state, "diagnose")
+    invalid = good.model_copy(deep=True)
+    invalid.task.target_index = 1  # Legal schema value, wrong current target.
+    generate = AsyncMock(side_effect=[invalid, good])
+    judge = AsyncMock(return_value=True)
+
+    accepted = await AdaptiveTeacher(generate, semantic_judge=judge).turn(
+        ctx, state, "diagnose"
+    )
+
+    assert accepted.task.target_index == state.target_index == 0
+    assert generate.await_count == 2
+    judge.assert_awaited_once()
+    assert "Probe the current component skill" in generate.await_args.args[1]["repair"]
+    assert not state.completed and not state.outbox
+
+
+@pytest.mark.asyncio
+async def test_two_structurally_wrong_probes_never_reach_semantic_reviewer():
+    ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    wrong = ScriptedTeacher()._turn(ctx, state, "diagnose")
+    wrong.task.target_index = 1
+    generate = AsyncMock(return_value=wrong)
+    judge = AsyncMock(return_value=True)
+
+    with pytest.raises(TeachingUnavailable):
+        await AdaptiveTeacher(generate, semantic_judge=judge).turn(
+            ctx, state, "diagnose"
+        )
+
+    assert generate.await_count == 2
+    judge.assert_not_awaited()
+    assert not state.completed and not state.outbox
+
+
+def test_diagnostic_prompt_explicitly_warns_against_pre_answer_leakage():
+    from lyo_app.ai_classroom.teaching_prompt import teaching_prompt
+
+    prompt = teaching_prompt("diagnose")
+    assert "correct answer choice" in prompt
+    assert "scenario, question, response_hint, speech" in prompt
+    assert "Numerical operands are permitted" in prompt
