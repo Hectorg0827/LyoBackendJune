@@ -256,7 +256,7 @@ async def test_cold_diagnostic_model_input_compacts_only_empty_top_level_fields(
     assert payload["unit"] == sent["unit"]
     assert payload["practice_target"] == sent["practice_target"]
     schema = json.loads(args["messages"][0]["content"].split(
-        "Return only JSON matching this schema:\\n", 1
+        "Return only JSON matching this schema:\n", 1
     )[1])
     assert "task" in schema["properties"]
 
