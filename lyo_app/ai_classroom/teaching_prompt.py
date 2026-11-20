@@ -116,8 +116,7 @@ DIAGNOSE = (
     "sure yet (abstains=true, no misconception, no gap). This is the first thing "
     "the unit asks, before anything is taught, so it must be answerable with one "
     "tap: a learner who has never met this skill can still choose, and will not "
-    "face an empty box. It probes prior knowledge, so it is the one checkpoint "
-    "that may ask about something this learner has not been taught. "
+    "face an empty box. It may ask about something this learner has not been taught. "
     "Give every distractor the misconception that tapping it would reveal, and "
     "set gap=near_miss when the learner has the idea and slips on one step, or "
     "gap=fundamental when they are reasoning from a different model of the "
@@ -136,7 +135,7 @@ DIAGNOSE = (
     "the method, or the answer — and a visual whose description explains why the "
     "answer is the answer belongs in a later beat, not this one. Do not hint at "
     "the answer, do not preview the method, and do not promise a grade. "
-    "Never place correct choice in question wording. "
+    "Never reveal or calculate the correct option in the visible scenario, question or hint. "
 )
 
 ORIENT = (
