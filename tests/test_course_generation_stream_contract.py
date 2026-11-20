@@ -68,6 +68,21 @@ def test_course_payload_normalization_drives_fallback_and_lesson_counts():
     assert normalized == {"course": direct}
     assert len(normalized["course"]["lessons"]) == 2
 
-    fallback = _normalize_course_payload_for_stream(None, "geometry")
-    assert fallback["course"]["topic"] == "geometry"
-    assert fallback["course"]["lessons"] == []
+    # A model failure is not an empty but supposedly completed course.
+    assert _normalize_course_payload_for_stream(None, "geometry") is None
+    assert _normalize_course_payload_for_stream({"course": {
+        "topic": "geometry", "level": "beginner", "lessons": [],
+    }}, "geometry") is None
+    assert _normalize_course_payload_for_stream({"course": {
+        "topic": "geometry", "modules": [
+            {"title": "Unit", "lessons": [{"title": "Angles"}]},
+        ],
+    }}, "geometry") is not None
+
+
+def test_stream_never_announces_ready_or_classroom_for_failed_generation():
+    source = Path("lyo_app/api/v1/stream_lyo2.py").read_text()
+    assert 'if _normalized_course_payload is None:' in source
+    assert 'update={"open_classroom_payload": None}' in source
+    assert '"phase": "failed"' in source
+    assert 'if decision.intent == Intent.COURSE and execution_response.open_classroom_payload:' in source
