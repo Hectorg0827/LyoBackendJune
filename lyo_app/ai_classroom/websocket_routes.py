@@ -176,7 +176,8 @@ async def websocket_endpoint(
             ContinuousTeachingBridge, SerializedTransitionRunner, bridge_enabled,
             message_is_session_scoped,
         )
-        if bridge_enabled(websocket.query_params.get("continuous_teaching") or ""):
+        if bridge_enabled(websocket.query_params.get("continuous_teaching") or "",
+                          user_id=connection.user_id):
             bridge = ContinuousTeachingBridge(
                 ws_manager, connection,
                 topic=websocket.query_params.get("topic") or "today's topic",

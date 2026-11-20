@@ -28,14 +28,46 @@ _starts: deque[float] = deque()
 _starts_lock = asyncio.Lock()
 
 
-def bridge_enabled(opt_in: str, *, environment: Optional[str] = None,
-                   flag: Optional[str] = None) -> bool:
-    env = environment if environment is not None else (
-        os.getenv("RAILWAY_ENVIRONMENT_NAME") or os.getenv("ENVIRONMENT", "")
-    )
-    allowed = env.lower() in {"staging", "test", "testing", "development"}
-    enabled = flag if flag is not None else os.getenv("LYO_CONTINUOUS_TEACHING_STAGING", "")
-    return allowed and enabled == "1" and opt_in == "1"
+def bridge_runtime_environment() -> str:
+    """Fail closed when Railway and application environment disagree."""
+    railway = os.getenv("RAILWAY_ENVIRONMENT_NAME", "").strip().lower()
+    configured = os.getenv("ENVIRONMENT", "").strip().lower()
+    if railway and configured and railway != configured:
+        return "mismatch"
+    return railway or configured
+
+
+def bridge_enabled(
+    opt_in: str, *, environment: Optional[str] = None,
+    flag: Optional[str] = None, user_id: Optional[str] = None,
+    production_flag: Optional[str] = None,
+    production_user_ids: Optional[str] = None,
+) -> bool:
+    """Gate staging and production independently; no client-only override.
+
+    In production require both the explicit kill-switch and a trustworthy,
+    server-authenticated user id in a nonwildcard allowlist. Never honor an
+    identity supplied in query params or the untrusted WebSocket payload.
+    """
+    if opt_in != "1":
+        return False
+    env = (environment if environment is not None
+           else bridge_runtime_environment()).strip().lower()
+    if env in {"staging", "test", "testing", "development"}:
+        enabled = (flag if flag is not None
+                   else os.getenv("LYO_CONTINUOUS_TEACHING_STAGING", ""))
+        return enabled == "1"
+    if env != "production":
+        return False
+    enabled = (production_flag if production_flag is not None
+               else os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED", ""))
+    allowlist = (production_user_ids if production_user_ids is not None
+                 else os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_USER_IDS", ""))
+    allowed_ids = {item.strip() for item in allowlist.split(",")
+                   if item.strip() and item.strip() != "*"}
+    return (enabled == "1" and bool(user_id)
+            and not str(user_id).startswith("guest_")
+            and user_id in allowed_ids)
 
 
 def message_is_session_scoped(message: object, session_id: str, user_id: str) -> bool:
@@ -93,14 +125,69 @@ async def _reserve_ai_start() -> bool:
         return True
 
 
+def bridge_ai_allowed() -> bool:
+    """Paid follow-ups default off in production even if text bridge is on."""
+    env = bridge_runtime_environment()
+    if env in {"staging", "test", "testing", "development"}:
+        from lyo_app.ai_classroom.trial_budget import trial_enabled
+        return trial_enabled()
+    if env == "production":
+        return (os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_AI_ENABLED") == "1"
+                and os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_RATES_APPROVED") == "1"
+                and os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_ENABLED") == "1")
+    return False
+
+
+async def reserve_bridge_spend(messages: list[dict]) -> bool:
+    """Reserve before paid provider call; separate production and staging ledgers.
+
+    The production ledger has no TTL, never resets across workers/deployments,
+    and cannot exceed a hard $50 pilot ceiling even with invalid settings.
+    Redis unavailable, exhausted budget, unapproved pricing or invalid
+    configuration all result in a local non-AI fallback.
+    """
+    if not bridge_ai_allowed():
+        return False
+    env = bridge_runtime_environment()
+    if env != "production":
+        from lyo_app.ai_classroom.trial_budget import reserve_classroom_attempt
+        try:
+            await reserve_classroom_attempt("gemini-3.5-flash-lite", messages, 90, None)
+            return True
+        except Exception:
+            return False
+
+    from decimal import Decimal, InvalidOperation
+    from lyo_app.ai_classroom.trial_budget import reserve_micro_usd, _RESERVE_LUA
+    try:
+        approved = Decimal(os.getenv("LYO_CONTINUOUS_TEACHING_PRODUCTION_TOTAL_BUDGET_USD", ""))
+        if not approved.is_finite() or approved <= 0 or approved > Decimal("50"):
+            return False
+        ceiling = approved * Decimal(1_000_000)
+        if ceiling != ceiling.to_integral_exact():
+            return False
+        cost = reserve_micro_usd("gemini-3.5-flash-lite", messages, 90, None)
+        from lyo_app.core.redis_client import redis_client
+        client = redis_client.client
+        if client is None:
+            return False
+        # Distinct persistent production reservation key, never the staging
+        # $60 trial ledger. No expiry or reset, including across restarts.
+        total = int(await client.eval(
+            _RESERVE_LUA, 1,
+            "lyo:classroom:continuous_teaching:production:pilot_reserved_microusd",
+            cost, int(ceiling),
+        ))
+        return total >= 0
+    except (Exception, InvalidOperation):
+        return False
+
+
 async def lightweight_ai_reply(topic: str, language: str, answer: str) -> Optional[str]:
     """Use one fast Gemini candidate, without invoking the logging-heavy chat wrapper."""
-    # Fail closed *before* initialising a provider or reserving quota. An
-    # unapproved/disabled staging trial must be entirely local and free.
-    from lyo_app.ai_classroom.trial_budget import (
-        trial_enabled, reserve_classroom_attempt,
-    )
-    if not trial_enabled() or not await _reserve_ai_start():
+    # No provider initialization or paid calls unless the environment's
+    # *separate*, explicit spending gate is on. Production defaults off.
+    if not bridge_ai_allowed() or not await _reserve_ai_start():
         return None
     try:
         from lyo_app.core.ai_resilience import ai_resilience_manager as manager
@@ -130,7 +217,8 @@ async def lightweight_ai_reply(topic: str, language: str, answer: str) -> Option
         ]
         # Share the existing audited, durable $60 staging classroom ledger.
         # Do not silently create a separate unbounded bridge spend path.
-        await reserve_classroom_attempt("gemini-3.5-flash-lite", messages, 90, None)
+        if not await reserve_bridge_spend(messages):
+            return None
         result = await asyncio.wait_for(
             manager._call_model_with_messages(
                 "gemini-3.5-flash-lite", model, messages,
