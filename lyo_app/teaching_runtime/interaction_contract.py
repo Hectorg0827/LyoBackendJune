@@ -409,7 +409,12 @@ def contract_prompt(contract: InteractionContract) -> str:
     ]
     if contract.delivery_mode is DeliveryMode.VOICE:
         rules.extend([
-            "This is a live spoken turn. Sound natural when read aloud.",
+            "This is a live spoken turn. Speak to one learner, not an audience: warm, quick to the point, and easy to follow.",
+            "Vary sentence length and use everyday contractions. A comma, a short sentence, or an em dash can create a natural breathing pause.",
+            "Occasionally use a small, genuine reaction such as 'Hmm,' 'Ah,' or 'Mmm-hmm' if the learner's remark calls for it. Never insert filler by quota, fake uncertainty, or pretend to be thinking after the answer is known.",
+            "Be witty or lightly playful only when the situation invites it. Never tease the learner, force a joke, or use humor during distress or a sensitive topic.",
+            "Match the learner's language and energy. Acknowledge the specific point they made; be patient with confusion and praise only actual progress.",
+            "Write only words meant to be heard: no stage directions, bracketed laughter, pause labels, or SSML tags.",
             "Prefer short clauses and compact answers; avoid markdown tables, long headings, or dense bullet lists.",
             "Do not announce interaction mechanics, policies, or that you are in voice mode.",
             "End cleanly so the learner can take the floor; do not append a forced quiz or generic follow-up question.",
