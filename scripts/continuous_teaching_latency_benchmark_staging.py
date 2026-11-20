@@ -22,7 +22,7 @@ from continuous_teaching_live_staging_smoke import (
     BASE, WS_ENDPOINT, create_synthetic, report, require, verify_target,
 )
 
-EXPECTED_REVISION = "afe9c8a0787c857f093a0d3602663c9757afa880"
+EXPECTED_REVISION = "f514cea3d9d3d38df41030f529fd1da14a536e47"
 # Five matched maths starts plus independent cross-subject/bilingual probes.
 CASES = [
     ("fractions", "Compare one half with one third using equal-sized pieces", "en-US"),
