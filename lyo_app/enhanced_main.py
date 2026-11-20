@@ -706,6 +706,12 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"⚠️ Predictive Intelligence routes not available: {e}")
 
+    # Staging-only GPT-Live relay. Its route is always default-deny and cannot
+    # reach the paid provider without verified staging env, user allowlist,
+    # a DB reservation and the independent kill switch.
+    from lyo_app.live_trial.routes import router as staging_gpt_live_trial_router
+    app.include_router(staging_gpt_live_trial_router)
+
     # ── Living Classroom: Real-time Scene-based Learning ──
     try:
         from lyo_app.ai_classroom.websocket_routes import router as living_classroom_router
