@@ -22,9 +22,14 @@ from continuous_teaching_live_staging_smoke import (
     BASE, WS_ENDPOINT, create_synthetic, report, require, verify_target,
 )
 
-EXPECTED_REVISION = "960334990c888ec3c406a32500696320c2c890c9"
-TOPIC = "Compare one half with one third using equal-sized pieces"
-SAMPLES = 5
+EXPECTED_REVISION = "ea4811016da0826482d23937b5cfb6c527363c9f"
+# Five matched maths starts plus independent cross-subject/bilingual probes.
+CASES = [
+    ("fractions", "Compare one half with one third using equal-sized pieces", "en-US"),
+    ("science", "Explain evaporation and condensation using a cold glass of water", "en-US"),
+    ("spanish", "Distinguir sustantivos y adjetivos en oraciones sencillas", "es-ES"),
+]
+SAMPLES = 12
 TIMEOUT_SECONDS = 120
 
 
@@ -36,11 +41,13 @@ async def start_once(client: httpx.AsyncClient, index: int) -> float | None:
     marker = f"latency{index}"
     token, user_id = await create_synthetic(client, marker)
     session = "ct-perf-" + uuid.uuid4().hex
+    case = CASES[0] if index < 5 else CASES[1] if index < 9 else CASES[2]
+    subject, topic, language = case
     params = {
         "token": token,
         "session_id": session,
-        "topic": TOPIC,
-        "language": "en-US",
+        "topic": topic,
+        "language": language,
         "continuous_teaching": "0",  # match the previous 39.1s startup
         "resume": "0",
     }
@@ -77,6 +84,7 @@ async def start_once(client: httpx.AsyncClient, index: int) -> float | None:
                     report(
                         "lesson_start_sample", status="passed", sample=index + 1,
                         session_id=session, elapsed_ms=ms,
+                        case=subject, language=language,
                         started_at_utc=started_at, finished_at_utc=utc_time(),
                         authoritative_scene=True,
                     )
@@ -86,6 +94,7 @@ async def start_once(client: httpx.AsyncClient, index: int) -> float | None:
         report(
             "lesson_start_sample", status="failed", sample=index + 1,
             session_id=session, reason=type(exc).__name__,
+            case=subject, language=language,
             started_at_utc=started_at, finished_at_utc=utc_time(),
         )
         return None
@@ -105,7 +114,7 @@ async def main() -> None:
         require(str(health.get("environment", "")).lower() != "production",
                 "refusing production")
         report("benchmark_target", status="passed", sha=EXPECTED_REVISION,
-               samples_requested=SAMPLES, topic=TOPIC,
+               samples_requested=SAMPLES, cases=[case[0] for case in CASES],
                baseline_single_session_ms=39132)
         times = []
         for index in range(SAMPLES):
