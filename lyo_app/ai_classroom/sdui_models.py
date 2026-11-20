@@ -615,6 +615,7 @@ class WebSocketEventType(str, Enum):
     SCENE_COMPLETE = "scene_complete"
     COMPONENT_RENDER = "component_render"
     ANSWER_FEEDBACK = "answer_feedback"
+    BRIDGE_MESSAGE = "bridge_message"  # Unscored, ephemeral teacher conversation
     USER_ACTION = "user_action"
     SYSTEM_STATE = "system_state"
     ERROR = "error"

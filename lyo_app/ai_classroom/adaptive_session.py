@@ -2,6 +2,7 @@
 
 import logging
 import re
+from time import perf_counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -125,8 +126,12 @@ class AdaptiveSession:
             progress.setdefault(
                 "record_scope", "unit" if data.get("record_scope") == "unit" else "topic"
             )
+            planning_started = perf_counter()
             try:
                 plan = await self.teacher.plan(context)
+                # No learner text or identifiers in timing logs.
+                logger.info("Classroom cold start plan_ms=%d",
+                            round((perf_counter() - planning_started) * 1000))
             except TeachingUnavailable:
                 return self.unavailable(context, None)
             identity = None
@@ -673,8 +678,11 @@ class AdaptiveSession:
         # when composing the next screen fails. Only install a new question
         # after it has successfully passed the actual rendering contract.
         before_generation = state.model_copy(deep=True)
+        generation_started = perf_counter()
         try:
             turn = await self.teacher.turn(context, state, move, learner_input)
+            logger.info("Classroom teaching turn move=%s author_and_review_ms=%d",
+                        move, round((perf_counter() - generation_started) * 1000))
             state.recovery_attempts = 0
             return self.accept_turn(context, progress, state, turn, move)
         except (TeachingUnavailable, ValidationError) as exc:
