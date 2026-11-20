@@ -86,3 +86,14 @@ def test_stream_never_announces_ready_or_classroom_for_failed_generation():
     assert 'update={"open_classroom_payload": None}' in source
     assert '"phase": "failed"' in source
     assert 'if decision.intent == Intent.COURSE and execution_response.open_classroom_payload:' in source
+
+
+def test_course_executor_never_promotes_hardcoded_syllabus_on_provider_failure():
+    source = Path("lyo_app/ai/executor.py").read_text()
+    course_part = source.split("async def _generate_course_data(", 1)[1].split(
+        "async def _generate_lesson_content_data(", 1
+    )[0]
+    assert "Course generation provider unavailable" in course_part
+    assert "Course generation did not produce validated JSON" in course_part
+    assert "return None" in course_part
+    assert "A comprehensive course about" not in course_part
