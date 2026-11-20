@@ -125,8 +125,7 @@ REWORDED = {
     "The checkpoint must test ONLY what this learner has been taught, except "
     "move=diagnose, which probes prior knowledge before teaching.":
         ("The checkpoint must test ONLY what this learner has been taught.",
-         "It probes prior knowledge, so it is the one checkpoint that may ask "
-         "about something this learner has not been taught."),
+         "It may ask about something this learner has not been taught."),
     # The compressed opening is its own prompt rather than a flag the model has
     # to reconcile against a contradictory beat count in the same paragraph.
     "When compress_demonstration is true the opening probe placed this learner "
