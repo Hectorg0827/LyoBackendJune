@@ -222,6 +222,14 @@ def comparable_text(value: str) -> str:
     return " ".join(re.findall(r"\w+", value.casefold().replace("_", " "), flags=re.UNICODE))
 
 
+def choice_label_key(label: str) -> tuple[str, ...]:
+    """Keep meaningful numerical punctuation when comparing visible answers."""
+    normalized = label.casefold().replace("_", " ").replace("−", "-")
+    normalized = re.sub(r"^\s*\+\s*(?=\d)", "", normalized)
+    # Normalize whitespace around decimal/fraction separators only between digits.
+    normalized = re.sub(r"(?<=\d)\s*([/.,])\s*(?=\d)", r"\1", normalized)
+    return tuple(re.findall(r"\w+|[-+](?=\s*\d)|(?<=\d)[/.,](?=\d)", normalized))
+
 #: Words that can wrap an option's own label without diagnosing anything, used
 #: to tell "They said 14 rolls" from a real, terse diagnosis. Deliberately only
 #: the scaffolding of a restatement — a diagnosis in any language clears this
@@ -298,7 +306,7 @@ class LearningTask(StrictModel):
                 raise ValueError("Choice tasks need exactly one correct option")
             if len({option.id for option in self.options}) != len(self.options):
                 raise ValueError("Option identifiers must be unique")
-            if len({comparable_text(option.label) for option in self.options}) != len(self.options):
+            if len({choice_label_key(option.label) for option in self.options}) != len(self.options):
                 raise ValueError("Choice options must have distinct visible answers")
             distractor_tags = [comparable_text(option.misconception) for option in self.options
                                if not option.correct and not option.abstains and option.misconception]
@@ -1664,8 +1672,12 @@ class AdaptiveTeacher:
                     # neutral introduction before validating or displaying it.
                     # This avoids a needless provider retry and prevents
                     # audible as well as visual answer leakage.
-                    turn.speech = "Try this question in your own words."
-                    turn.board_title = "Your question"
+                    is_spanish = context.language_code.lower().startswith("es")
+                    turn.speech = (
+                        "Intenta responder esta pregunta con tus propias palabras."
+                        if is_spanish else "Try this question in your own words."
+                    )
+                    turn.board_title = "Tu pregunta" if is_spanish else "Your question"
                     turn.board_content = turn.task.scenario
                     turn.visual = None
                 validate_semantic_content(turn)
