@@ -20,6 +20,23 @@ def test_equivalent_visible_options_are_rejected(bad_label):
         LearningTask.model_validate(choice)
 
 
+@pytest.mark.parametrize(("left", "right"), [("-3", "3"), ("1/2", "1.2"), ("3+2", "3-2")])
+def test_mathematically_distinct_choices_remain_selectable(left, right):
+    choice = task("choose").model_dump()
+    choice["options"][0]["label"] = left
+    choice["options"][1]["label"] = right
+    assert LearningTask.model_validate(choice).options[0].label == left
+
+
+@pytest.mark.parametrize(("left", "right"), [("-3", "−3"), ("1 / 2", "1/2"), ("+3", "3")])
+def test_typographical_variants_of_numeric_choices_are_duplicates(left, right):
+    choice = task("choose").model_dump()
+    choice["options"][0]["label"] = left
+    choice["options"][1]["label"] = right
+    with pytest.raises(ValueError, match="distinct visible answers"):
+        LearningTask.model_validate(choice)
+
+
 def test_two_distractors_cannot_claim_the_same_misconception_under_different_punctuation():
     diagnostic = probe().model_dump()
     diagnostic["options"][2]["misconception"] = "More pieces means MORE each"
@@ -506,9 +523,14 @@ async def test_grader_sends_relevant_recent_teaching_only():
 
 
 @pytest.mark.asyncio
-async def test_graded_teacher_introduction_is_neutral_even_when_model_leaks_solution():
+@pytest.mark.parametrize(("locale", "speech", "title"), [
+    ("en", "Try this question in your own words.", "Your question"),
+    ("es-DO", "Intenta responder esta pregunta con tus propias palabras.", "Tu pregunta"),
+])
+async def test_graded_teacher_introduction_is_neutral_even_when_model_leaks_solution(locale, speech, title):
     """Answer-bearing narration must not require another expensive authoring call."""
     ctx, state = context(), GuidedState(owner="42", plan=plan(1))
+    ctx.language_code = locale
     candidate = ScriptedTeacher()._turn(ctx, state, "guided")
     answer = next(option.label for option in candidate.task.options if option.correct)
     candidate.speech = f"The answer is {answer}; listen carefully."
@@ -520,7 +542,7 @@ async def test_graded_teacher_introduction_is_neutral_even_when_model_leaks_solu
     result = await AdaptiveTeacher(generate).turn(ctx, state, "guided")
 
     assert generate.await_count == 1
-    assert result.speech == "Try this question in your own words."
-    assert result.board_title == "Your question"
+    assert result.speech == speech
+    assert result.board_title == title
     assert result.board_content == result.task.scenario
     assert result.visual is None
