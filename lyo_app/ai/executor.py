@@ -868,7 +868,8 @@ Freshness rules:
                     )
                 execution_context["created_artifacts"].append(artifact)
                 
-            elif step.action_type == ActionType.GENERATE_TEXT and not execution_context["final_text"]:
+            elif (step.action_type == ActionType.GENERATE_TEXT
+                  and intent != "COURSE" and not execution_context["final_text"]):
                     execution_context["final_text"] = await self._generate_text(
                         original_request, execution_context, step.parameters
                     )
@@ -926,9 +927,10 @@ Freshness rules:
             if isinstance(course, dict) and isinstance(course.get("lessons"), list) and course["lessons"]:
                 course_name = str(course.get("title") or course.get("topic") or "your course").strip()[:100]
                 lesson_count = len(course["lessons"])
+                lesson_word = "lesson" if lesson_count == 1 else "lessons"
                 execution_context["final_text"] = (
                     f"Your course outline for {course_name} is ready with "
-                    f"{lesson_count} lessons. Review it below to begin."
+                    f"{lesson_count} {lesson_word}. Review it below to begin."
                 )
             else:
                 execution_context["final_text"] = (
