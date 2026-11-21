@@ -1,0 +1,43 @@
+name: LYO Web-first progress durability regression
+# Isolated branch-only validation. No staging/prod deployment or paid AI calls.
+on:
+  push:
+    branches: [fix/web-first-progress-telemetry-isolation-20261121]
+    paths:
+      - 'lyo_app/ai_classroom/scene_lifecycle_engine.py'
+      - 'tests/test_adaptive_classroom_persistence.py'
+      - '.github/workflows/lyo-web-first-progress-telemetry-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  progress-durability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TESTING: 'true'
+      ENVIRONMENT: development
+      CLASSROOM_AI_TRIAL_ENABLED: '0'
+      LYO_CONTINUOUS_TEACHING_STAGING: '0'
+      SECRET_KEY: synthetic-progress-test-secret-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install backend test requirements
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/lyo-progress-test-reqs.txt
+          python -m pip install --ignore-installed packaging -r /tmp/lyo-progress-test-reqs.txt
+          python -m pip install pytest pytest-asyncio
+      - name: Verify durable checkpoint with rejected optional telemetry
+        run: python -m pytest -q tests/test_adaptive_classroom_persistence.py tests/test_classroom_recovery.py
+      - name: Summarize evidence boundary
+        if: success()
+        run: |
+          echo 'Staging source-only persistence regression passed; optional policy telemetry cannot roll back essential lesson checkpoint.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Not an authenticated Railway PostgreSQL integration run; no production readiness claim.' >> "$GITHUB_STEP_SUMMARY"
