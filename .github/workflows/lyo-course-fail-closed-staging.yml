@@ -2,7 +2,7 @@ name: LYO staging course completion integrity
 # Focused backend PR validation only. No deploy, migration or provider calls.
 on:
   push:
-    branches: [fix/web-course-completion-staging-20261120, fix/course-json-budget-20261120]
+    branches: [fix/web-course-completion-staging-20261120, fix/course-json-budget-20261120, fix/course-status-no-redundant-ai-20261120]
   workflow_dispatch:
 permissions:
   contents: read
