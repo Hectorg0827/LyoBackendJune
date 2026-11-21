@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from lyo_app.ai_classroom.adaptive_persistence import learner_session
@@ -240,6 +240,62 @@ async def test_classroom_intervention_is_durable_but_never_counts_as_mastery_evi
             assert record.concepts == []
 
         assert "_pending_teaching_intervention" not in progress
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_optional_policy_enum_failure_does_not_rollback_learner_progress():
+    """A stale AI_SESSION enum must not erase a saved answer or its session.
+
+    SQLite trigger models a PostgreSQL enum rejection without a live database,
+    credentials, provider spend or a schema migration.
+    """
+    database = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with database.begin() as connection:
+            await connection.run_sync(ClassroomSession.__table__.create)
+            await connection.run_sync(ClassroomInteraction.__table__.create)
+            await connection.run_sync(LearningEvent.__table__.create)
+            await connection.execute(text("""
+                CREATE TRIGGER reject_optional_policy_event
+                BEFORE INSERT ON learning_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'simulated missing AI_SESSION enum');
+                END;
+            """))
+
+        progress = {
+            "guided_state": {"checkpoint": "graded-and-saved"},
+            "_pending_teaching_intervention": {
+                "scene_id": "scene-checkpoint-1",
+                "action": "guide",
+                "target_evidence_type": "application",
+                "policy_version": "learning-os-v1",
+                "concept_id": "fractions",
+            },
+        }
+        turn = action(
+            ActionIntent.SUBMIT_ANSWER, "checkpoint-1",
+            answer_data={"selected_option_id": "a"},
+        )
+        async with AsyncSession(database) as db:
+            engine = SceneLifecycleEngine.__new__(SceneLifecycleEngine)
+            engine.db = db
+            assert await engine._persist_session_progress(turn, context(), progress)
+            assert "_pending_teaching_intervention" not in progress
+
+        async with AsyncSession(database) as db:
+            sessions = (await db.execute(select(ClassroomSession))).scalars().all()
+            interactions = (await db.execute(select(ClassroomInteraction))).scalars().all()
+            events = (await db.execute(select(LearningEvent))).scalars().all()
+            assert len(sessions) == 1
+            assert sessions[0].context["guided_state"] == {
+                "checkpoint": "graded-and-saved"
+            }
+            assert len(interactions) == 1
+            assert interactions[0].session_id == sessions[0].id
+            assert events == []
     finally:
         await database.dispose()
 

@@ -1354,6 +1354,12 @@ class SceneLifecycleEngine:
                     is_correct=is_correct,
                     word_count=len(response.split()) if response else None,
                 ))
+            # Teaching-policy events are operational telemetry, not learner
+            # progress. They must never make the authoritative classroom
+            # checkpoint fail (e.g. when an older PostgreSQL event enum lacks
+            # AI_SESSION). Prepare the optional event without enlisting it in
+            # the progress/interaction transaction.
+            intervention_event = None
             intervention = progress.get("_pending_teaching_intervention")
             if (
                 record_interaction
@@ -1365,27 +1371,42 @@ class SceneLifecycleEngine:
                 concept_id = intervention.get("concept_id")
                 if concept_id is not None:
                     concept_id = str(concept_id)[:80]
-                self.db.add(
-                    LearningEvent(
-                        user_id=user_id,
-                        event_type=EventType.AI_SESSION,
-                        concept_id=concept_id,
-                        source_surface="classroom",
-                        metadata_json={
-                            "event_kind": "teaching_policy_decision",
-                            "session_id": trigger.session_id,
-                            "scene_id": intervention.get("scene_id"),
-                            "action": intervention.get("action"),
-                            "target_evidence_type": intervention.get(
-                                "target_evidence_type"
-                            ),
-                            "policy_version": intervention.get("policy_version"),
-                        },
-                    )
+                intervention_event = LearningEvent(
+                    user_id=user_id,
+                    event_type=EventType.AI_SESSION,
+                    concept_id=concept_id,
+                    source_surface="classroom",
+                    metadata_json={
+                        "event_kind": "teaching_policy_decision",
+                        "session_id": trigger.session_id,
+                        "scene_id": intervention.get("scene_id"),
+                        "action": intervention.get("action"),
+                        "target_evidence_type": intervention.get(
+                            "target_evidence_type"
+                        ),
+                        "policy_version": intervention.get("policy_version"),
+                    },
                 )
 
+            # Commit essential learner progress first. Optional telemetry is
+            # written in a separate transaction, so its constraint/enum errors
+            # cannot roll back a successful lesson checkpoint.
             await self.db.commit()
             progress.pop("_pending_teaching_intervention", None)
+            if intervention_event is not None:
+                try:
+                    self.db.add(intervention_event)
+                    await self.db.commit()
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Optional classroom policy telemetry skipped after "
+                        "durable progress checkpoint: %s",
+                        type(telemetry_error).__name__,
+                    )
+                    try:
+                        await self.db.rollback()
+                    except Exception:
+                        logger.exception("Optional classroom telemetry rollback failed")
             return True
         except (ValueError, TypeError):
             return False
