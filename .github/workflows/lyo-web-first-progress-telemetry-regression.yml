@@ -7,6 +7,12 @@ on:
       - 'lyo_app/ai_classroom/scene_lifecycle_engine.py'
       - 'tests/test_adaptive_classroom_persistence.py'
       - '.github/workflows/lyo-web-first-progress-telemetry-regression.yml'
+  pull_request:
+    branches: [ccr-3bc562fc-kn237t]
+    paths:
+      - 'lyo_app/ai_classroom/scene_lifecycle_engine.py'
+      - 'tests/test_adaptive_classroom_persistence.py'
+      - '.github/workflows/lyo-web-first-progress-telemetry-regression.yml'
   workflow_dispatch:
 
 permissions:
