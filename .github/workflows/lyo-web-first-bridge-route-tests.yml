@@ -1,0 +1,42 @@
+name: LYO Web-first bridge authenticated route CI
+# The feature is enabled only inside disposable test workers. No live providers.
+on:
+  push:
+    branches: [feature/web-first-bridge-staging-20261120]
+    paths:
+      - '.github/workflows/lyo-web-first-bridge-route-tests.yml'
+      - 'lyo_app/ai_classroom/continuous_teaching.py'
+      - 'lyo_app/ai_classroom/websocket_routes.py'
+      - 'tests/test_classroom_continuous*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  authenticated-socket:
+    name: Authenticated startup, transition, session isolation and stale handoff
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TESTING: 'true'
+      ENVIRONMENT: development
+      LYO_CONTINUOUS_TEACHING_STAGING: '1'
+      CLASSROOM_AI_TRIAL_ENABLED: '0'
+      SECRET_KEY: synthetic-bridge-test-secret-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install backend QA dependencies without media render packages
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/lyo-bridge-test-reqs.txt
+          python -m pip install --ignore-installed packaging -r /tmp/lyo-bridge-test-reqs.txt
+          python -m pip install pytest pytest-asyncio
+      - name: Test real endpoint without production or billing
+        run: |
+          python -m pytest -q             tests/test_classroom_continuous_teaching.py             tests/test_classroom_continuous_teaching_socket.py             tests/test_classroom_continuous_socket_route.py             tests/test_classroom_ws_topic_continuity.py
+      - name: Record safety boundary
+        if: success()
+        run: echo 'Staging bridge route tests passed with classroom AI trial disabled. No real learner/provider calls.' >> "$GITHUB_STEP_SUMMARY"
