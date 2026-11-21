@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 25
     env:
       TESTING: 'true'
-      ENVIRONMENT: testing
+      ENVIRONMENT: development
       LYO_CONTINUOUS_TEACHING_STAGING: '1'
       CLASSROOM_AI_TRIAL_ENABLED: '0'
       SECRET_KEY: synthetic-bridge-test-secret-at-least-32-characters
