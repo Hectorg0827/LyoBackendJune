@@ -97,3 +97,82 @@ def test_course_executor_never_promotes_hardcoded_syllabus_on_provider_failure()
     assert "Course generation did not produce validated JSON" in course_part
     assert "return None" in course_part
     assert "A comprehensive course about" not in course_part
+
+
+def _valid_generated_outline():
+    return {
+        "title": "Intermediate Algebra",
+        "topic": "algebra",
+        "description": "Learn symbolic algebra through progressive practice.",
+        "difficulty": "Intermediate",
+        "estimated_duration": "1 hour",
+        "objectives": ["Solve equations", "Factor polynomials", "Apply functions"],
+        "lessons": [
+            {"title": "Linear equations", "description": "Solve linear systems.", "type": "reading", "duration": "15 min"},
+            {"title": "Quadratics", "description": "Factor and solve quadratics.", "type": "exercise", "duration": "15 min"},
+            {"title": "Functions", "description": "Evaluate functions.", "type": "reading", "duration": "15 min"},
+            {"title": "Practice assessment", "description": "Check algebra skills.", "type": "quiz", "duration": "15 min"},
+        ],
+    }
+
+
+def test_compact_course_outline_must_match_level_and_have_real_lessons():
+    from lyo_app.ai.executor import _validate_ai_course_outline
+    valid = _validate_ai_course_outline(
+        _valid_generated_outline(), "Create an intermediate course on algebra"
+    )
+    assert valid is not None
+    assert valid["difficulty"] == "Intermediate"
+    assert len(valid["lessons"]) == 4
+    assert valid["id"]
+    assert _validate_ai_course_outline(
+        {**_valid_generated_outline(), "difficulty": "Beginner"},
+        "Create an intermediate course on algebra",
+    ) is None
+    assert _validate_ai_course_outline(
+        {**_valid_generated_outline(), "lessons": []},
+        "Create an intermediate course on algebra",
+    ) is None
+    assert _validate_ai_course_outline(
+        {**_valid_generated_outline(), "lessons": [_valid_generated_outline()["lessons"][0]] * 4},
+        "Create an intermediate course on algebra",
+    ) is None
+    assert _validate_ai_course_outline({"error": "Provider unavailable"}, "algebra") is None
+
+
+async def _simulate_generator_return(result):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from lyo_app.ai.executor import LyoExecutor
+    mock_manager = SimpleNamespace(session=object(), chat_completion=AsyncMock(return_value=result))
+    with patch("lyo_app.core.ai_resilience.ai_resilience_manager", mock_manager):
+        out = await LyoExecutor._generate_course_data(
+            SimpleNamespace(_gemini=object()), "Create an intermediate course on algebra", {}, {}
+        )
+    return out, mock_manager.chat_completion
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_course_generation_json_mode_stays_inside_existing_token_cap():
+    import json
+    generated, chat = await _simulate_generator_return(
+        {"content": json.dumps(_valid_generated_outline())}
+    )
+    assert generated["difficulty"] == "Intermediate"
+    assert generated["id"]
+    kwargs = chat.await_args.kwargs
+    assert kwargs["max_tokens"] == 1000
+    assert kwargs["use_cache"] is False
+    assert kwargs["response_format"] == {"type": "json_object"}
+    assert kwargs["provider_order"] == ["gemini-3.5-flash-lite", "gpt-4o-mini"]
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_message_cannot_become_a_fake_course():
+    bad, _ = await _simulate_generator_return(
+        {"content": '{"status":"unavailable","lessons":[]}'}
+    )
+    assert bad is None
