@@ -902,7 +902,12 @@ Freshness rules:
                     logger.warning(f"Failed to queue Calendar/Push tasks: {e}")
                 
             elif step.action_type == ActionType.GENERATE_TEXT:
-                # Final text generation step — call Gemini with all context
+                if intent == "COURSE":
+                    # The final course result itself is the authority. Do not
+                    # spend a second model call just to announce its success:
+                    # that call frequently exhausted tokens, then showed an
+                    # error beside an otherwise valid course outline.
+                    continue
                 execution_context["final_text"] = await self._generate_text(
                     original_request, execution_context, step.parameters
                 )
@@ -913,6 +918,22 @@ Freshness rules:
             execution_context["open_classroom_payload"] = await self._generate_course_data(
                 original_request, {}, execution_context
             )
+
+        # A course may be described as ready only after validation completed.
+        # A provider failure is reported explicitly, never as a fake lesson.
+        if intent == "COURSE":
+            course = execution_context.get("open_classroom_payload")
+            if isinstance(course, dict) and isinstance(course.get("lessons"), list) and course["lessons"]:
+                course_name = str(course.get("title") or course.get("topic") or "your course").strip()[:100]
+                lesson_count = len(course["lessons"])
+                execution_context["final_text"] = (
+                    f"Your course outline for {course_name} is ready with "
+                    f"{lesson_count} lessons. Review it below to begin."
+                )
+            else:
+                execution_context["final_text"] = (
+                    "I couldn't finish generating this course. Please retry."
+                )
 
         # Construct UnifiedChatResponse
         answer_block = UIBlock(
@@ -940,10 +961,12 @@ Freshness rules:
         return UnifiedChatResponse(
             answer_block=answer_block,
             artifact_block=artifact_block,
-            next_actions=self._contextual_actions(
-                intent,
-                interaction_contract=interaction_contract,
-                has_media=bool(media_attachments),
+            next_actions=(
+                self._contextual_actions(
+                    intent,
+                    interaction_contract=interaction_contract,
+                    has_media=bool(media_attachments),
+                ) if intent != "COURSE" or execution_context.get("open_classroom_payload") else []
             ),
             open_classroom_payload=execution_context.get("open_classroom_payload"),
             metadata={
