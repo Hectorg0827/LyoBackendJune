@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 import uuid
 import asyncio
 import time
@@ -111,6 +112,50 @@ def _get_json_gemini_model():
             "response_mime_type": "application/json",
         },
     )
+
+
+def _validate_ai_course_outline(raw: Any, request: str) -> Optional[Dict[str, Any]]:
+    """Accept only complete, correctly leveled AI course outlines.
+
+    No invented Beginner defaults, empty units, or generic placeholder
+    material can be promoted as a finished learner course.
+    """
+    if not isinstance(raw, dict):
+        return None
+    title, topic = raw.get("title"), raw.get("topic")
+    difficulty = raw.get("difficulty")
+    if not all(isinstance(s, str) and s.strip() for s in (title, topic, difficulty)):
+        return None
+    level = difficulty.strip().lower()
+    if level not in {"beginner", "intermediate", "advanced"}:
+        return None
+    specified = set(re.findall(r"\b(?:beginner|intermediate|advanced)\b", request.lower()))
+    if len(specified) == 1 and level not in specified:
+        return None
+    objectives = raw.get("objectives")
+    if not isinstance(objectives, list) or len(objectives) != 3 or not all(
+        isinstance(x, str) and x.strip() for x in objectives
+    ):
+        return None
+    lessons = raw.get("lessons")
+    if not isinstance(lessons, list) or len(lessons) != 4:
+        return None
+    titles = set()
+    for lesson in lessons:
+        if not isinstance(lesson, dict):
+            return None
+        if not all(
+            isinstance(lesson.get(k), str) and lesson[k].strip()
+            for k in ("title", "description", "type", "duration")
+        ):
+            return None
+        title_key = lesson["title"].strip().casefold()
+        if title_key in titles or title_key in {"lesson", "lesson title", "introduction"} and len(titles) > 0:
+            return None
+        titles.add(title_key)
+    # IDs are server-owned, not fabricated by the model; a real course needs
+    # stable identity for reopening in Classroom and the learner's Stack.
+    return {**raw, "id": str(uuid.uuid4()), "difficulty": level.title()}
 
 
 class LyoExecutor:
@@ -968,45 +1013,46 @@ Freshness rules:
                     "phrase such as 'this'.\n" + "\n\n".join(snippets)
                 )
 
-        prompt = f"""You are a course architect. Generate a structured learning course for: "{original_request}"
+        # Keep outline output compact: the former 1,000-token call to a
+        # reasoning-heavy model repeatedly exhausted its output budget.
+        # Never increase the token/spend limit just to mask truncated JSON.
+        prompt = f"""Create a real, topic-specific course outline for this request:
+{original_request[:1000]}
 {source_context}
 
-Return ONLY valid JSON, no markdown fences, no explanation:
-{{
-    "title": "Course Title",
-    "topic": "main topic",
-    "description": "2-sentence course description",
-    "difficulty": "Beginner|Intermediate|Advanced",
-    "estimated_duration": "X hours",
-    "objectives": ["Objective 1", "Objective 2", "Objective 3"],
-    "lessons": [
-        {{"title": "Lesson Title", "description": "1-sentence description", "type": "reading|exercise|quiz", "duration": "X min"}}
-    ]
-}}
-Include exactly 4 lessons and 3 objectives. Keep all descriptions concise."""
-        
+Return one compact JSON object (no markdown) with keys:
+title, topic, description, difficulty, estimated_duration, objectives, lessons.
+difficulty: Beginner, Intermediate, or Advanced, matching the request.
+objectives: exactly 3 brief, measurable objectives.
+lessons: exactly 4 distinct sequential lessons, each with title, description,
+type (reading, exercise or quiz), and duration (e.g. 15 min).
+Keep each description to one concise sentence. No placeholder lessons."""
         try:
-            # Use the standard model since Gemini 3.1 excels at dual-output text+JSON in one pass
             from lyo_app.core.ai_resilience import ai_resilience_manager
             if not ai_resilience_manager.session:
                 await ai_resilience_manager.initialize()
-            
+
             ai_response = await asyncio.wait_for(
                 ai_resilience_manager.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    provider_order=["gemini-3.8-flash", "gpt-4o-mini"]
+                    provider_order=["gemini-3.5-flash-lite", "gpt-4o-mini"],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                    max_tokens=1000,  # Keep existing per-request output cap.
+                    use_cache=False,
                 ),
-                timeout=45.0
+                timeout=45.0,
             )
-            text = ai_response.get("content", "").strip() if ai_response.get("content") else None
-            
-            if text:
-                # Strip markdown fences if the model wraps the JSON anyway
-                stripped = text.strip()
+            content = ai_response.get("content")
+            if isinstance(content, str) and content.strip():
+                stripped = content.strip()
                 if stripped.startswith("```"):
                     stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped[3:]
                     stripped = stripped.rsplit("```", 1)[0].strip()
-                return json.loads(stripped)
+                validated = _validate_ai_course_outline(json.loads(stripped), original_request)
+                if validated is not None:
+                    return validated
+                logger.warning("Course outline did not meet level and lesson quality checks")
         except Exception as e:
             logger.error(f"Course data generation failed: {e}", exc_info=True)
         
