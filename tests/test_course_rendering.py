@@ -61,7 +61,8 @@ async def test_executor_course_generation_payload():
     
     # Verify the tutor message block is rendered correctly
     assert response.answer_block.type == UIBlockType.TUTOR_MESSAGE
-    assert "Hello!" in response.answer_block.content["text"]
+    assert "Introduction to Python" in response.answer_block.content["text"]
+    executor._generate_text.assert_not_awaited()
     
     # Verify next actions are present (CTA for courses)
     assert len(response.next_actions) > 0
@@ -93,3 +94,55 @@ async def test_executor_course_generation_intent_trigger():
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_course_result_uses_verified_outline_instead_of_redundant_ai_prose():
+    executor = LyoExecutor()
+    executor.rag = AsyncMock()
+    executor.artifacts = AsyncMock()
+    executor.mutator = AsyncMock()
+    executor._generate_text = AsyncMock(
+        return_value="I'm having trouble responding right now. Please try again."
+    )
+    executor._generate_course_data = AsyncMock(return_value={
+        "title": "Intermediate Algebra",
+        "topic": "algebra",
+        "difficulty": "Intermediate",
+        "lessons": [{"title": "Algebraic expressions", "description": "Simplify expressions."}],
+    })
+    plan = LyoPlan(steps=[PlannedAction(
+        action_type=ActionType.GENERATE_TEXT, description="Introduce the course"
+    )])
+    result = await executor.execute(
+        user_id="synthetic-course-test", plan=plan,
+        original_request="Create an intermediate course on algebra",
+        intent="COURSE",
+    )
+    executor._generate_text.assert_not_awaited()
+    assert "Intermediate Algebra" in result.answer_block.content["text"]
+    assert "1 lesson" in result.answer_block.content["text"]
+    assert "trouble responding" not in result.answer_block.content["text"]
+    assert result.open_classroom_payload is not None
+
+
+@pytest.mark.asyncio
+async def test_failed_course_generation_never_suggests_start_learning():
+    executor = LyoExecutor()
+    executor.rag = AsyncMock()
+    executor.artifacts = AsyncMock()
+    executor.mutator = AsyncMock()
+    executor._generate_text = AsyncMock(return_value="Fake AI success")
+    executor._generate_course_data = AsyncMock(return_value=None)
+    plan = LyoPlan(steps=[PlannedAction(
+        action_type=ActionType.GENERATE_TEXT, description="Introduce the course"
+    )])
+    result = await executor.execute(
+        user_id="synthetic-course-test", plan=plan,
+        original_request="Create an intermediate course on algebra",
+        intent="COURSE",
+    )
+    executor._generate_text.assert_not_awaited()
+    assert result.open_classroom_payload is None
+    assert "couldn't finish" in result.answer_block.content["text"]
+    assert result.next_actions == []
