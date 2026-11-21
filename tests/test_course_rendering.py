@@ -61,7 +61,8 @@ async def test_executor_course_generation_payload():
     
     # Verify the tutor message block is rendered correctly
     assert response.answer_block.type == UIBlockType.TUTOR_MESSAGE
-    assert "Hello!" in response.answer_block.content["text"]
+    assert "Introduction to Python" in response.answer_block.content["text"]
+    executor._generate_text.assert_not_awaited()
     
     # Verify next actions are present (CTA for courses)
     assert len(response.next_actions) > 0
@@ -120,7 +121,7 @@ async def test_course_result_uses_verified_outline_instead_of_redundant_ai_prose
     )
     executor._generate_text.assert_not_awaited()
     assert "Intermediate Algebra" in result.answer_block.content["text"]
-    assert "1 lessons" in result.answer_block.content["text"]
+    assert "1 lesson" in result.answer_block.content["text"]
     assert "trouble responding" not in result.answer_block.content["text"]
     assert result.open_classroom_payload is not None
 
