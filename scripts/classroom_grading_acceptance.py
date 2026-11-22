@@ -329,16 +329,34 @@ def require_bounded_staging_trial() -> None:
 
 
 
-async def read_staging_ledger_preflight() -> dict[str, Any]:
-    """Read the durable trial spending ledger without calling an AI provider.
-
-    Never interpret a missing/expiring key as a fresh $70 allowance: previous
-    authorizations and reservations must survive reboots and release cycles.
-    """
-    require_bounded_staging_trial()
+async def inspect_durable_staging_ledger(client) -> dict[str, Any]:
+    """Reject lost or expiring history before ANY new provider reservation."""
     from lyo_app.ai_classroom.trial_budget import (
         LEDGER_KEY, configured_ceiling_micro_usd,
     )
+    stored = await client.get(LEDGER_KEY)
+    ttl = await client.ttl(LEDGER_KEY)
+    if stored is None or ttl != -1:
+        raise RuntimeError("Missing or expiring trial ledger key; do not reset it")
+    try:
+        reserved = int(stored)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Trial ledger contains an invalid reservation") from exc
+    ceiling = configured_ceiling_micro_usd()
+    if reserved < 0 or reserved > ceiling:
+        raise RuntimeError("Trial ledger reservations exceed valid approved bounds")
+    return {
+        "ceiling_usd": ceiling / 1_000_000,
+        "reserved_usd": reserved / 1_000_000,
+        "remaining_reservation_usd": (ceiling - reserved) / 1_000_000,
+        "durable_no_ttl": True,
+        "measurement": "pessimistic Redis reservations, not provider billing",
+    }
+
+
+async def read_staging_ledger_preflight() -> dict[str, Any]:
+    """Read the immutable-history trial ledger without calling an AI provider."""
+    require_bounded_staging_trial()
     from lyo_app.core.redis_client import close_redis, init_redis, redis_client
 
     await init_redis()
@@ -346,24 +364,7 @@ async def read_staging_ledger_preflight() -> dict[str, Any]:
         client = redis_client.client
         if client is None or not await redis_client.ping():
             raise RuntimeError("Staging trial Redis ledger is unavailable")
-        stored = await client.get(LEDGER_KEY)
-        ttl = await client.ttl(LEDGER_KEY)
-        if stored is None or ttl != -1:
-            raise RuntimeError("Missing or expiring trial ledger key; do not reset it")
-        try:
-            reserved = int(stored)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("Trial ledger contains an invalid reservation") from exc
-        ceiling = configured_ceiling_micro_usd()
-        if reserved < 0 or reserved > ceiling:
-            raise RuntimeError("Trial ledger reservations exceed valid approved bounds")
-        return {
-            "ceiling_usd": ceiling / 1_000_000,
-            "reserved_usd": reserved / 1_000_000,
-            "remaining_reservation_usd": (ceiling - reserved) / 1_000_000,
-            "durable_no_ttl": True,
-            "measurement": "pessimistic Redis reservations, not provider billing",
-        }
+        return await inspect_durable_staging_ledger(client)
     finally:
         await close_redis()
 
@@ -379,8 +380,12 @@ async def run(repeats: int, concurrency: int, only: str | None) -> list[dict[str
     # Connect to the SAME staging Redis ledger before any teacher is invoked.
     await init_redis()
     try:
-        if not await redis_client.ping():
+        if redis_client.client is None or not await redis_client.ping():
             raise RuntimeError("Grading acceptance requires a live staging Redis ledger")
+        # A lost Redis key would otherwise let the reservation Lua script start
+        # counting from zero again. Block the full benchmark before ANY model
+        # requests, even if an operator skips the optional CLI preflight.
+        await inspect_durable_staging_ledger(redis_client.client)
 
         gate = asyncio.Semaphore(concurrency)
         selected = [(i, c) for i, c in enumerate(CASES) if not only or c.task == only]
