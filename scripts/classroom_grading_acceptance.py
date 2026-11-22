@@ -231,16 +231,31 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     graded = total - counts.get("unavailable", 0)
     agreeing = counts.get("agree", 0) + counts.get("tolerated", 0)
 
-    by_case: dict[str, set[str]] = {}
+    # A two-pass, whole-matrix gate is essential: without it even ONE perfect
+    # answer had 100% agreement and 100% consistency and could release.
+    # Match the exact dataset identities rather than just counting rows; a
+    # duplicated case must never conceal a missing prompt-injection or
+    # Spanish-language case.
+    expected_case_ids = {
+        f"{index:02d}:{case.task}:{case.label}"
+        for index, case in enumerate(CASES)
+    }
+    by_case: dict[str, list[str]] = {}
     for row in results:
-        by_case.setdefault(row["case"], set()).add(row["verdict"])
-    repeated = [verdicts for verdicts in by_case.values()]
+        by_case.setdefault(row["case"], []).append(row["verdict"])
+    complete_matrix = (set(by_case) == expected_case_ids
+                       and all(len(by_case[case_id]) >= 2
+                               for case_id in expected_case_ids))
+    repeated = [set(verdicts) for verdicts in by_case.values()]
     consistent = sum(1 for verdicts in repeated if len(verdicts) == 1)
 
     latencies = [row["seconds"] for row in results if row.get("seconds") is not None]
     metrics = {
         "attempts": total,
         "cases": len(by_case),
+        "expected_cases": len(CASES),
+        "cases_repeated_twice": sum(len(by_case.get(case_id, [])) >= 2
+                                     for case_id in expected_case_ids),
         "outcomes": counts,
         "false_pass": counts.get("false_pass", 0),
         "false_fail": counts.get("false_fail", 0),
@@ -252,6 +267,7 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "latency_mean_s": round(statistics.fmean(latencies), 3) if latencies else None,
     }
     checks = {
+        "full_matrix_twice": complete_matrix,
         "no_wrong_answer_marked_correct": metrics["false_pass"] <= MAX_FALSE_PASS,
         "no_correct_answer_marked_wrong": metrics["false_fail"] <= MAX_FALSE_FAIL,
         "agreement_with_human_labels": metrics["agreement"] >= MIN_AGREEMENT,
@@ -294,7 +310,26 @@ async def grade_once(teacher, case: Case, case_id: str) -> dict[str, Any]:
     }
 
 
+def require_bounded_staging_trial() -> None:
+    """Never allow an accuracy run to bypass the owner's paid trial ledger.
+
+    Model evaluation uses classroom_trial_budget=True. Outside a staging,
+    explicitly enabled trial the underlying client may otherwise skip paid
+    reservations. This guard protects even a directly imported run().
+    """
+    from lyo_app.ai_classroom.trial_budget import (
+        configured_ceiling_micro_usd, trial_enabled,
+    )
+    if os.getenv("ENVIRONMENT", "").strip().lower() not in {"staging", "stage"}:
+        raise RuntimeError("Grading acceptance may run on isolated staging only")
+    if not trial_enabled():
+        raise RuntimeError("Grading acceptance requires the existing paid-trial ledger")
+    if configured_ceiling_micro_usd() > 70_000_000:
+        raise RuntimeError("Grading acceptance exceeds the approved cumulative $70")
+
+
 async def run(repeats: int, concurrency: int, only: str | None) -> list[dict[str, Any]]:
+    require_bounded_staging_trial()
     from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
 
     gate = asyncio.Semaphore(concurrency)
@@ -322,6 +357,11 @@ def main(argv: list[str] | None = None) -> int:
         print("No AI provider key is set (" + ", ".join(PROVIDER_KEYS) + "). Nothing was run.", file=sys.stderr)
         return 2
 
+    try:
+        require_bounded_staging_trial()
+    except (RuntimeError, ValueError) as exc:
+        print("No grading run: " + str(exc) + ". Nothing was run.", file=sys.stderr)
+        return 2
     results = asyncio.run(run(max(1, args.repeats), max(1, args.concurrency), args.task))
     summary = summarize(results)
     report = {
