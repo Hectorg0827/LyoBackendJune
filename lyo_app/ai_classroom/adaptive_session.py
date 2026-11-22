@@ -16,7 +16,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
-    QuizOption, Scene, SceneType, TeacherMessage,
+    QuizOption, Scene, SceneMetadata, SceneType, TeacherMessage,
 )
 from lyo_app.ai_classroom.teaching_prompt import MOVES
 from lyo_app.ai_classroom.board_presentation import board_document
@@ -1873,7 +1873,9 @@ class AdaptiveSession:
             if ungraded else self.copy(context, "Retry this step", "Reintentar este paso"),
             action_intent=ActionIntent.SKIP_QUESTION if ungraded else ActionIntent.RETRY,
             language_code=context.language_code))
-        return Scene(scene_type=SceneType.INSTRUCTION, components=components)
+        # Deterministic recovery guidance, never a model-authored teaching scene.
+        return Scene(scene_type=SceneType.INSTRUCTION, components=components,
+                     metadata=SceneMetadata(scene_source="fallback"))
 
     def current_or_retry(self, context, state):
         return Scene.model_validate(state.scene) if state.scene else self.unavailable(context, state)
