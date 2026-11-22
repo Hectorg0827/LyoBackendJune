@@ -1794,6 +1794,38 @@ class AdaptiveTeacher:
                         " option, unique short IDs, and distinct feedback and"
                         " misconceptions. Open answers use no options."
                     )
+                    if move == "diagnose" and (
+                        "Choice options must have distinct visible answers"
+                        in validation_summary(exc)
+                    ):
+                        # The first authored algebra probe failed twice in
+                        # staging with duplicated option text. The diagnostic
+                        # *must* retain four honest choices (correct, two
+                        # distinct misconceptions, abstain); merely deleting
+                        # duplicates would corrupt the diagnostic and changing
+                        # the validator would enable ambiguous grading.
+                        # Force a fresh scenario with an explicit preflight
+                        # uniqueness check by the repair model. No additional
+                        # provider request beyond the existing 2-attempt cap.
+                        payload["_escalate"] = True
+                        payload["repair"] += (
+                            " Rebuild the entire diagnostic question for a"
+                            " NEW concrete situation. Before returning JSON,"
+                            " check that the four learner-visible option labels"
+                            " are pairwise different after case, punctuation"
+                            " and whitespace normalization. Option A: exactly"
+                            " one demonstrably correct result or judgment."
+                            " Options B and C: different mathematically or"
+                            " conceptually plausible WRONG results, each with"
+                            " its own misconception and gap severity."
+                            " Option D: one distinct 'I'm not sure yet' answer"
+                            " with abstains=true. Do not rephrase the SAME"
+                            " numeric value or equivalent equation into"
+                            " two options. Provide distinct explanations for"
+                            " each; do not reveal the answer in teacher speech"
+                            " or board. If uncertain, choose a simpler"
+                            " situation with unmistakably different answers."
+                        )
                     if move in {"guided", "faded", "independent", "transfer", "interleave", "closing_win"}:
                         payload["repair"] += (
                             " If you cannot write credible choice options, use"
