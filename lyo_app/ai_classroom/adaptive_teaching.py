@@ -22,6 +22,7 @@ from prometheus_client import Counter, Histogram
 
 from lyo_app.ai.lesson_composer import slugify_skill
 from lyo_app.ai_classroom.teaching_prompt import teaching_prompt, unit_package_prompt
+from lyo_app.ai_classroom.trial_budget import ClassroomTrialBudgetExceeded
 from lyo_app.ai_classroom.strict_schema import (
     SchemaNotStrictable, looks_like_schema_rejection, strict_json_schema,
 )
@@ -1517,6 +1518,17 @@ class AdaptiveTeacher:
                     while len(_FAST_PLAN_CACHE) > _FAST_PLAN_CACHE_LIMIT:
                         _FAST_PLAN_CACHE.popitem(last=False)
                 return plan
+            except ClassroomTrialBudgetExceeded as exc:
+                # Spending/authorization rejection is not an invalid AI plan.
+                # A repair retry cannot fix it and may double work or fees.
+                # The message is from our fixed internal budget guard, never
+                # provider output or learner data. Never disable the ledger.
+                logger.warning(
+                    "Classroom AI trial blocked planning: %s", str(exc)
+                )
+                raise TeachingUnavailable(
+                    "Classroom model teaching unavailable under staging AI budget controls"
+                ) from exc
             except Exception as exc:
                 logger.warning("Classroom plan rejected (%s)", type(exc).__name__)
                 payload["repair"] = "Return the exact unit_count, distinct skills and real teaching material."
