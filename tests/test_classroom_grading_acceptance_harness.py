@@ -236,12 +236,26 @@ async def test_standalone_grading_initializes_redis_before_provider(monkeypatch,
 
     redis_module = importlib.import_module("lyo_app.core.redis_client")
     adaptive = importlib.import_module("lyo_app.ai_classroom.adaptive_teaching")
+    trial_module = importlib.import_module("lyo_app.ai_classroom.trial_budget")
     observed = []
 
     class FakeRedis:
+        def __init__(self):
+            self.client = self
+
         async def ping(self):
             observed.append("ping")
             return redis_available
+
+        async def get(self, key):
+            assert key == trial_module.LEDGER_KEY
+            observed.append("get")
+            return b"10000000"
+
+        async def ttl(self, key):
+            assert key == trial_module.LEDGER_KEY
+            observed.append("ttl")
+            return -1
 
     async def fake_connect():
         observed.append("connect")
@@ -267,6 +281,8 @@ async def test_standalone_grading_initializes_redis_before_provider(monkeypatch,
     monkeypatch.setattr(redis_module, "init_redis", fake_connect)
     monkeypatch.setattr(redis_module, "close_redis", fake_close)
     monkeypatch.setattr(redis_module, "redis_client", FakeRedis())
+    monkeypatch.setattr(trial_module, "configured_ceiling_micro_usd",
+                        lambda: 70_000_000)
     monkeypatch.setattr(adaptive, "AdaptiveTeacher", fake_teacher)
     monkeypatch.setattr(harness, "grade_once", fake_grade)
 
@@ -281,3 +297,129 @@ async def test_standalone_grading_initializes_redis_before_provider(monkeypatch,
 
     assert observed[:2] == ["connect", "ping"]
     assert observed[-1] == "close"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored,ttl,accepted", [
+    (b"23500000", -1, True),
+    (None, -2, False),
+    (b"23500000", 600, False),
+    (b"invalid", -1, False),
+    (b"-1", -1, False),
+    (b"70000001", -1, False),
+])
+async def test_staging_ledger_preflight_never_resets_or_calls_provider(
+        monkeypatch, stored, ttl, accepted):
+    """A missing/expiring ledger is not permission to restart spending."""
+    pytest.importorskip("sqlalchemy")
+    import importlib
+    redis_module = importlib.import_module("lyo_app.core.redis_client")
+    trial_module = importlib.import_module("lyo_app.ai_classroom.trial_budget")
+    events = []
+
+    class FakeClient:
+        client = None
+
+        def __init__(self):
+            self.client = self
+
+        async def ping(self):
+            events.append("ping")
+            return True
+
+        async def get(self, key):
+            assert key == trial_module.LEDGER_KEY
+            events.append("get")
+            return stored
+
+        async def ttl(self, key):
+            assert key == trial_module.LEDGER_KEY
+            events.append("ttl")
+            return ttl
+
+    fake = FakeClient()
+
+    async def connect():
+        events.append("connect")
+
+    async def close():
+        events.append("close")
+
+    monkeypatch.setattr(harness, "require_bounded_staging_trial", lambda: None)
+    monkeypatch.setattr(redis_module, "redis_client", fake)
+    monkeypatch.setattr(redis_module, "init_redis", connect)
+    monkeypatch.setattr(redis_module, "close_redis", close)
+    monkeypatch.setattr(trial_module, "configured_ceiling_micro_usd",
+                        lambda: 70_000_000)
+
+    if accepted:
+        report = await harness.read_staging_ledger_preflight()
+        assert report["reserved_usd"] == 23.5
+        assert report["remaining_reservation_usd"] == 46.5
+        assert report["durable_no_ttl"] is True
+    else:
+        with pytest.raises(RuntimeError):
+            await harness.read_staging_ledger_preflight()
+    assert events == ["connect", "ping", "get", "ttl", "close"]
+
+
+def test_ledger_preflight_cli_does_not_require_provider_key(monkeypatch, capsys):
+    import asyncio
+    for name in harness.PROVIDER_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+    async def safe_read():
+        return {"ceiling_usd": 70.0, "reserved_usd": 23.5}
+
+    monkeypatch.setattr(harness, "read_staging_ledger_preflight", safe_read)
+    monkeypatch.setattr(harness, "run", lambda *_a, **_kw: (_ for _ in ()).throw(
+        AssertionError("provider benchmark must never start in preflight")))
+    assert harness.main(["--ledger-preflight"]) == 0
+    assert '"reserved_usd": 23.5' in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_benchmark_refuses_lost_historical_ledger_before_model(monkeypatch):
+    """A responsive but reset Redis MUST NOT grant a fresh $70 allowance."""
+    pytest.importorskip("sqlalchemy")
+    import importlib
+    redis_module = importlib.import_module("lyo_app.core.redis_client")
+    adaptive = importlib.import_module("lyo_app.ai_classroom.adaptive_teaching")
+    trial_module = importlib.import_module("lyo_app.ai_classroom.trial_budget")
+    events = []
+
+    class EmptyLedger:
+        def __init__(self):
+            self.client = self
+
+        async def ping(self):
+            return True
+
+        async def get(self, key):
+            events.append("get")
+            assert key == trial_module.LEDGER_KEY
+            return None
+
+        async def ttl(self, key):
+            events.append("ttl")
+            return -2
+
+    async def connect():
+        events.append("connect")
+
+    async def close():
+        events.append("close")
+
+    def prohibited_teacher():
+        raise AssertionError("A missing ledger must never invoke the provider")
+
+    monkeypatch.setattr(harness, "require_bounded_staging_trial", lambda: None)
+    monkeypatch.setattr(redis_module, "redis_client", EmptyLedger())
+    monkeypatch.setattr(redis_module, "init_redis", connect)
+    monkeypatch.setattr(redis_module, "close_redis", close)
+    monkeypatch.setattr(trial_module, "configured_ceiling_micro_usd",
+                        lambda: 70_000_000)
+    monkeypatch.setattr(adaptive, "AdaptiveTeacher", prohibited_teacher)
+    with pytest.raises(RuntimeError, match="Missing or expiring"):
+        await harness.run(repeats=2, concurrency=4, only=None)
+    assert events == ["connect", "get", "ttl", "close"]
