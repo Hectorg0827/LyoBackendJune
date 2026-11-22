@@ -223,6 +223,25 @@ def comparable_text(value: str) -> str:
     return " ".join(re.findall(r"\w+", value.casefold().replace("_", " "), flags=re.UNICODE))
 
 
+def comparable_option_label(value: str) -> str:
+    """Compare visible choices without erasing mathematically different signs.
+
+    General prose labels retain the established punctuation-insensitive check.
+    Mathematical answers need their operators: x = -5 and x = 5, or x + 3
+    and x - 3, cannot be treated as duplicates. The shared comparable_text
+    stays unchanged for rubric/answer-leakage and misconception comparisons.
+    """
+    raw = value.casefold().replace("_", " ").replace("−", "-").replace("–", "-")
+    raw = raw.replace("×", "*").replace("÷", "/")
+    math_like = bool(re.search(r"\d|\b[a-z]\b\s*[+\-*/=<>]", raw))
+    if not math_like:
+        return comparable_text(raw)
+    return " ".join(re.findall(
+        r"\d+(?:\.\d+)+|\w+|[+\-*/=<>≤≥≠]",
+        raw, flags=re.UNICODE,
+    ))
+
+
 #: Words that can wrap an option's own label without diagnosing anything, used
 #: to tell "They said 14 rolls" from a real, terse diagnosis. Deliberately only
 #: the scaffolding of a restatement — a diagnosis in any language clears this
@@ -299,7 +318,7 @@ class LearningTask(StrictModel):
                 raise ValueError("Choice tasks need exactly one correct option")
             if len({option.id for option in self.options}) != len(self.options):
                 raise ValueError("Option identifiers must be unique")
-            if len({comparable_text(option.label) for option in self.options}) != len(self.options):
+            if len({comparable_option_label(option.label) for option in self.options}) != len(self.options):
                 raise ValueError("Choice options must have distinct visible answers")
             distractor_tags = [comparable_text(option.misconception) for option in self.options
                                if not option.correct and not option.abstains and option.misconception]
