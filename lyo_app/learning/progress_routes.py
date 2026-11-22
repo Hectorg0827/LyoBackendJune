@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,7 @@ from lyo_app.core.database import get_db
 from lyo_app.learning.models import Course, CourseEnrollment, Lesson, LessonCompletion
 
 router = APIRouter()
+_course_bearer = HTTPBearer(auto_error=False)
 
 
 class CanonicalLessonCompletionCreate(BaseModel):
@@ -148,10 +150,22 @@ async def _progress_payload(
 async def canonical_course_detail(
     course_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_course_bearer),
 ) -> dict[str, Any]:
-    """Return a complete course payload with ordered playable lessons."""
+    """Return playable lessons, never exposing another learner's draft."""
     course = await _course_with_lessons(db, course_id)
+    if credentials is not None:
+        owner = await get_current_user(credentials, db)
+        owner_id = _legacy_user_id(owner)
+    else:
+        owner_id = None
+    if not course.is_published and course.instructor_id != owner_id:
+        raise HTTPException(status_code=404, detail="Course not found")
     lessons = sorted(course.lessons, key=lambda lesson: lesson.order_index)
+    metadata = course.generation_metadata or {}
+    persisted_modules = metadata.get("modules", []) if isinstance(metadata, dict) else []
+    if not isinstance(persisted_modules, list):
+        persisted_modules = []
     return {
         "id": course.id,
         "title": course.title,
@@ -166,7 +180,7 @@ async def canonical_course_detail(
         "is_featured": course.is_featured,
         "created_at": course.created_at.isoformat() if course.created_at else None,
         "updated_at": course.updated_at.isoformat() if course.updated_at else None,
-        "modules": [],
+        "modules": persisted_modules,
         "lessons": [
             {
                 "id": lesson.id,
@@ -197,6 +211,8 @@ async def canonical_course_progress(
     """Hydrate the authenticated learner's canonical resume state."""
     user_id = _legacy_user_id(current_user)
     course = await _course_with_lessons(db, course_id)
+    if not course.is_published and course.instructor_id != user_id:
+        raise HTTPException(status_code=404, detail="Course not found")
     enrollment = await _ensure_enrollment(db, user_id=user_id, course_id=course_id)
     payload = await _progress_payload(
         db,
@@ -225,6 +241,8 @@ async def canonical_complete_lesson(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found")
 
     course = await _course_with_lessons(db, lesson.course_id)
+    if not course.is_published and course.instructor_id != user_id:
+        raise HTTPException(status_code=404, detail="Course not found")
     enrollment = await _ensure_enrollment(
         db,
         user_id=user_id,
