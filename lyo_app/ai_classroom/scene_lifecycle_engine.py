@@ -1263,6 +1263,7 @@ class SceneLifecycleEngine:
             durable_context = dict(session.context or {})
             durable_context.update({
                 "guided_state": progress.get("guided_state"),
+                "last_scene": progress.get("last_scene"),
                 "guided_history": progress.get("guided_history", []),
                 "current_lesson_index": progress.get(
                     "current_lesson_index", context.lesson_index
@@ -1542,9 +1543,23 @@ class SceneLifecycleEngine:
                 if saved:
                     progress.update(saved)
             state = self._read_guided_state(progress, progress.get("guided_state"))
-            if not state or state.owner != str(user_id) or not state.scene:
+            if state and state.owner != str(user_id):
                 return None
-            scene = Scene.model_validate(state.scene)
+            # When an AI trial-budget guard rejects a plan, the first scene
+            # still teaches the learner something, but GuidedState is absent.
+            # Replay its committed snapshot rather than showing a fresh scene
+            # or claiming a new grading state.
+            raw_scene = (
+                state.scene if state and state.scene
+                else progress.get("last_scene")
+            )
+            if not isinstance(raw_scene, dict):
+                return None
+            try:
+                scene = Scene.model_validate(raw_scene)
+            except ValidationError:
+                logger.warning("Saved Classroom scene snapshot invalid; cannot resume")
+                return None
             self.active_scenes[scene.scene_id] = scene
             if self.websocket_manager:
                 await self.websocket_manager.stream_scene_to_session(
@@ -1730,6 +1745,10 @@ class SceneLifecycleEngine:
             context.course_complete = False
         progress["course_complete"] = context.course_complete
         progress["current_lesson_index"] = context.lesson_index
+        # Committed even when no GuidedState exists (e.g. trial budget denied
+        # generation). The scene snapshot and lesson position are written in
+        # the same checkpoint, preventing a new welcome on reconnect.
+        progress["last_scene"] = scene.model_dump(mode="json")
         self.session_contexts[key] = context
         phase_start = time.perf_counter()
         saved = await self._persist_session_progress(
