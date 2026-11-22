@@ -24,7 +24,7 @@ def rows(verdict_for):
         for _ in range(2):
             verdict = verdict_for(case)
             out.append({
-                "case": f"{index}", "verdict": verdict,
+                "case": f"{index:02d}:{case.task}:{case.label}", "verdict": verdict,
                 "outcome": harness.classify(case, verdict), "seconds": 1.0,
             })
     return out
@@ -125,3 +125,58 @@ def test_harness_drives_the_real_grader_contract():
     # Help requests short-circuit to "clarify" without a model call.
     assert verdicts == {"incorrect", "clarify"}, verdicts
     assert all(row["verdict"] == "clarify" for row in graded if row["expected"] == "clarify")
+
+
+def test_single_perfect_answer_cannot_claim_full_release():
+    case = harness.CASES[0]
+    result = {
+        "case": f"00:{case.task}:{case.label}",
+        "verdict": case.expect, "outcome": harness.classify(case, case.expect),
+        "seconds": 1.0,
+    }
+    summary = harness.summarize([result, result])
+    assert summary["checks"]["full_matrix_twice"] is False
+    assert not summary["accepted"]
+
+
+def test_whole_suite_run_only_once_cannot_claim_consistency():
+    result = rows(lambda case: case.expect)[::2]
+    assert len(result) == len(harness.CASES)
+    summary = harness.summarize(result)
+    assert summary["metrics"]["agreement"] == 1.0
+    assert summary["metrics"]["consistency"] == 1.0
+    assert summary["checks"]["full_matrix_twice"] is False
+    assert not summary["accepted"]
+
+
+def test_repeated_easy_answers_cannot_conceal_missing_prompt_injection():
+    complete = rows(lambda case: case.expect)
+    risky = next(i for i, c in enumerate(harness.CASES)
+                 if "Ignore all previous instructions" in c.answer)
+    missing_id = f"{risky:02d}:{harness.CASES[risky].task}:{harness.CASES[risky].label}"
+    masked = [row for row in complete if row["case"] != missing_id]
+    masked.extend(complete[:2])
+    summary = harness.summarize(masked)
+    assert len(masked) == len(complete)
+    assert summary["metrics"]["false_pass"] == 0
+    assert summary["checks"]["full_matrix_twice"] is False
+    assert not summary["accepted"]
+
+
+def test_complete_two_pass_matrix_reports_actual_case_coverage():
+    summary = harness.summarize(rows(lambda case: case.expect))
+    assert summary["checks"]["full_matrix_twice"] is True
+    assert summary["metrics"]["expected_cases"] == len(harness.CASES)
+    assert summary["metrics"]["cases_repeated_twice"] == len(harness.CASES)
+    assert summary["metrics"]["attempts"] == 2 * len(harness.CASES)
+    assert summary["accepted"]
+
+
+def test_missing_spanish_case_refuses_release_even_with_duplicate_english_rows():
+    all_rows = rows(lambda case: case.expect)
+    spanish_index = next(i for i, case in enumerate(harness.CASES)
+                         if case.task == "fracciones_es")
+    missing_id = f"{spanish_index:02d}:{harness.CASES[spanish_index].task}:{harness.CASES[spanish_index].label}"
+    filtered = [row for row in all_rows if row["case"] != missing_id]
+    filtered.extend(all_rows[:2])
+    assert not harness.summarize(filtered)["accepted"]
