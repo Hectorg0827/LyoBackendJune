@@ -1,4 +1,4 @@
-"""The $60 classroom trial is a real, cross-worker pre-request guard."""
+"""The $70 Classroom trial extends the existing cross-worker pre-request guard."""
 
 import asyncio
 from unittest.mock import AsyncMock
@@ -40,11 +40,11 @@ def test_new_acceptance_round_uses_separate_durable_ledger():
     assert LEDGER_KEY != "lyo:classroom:trial:20261105:reserved_microusd"
 
 
-def test_approved_sixty_dollar_limit_rejects_any_higher_configuration(monkeypatch):
-    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60")
-    assert configured_ceiling_micro_usd() == 60_000_000
-    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60.000001")
-    with pytest.raises(ClassroomTrialBudgetExceeded, match="at most \\$60"):
+def test_approved_seventy_dollar_limit_rejects_any_higher_configuration(monkeypatch):
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "70")
+    assert configured_ceiling_micro_usd() == 70_000_000
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "70.000001")
+    with pytest.raises(ClassroomTrialBudgetExceeded, match="at most \\$70"):
         configured_ceiling_micro_usd()
 
 
@@ -154,6 +154,52 @@ async def test_trial_requires_explicit_staging_configuration(trial):
     with pytest.raises(ClassroomTrialBudgetExceeded, match="staging only"):
         await reserve_classroom_attempt("gpt-4o-mini", [], 100, None)
     trial.setenv("ENVIRONMENT", "staging")
-    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60.000001")
+    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "70.000001")
     with pytest.raises(ClassroomTrialBudgetExceeded, match="at most"):
         await reserve_classroom_attempt("gpt-4o-mini", [], 100, None)
+
+
+@pytest.mark.asyncio
+async def test_approved_extra_ten_dollars_preserves_every_prior_reservation(trial):
+    from lyo_app.core.redis_client import redis_client
+
+    ledger = AtomicRedisLedger()
+    # Existing reservations are not refunded, deleted or moved to a fresh key.
+    ledger.total = 60_000_000
+    trial.setattr(redis_client, "client", ledger)
+    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "70")
+    message = [{"role": "user", "content": "Explain linear equations"}]
+    requested = reserve_micro_usd("gemini-3.6-flash", message, 100)
+    remaining = await reserve_classroom_attempt("gemini-3.6-flash", message, 100, None)
+    assert ledger.total == 60_000_000 + requested
+    assert remaining == 10_000_000 - requested
+    assert LEDGER_KEY == "lyo:classroom:trial:20261108:reserved_microusd"
+
+
+@pytest.mark.asyncio
+async def test_approved_increment_cannot_spend_beyond_seventy_under_concurrency(trial):
+    from lyo_app.core.redis_client import redis_client
+
+    ledger = AtomicRedisLedger()
+    trial.setattr(redis_client, "client", ledger)
+    trial.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "70")
+    message = [{"role": "user", "content": "Teach fractions"}]
+    per_request = reserve_micro_usd("gpt-4o-mini", message, 100)
+    ledger.total = 70_000_000 - 2 * per_request
+    attempted = await asyncio.gather(
+        *(reserve_classroom_attempt("gpt-4o-mini", message, 100, None)
+          for _ in range(30)),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(value, int) for value in attempted) == 2
+    assert sum(isinstance(value, ClassroomTrialBudgetExceeded)
+               for value in attempted) == 28
+    assert ledger.total == 70_000_000
+    with pytest.raises(ClassroomTrialBudgetExceeded, match="\\$70 budget exhausted"):
+        await reserve_classroom_attempt("gpt-4o-mini", message, 100, None)
+    assert ledger.total == 70_000_000
+
+
+def test_trial_still_enforces_original_sixty_dollar_ceiling_if_configured(monkeypatch):
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60")
+    assert configured_ceiling_micro_usd() == 60_000_000
