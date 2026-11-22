@@ -224,3 +224,60 @@ def test_one_subject_cannot_claim_41_case_release_even_with_two_passes():
         for _ in range(2)
     ]
     assert not harness.summarize(subset)["accepted"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis_available", [True, False])
+async def test_standalone_grading_initializes_redis_before_provider(monkeypatch, redis_available):
+    """A CLI process has no FastAPI lifespan, so its trial ledger needs
+    explicit connect and cleanup before any billable provider call."""
+    pytest.importorskip("sqlalchemy")
+    import importlib
+
+    redis_module = importlib.import_module("lyo_app.core.redis_client")
+    adaptive = importlib.import_module("lyo_app.ai_classroom.adaptive_teaching")
+    observed = []
+
+    class FakeRedis:
+        async def ping(self):
+            observed.append("ping")
+            return redis_available
+
+    async def fake_connect():
+        observed.append("connect")
+
+    async def fake_close():
+        observed.append("close")
+
+    def fake_teacher():
+        assert observed[:2] == ["connect", "ping"]
+        observed.append("teacher")
+        return object()
+
+    async def fake_grade(teacher, case, case_id):
+        observed.append("graded")
+        return {
+            "case": case_id,
+            "verdict": case.expect,
+            "outcome": "agree",
+            "seconds": 0.01,
+        }
+
+    monkeypatch.setattr(harness, "require_bounded_staging_trial", lambda: None)
+    monkeypatch.setattr(redis_module, "init_redis", fake_connect)
+    monkeypatch.setattr(redis_module, "close_redis", fake_close)
+    monkeypatch.setattr(redis_module, "redis_client", FakeRedis())
+    monkeypatch.setattr(adaptive, "AdaptiveTeacher", fake_teacher)
+    monkeypatch.setattr(harness, "grade_once", fake_grade)
+
+    if redis_available:
+        rows = await harness.run(repeats=2, concurrency=2, only="fractions_add")
+        assert len(rows) == 2 * sum(c.task == "fractions_add" for c in harness.CASES)
+        assert "graded" in observed
+    else:
+        with pytest.raises(RuntimeError, match="staging Redis ledger"):
+            await harness.run(repeats=2, concurrency=2, only="fractions_add")
+        assert "teacher" not in observed and "graded" not in observed
+
+    assert observed[:2] == ["connect", "ping"]
+    assert observed[-1] == "close"
