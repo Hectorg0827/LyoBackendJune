@@ -310,7 +310,26 @@ async def grade_once(teacher, case: Case, case_id: str) -> dict[str, Any]:
     }
 
 
+def require_bounded_staging_trial() -> None:
+    """Never allow an accuracy run to bypass the owner's paid trial ledger.
+
+    Model evaluation uses classroom_trial_budget=True. Outside a staging,
+    explicitly enabled trial the underlying client may otherwise skip paid
+    reservations. This guard protects even a directly imported run().
+    """
+    from lyo_app.ai_classroom.trial_budget import (
+        configured_ceiling_micro_usd, trial_enabled,
+    )
+    if os.getenv("ENVIRONMENT", "").strip().lower() not in {"staging", "stage"}:
+        raise RuntimeError("Grading acceptance may run on isolated staging only")
+    if not trial_enabled():
+        raise RuntimeError("Grading acceptance requires the existing paid-trial ledger")
+    if configured_ceiling_micro_usd() > 70_000_000:
+        raise RuntimeError("Grading acceptance exceeds the approved cumulative $70")
+
+
 async def run(repeats: int, concurrency: int, only: str | None) -> list[dict[str, Any]]:
+    require_bounded_staging_trial()
     from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
 
     gate = asyncio.Semaphore(concurrency)
@@ -338,6 +357,11 @@ def main(argv: list[str] | None = None) -> int:
         print("No AI provider key is set (" + ", ".join(PROVIDER_KEYS) + "). Nothing was run.", file=sys.stderr)
         return 2
 
+    try:
+        require_bounded_staging_trial()
+    except (RuntimeError, ValueError) as exc:
+        print("No grading run: " + str(exc) + ". Nothing was run.", file=sys.stderr)
+        return 2
     results = asyncio.run(run(max(1, args.repeats), max(1, args.concurrency), args.task))
     summary = summarize(results)
     report = {
