@@ -236,12 +236,26 @@ async def test_standalone_grading_initializes_redis_before_provider(monkeypatch,
 
     redis_module = importlib.import_module("lyo_app.core.redis_client")
     adaptive = importlib.import_module("lyo_app.ai_classroom.adaptive_teaching")
+    trial_module = importlib.import_module("lyo_app.ai_classroom.trial_budget")
     observed = []
 
     class FakeRedis:
+        def __init__(self):
+            self.client = self
+
         async def ping(self):
             observed.append("ping")
             return redis_available
+
+        async def get(self, key):
+            assert key == trial_module.LEDGER_KEY
+            observed.append("get")
+            return b"10000000"
+
+        async def ttl(self, key):
+            assert key == trial_module.LEDGER_KEY
+            observed.append("ttl")
+            return -1
 
     async def fake_connect():
         observed.append("connect")
@@ -267,6 +281,8 @@ async def test_standalone_grading_initializes_redis_before_provider(monkeypatch,
     monkeypatch.setattr(redis_module, "init_redis", fake_connect)
     monkeypatch.setattr(redis_module, "close_redis", fake_close)
     monkeypatch.setattr(redis_module, "redis_client", FakeRedis())
+    monkeypatch.setattr(trial_module, "configured_ceiling_micro_usd",
+                        lambda: 70_000_000)
     monkeypatch.setattr(adaptive, "AdaptiveTeacher", fake_teacher)
     monkeypatch.setattr(harness, "grade_once", fake_grade)
 
@@ -360,3 +376,50 @@ def test_ledger_preflight_cli_does_not_require_provider_key(monkeypatch, capsys)
         AssertionError("provider benchmark must never start in preflight")))
     assert harness.main(["--ledger-preflight"]) == 0
     assert '"reserved_usd": 23.5' in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_benchmark_refuses_lost_historical_ledger_before_model(monkeypatch):
+    """A responsive but reset Redis MUST NOT grant a fresh $70 allowance."""
+    pytest.importorskip("sqlalchemy")
+    import importlib
+    redis_module = importlib.import_module("lyo_app.core.redis_client")
+    adaptive = importlib.import_module("lyo_app.ai_classroom.adaptive_teaching")
+    trial_module = importlib.import_module("lyo_app.ai_classroom.trial_budget")
+    events = []
+
+    class EmptyLedger:
+        def __init__(self):
+            self.client = self
+
+        async def ping(self):
+            return True
+
+        async def get(self, key):
+            events.append("get")
+            assert key == trial_module.LEDGER_KEY
+            return None
+
+        async def ttl(self, key):
+            events.append("ttl")
+            return -2
+
+    async def connect():
+        events.append("connect")
+
+    async def close():
+        events.append("close")
+
+    def prohibited_teacher():
+        raise AssertionError("A missing ledger must never invoke the provider")
+
+    monkeypatch.setattr(harness, "require_bounded_staging_trial", lambda: None)
+    monkeypatch.setattr(redis_module, "redis_client", EmptyLedger())
+    monkeypatch.setattr(redis_module, "init_redis", connect)
+    monkeypatch.setattr(redis_module, "close_redis", close)
+    monkeypatch.setattr(trial_module, "configured_ceiling_micro_usd",
+                        lambda: 70_000_000)
+    monkeypatch.setattr(adaptive, "AdaptiveTeacher", prohibited_teacher)
+    with pytest.raises(RuntimeError, match="Missing or expiring"):
+        await harness.run(repeats=2, concurrency=4, only=None)
+    assert events == ["connect", "get", "ttl", "close"]
