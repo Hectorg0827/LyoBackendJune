@@ -52,10 +52,24 @@ MODEL_UPPER_USD_PER_MILLION: dict[str, tuple[int, int]] = {
 }
 
 _RESERVE_LUA = """
-local existing = tonumber(redis.call('GET', KEYS[1]) or '0')
+-- A missing key is NOT unused allowance. History persists across trials.
+-- Perform the existence and expiry checks in the SAME atomic EVAL as INCRBY.
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+    return -3
+end
+if redis.call('TTL', KEYS[1]) ~= -1 then
+    return -3
+end
+if not string.match(raw, '^%d+$') then
+    return -2
+end
+local existing = tonumber(raw)
 local cost = tonumber(ARGV[1])
 local ceiling = tonumber(ARGV[2])
-if not existing or not cost or cost <= 0 or not ceiling or existing < 0 then
+if not existing or not cost or cost <= 0 or not ceiling or ceiling <= 0
+    or cost % 1 ~= 0 or ceiling % 1 ~= 0
+    or existing < 0 or existing > ceiling then
     return -2
 end
 if existing + cost > ceiling then
@@ -144,6 +158,12 @@ async def reserve_classroom_attempt(model: str, messages: list[dict],
     except Exception as exc:
         logger.warning("Classroom trial ledger rejected a reservation: %s", type(exc).__name__)
         raise ClassroomTrialBudgetExceeded("Classroom trial ledger is unavailable") from exc
+    if total == -3:
+        raise ClassroomTrialBudgetExceeded(
+            "Classroom trial ledger history is missing or expiring; paid calls blocked")
+    if total == -2:
+        raise ClassroomTrialBudgetExceeded(
+            "Classroom trial ledger is invalid; paid calls blocked")
     if total < 0:
         raise ClassroomTrialBudgetExceeded("Classroom AI trial $70 budget exhausted")
     remaining = ceiling - total

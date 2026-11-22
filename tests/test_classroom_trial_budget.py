@@ -19,15 +19,26 @@ class AtomicRedisLedger:
     """An in-memory simulation of the installed Redis Lua script's atomicity."""
 
     def __init__(self):
+        # This synthetic test ledger starts with an existing durable "0".
+        # It is never a stand-in for a missing real history key.
         self.total = 0
+        self.exists = True
+        self.ttl = -1
+        self.malformed = False
         self.lock = asyncio.Lock()
         self.calls = 0
 
     async def eval(self, script, number_of_keys, key, requested, limit):
         assert "INCRBY" in script and number_of_keys == 1
+        assert "redis.call('TTL', KEYS[1])" in script
+        assert "if not raw then" in script
         assert key.startswith("lyo:classroom:trial:")
         async with self.lock:
             self.calls += 1
+            if not self.exists or self.ttl != -1:
+                return -3
+            if self.malformed or self.total < 0 or self.total > int(limit):
+                return -2
             if self.total + int(requested) > int(limit):
                 return -1
             self.total += int(requested)
@@ -203,3 +214,44 @@ async def test_approved_increment_cannot_spend_beyond_seventy_under_concurrency(
 def test_trial_still_enforces_original_sixty_dollar_ceiling_if_configured(monkeypatch):
     monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "60")
     assert configured_ceiling_micro_usd() == 60_000_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_state,expected_error", [
+    ("deleted", "history is missing or expiring"),
+    ("expiring", "history is missing or expiring"),
+    ("malformed", "ledger is invalid"),
+    ("negative", "ledger is invalid"),
+    ("over_limit", "ledger is invalid"),
+])
+async def test_atomic_reservation_refuses_invalid_history_even_after_previous_success(
+        trial, invalid_state, expected_error):
+    """The CLI preflight cannot protect a key deleted BETWEEN reservations.
+
+    A provider attempt must fail closed at the atomic Lua reservation itself.
+    """
+    from lyo_app.core.redis_client import redis_client
+
+    ledger = AtomicRedisLedger()
+    trial.setattr(redis_client, "client", ledger)
+    message = [{"role": "user", "content": "Fraction comparison"}]
+    initial = await reserve_classroom_attempt("gpt-4o-mini", message, 100, None)
+    assert initial < 10_000
+    previously_reserved = ledger.total
+    if invalid_state == "deleted":
+        ledger.exists = False
+    elif invalid_state == "expiring":
+        ledger.ttl = 20
+    elif invalid_state == "malformed":
+        ledger.malformed = True
+    elif invalid_state == "negative":
+        ledger.total = -1
+    elif invalid_state == "over_limit":
+        ledger.total = 20_000
+
+    with pytest.raises(ClassroomTrialBudgetExceeded, match=expected_error):
+        await reserve_classroom_attempt("gpt-4o-mini", message, 100, None)
+    assert ledger.calls == 2
+    assert ledger.total == (previously_reserved
+                            if invalid_state in {"deleted", "expiring", "malformed"}
+                            else (-1 if invalid_state == "negative" else 20_000))
