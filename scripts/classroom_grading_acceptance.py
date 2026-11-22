@@ -331,17 +331,30 @@ def require_bounded_staging_trial() -> None:
 async def run(repeats: int, concurrency: int, only: str | None) -> list[dict[str, Any]]:
     require_bounded_staging_trial()
     from lyo_app.ai_classroom.adaptive_teaching import AdaptiveTeacher
+    from lyo_app.core.redis_client import close_redis, init_redis, redis_client
 
-    gate = asyncio.Semaphore(concurrency)
-    selected = [(i, c) for i, c in enumerate(CASES) if not only or c.task == only]
+    # This script runs outside FastAPI's lifespan. Without an explicit
+    # connection, the global Redis client is None and *every* provider
+    # reservation fails closed, producing 82 misleading unavailable grades.
+    # Connect to the SAME staging Redis ledger before any teacher is invoked.
+    await init_redis()
+    try:
+        if not await redis_client.ping():
+            raise RuntimeError("Grading acceptance requires a live staging Redis ledger")
 
-    async def one(index: int, case: Case):
-        async with gate:
-            # A fresh teacher per attempt: no state may leak between learners.
-            return await grade_once(AdaptiveTeacher(), case, f"{index:02d}:{case.task}:{case.label}")
+        gate = asyncio.Semaphore(concurrency)
+        selected = [(i, c) for i, c in enumerate(CASES) if not only or c.task == only]
 
-    jobs = [one(i, c) for _ in range(repeats) for i, c in selected]
-    return list(await asyncio.gather(*jobs))
+        async def one(index: int, case: Case):
+            async with gate:
+                # A fresh teacher per attempt: no state may leak between learners.
+                return await grade_once(AdaptiveTeacher(), case, f"{index:02d}:{case.task}:{case.label}")
+
+        jobs = [one(i, c) for _ in range(repeats) for i, c in selected]
+        return list(await asyncio.gather(*jobs))
+    finally:
+        # Never reset or mutate the persistent reservation key.
+        await close_redis()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -362,7 +375,13 @@ def main(argv: list[str] | None = None) -> int:
     except (RuntimeError, ValueError) as exc:
         print("No grading run: " + str(exc) + ". Nothing was run.", file=sys.stderr)
         return 2
-    results = asyncio.run(run(max(1, args.repeats), max(1, args.concurrency), args.task))
+    try:
+        results = asyncio.run(run(max(1, args.repeats), max(1, args.concurrency), args.task))
+    except RuntimeError as exc:
+        print("Grading run failed: " + str(exc) +
+              ". Check the existing Redis reservation ledger before retrying.",
+              file=sys.stderr)
+        return 2
     summary = summarize(results)
     report = {
         "report_version": REPORT_VERSION,
