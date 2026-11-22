@@ -1607,9 +1607,7 @@ class AdaptiveSession:
             "Seguir aprendiendo" if state.support_attempts >= 2 and state.next_move in ("reteach", "prerequisite") else "Practiquemos juntos")
         components.append(CTAButton(component_id=state.step_id, label=label, action_intent=ActionIntent.CONTINUE,
                                     language_code=context.language_code))
-        # This scene is deterministic recovery guidance, not provider-authored teaching.
-        return Scene(scene_type=SceneType.INSTRUCTION, components=components,
-                     metadata=SceneMetadata(scene_source="fallback"))
+        return Scene(scene_type=SceneType.INSTRUCTION, components=components)
 
     def checkpoint(self, context, state, follow_up=False):
         pending, task = state.pending, state.pending.task
@@ -1875,7 +1873,9 @@ class AdaptiveSession:
             if ungraded else self.copy(context, "Retry this step", "Reintentar este paso"),
             action_intent=ActionIntent.SKIP_QUESTION if ungraded else ActionIntent.RETRY,
             language_code=context.language_code))
-        return Scene(scene_type=SceneType.INSTRUCTION, components=components)
+        # Deterministic recovery guidance, never a model-authored teaching scene.
+        return Scene(scene_type=SceneType.INSTRUCTION, components=components,
+                     metadata=SceneMetadata(scene_source="fallback"))
 
     def current_or_retry(self, context, state):
         return Scene.model_validate(state.scene) if state.scene else self.unavailable(context, state)
