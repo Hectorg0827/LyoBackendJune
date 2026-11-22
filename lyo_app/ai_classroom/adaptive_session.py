@@ -16,7 +16,7 @@ from lyo_app.ai_classroom.adaptive_teaching import (
 )
 from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
-    QuizOption, Scene, SceneType, TeacherMessage,
+    QuizOption, Scene, SceneMetadata, SceneType, TeacherMessage,
 )
 from lyo_app.ai_classroom.teaching_prompt import MOVES
 from lyo_app.ai_classroom.board_presentation import board_document
@@ -1607,7 +1607,9 @@ class AdaptiveSession:
             "Seguir aprendiendo" if state.support_attempts >= 2 and state.next_move in ("reteach", "prerequisite") else "Practiquemos juntos")
         components.append(CTAButton(component_id=state.step_id, label=label, action_intent=ActionIntent.CONTINUE,
                                     language_code=context.language_code))
-        return Scene(scene_type=SceneType.INSTRUCTION, components=components)
+        # This scene is deterministic recovery guidance, not provider-authored teaching.
+        return Scene(scene_type=SceneType.INSTRUCTION, components=components,
+                     metadata=SceneMetadata(scene_source="fallback"))
 
     def checkpoint(self, context, state, follow_up=False):
         pending, task = state.pending, state.pending.task
