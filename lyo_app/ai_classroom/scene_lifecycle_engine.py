@@ -2150,10 +2150,13 @@ class SceneLifecycleEngine:
                 )
             )
 
-        return Scene(
+        # A server-authored recovery scene must never claim model provenance.
+        scene = Scene(
             scene_type=SceneType.INSTRUCTION,
             components=components,
         )
+        scene.metadata.scene_source = "fallback"
+        return scene
 
     # ═══════════════════════════════════════════════════════════════════════════════
     # 🎮 PUBLIC API METHODS
