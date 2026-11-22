@@ -180,3 +180,47 @@ def test_missing_spanish_case_refuses_release_even_with_duplicate_english_rows()
     filtered = [row for row in all_rows if row["case"] != missing_id]
     filtered.extend(all_rows[:2])
     assert not harness.summarize(filtered)["accepted"]
+
+
+@pytest.mark.parametrize("environment,enabled,limit", [
+    ("production", "1", "70"),
+    ("staging", "0", "70"),
+    ("staging", "1", "70.000001"),
+    ("development", "1", "70"),
+])
+def test_live_runner_rejects_outside_owner_approved_staging_ledger(
+        monkeypatch, capsys, environment, enabled, limit):
+    # This fake key must NEVER initiate provider requests. The gate should
+    # refuse before it reaches asyncio.run or creates an AdaptiveTeacher.
+    for name in harness.PROVIDER_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "unusable-ci-fake-key")
+    monkeypatch.setenv("ENVIRONMENT", environment)
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_ENABLED", enabled)
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", limit)
+    def no_provider_calls(*_args, **_kwargs):
+        raise AssertionError("Unsafe provider invocation")
+    monkeypatch.setattr(harness, "run", no_provider_calls)
+    assert harness.main(["--repeats", "2"]) == 2
+    assert "Nothing was run" in capsys.readouterr().err
+
+
+def test_staging_trial_preflight_accepts_owner_approved_cumulative_70(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_ENABLED", "1")
+    monkeypatch.setenv("CLASSROOM_AI_TRIAL_LIMIT_USD", "70")
+    assert harness.require_bounded_staging_trial() is None
+
+
+def test_one_subject_cannot_claim_41_case_release_even_with_two_passes():
+    first = harness.CASES[0]
+    subset = [
+        {
+            "case": f"00:{first.task}:{first.label}",
+            "verdict": first.expect,
+            "outcome": harness.classify(first, first.expect),
+            "seconds": 1.0,
+        }
+        for _ in range(2)
+    ]
+    assert not harness.summarize(subset)["accepted"]
