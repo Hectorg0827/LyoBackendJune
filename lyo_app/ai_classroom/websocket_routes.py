@@ -94,6 +94,50 @@ async def authenticate_websocket(
 # 🔌 WEBSOCKET ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════════
 
+async def _start_or_resume_scene(lifecycle_engine, connection, streaming_mode, bridge=None):
+    """Reconnect the same authenticated learner to the *saved* scene.
+
+    A resume is not a new lesson launch. Never call the welcome generator for
+    resume=1: doing so silently overwrites the current question, teacher
+    segment, scene ID and grading position. The scene engine checks ownership
+    before replaying the durable state.
+    """
+    resume_requested = (
+        connection.websocket.query_params.get("resume") or ""
+    ).strip().lower() in {"1", "true", "yes"}
+    if not resume_requested:
+        await _send_welcome_scene(
+            lifecycle_engine, connection, streaming_mode, bridge=bridge
+        )
+        return "new"
+
+    try:
+        restored = (
+            await lifecycle_engine.resume_saved_scene(
+                str(connection.user_id), str(connection.session_id)
+            )
+            if lifecycle_engine is not None else None
+        )
+        if restored is not None:
+            logger.info("Replayed saved Classroom scene for resumed session")
+            return "resumed"
+    except Exception:
+        logger.exception("Failed to restore saved Classroom session")
+    # Fail closed: a connection without durable state must not pretend a
+    # newly-generated welcome is the previous saved lesson.
+    await connection.websocket.send_text(json.dumps({
+        "type": "error",
+        "event_type": "ERROR",
+        "session_id": connection.session_id,
+        "data": {
+            "event_type": "ERROR",
+            "error": "resume_unavailable",
+            "recoverable": True,
+        },
+    }))
+    return "unavailable"
+
+
 @router.websocket("/connect")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -252,7 +296,7 @@ async def websocket_endpoint(
         logger.info(f"🎭 WebSocket connected: {connection.connection_id} (mode: {streaming_mode})")
 
         # Keep scene production authoritative; the bridge has its own event.
-        await _send_welcome_scene(lifecycle_engine, connection, streaming_mode, bridge=bridge)
+        await _start_or_resume_scene(lifecycle_engine, connection, streaming_mode, bridge=bridge)
 
         # Message handling loop
         while True:
