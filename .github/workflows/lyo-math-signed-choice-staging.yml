@@ -35,4 +35,5 @@ jobs:
           python -m pytest -q tests/test_web_math_signed_choice_labels.py tests/test_web_diagnostic_distinct_choice_repair.py tests/test_classroom_generation_contract.py
       - name: Evidence
         if: success()
-        run: echo 'Source checks passed: signs preserved, true duplicate options still rejected. Real provider grading remains a separate gate.' >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo 'Source checks passed: signs preserved, true duplicate options still rejected. Real provider grading remains a separate gate.' >> "$GITHUB_STEP_SUMMARY"
