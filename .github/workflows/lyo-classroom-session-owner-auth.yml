@@ -20,7 +20,8 @@ jobs:
       SECRET_KEY: lyo-classroom-auth-no-provider-test-only
       CLASSROOM_AI_TRIAL_ENABLED: 'false'
       OPENAI_API_KEY: ''
-      GEMINI_API_KEY: ''
+      # Settings requires >=10 chars at import; this is not a usable provider key.
+      GEMINI_API_KEY: 'synthetic-placeholder-no-network'
       GOOGLE_API_KEY: ''
     steps:
       - uses: actions/checkout@v4
