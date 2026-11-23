@@ -20,8 +20,6 @@ jobs:
       SECRET_KEY: lyo-classroom-auth-no-provider-test-only
       CLASSROOM_AI_TRIAL_ENABLED: 'false'
       OPENAI_API_KEY: ''
-      # Settings requires >=10 chars at import; this is not a usable provider key.
-      GEMINI_API_KEY: 'synthetic-placeholder-no-network'
       GOOGLE_API_KEY: ''
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +27,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile route and test before dependency install
-        run: python -m py_compile lyo_app/ai_classroom/routes.py tests/test_classroom_session_owner_authorization.py
+        run: python -m py_compile lyo_app/ai_classroom/routes.py tests/test_classroom_session_owner_authorization.py scripts/qa/classroom_session_owner_live_http.py
       - name: Install isolated no-provider dependencies
         run: |
           python -m pip install --upgrade pip
