@@ -1,0 +1,45 @@
+name: LYO staging Classroom session ownership authorization
+on:
+  push:
+    branches: [fix/staging-classroom-session-ownership-20261122]
+    paths:
+      - 'lyo_app/ai_classroom/routes.py'
+      - 'tests/test_classroom_session_owner_authorization.py'
+      - '.github/workflows/lyo-classroom-session-owner-auth.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  classroom-owner-access:
+    name: Authenticated session owner isolation (no provider)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TESTING: 'true'
+      ENVIRONMENT: development
+      SECRET_KEY: lyo-classroom-auth-no-provider-test-only
+      CLASSROOM_AI_TRIAL_ENABLED: 'false'
+      OPENAI_API_KEY: ''
+      GOOGLE_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile route and test before dependency install
+        run: python -m py_compile lyo_app/ai_classroom/routes.py tests/test_classroom_session_owner_authorization.py scripts/qa/classroom_session_owner_live_http.py
+      - name: Install isolated no-provider dependencies
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^[[:space:]]*moviepy([<=>~!].*)?$' requirements.txt > /tmp/lyo-authorization-req.txt
+          python -m pip install --ignore-installed packaging -r /tmp/lyo-authorization-req.txt
+          python -m pip install pytest pytest-asyncio flake8
+      - name: Run exact-head owner/foreign/missing/unowned access tests
+        run: |
+          python -m flake8 lyo_app/ai_classroom/routes.py tests/test_classroom_session_owner_authorization.py --count --select=E9,F63,F7,F82 --show-source --statistics
+          python -m pytest -q tests/test_classroom_session_owner_authorization.py tests/test_web_canonical_course_ownership.py
+      - name: State test limitations
+        if: always()
+        run: |
+          echo 'No paid model calls, Redis reset, live learner access or production changes.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'These regression tests validate route authentication wiring and owner isolation in-process; authenticated two-account staging E2E remains necessary.' >> "$GITHUB_STEP_SUMMARY"

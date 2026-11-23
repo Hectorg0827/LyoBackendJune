@@ -613,19 +613,28 @@ async def create_session(
     )
 
 
-@router.get("/session/{session_id}")
-async def get_session(session_id: str):
+def _owned_classroom_session(session_id: str, current_user: User):
+    """Fail closed for unknown, legacy unowned or other-user sessions.
+
+    Session IDs are not credentials. Returning the same 404 for missing and
+    unauthorized sessions also avoids disclosing another learner's session.
     """
-    Get session information
-    
-    Returns current state, message count, and topic.
-    """
-    manager = get_conversation_manager()
-    session = manager.get_session(session_id)
-    
-    if not session:
+    session = get_conversation_manager().get_session(session_id)
+    owner_id = getattr(session, "user_id", None)
+    authenticated_id = getattr(current_user, "id", None)
+    if session is None or owner_id is None or authenticated_id is None \
+            or str(owner_id) != str(authenticated_id):
         raise HTTPException(status_code=404, detail="Session not found")
-    
+    return session
+
+
+@router.get("/session/{session_id}")
+async def get_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return session information only to its authenticated owner."""
+    session = _owned_classroom_session(session_id, current_user)
     return {
         "session_id": session.session_id,
         "state": session.state.value,
@@ -639,18 +648,16 @@ async def get_session(session_id: str):
 
 
 @router.delete("/session/{session_id}")
-async def end_session(session_id: str):
-    """
-    End a classroom session
-    
-    Cleans up session resources.
-    """
-    manager = get_conversation_manager()
-    success = manager.end_session(session_id)
-    
+async def end_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """End only a session belonging to the authenticated learner."""
+    _owned_classroom_session(session_id, current_user)
+    # No await between authorization and deletion of this local manager entry.
+    success = get_conversation_manager().end_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="Session not found")
-    
     return {"status": "ended", "session_id": session_id}
 
 
