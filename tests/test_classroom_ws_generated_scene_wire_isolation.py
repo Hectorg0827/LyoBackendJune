@@ -77,7 +77,7 @@ async def test_actual_scene_streaming_same_id_across_two_authenticated_owners():
             ("1001", "shared-legacy-course"),
             ("1002", "shared-legacy-course"),
         }
-        private_a = "SYNTHETIC_ONLY_OWNER_A_CANARY"
+        private_a = "SYNTHETIC ONLY OWNER A CANARY"
         scene_a = Scene(
             scene_type=SceneType.INSTRUCTION,
             components=[TeacherMessage(text=private_a, language_code="en-US")],
@@ -98,7 +98,7 @@ async def test_actual_scene_streaming_same_id_across_two_authenticated_owners():
             for f in seat.events("scene_start")
         )
 
-        private_b = "SYNTHETIC_ONLY_OWNER_B_CANARY"
+        private_b = "SYNTHETIC ONLY OWNER B CANARY"
         scene_b = Scene(
             scene_type=SceneType.INSTRUCTION,
             components=[TeacherMessage(text=private_b, language_code="en-US")],
