@@ -1,0 +1,38 @@
+name: LYO staging two-account WebSocket safe resume and identity
+# Isolated staging only. Resume=1 prohibits generation and paid AI calls.
+on:
+  push:
+    branches: [qa/staging-classroom-two-user-ws-resume-20261122]
+    paths:
+      - 'scripts/qa/classroom_ws_cross_user_resume_no_provider.py'
+      - '.github/workflows/lyo-classroom-ws-two-account-resume.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  same-seat-two-owner:
+    name: Live staging two-JWT same-session-ID resume denial
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      CLASSROOM_AI_TRIAL_ENABLED: 'false'
+      OPENAI_API_KEY: ''
+      GOOGLE_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile two-account no-provider probes
+        run: |
+          python -m py_compile scripts/qa/classroom_session_owner_live_http.py scripts/qa/classroom_ws_cross_user_resume_no_provider.py
+      - name: Install pinned WebSocket transport only
+        run: python -m pip install --disable-pip-version-check websockets==14.2
+      - name: Verify isolated staging same-ID connection separation
+        run: python -u scripts/qa/classroom_ws_cross_user_resume_no_provider.py
+      - name: Report evidence boundary
+        if: always()
+        run: |
+          echo 'Two disposable staging learners connect same session ID with resume=1 and continuous_teaching=0.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No welcome generation, no graded text-AI, no TTS, no Redis budget reset, no production.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This verifies authenticated transport identity, not owner-scoped scene broadcasts from live generated lessons.' >> "$GITHUB_STEP_SUMMARY"
