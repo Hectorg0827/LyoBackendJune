@@ -393,7 +393,9 @@ class WebSocketManager:
     def __init__(self):
         # Connection management
         self.connections: Dict[str, ClientConnection] = {}
-        self.rooms: Dict[str, ConnectionRoom] = {}
+        # A session_id is client-chosen on some legacy clients. Never group
+        # connections from different authenticated learners in one room.
+        self.rooms: Dict[tuple[str, str], ConnectionRoom] = {}
 
         # Message delivery
         self.delivery_manager = DeliveryManager()
@@ -492,22 +494,26 @@ class WebSocketManager:
 
         logger.info(f"🔌 Client disconnected: {connection_id}")
 
-    async def _add_to_room(self, connection: ClientConnection, room_id: str):
-        """Add connection to room"""
-        if room_id not in self.rooms:
-            self.rooms[room_id] = ConnectionRoom(room_id)
+    @staticmethod
+    def _room_key(user_id: str, session_id: str) -> tuple[str, str]:
+        """A client-controlled seat ID never becomes a cross-user room key."""
+        return str(user_id), str(session_id)
 
-        self.rooms[room_id].add_connection(connection)
+    async def _add_to_room(self, connection: ClientConnection, room_id: str):
+        """Add connection to the authenticated learner's own room."""
+        key = self._room_key(connection.user_id, room_id)
+        if key not in self.rooms:
+            self.rooms[key] = ConnectionRoom(room_id)
+        self.rooms[key].add_connection(connection)
 
     async def _remove_from_room(self, connection: ClientConnection, room_id: str):
-        """Remove connection from room"""
-        if room_id in self.rooms:
-            self.rooms[room_id].remove_connection(connection.connection_id)
-
-            # Clean up empty rooms
-            if self.rooms[room_id].is_empty():
-                del self.rooms[room_id]
-                logger.info(f"🏠 Cleaned up empty room: {room_id}")
+        """Only remove the connection from its authenticated user's room."""
+        key = self._room_key(connection.user_id, room_id)
+        if key in self.rooms:
+            self.rooms[key].remove_connection(connection.connection_id)
+            if self.rooms[key].is_empty():
+                del self.rooms[key]
+                logger.info("Cleaned up empty authenticated Classroom room")
 
     # ═══════════════════════════════════════════════════════════════════════════════
     # MESSAGE HANDLING
@@ -617,22 +623,31 @@ class WebSocketManager:
     # ═══════════════════════════════════════════════════════════════════════════════
 
     async def send_to_connection(self, connection_id: str, payload: WebSocketPayload):
-        """Send message to specific connection"""
+        """Send only to the identified connection, never another user's payload."""
+        connection = self.connections.get(connection_id)
+        if connection is None or (
+            payload.user_id is not None
+            and str(payload.user_id) != str(connection.user_id)
+        ):
+            return
         await self.delivery_manager.queue_message(connection_id, payload)
 
     async def send_to_session(self, session_id: str, payload: WebSocketPayload):
-        """Send message to all connections in a session"""
-        if session_id in self.rooms:
-            room = self.rooms[session_id]
-            active_connections = room.get_active_connections()
-
-            for connection in active_connections:
-                await self.send_to_connection(connection.connection_id, payload)
+        """Per-session delivery requires an explicit authenticated owner."""
+        if payload.user_id is None:
+            logger.warning("Refusing Classroom session broadcast without owner ID")
+            return
+        key = self._room_key(payload.user_id, session_id)
+        room = self.rooms.get(key)
+        if room is None:
+            return
+        for connection in room.get_active_connections():
+            await self.send_to_connection(connection.connection_id, payload)
 
     async def send_answer_feedback(self, session_id: str, user_id: str, component_id: str,
                                    verdict: str, feedback: str, language: str):
         """An early result for the answered question, scoped to its owner."""
-        room = self.rooms.get(session_id)
+        room = self.rooms.get(self._room_key(user_id, session_id))
         if room is None:
             return
         payload = WebSocketPayload(
@@ -656,12 +671,14 @@ class WebSocketManager:
             await self.send_to_connection(connection.connection_id, payload)
 
     async def broadcast(self, payload: WebSocketPayload, exclude_connections: List[str] = None):
-        """Broadcast message to all active connections"""
+        """System-wide events may broadcast; owner-tagged events cannot leak."""
         exclude_set = set(exclude_connections or [])
-
         for connection in self._get_active_connections():
-            if connection.connection_id not in exclude_set:
-                await self.send_to_connection(connection.connection_id, payload)
+            if connection.connection_id in exclude_set:
+                continue
+            if payload.user_id is not None and str(payload.user_id) != str(connection.user_id):
+                continue
+            await self.send_to_connection(connection.connection_id, payload)
 
     async def _attempt_message_delivery(self, connection_id: str, payload: WebSocketPayload) -> bool:
         """Attempt to deliver message to connection (implements DeliveryManager interface)"""
@@ -691,17 +708,15 @@ class WebSocketManager:
     # ═══════════════════════════════════════════════════════════════════════════════
 
     async def stream_scene_to_session(self, session_id: str, scene: Scene, mode: StreamingMode = StreamingMode.ADAPTIVE, *, user_id: Optional[str] = None):
-        """Stream a guided scene only to its owner, including their other devices."""
-        if session_id not in self.rooms:
-            logger.warning(f"⚠️ No room found for session: {session_id}")
+        """A student-specific scene requires the owner ID, even with one seat."""
+        if user_id is None:
+            logger.warning("Refusing Classroom scene streaming without owner ID")
             return
-
-        room = self.rooms[session_id]
+        room = self.rooms.get(self._room_key(user_id, session_id))
+        if room is None:
+            return
         active_connections = room.get_active_connections()
-        if user_id is not None:
-            active_connections = [c for c in active_connections if str(c.user_id) == str(user_id)]
-
-        logger.info(f"🎬 Streaming scene {scene.scene_id} to {len(active_connections)} connections")
+        logger.info("Streaming authenticated Classroom scene to %d connection(s)", len(active_connections))
 
         # Stream to all active connections
         for connection in active_connections:

@@ -128,7 +128,7 @@ async def test_feedback_is_only_sent_to_the_owner_in_the_requested_session():
     manager = WebSocketManager.__new__(WebSocketManager)
     owner = SimpleNamespace(user_id="42", connection_id="owner")
     other = SimpleNamespace(user_id="99", connection_id="other")
-    manager.rooms = {"lesson": SimpleNamespace(get_active_connections=lambda: [owner, other])}
+    manager.rooms = {("42", "lesson"): SimpleNamespace(get_active_connections=lambda: [owner])}
     manager.send_to_connection = AsyncMock()
     await manager.send_answer_feedback("lesson", "42", "question", "correct", "That's correct because…", "en-US")
     manager.send_to_connection.assert_awaited_once()

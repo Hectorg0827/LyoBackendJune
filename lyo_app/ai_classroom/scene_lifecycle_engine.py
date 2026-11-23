@@ -1948,12 +1948,13 @@ class SceneLifecycleEngine:
         scene = await self.process_trigger(trigger)
         # Don't schedule another timeout after this gentle nudge
 
-    async def _stream_scene_to_client(self, scene: Scene, session_id: str):
-        """Stream scene to client via WebSocket"""
+    async def _stream_scene_to_client(self, scene: Scene, session_id: str, user_id: str):
+        """Stream a scene only within its authenticated learner's session."""
         if not self.websocket_manager:
             return
-
-        await self.websocket_manager.stream_scene_to_session(session_id, scene)
+        await self.websocket_manager.stream_scene_to_session(
+            session_id, scene, user_id=user_id,
+        )
 
     #: How much of the lesson to re-present when teaching from the fallback.
     #: Long enough to be a real re-teach, short enough not to dump a whole

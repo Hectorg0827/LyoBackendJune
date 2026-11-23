@@ -350,11 +350,13 @@ async def test_websocket_uses_authenticated_identity_not_payload(monkeypatch, in
 @pytest.mark.asyncio
 async def test_scene_only_reaches_the_owners_devices_in_a_shared_topic_room():
     instance = WebSocketManager.__new__(WebSocketManager)
-    devices = [SimpleNamespace(user_id="42", name="web"), SimpleNamespace(user_id="43", name="other"),
+    # Rooms are partitioned by authenticated user, even if two learners
+    # legitimately use the same legacy topic/course ID as their seat ID.
+    devices = [SimpleNamespace(user_id="42", name="web"),
                SimpleNamespace(user_id="42", name="phone")]
     room = MagicMock()
     room.get_active_connections.return_value = devices
-    instance.rooms = {"fractions": room}
+    instance.rooms = {("42", "fractions"): room}
     instance.scene_streamer = SimpleNamespace(stream_scene=AsyncMock())
     instance.stats = {"scenes_streamed": 0}
     scene = Scene(scene_type=SceneType.INSTRUCTION, components=[TeacherMessage(text="Compare these equal parts.")])
