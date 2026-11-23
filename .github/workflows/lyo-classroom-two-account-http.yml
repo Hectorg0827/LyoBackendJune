@@ -1,0 +1,35 @@
+name: LYO staging two-account Classroom session authorization E2E
+# Staging-only, disposable synthetic learners. Do not run against production.
+on:
+  push:
+    branches: [qa/staging-classroom-session-two-account-20261122]
+    paths:
+      - 'scripts/qa/classroom_session_owner_live_http.py'
+      - '.github/workflows/lyo-classroom-two-account-http.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-http-owner-enforcement:
+    name: Real staging GET/DELETE owner and foreign-user denial
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      OPENAI_API_KEY: ''
+      GOOGLE_API_KEY: ''
+      CLASSROOM_AI_TRIAL_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile standard-library-only HTTP probe
+        run: python -m py_compile scripts/qa/classroom_session_owner_live_http.py
+      - name: Create and delete only synthetic staging learners
+        run: python -u scripts/qa/classroom_session_owner_live_http.py
+      - name: State security and cost boundaries
+        if: always()
+        run: |
+          echo 'This checks live staging HTTP owner isolation with two disposable learner accounts.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No AI generation, grading, speech, production traffic or Redis budget changes.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Separate WebSocket room and scene cross-user isolation still requires review.' >> "$GITHUB_STEP_SUMMARY"

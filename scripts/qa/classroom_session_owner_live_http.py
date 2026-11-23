@@ -42,7 +42,9 @@ def request(method, path, body=None, token=None):
     req = Request(API + path, data=data, method=method, headers=headers)
     try:
         with urlopen(req, timeout=20) as res:
-            raw = res.read(128000)
+            raw = res.read(8_000_001)
+            if len(raw) > 8_000_000:
+                raise RuntimeError('Staging API response exceeded safe bound')
             return res.status, json.loads(raw) if raw else {}
     except HTTPError as err:
         # Error bodies and headers may contain sensitive trace data.
@@ -170,7 +172,7 @@ def main():
             else:
                 valid = False
                 print("CLEANUP FAILED for " + key, file=sys.stderr)
-        if cleaned == set(paths):
+        if paths and cleaned == set(paths):
             print("PASS: all synthetic staging learners permanently deleted")
     return 0 if valid and cleaned == set(paths) and len(paths) == 2 else 1
 
