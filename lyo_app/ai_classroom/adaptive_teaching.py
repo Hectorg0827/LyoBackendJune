@@ -1794,6 +1794,8 @@ class AdaptiveTeacher:
                 self.schedule_package_prefetch(context, state, unit)
                 self.schedule_next_unit_prefetch(context, state, move)
                 return turn
+            except ClassroomTrialBudgetExceeded as exc:
+                raise TeachingUnavailable("Classroom authoring budget unavailable") from exc
             except Exception as exc:
                 logger.warning("Classroom turn rejected: move=%s attempt=%s cause=%s",
                                move, attempt + 1, validation_summary(exc))
@@ -1880,6 +1882,10 @@ class AdaptiveTeacher:
                 verdict="clarify", confidence=1, question_clear=True,
                 feedback="Vamos paso a paso." if is_es else "Let's work through a smaller step together.",
             )
+        from lyo_app.ai_classroom.equation_practice import grade_recovery
+        local_grade = grade_recovery(pending, response)
+        if local_grade is not None:
+            return local_grade
         prompt = (
             "Evaluate the learner's MEANING against only the active question's criteria. "
             "Accept synonyms, equivalent solutions, speech transcription errors, short "
