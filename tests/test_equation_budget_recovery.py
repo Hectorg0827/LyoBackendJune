@@ -113,3 +113,17 @@ async def test_try_fresh_example_from_skipped_summary_reaches_editable_question(
         component_id = saved["step_id"]
         intent = ActionIntent.CONTINUE
     pytest.fail("Fresh example never reached an editable question")
+
+
+@pytest.mark.asyncio
+async def test_equivalent_saved_unit_restores_opening_diagnostic():
+    teacher, context, state = fixture()
+    state.unit.title = "Collecting Variable Terms in Linear Equations"
+    state.next_move = state.phase = "diagnose"
+    runner, progress = AdaptiveSession(teacher), {}
+    runner.save(progress, state, runner.unavailable(context, state))
+    scene = await runner.run(context, progress, SimpleNamespace(component_id=None, action_data={"welcome": True}))
+    assert scene.metadata.scene_source == "template"
+    pending = PendingTask.model_validate(progress["guided_state"]["pending"])
+    assert pending.phase == "diagnose"
+    assert len(pending.task.options) == 4 and sum(item.correct for item in pending.task.options) == 1

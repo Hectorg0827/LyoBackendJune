@@ -5,7 +5,7 @@ from decimal import Decimal
 from random import SystemRandom
 
 from lyo_app.ai_classroom.adaptive_teaching import (
-    CriterionResult, Evaluation, LearningTask, TeachingBeat, normalize_text,
+    CriterionResult, Evaluation, LearningTask, TaskOption, TeachingBeat, normalize_text,
     turn_schema, validate_evaluation, validate_semantic_content,
 )
 
@@ -23,6 +23,7 @@ async def recovery_turn(teacher, context, state, move):
         return None
     if state.unit.title.strip().casefold() not in {
         "isolating variables on one side of an equation",
+        "collecting variable terms in linear equations",
         "solving linear equations with variables on both sides",
     }:
         return None
@@ -37,7 +38,7 @@ async def recovery_turn(teacher, context, state, move):
         return turn_schema(move)(speech="Follow this worked example, then try another equation.",
                                  board_title=TITLE, board_content="Worked example: 5x + 3 = 2x + 18.",
                                  demonstration=beats if move in {"orient", "reteach", "prerequisite"} else [])
-    if move not in {"guided", "faded", "independent", "transfer", "closing_win"}:
+    if move not in {"diagnose", "guided", "faded", "independent", "transfer", "closing_win"}:
         return None
 
     rng = SystemRandom()
@@ -57,6 +58,25 @@ async def recovery_turn(teacher, context, state, move):
                             criteria=["Find the value that balances the two expressions.",
                                       "Evaluate the equal expressions at that value."],
                             example_answer=f"{solution}, {common}")
+        if move == "diagnose":
+            task = LearningTask(
+                kind="diagnose", response_format="choice", target_index=state.target_index,
+                scenario=scenario, question="Which operation removes the variable term on the right?",
+                criteria=["Choose the additive inverse of the right-hand variable term."],
+                example_answer=f"Subtract {b}x from both sides.", response_hint="Select one operation.",
+                options=[
+                    TaskOption(id="add", label=f"Add {b}x to both sides.", correct=False,
+                               feedback="Addition doubles the variable term on the right.",
+                               misconception="Confuses addition with its inverse.", gap="near_miss"),
+                    TaskOption(id="subtract", label=f"Subtract {b}x from both sides.", correct=True,
+                               feedback="Equal subtraction cancels the right-hand variable term."),
+                    TaskOption(id="one_side", label=f"Remove {b}x only from the right.", correct=False,
+                               feedback="Changing only one side can change the solution.",
+                               misconception="Does not preserve equality.", gap="fundamental"),
+                    TaskOption(id="unsure", label="I am not sure yet.", correct=False, abstains=True,
+                               feedback="We can work through an example together."),
+                ],
+            )
         if normalize_text(scenario + " " + question) in state.recent_questions:
             continue
         turn = turn_schema(move)(speech="Work through this example and check your result.",

@@ -18,7 +18,6 @@ from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
     QuizOption, Scene, SceneMetadata, SceneType, TeacherMessage,
 )
-from lyo_app.ai_classroom.trial_budget import ClassroomTrialBudgetExceeded
 from lyo_app.ai_classroom.equation_practice import TITLE as EQUATION_PRACTICE_TITLE, recovery_turn, is_recovery_question
 from lyo_app.ai_classroom.teaching_prompt import MOVES
 from lyo_app.ai_classroom.board_presentation import board_document
@@ -686,9 +685,7 @@ class AdaptiveSession:
         try:
             try:
                 turn = await self.teacher.turn(context, state, move, learner_input)
-            except TeachingUnavailable as exc:
-                if not isinstance(exc.__cause__, ClassroomTrialBudgetExceeded):
-                    raise
+            except TeachingUnavailable:
                 # An optional semantic explanation cannot be graded offline.
                 # Resume the earned practice rung without recording explanation credit.
                 recovery_move = state.phase if move == "explain" else move
