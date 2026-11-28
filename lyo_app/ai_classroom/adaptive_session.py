@@ -18,6 +18,8 @@ from lyo_app.ai_classroom.sdui_models import (
     ActionIntent, CTAButton, ExampleBlock, InputField, LessonBlock, ProgressBar, QuizCard,
     QuizOption, Scene, SceneMetadata, SceneType, TeacherMessage,
 )
+from lyo_app.ai_classroom.trial_budget import ClassroomTrialBudgetExceeded
+from lyo_app.ai_classroom.equation_practice import TITLE as EQUATION_PRACTICE_TITLE, recovery_turn, is_recovery_question
 from lyo_app.ai_classroom.teaching_prompt import MOVES
 from lyo_app.ai_classroom.board_presentation import board_document
 from lyo_app.teaching_runtime import POLICY_VERSION, canonical_action_for_classroom_move
@@ -388,6 +390,14 @@ class AdaptiveSession:
             if result.misconception:
                 self.remember_misconception(state, result.misconception)
             if result.verdict == "unavailable":
+                if is_recovery_question(pending):
+                    # Keep the same problem editable when prose cannot be assessed.
+                    # A formatting clarification supplies no mathematical help.
+                    self.handled(state, pending.id)
+                    pending.id = str(uuid4())
+                    pending.feedback = "Please enter your two numbers separated by a comma."
+                    pending.follow_up = pending.task.question
+                    return self.save(progress, state, self.checkpoint(context, state, follow_up=True))
                 pending.retry_response = response
                 return self.save(progress, state, self.unavailable(context, state))
             self.handled(state, pending.id)
@@ -674,7 +684,18 @@ class AdaptiveSession:
         # after it has successfully passed the actual rendering contract.
         before_generation = state.model_copy(deep=True)
         try:
-            turn = await self.teacher.turn(context, state, move, learner_input)
+            try:
+                turn = await self.teacher.turn(context, state, move, learner_input)
+            except TeachingUnavailable as exc:
+                if not isinstance(exc.__cause__, ClassroomTrialBudgetExceeded):
+                    raise
+                # An optional semantic explanation cannot be graded offline.
+                # Resume the earned practice rung without recording explanation credit.
+                recovery_move = state.phase if move == "explain" else move
+                turn = await recovery_turn(self.teacher, context, state, recovery_move)
+                if turn is None:
+                    raise
+                move = state.next_move = recovery_move
             state.recovery_attempts = 0
             return self.accept_turn(context, progress, state, turn, move)
         except (TeachingUnavailable, ValidationError) as exc:
@@ -1461,6 +1482,10 @@ class AdaptiveSession:
                 else state.plan.units[i].title for i in indices
                 if not state.identity_required or i < len(state.skill_ids)
             ]
+        active_beat = state.presentation or state.pending
+        if (active_beat and active_beat.board_title == EQUATION_PRACTICE_TITLE
+                and scene.metadata.scene_source == "ai_generated"):
+            scene.metadata.scene_source = "template"
         state.scene = scene.model_dump(mode="json")
         progress["guided_state"] = state.model_dump(mode="json")
         return scene
